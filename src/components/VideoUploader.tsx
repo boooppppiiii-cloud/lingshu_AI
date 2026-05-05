@@ -6,7 +6,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Upload, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import { compressVideoWithFfmpeg, shouldCompressVideo } from '../lib/videoCompressFfmpeg';
+import {
+  compressVideoWithFfmpeg,
+  inferVideoMimeType,
+  isLikelyVideoFile,
+  shouldCompressVideo,
+} from '../lib/videoCompressFfmpeg';
 
 interface VideoUploaderProps {
   onUpload: (base64: string, mimeType: string, fileSize: number) => void;
@@ -42,7 +47,12 @@ export default function VideoUploader({ onUpload, label = '上传参考视频' }
   }, [videoPreview]);
 
   const handleFile = async (file: File) => {
-    if (!file || !file.type.startsWith('video/')) return;
+    if (!file || !isLikelyVideoFile(file)) {
+      window.alert('请上传视频文件（支持 mp4、mov、webm 等常见格式）');
+      return;
+    }
+
+    const effectiveMime = inferVideoMimeType(file);
 
     try {
       if (shouldCompressVideo(file)) {
@@ -61,7 +71,7 @@ export default function VideoUploader({ onUpload, label = '上传参考视频' }
           const base64 = e.target?.result as string;
           const base64Data = base64.split(',')[1];
           setVideoPreview(URL.createObjectURL(file));
-          onUpload(base64Data, file.type, file.size);
+          onUpload(base64Data, effectiveMime, file.size);
         };
         reader.readAsDataURL(file);
       }

@@ -94,7 +94,8 @@ if (outboundProxy) {
 }
 const app = express();
 
-app.use(express.json({ limit: '50mb' }));
+/** Base64 约膨胀 4/3，视频类 op 需明显大于原文件体积；过小会导致「能选文件但接口 413」 */
+app.use(express.json({ limit: '200mb' }));
 
 /**
  * 为「被点赞用户」写 like.received 流水（需 PocketBase 用户 Authorization；服务端用 admin 代写）。

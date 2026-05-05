@@ -1,14 +1,17 @@
 /**
  * 使用 ffmpeg.wasm 在浏览器端压缩大于 10MB 的视频，目标 720p 且尽量压到 10MB 以下。
+ *
+ * core 必须使用 ESM 构建：worker 内对 core 走 dynamic import()，UMD 无 default 会报
+ * "failed to import ffmpeg-core.js"。用 Vite ?url 同源托管，避免 CDN/blob 在部分环境下失败。
  */
 import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { fetchFile, toBlobURL } from '@ffmpeg/util';
+import { fetchFile } from '@ffmpeg/util';
+import coreJsUrl from '@ffmpeg/core?url';
+import coreWasmUrl from '@ffmpeg/core/wasm?url';
 
 /** 超过此大小的视频在客户端预压缩 */
 const COMPRESS_INPUT_THRESHOLD = 10 * 1024 * 1024;
 const TEN_MB = 10 * 1024 * 1024;
-const CORE_VERSION = '0.12.6';
-const CORE_CDN = `https://cdn.jsdelivr.net/npm/@ffmpeg/core@${CORE_VERSION}/dist/umd`;
 
 let ffmpegInstance: FFmpeg | null = null;
 let loadPromise: Promise<FFmpeg> | null = null;
@@ -18,8 +21,36 @@ function resetFfmpegLoadState() {
   ffmpegInstance = null;
 }
 
+/** 部分系统对本地/拖拽视频给出空 MIME，仅靠扩展名识别，否则大文件不会走压缩且可能被前端直接忽略 */
+export function isLikelyVideoFile(file: File): boolean {
+  if (file.type.startsWith('video/')) return true;
+  if (file.type === 'application/octet-stream' || file.type === '') {
+    return /\.(mp4|mov|m4v|webm|mkv|avi|mpeg|mpg|3gp|ogv)(\?.*)?$/i.test(file.name);
+  }
+  return false;
+}
+
+export function inferVideoMimeType(file: File): string {
+  if (file.type.startsWith('video/')) return file.type;
+  const ext = file.name.split('.').pop()?.toLowerCase();
+  const map: Record<string, string> = {
+    mp4: 'video/mp4',
+    mov: 'video/quicktime',
+    m4v: 'video/x-m4v',
+    webm: 'video/webm',
+    mkv: 'video/x-matroska',
+    avi: 'video/x-msvideo',
+    mpeg: 'video/mpeg',
+    mpg: 'video/mpeg',
+    '3gp': 'video/3gpp',
+    ogv: 'video/ogg',
+  };
+  if (ext && map[ext]) return map[ext]!;
+  return file.type || 'video/mp4';
+}
+
 export function shouldCompressVideo(file: File): boolean {
-  return file.size > COMPRESS_INPUT_THRESHOLD && file.type.startsWith('video/');
+  return file.size > COMPRESS_INPUT_THRESHOLD && isLikelyVideoFile(file);
 }
 
 async function loadFfmpeg(onPhase: (phase: 'load', p01: number) => void): Promise<FFmpeg> {
@@ -29,8 +60,8 @@ async function loadFfmpeg(onPhase: (phase: 'load', p01: number) => void): Promis
       const ffmpeg = new FFmpeg();
       onPhase('load', 0.05);
       await ffmpeg.load({
-        coreURL: await toBlobURL(`${CORE_CDN}/ffmpeg-core.js`, 'text/javascript'),
-        wasmURL: await toBlobURL(`${CORE_CDN}/ffmpeg-core.wasm`, 'application/wasm'),
+        coreURL: coreJsUrl,
+        wasmURL: coreWasmUrl,
       });
       onPhase('load', 1);
       ffmpegInstance = ffmpeg;
@@ -65,7 +96,7 @@ export async function compressVideoWithFfmpeg(
 ): Promise<{ blob: Blob; mimeType: string }> {
   if (!shouldCompressVideo(file)) {
     onProgress({ overall: 1, phase: 'encode' });
-    return { blob: file, mimeType: file.type || 'video/mp4' };
+    return { blob: file, mimeType: inferVideoMimeType(file) };
   }
 
   const ffmpeg = await loadFfmpeg((phase, p) => {
