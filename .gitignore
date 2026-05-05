@@ -1,0 +1,10 @@
+node_modules
+dist
+.DS_Store
+
+# PocketBase 本地数据目录（勿提交）
+pb_data/
+
+.env
+.env.local
+.env.*.local
