@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Sparkles, FileText, Bookmark, Copy, CheckCircle2, Layout, Zap, ChevronRight, Check, RefreshCw as RefreshIcon, TrendingUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
@@ -8,6 +8,9 @@ import { useAuth } from '../lib/AuthContext';
 import { useToast } from '../lib/ToastContext';
 import { pb } from '../lib/pb';
 import { buildAssetCreateBody } from '../lib/recordMappers';
+import { createLeadingDebouncer } from '../lib/leadingDebounce';
+import { logUsageEvent } from '../lib/logUsageEvent';
+import { USAGE_EVENT } from '../lib/usageEvents';
 import { AssetType } from '../types';
 
 interface Highlights {
@@ -28,7 +31,23 @@ export default function InspirationExtraction() {
   const [step, setStep] = useState(1);
   const [video, setVideo] = useState<{ base64: string; mimeType: string } | null>(null);
   const [loading, setLoading] = useState(false);
-  
+  const [geminiRetryLabel, setGeminiRetryLabel] = useState<string | null>(null);
+
+  const geminiOpts = useMemo(
+    () => ({
+      onRetryAttempt: (n: number, m: number) => setGeminiRetryLabel(`第 ${n} / ${m} 次请求`),
+    }),
+    [],
+  );
+
+  const geminiCallOpts = useMemo(
+    () => ({
+      ...geminiOpts,
+      analyticsUserId: user?.uid,
+    }),
+    [geminiOpts, user?.uid],
+  );
+
   // Step 1 data
   const [highlights, setHighlights] = useState<Highlights | null>(null);
   const [selectedHighlights, setSelectedHighlights] = useState<string[]>([]);
@@ -99,11 +118,12 @@ export default function InspirationExtraction() {
     }
   };
 
-  const handleExtractHighlights = async () => {
+  const handleExtractHighlightsImpl = async () => {
     if (!video) return;
     setLoading(true);
+    setGeminiRetryLabel(null);
     try {
-      const data = await geminiService.extractHighlights(video.base64, video.mimeType);
+      const data = await geminiService.extractHighlights(video.base64, video.mimeType, geminiCallOpts);
       if (data) {
         setHighlights(data);
         setStep(2);
@@ -112,18 +132,28 @@ export default function InspirationExtraction() {
       console.error(error);
       alert("提取失败，请重试");
     } finally {
+      setGeminiRetryLabel(null);
       setLoading(false);
     }
   };
 
-  const handleGenerateThemes = async () => {
+  const handleExtractHighlightsRef = useRef(handleExtractHighlightsImpl);
+  handleExtractHighlightsRef.current = handleExtractHighlightsImpl;
+
+  const handleExtractHighlights = useMemo(
+    () => createLeadingDebouncer(500)(() => void handleExtractHighlightsRef.current()),
+    [],
+  );
+
+  const handleGenerateThemesImpl = async () => {
     if (selectedHighlights.length === 0 || !sellingPoint) {
       alert("请选择至少一个灵感点和卖点");
       return;
     }
     setLoading(true);
+    setGeminiRetryLabel(null);
     try {
-      const data = await geminiService.generateThemes(selectedHighlights, sellingPoint);
+      const data = await geminiService.generateThemes(selectedHighlights, sellingPoint, geminiCallOpts);
       setThemes(data);
       // Auto select first theme
       if (data.length > 0) {
@@ -133,42 +163,68 @@ export default function InspirationExtraction() {
     } catch (error) {
       console.error(error);
     } finally {
+      setGeminiRetryLabel(null);
       setLoading(false);
     }
   };
 
-  const handleSelectTheme = async (index: number) => {
+  const handleGenerateThemesRef = useRef(handleGenerateThemesImpl);
+  handleGenerateThemesRef.current = handleGenerateThemesImpl;
+
+  const handleGenerateThemes = useMemo(
+    () => createLeadingDebouncer(500)(() => void handleGenerateThemesRef.current()),
+    [],
+  );
+
+  const handleSelectTheme = (index: number) => {
     setSelectedThemeIndex(index);
     if (!scriptsCache[index]) {
-      await handleGenerateFinalScriptForTheme(index);
+      debouncedGenerateFinalScriptForTheme(index);
     }
   };
 
-  const handleGenerateFinalScriptForTheme = async (index: number) => {
+  const handleGenerateFinalScriptForThemeImpl = async (index: number) => {
     const theme = themes[index];
     if (!theme) return;
-    
+
     setLoading(true);
+    setGeminiRetryLabel(null);
     try {
       const script = await geminiService.generateFinalScript(
         theme.title,
         theme.description,
         selectedStyle || '真人3D写实风格',
-        selectedMoods.length > 0 ? selectedMoods.join('、') : '治愈、惊喜'
+        selectedMoods.length > 0 ? selectedMoods.join('、') : '治愈、惊喜',
+        geminiCallOpts,
       );
-      setScriptsCache(prev => ({ ...prev, [index]: script }));
+      setScriptsCache((prev) => ({ ...prev, [index]: script }));
+      if (user?.uid) {
+        void logUsageEvent(user.uid, USAGE_EVENT.SCRIPT_GENERATED, {
+          source: 'inspiration_extraction',
+          meta: { variant: 'generate_final_script', theme_index: index },
+        });
+      }
     } catch (error) {
       console.error(error);
     } finally {
+      setGeminiRetryLabel(null);
       setLoading(false);
     }
   };
+
+  const handleGenerateFinalScriptForThemeRef = useRef(handleGenerateFinalScriptForThemeImpl);
+  handleGenerateFinalScriptForThemeRef.current = handleGenerateFinalScriptForThemeImpl;
+
+  const debouncedGenerateFinalScriptForTheme = useMemo(
+    () => createLeadingDebouncer(500)((index: number) => void handleGenerateFinalScriptForThemeRef.current(index)),
+    [],
+  );
 
   const handleSaveAsset = async (type: AssetType, content: string, title: string) => {
     if (!user) return alert('请先登录以收藏资产');
 
     try {
-      await pb.collection('assets').create(
+      const record = await pb.collection('assets').create(
         buildAssetCreateBody({
           userId: user.uid,
           type,
@@ -179,6 +235,15 @@ export default function InspirationExtraction() {
           likedBy: [],
         })
       );
+
+      if (type === 'inspiration') {
+        void logUsageEvent(user.uid, USAGE_EVENT.CREATIVE_INSPIRATION_SAVED, {
+          source: 'inspiration_extraction',
+          refCollection: 'assets',
+          refId: record.id,
+          meta: { asset_type: type },
+        });
+      }
 
       const labelMap: Record<string, string> = {
         prompt: '提示词',
@@ -245,6 +310,9 @@ export default function InspirationExtraction() {
                 {loading ? <Loader2 className="w-6 h-6 animate-spin mr-2" /> : <Sparkles className="w-6 h-6 mr-2" />}
                 {loading ? '正在分析亮点...' : '提取核心灵感'}
               </button>
+              {loading && geminiRetryLabel ? (
+                <p className="mt-3 text-center text-[10px] text-slate-500">{geminiRetryLabel}</p>
+              ) : null}
             </div>
           </motion.div>
         )}
@@ -345,6 +413,9 @@ export default function InspirationExtraction() {
                   {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
                   {loading ? '正在构思精彩方案...' : '一键生成创意方案'}
                 </button>
+                {loading && geminiRetryLabel ? (
+                  <p className="mt-3 text-center text-[10px] text-slate-500">{geminiRetryLabel}</p>
+                ) : null}
               </div>
             </div>
             
@@ -466,13 +537,16 @@ export default function InspirationExtraction() {
                     <div className="absolute inset-0 flex flex-col items-center justify-center bg-white/60 backdrop-blur-sm z-10">
                       <div className="w-16 h-16 border-4 border-accent-blue border-t-transparent rounded-full animate-spin mb-4" />
                       <p className="text-accent-blue font-bold animate-pulse">正在精编脚本内容...</p>
+                      {geminiRetryLabel ? (
+                        <p className="mt-2 text-[10px] text-slate-500">{geminiRetryLabel}</p>
+                      ) : null}
                     </div>
                   ) : !scriptsCache[selectedThemeIndex] ? (
                     <div className="flex-1 flex flex-col items-center justify-center text-center opacity-40">
                       <Sparkles className="w-16 h-16 text-slate-300 mb-4" />
                       <p className="text-slate-500 font-bold">请点击左侧方案以生成脚本</p>
                       <button 
-                         onClick={() => handleGenerateFinalScriptForTheme(selectedThemeIndex)}
+                         onClick={() => debouncedGenerateFinalScriptForTheme(selectedThemeIndex)}
                          className="mt-6 px-8 py-3 bg-slate-100 border border-slate-200 rounded-2xl text-slate-700 font-bold hover:bg-slate-200 transition-all cursor-pointer"
                       >
                         立即生成此方案脚本
@@ -508,7 +582,7 @@ export default function InspirationExtraction() {
                   </div>
                   <div className="flex items-center gap-3">
                     <button 
-                      onClick={() => handleGenerateFinalScriptForTheme(selectedThemeIndex)}
+                      onClick={() => debouncedGenerateFinalScriptForTheme(selectedThemeIndex)}
                       disabled={loading}
                       className="p-3 bg-white border border-slate-200 hover:bg-slate-50 text-slate-400 rounded-xl transition-all cursor-pointer"
                       title="重新生成"

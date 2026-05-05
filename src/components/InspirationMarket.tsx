@@ -6,6 +6,10 @@ import { AssetType, MarketItem } from '../types';
 import { Search, Zap, MessageSquare, FileText, Layout, Heart, Share2, ChevronDown, Check, Trash2, Edit3, X } from 'lucide-react';
 import { pb } from '../lib/pb';
 import { recordToMarketItem } from '../lib/recordMappers';
+import { logUsageEvent } from '../lib/logUsageEvent';
+import { USAGE_EVENT } from '../lib/usageEvents';
+
+const apiBase = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') ?? '';
 import Markdown from 'react-markdown';
 
 const CATEGORIES_BY_TAB: Record<string, string[]> = {
@@ -131,6 +135,29 @@ export default function InspirationMarket() {
         likes: newLikes,
         likedBy: newLikedBy,
       });
+      const delta = liked ? -1 : 1;
+      void logUsageEvent(user.uid, USAGE_EVENT.LIKE_GIVEN, {
+        source: 'inspiration_market',
+        refCollection: 'market',
+        refId: itemId,
+        meta: { delta },
+      });
+      const ownerId = item.userId;
+      if (ownerId && ownerId !== user.uid && pb.authStore.token) {
+        void fetch(`${apiBase}/api/usage/like-received`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: pb.authStore.token,
+          },
+          body: JSON.stringify({
+            ownerId,
+            marketId: itemId,
+            actorId: user.uid,
+            delta,
+          }),
+        }).catch(() => {});
+      }
     } catch (e) {
       console.error(e);
       setItems((prev) =>

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { Loader2, Sparkles, FileText, Bookmark, Copy, CheckCircle2 } from 'lucide-react';
 import { motion } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
@@ -7,44 +7,41 @@ import { geminiService } from '../services/gemini';
 import { useAuth } from '../lib/AuthContext';
 import { useToast } from '../lib/ToastContext';
 import { pb } from '../lib/pb';
+import { createLeadingDebouncer } from '../lib/leadingDebounce';
+import { logUsageEvent } from '../lib/logUsageEvent';
+import { USAGE_EVENT } from '../lib/usageEvents';
 import { buildAssetCreateBody } from '../lib/recordMappers';
 import { AssetType } from '../types';
 
 const FULL_SCRIPT_SAVE_KEY = 'iteration:full_script';
+const DEFAULT_STYLE = '真人3D写实风格';
+const DEFAULT_MOODS = '治愈、惊喜';
 
 export default function ContentIteration() {
   const { user } = useAuth();
   const { showToast } = useToast();
   const [video, setVideo] = useState<{ base64: string; mimeType: string; size?: number } | null>(null);
   const [loading, setLoading] = useState(false);
-  const [processingStatus, setProcessingStatus] = useState<string>('');
   const [progress, setProgress] = useState(0);
   const [result, setResult] = useState<string | null>(null);
-  const [selectedStyle, setSelectedStyle] = useState<string>('');
-  const [customStyle, setCustomStyle] = useState('');
-  const [selectedMoods, setSelectedMoods] = useState<string[]>([]);
-  const [customMood, setCustomMood] = useState('');
   const [isEditing, setIsEditing] = useState(false);
   const [saveStatus, setSaveStatus] = useState<{[key: string]: boolean}>({});
+  const [geminiRetryLabel, setGeminiRetryLabel] = useState<string | null>(null);
 
-  const STYLES = [
-    '真人3D写实风格',
-    '华丽建模动画画画',
-    'Q版动漫人物画画',
-    '赛博奇幻画风',
-    '其他'
-  ];
+  const geminiOpts = useMemo(
+    () => ({
+      onRetryAttempt: (n: number, m: number) => setGeminiRetryLabel(`第 ${n} / ${m} 次请求`),
+    }),
+    [],
+  );
 
-  const MOODS = [
-    '温情',
-    '治愈',
-    '热血',
-    '悲伤',
-    '惊喜',
-    '戏剧性',
-    '反转打脸',
-    '其他'
-  ];
+  const geminiCallOpts = useMemo(
+    () => ({
+      ...geminiOpts,
+      analyticsUserId: user?.uid,
+    }),
+    [geminiOpts, user?.uid],
+  );
 
   /**
    * 预处理视频逻辑 - 集成 ffmpeg.wasm 占位
@@ -52,7 +49,6 @@ export default function ContentIteration() {
   const preProcessVideo = async (inputBase64: string): Promise<string> => {
     return new Promise((resolve) => {
       // 阶段一：音视频分离与压制
-      setProcessingStatus('正在进行音视频分离与压制 (20%)...');
       setProgress(20);
       
       console.log('FFMPEG Action: ffmpeg.load()');
@@ -63,12 +59,10 @@ export default function ContentIteration() {
         console.log('FFMPEG Action: Compression finished. Simulated Output Size: ~' + (inputBase64.length * 0.15 / (1024 * 1024)).toFixed(2) + ' MB (Reduction: 85%)');
         
         // 阶段二：传输至创意中心
-        setProcessingStatus('正在传输至创意中心 (50%)...');
         setProgress(50);
         
         setTimeout(() => {
           // 阶段三：灵感提取中
-          setProcessingStatus('灵感提取中，请稍候 (80%)...');
           setProgress(80);
           
           resolve(inputBase64); // 目前直接返回原数据，模拟处理完成
@@ -77,7 +71,7 @@ export default function ContentIteration() {
     });
   };
 
-  const handleAnalyze = async () => {
+  const handleAnalyzeImpl = async () => {
     if (!video) return;
 
     // 检查体积是否超过 200MB
@@ -88,29 +82,47 @@ export default function ContentIteration() {
       return;
     }
 
-    const finalStyle = selectedStyle === '其他' ? customStyle : selectedStyle;
-    const finalMoods = [...selectedMoods.filter(m => m !== '其他'), ...(selectedMoods.includes('其他') ? [customMood] : [])].join('、');
-
     setLoading(true);
+    setGeminiRetryLabel(null);
     setResult(null);
     setProgress(0);
     try {
       // 执行预处理
       const processedBase64 = await preProcessVideo(video.base64);
-      
+
       // 最终提取阶段
-      const script = await geminiService.analyzeVideoIteration(processedBase64, video.mimeType, finalStyle, finalMoods);
+      const script = await geminiService.analyzeVideoIteration(
+        processedBase64,
+        video.mimeType,
+        DEFAULT_STYLE,
+        DEFAULT_MOODS,
+        geminiCallOpts,
+      );
       setResult(script || "分析失败，请重试。");
+      if (user?.uid) {
+        void logUsageEvent(user.uid, USAGE_EVENT.SCRIPT_GENERATED, {
+          source: 'content_iteration',
+          meta: { variant: 'analyze_video_iteration' },
+        });
+      }
       setProgress(100);
       setIsEditing(false);
     } catch (error) {
       console.error(error);
       setResult("发生错误，请检查网络或 API 配置。");
     } finally {
+      setGeminiRetryLabel(null);
       setLoading(false);
-      setProcessingStatus('');
     }
   };
+
+  const handleAnalyzeRef = useRef(handleAnalyzeImpl);
+  handleAnalyzeRef.current = handleAnalyzeImpl;
+
+  const handleAnalyze = useMemo(
+    () => createLeadingDebouncer(500)(() => void handleAnalyzeRef.current()),
+    [],
+  );
 
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -125,17 +137,26 @@ export default function ContentIteration() {
     if (!user) return alert('请先登录以收藏资产');
 
     try {
-      await pb.collection('assets').create(
+      const record = await pb.collection('assets').create(
         buildAssetCreateBody({
           userId: user.uid,
           type,
           title,
           content,
-          tags: [selectedStyle, ...selectedMoods].filter(Boolean),
+          tags: ['创意迭代', DEFAULT_STYLE, DEFAULT_MOODS],
           likes: 0,
           likedBy: [],
         })
       );
+
+      if (type === 'inspiration') {
+        void logUsageEvent(user.uid, USAGE_EVENT.CREATIVE_INSPIRATION_SAVED, {
+          source: 'content_iteration',
+          refCollection: 'assets',
+          refId: record.id,
+          meta: { asset_type: type },
+        });
+      }
 
       const labelMap: Record<string, string> = {
         prompt: '提示词',
@@ -169,64 +190,6 @@ export default function ContentIteration() {
           <VideoUploader onUpload={(base64, mimeType, size) => setVideo({ base64, mimeType, size })} />
           
           <div className="mt-8 space-y-6">
-            {/* Style Selection */}
-            <div className="space-y-3">
-              <label className="text-xs font-bold text-slate-400 uppercase tracking-widest block">画风选择（选填）</label>
-              <div className="flex flex-wrap gap-2">
-                {STYLES.map((style, idx) => (
-                  <button
-                    key={`style-${idx}-${style}`}
-                    onClick={() => setSelectedStyle(selectedStyle === style ? '' : style)}
-                    className={`px-4 py-2 rounded-lg text-sm transition-all border cursor-pointer ${
-                      selectedStyle === style ? 'bg-primary-blue text-white border-primary-blue shadow-md' : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-slate-300'
-                    }`}
-                  >
-                    {style}
-                  </button>
-                ))}
-              </div>
-              {selectedStyle === '其他' && (
-                <input
-                  type="text"
-                  value={customStyle}
-                  onChange={(e) => setCustomStyle(e.target.value)}
-                  placeholder="请输入自定义画风..."
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-accent-blue/50 text-slate-700"
-                />
-              )}
-            </div>
-
-            {/* Mood Selection */}
-            <div className="space-y-3">
-              <label className="text-xs font-bold text-slate-400 uppercase tracking-widest block">情绪选择（多选）</label>
-              <div className="flex flex-wrap gap-2">
-                {MOODS.map((mood, idx) => (
-                  <button
-                    key={`mood-${idx}-${mood}`}
-                    onClick={() => {
-                      setSelectedMoods(prev => 
-                        prev.includes(mood) ? prev.filter(m => m !== mood) : [...prev, mood]
-                      );
-                    }}
-                    className={`px-4 py-2 rounded-lg text-sm transition-all border cursor-pointer ${
-                      selectedMoods.includes(mood) ? 'bg-primary-blue text-white border-primary-blue shadow-md' : 'bg-slate-50 text-slate-600 border-slate-200 hover:border-slate-300'
-                    }`}
-                  >
-                    {mood}
-                  </button>
-                ))}
-              </div>
-              {selectedMoods.includes('其他') && (
-                <input
-                  type="text"
-                  value={customMood}
-                  onChange={(e) => setCustomMood(e.target.value)}
-                  placeholder="请输入自定义情绪..."
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 text-sm outline-none focus:border-accent-blue/50 text-slate-700"
-                />
-              )}
-            </div>
-
             <div className="flex flex-col items-center pt-4 space-y-6">
               <button
                 onClick={handleAnalyze}
@@ -248,9 +211,9 @@ export default function ContentIteration() {
 
               {loading && (
                 <div className="w-full max-w-md space-y-3">
-                  <div className="flex justify-between items-center text-sm mb-1">
-                    <span className="text-accent-blue font-medium animate-pulse">{processingStatus}</span>
-                    <span className="text-slate-400 font-mono">{progress}%</span>
+                  <div className="flex justify-between items-center text-sm mb-1 w-full min-w-0">
+                    <span className="text-accent-blue font-medium animate-pulse shrink-0">当前进度</span>
+                    <span className="text-slate-400 font-mono tabular-nums shrink-0">{progress}%</span>
                   </div>
                   <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
                     <motion.div 
@@ -261,6 +224,9 @@ export default function ContentIteration() {
                     />
                   </div>
                   <p className="text-[10px] text-slate-400 text-center">正在使用深度学习模型提取视觉灵感与核心卖点</p>
+                  {geminiRetryLabel ? (
+                    <p className="text-[10px] text-slate-500 text-center">{geminiRetryLabel}</p>
+                  ) : null}
                 </div>
               )}
             </div>

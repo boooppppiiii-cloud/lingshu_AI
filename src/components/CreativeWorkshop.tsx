@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Sparkles, Zap, Send, RefreshCw, MessageSquare, ChevronDown, Bookmark, Copy, CheckCircle2, Layout, FileText, Lightbulb, Image as ImageIcon, Upload, X } from 'lucide-react';
 import ContentIteration from './ContentIteration';
@@ -11,6 +11,9 @@ import { buildAssetCreateBody } from '../lib/recordMappers';
 import Markdown from 'react-markdown';
 
 import { useToast } from '../lib/ToastContext';
+import { createLeadingDebouncer } from '../lib/leadingDebounce';
+import { logUsageEvent } from '../lib/logUsageEvent';
+import { USAGE_EVENT } from '../lib/usageEvents';
 
 export default function CreativeWorkshop() {
   const { user } = useAuth();
@@ -32,6 +35,22 @@ export default function CreativeWorkshop() {
   const [activeInspirationIndex, setActiveInspirationIndex] = useState<number | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [saveStatus, setSaveStatus] = useState<{[key: string]: boolean}>({});
+  const [geminiRetryLabel, setGeminiRetryLabel] = useState<string | null>(null);
+
+  const geminiOpts = useMemo(
+    () => ({
+      onRetryAttempt: (n: number, m: number) => setGeminiRetryLabel(`第 ${n} / ${m} 次请求`),
+    }),
+    [],
+  );
+
+  const geminiCallOpts = useMemo(
+    () => ({
+      ...geminiOpts,
+      analyticsUserId: user?.uid,
+    }),
+    [geminiOpts, user?.uid],
+  );
 
   const SELLING_POINTS = [
     '种花送时装',
@@ -61,7 +80,7 @@ export default function CreativeWorkshop() {
     '其他'
   ];
 
-  const handleFlashGenerate = async (mode: 'ideas' | 'script' | 'description') => {
+  const handleFlashGenerateImpl = async (mode: 'ideas' | 'script' | 'description') => {
     const finalSellingPoint = sellingPoint === '其他' ? customSellingPoint : sellingPoint;
     const finalStyle = selectedStyle === '其他' ? customStyle : selectedStyle;
     const finalMoods = [...selectedMoods.filter(m => m !== '其他'), ...(selectedMoods.includes('其他') ? [customMood] : [])].join('、');
@@ -69,6 +88,7 @@ export default function CreativeWorkshop() {
     if (!prompt.trim() && !uploadedImage) return;
 
     setIsGenerating(true);
+    setGeminiRetryLabel(null);
     setInspirationMode(mode);
     setGeneratedScript('');
     setInspirations([]);
@@ -77,22 +97,61 @@ export default function CreativeWorkshop() {
 
     try {
       if (mode === 'ideas') {
-        const result = await geminiService.generateInspirationIdeas(prompt, finalSellingPoint, finalStyle, finalMoods);
+        const result = await geminiService.generateInspirationIdeas(
+          prompt,
+          finalSellingPoint,
+          finalStyle,
+          finalMoods,
+          geminiCallOpts,
+        );
         setInspirations(result || []);
+        if (user?.uid) {
+          void logUsageEvent(user.uid, USAGE_EVENT.CREATIVE_IDEAS_GENERATED, {
+            source: 'creative_workshop_flash',
+          });
+        }
       } else if (mode === 'script') {
-        const result = await geminiService.generateFlashInspiration(prompt, finalSellingPoint, finalStyle, finalMoods);
+        const result = await geminiService.generateFlashInspiration(
+          prompt,
+          finalSellingPoint,
+          finalStyle,
+          finalMoods,
+          geminiCallOpts,
+        );
         setGeneratedScript(result || '');
+        if (user?.uid) {
+          void logUsageEvent(user.uid, USAGE_EVENT.SCRIPT_GENERATED, {
+            source: 'creative_workshop_flash',
+            meta: { variant: 'direct_prompt' },
+          });
+        }
       } else if (mode === 'description') {
-        const result = await geminiService.generateImageDescription(uploadedImage, prompt, finalSellingPoint, finalStyle, finalMoods);
+        const result = await geminiService.generateImageDescription(
+          uploadedImage,
+          prompt,
+          finalSellingPoint,
+          finalStyle,
+          finalMoods,
+          geminiCallOpts,
+        );
         setGeneratedScript(result || '');
       }
     } catch (error) {
       console.error(error);
       showToast(error instanceof Error ? error.message : '生成失败', 'error');
     } finally {
+      setGeminiRetryLabel(null);
       setIsGenerating(false);
     }
   };
+
+  const handleFlashGenerateRef = useRef(handleFlashGenerateImpl);
+  handleFlashGenerateRef.current = handleFlashGenerateImpl;
+
+  const handleFlashGenerate = useMemo(
+    () => createLeadingDebouncer(500)((mode: 'ideas' | 'script' | 'description') => void handleFlashGenerateRef.current(mode)),
+    [],
+  );
 
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -112,28 +171,50 @@ export default function CreativeWorkshop() {
     setImagePreview(null);
   };
 
-  const handleGenerateFromInspiration = async (index: number) => {
+  const handleGenerateFromInspirationImpl = async (index: number) => {
      const insp = inspirations[index];
      const finalSellingPoint = sellingPoint === '其他' ? customSellingPoint : sellingPoint;
      const finalStyle = selectedStyle === '其他' ? customStyle : selectedStyle;
      const finalMoods = [...selectedMoods.filter(m => m !== '其他'), ...(selectedMoods.includes('其他') ? [customMood] : [])].join('、');
 
      setIsGenerating(true);
+     setGeminiRetryLabel(null);
      setActiveInspirationIndex(index);
      setGeneratedScript('');
      setIsEditing(false);
 
      try {
        const scriptPrompt = `根据创意灵感点生成全文脚本：\n标题：${insp.title}\n核心梗：${insp.concept}\n爆点：${insp.hook}\n原始需求：${prompt}`;
-       const result = await geminiService.generateFlashInspiration(scriptPrompt, finalSellingPoint, finalStyle, finalMoods);
+       const result = await geminiService.generateFlashInspiration(
+         scriptPrompt,
+         finalSellingPoint,
+         finalStyle,
+         finalMoods,
+         geminiCallOpts,
+       );
        setGeneratedScript(result || '');
+       if (user?.uid) {
+         void logUsageEvent(user.uid, USAGE_EVENT.SCRIPT_GENERATED, {
+           source: 'creative_workshop_flash',
+           meta: { variant: 'from_inspiration' },
+         });
+       }
      } catch (error) {
        console.error(error);
        showToast(error instanceof Error ? error.message : '生成失败', 'error');
      } finally {
+       setGeminiRetryLabel(null);
        setIsGenerating(false);
      }
   };
+
+  const handleGenerateFromInspirationRef = useRef(handleGenerateFromInspirationImpl);
+  handleGenerateFromInspirationRef.current = handleGenerateFromInspirationImpl;
+
+  const handleGenerateFromInspiration = useMemo(
+    () => createLeadingDebouncer(500)((index: number) => void handleGenerateFromInspirationRef.current(index)),
+    [],
+  );
 
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
@@ -143,7 +224,7 @@ export default function CreativeWorkshop() {
     if (!user) return alert('请先登录以收藏资产');
 
     try {
-      await pb.collection('assets').create(
+      const record = await pb.collection('assets').create(
         buildAssetCreateBody({
           userId: user.uid,
           type,
@@ -154,6 +235,15 @@ export default function CreativeWorkshop() {
           likedBy: [],
         })
       );
+
+      if (type === 'inspiration') {
+        void logUsageEvent(user.uid, USAGE_EVENT.CREATIVE_INSPIRATION_SAVED, {
+          source: 'creative_workshop_flash',
+          refCollection: 'assets',
+          refId: record.id,
+          meta: { asset_type: type },
+        });
+      }
 
       const labelMap: Record<string, string> = {
         prompt: '提示词',
@@ -330,6 +420,9 @@ export default function CreativeWorkshop() {
                           全文脚本
                         </button>
                       </div>
+                      {isGenerating && geminiRetryLabel ? (
+                        <p className="absolute bottom-2 left-8 text-[10px] text-slate-500">{geminiRetryLabel}</p>
+                      ) : null}
                     </div>
                   </div>
 

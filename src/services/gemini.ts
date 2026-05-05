@@ -14,9 +14,37 @@ export type VideoHighlights = {
 
 export type ThemeCard = { title: string; description: string };
 
+export type GeminiCallOptions = {
+  onRetryAttempt?: (attempt: number, maxAttempts: number) => void;
+  /** 登录用户 id，供服务端写入 `gemini.call` 流水 */
+  analyticsUserId?: string;
+};
+
 const apiBase = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') ?? '';
 
-async function callGemini<T>(body: object): Promise<T> {
+const MAX_ATTEMPTS = 5;
+const RETRY_BASE_MS = [1000, 2000, 4000, 8000] as const;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function jitterMs(): number {
+  return Math.random() * 400;
+}
+
+function isRetriable(err: unknown, status?: number): boolean {
+  if (status === 429) return true;
+  if (status !== undefined && status >= 500 && status <= 599) return true;
+  const msg = err instanceof Error ? err.message : String(err);
+  return (
+    /busy|RESOURCE_EXHAUSTED|too many|rate limit|rate[-_ ]?limit|ECONNRESET|ETIMEDOUT|socket|network|fetch failed|load failed|aborted|限流|繁忙|过载|请稍后/i.test(
+      msg,
+    ) || /503|502|504|429/.test(msg)
+  );
+}
+
+async function singleFetch<T>(body: object): Promise<T> {
   const url = `${apiBase}/api/gemini`;
   let res: Response;
   try {
@@ -42,33 +70,84 @@ async function callGemini<T>(body: object): Promise<T> {
   try {
     json = JSON.parse(raw) as { ok: boolean; data?: T; error?: string };
   } catch {
-    throw new Error(`AI 接口返回异常 (${res.status}): ${raw.slice(0, 200)}`);
+    const e = new Error(`AI 接口返回异常 (${res.status}): ${raw.slice(0, 200)}`) as Error & {
+      status?: number;
+    };
+    e.status = res.status;
+    throw e;
   }
   if (!res.ok || !json.ok) {
-    throw new Error(json.error || res.statusText || 'Gemini API request failed');
+    const e = new Error(
+      json.error || res.statusText || 'Gemini API request failed',
+    ) as Error & { status?: number };
+    e.status = res.status;
+    throw e;
   }
   return json.data as T;
 }
 
+async function callGemini<T>(body: object, options?: GeminiCallOptions): Promise<T> {
+  const { analyticsUserId, onRetryAttempt } = options ?? {};
+  const payload = analyticsUserId ? { ...body, analyticsUserId } : body;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    onRetryAttempt?.(attempt, MAX_ATTEMPTS);
+    try {
+      return await singleFetch<T>(payload);
+    } catch (e) {
+      const status = (e as Error & { status?: number }).status;
+      if (!isRetriable(e, status)) {
+        throw e;
+      }
+      if (attempt >= MAX_ATTEMPTS) {
+        break;
+      }
+      const base = RETRY_BASE_MS[attempt - 1] ?? RETRY_BASE_MS[RETRY_BASE_MS.length - 1];
+      await sleep(base + jitterMs());
+    }
+  }
+
+  throw new Error(
+    '已重试多次仍无法完成请求，服务可能繁忙、遇到限流或网络不稳定，请稍后再试。',
+  );
+}
+
 export const geminiService = {
-  async generateFlashInspiration(prompt: string, sellingPoints: string, style: string, moods: string) {
-    return callGemini<string | undefined>({
-      op: 'generateFlashInspiration',
-      prompt,
-      sellingPoints,
-      style,
-      moods,
-    });
+  async generateFlashInspiration(
+    prompt: string,
+    sellingPoints: string,
+    style: string,
+    moods: string,
+    options?: GeminiCallOptions,
+  ) {
+    return callGemini<string | undefined>(
+      {
+        op: 'generateFlashInspiration',
+        prompt,
+        sellingPoints,
+        style,
+        moods,
+      },
+      options,
+    );
   },
 
-  async generateInspirationIdeas(prompt: string, sellingPoints: string, style: string, moods: string) {
-    return callGemini<FlashInspirationIdea[]>({
-      op: 'generateInspirationIdeas',
-      prompt,
-      sellingPoints,
-      style,
-      moods,
-    });
+  async generateInspirationIdeas(
+    prompt: string,
+    sellingPoints: string,
+    style: string,
+    moods: string,
+    options?: GeminiCallOptions,
+  ) {
+    return callGemini<FlashInspirationIdea[]>(
+      {
+        op: 'generateInspirationIdeas',
+        prompt,
+        sellingPoints,
+        style,
+        moods,
+      },
+      options,
+    );
   },
 
   async generateImageDescription(
@@ -77,60 +156,101 @@ export const geminiService = {
     sellingPoints: string,
     style: string,
     moods: string,
+    options?: GeminiCallOptions,
   ) {
-    return callGemini<string | undefined>({
-      op: 'generateImageDescription',
-      imageBase64,
-      prompt,
-      sellingPoints,
-      style,
-      moods,
-    });
+    return callGemini<string | undefined>(
+      {
+        op: 'generateImageDescription',
+        imageBase64,
+        prompt,
+        sellingPoints,
+        style,
+        moods,
+      },
+      options,
+    );
   },
 
-  async analyzeVideoIteration(videoBase64: string, mimeType: string, style: string, moods: string) {
-    return callGemini<string | undefined>({
-      op: 'analyzeVideoIteration',
-      videoBase64,
-      mimeType,
-      style,
-      moods,
-    });
+  async analyzeVideoIteration(
+    videoBase64: string,
+    mimeType: string,
+    style: string,
+    moods: string,
+    options?: GeminiCallOptions,
+  ) {
+    return callGemini<string | undefined>(
+      {
+        op: 'analyzeVideoIteration',
+        videoBase64,
+        mimeType,
+        style,
+        moods,
+      },
+      options,
+    );
   },
 
-  async extractHighlights(videoBase64: string, mimeType: string) {
-    return callGemini<VideoHighlights | null>({
-      op: 'extractHighlights',
-      videoBase64,
-      mimeType,
-    });
+  async extractHighlights(videoBase64: string, mimeType: string, options?: GeminiCallOptions) {
+    return callGemini<VideoHighlights | null>(
+      {
+        op: 'extractHighlights',
+        videoBase64,
+        mimeType,
+      },
+      options,
+    );
   },
 
-  async generateThemes(selectedHighlights: string[], sellingPoints: string) {
-    return callGemini<ThemeCard[]>({
-      op: 'generateThemes',
-      selectedHighlights,
-      sellingPoints,
-    });
+  async generateThemes(
+    selectedHighlights: string[],
+    sellingPoints: string,
+    options?: GeminiCallOptions,
+  ) {
+    return callGemini<ThemeCard[]>(
+      {
+        op: 'generateThemes',
+        selectedHighlights,
+        sellingPoints,
+      },
+      options,
+    );
   },
 
-  async generateFinalScript(themeTitle: string, themeDescription: string, style: string, moods: string) {
-    return callGemini<string | undefined>({
-      op: 'generateFinalScript',
-      themeTitle,
-      themeDescription,
-      style,
-      moods,
-    });
+  async generateFinalScript(
+    themeTitle: string,
+    themeDescription: string,
+    style: string,
+    moods: string,
+    options?: GeminiCallOptions,
+  ) {
+    return callGemini<string | undefined>(
+      {
+        op: 'generateFinalScript',
+        themeTitle,
+        themeDescription,
+        style,
+        moods,
+      },
+      options,
+    );
   },
 
-  async extractInspiration(videoBase64: string, mimeType: string, style: string, moods: string) {
-    return callGemini<string | undefined>({
-      op: 'extractInspiration',
-      videoBase64,
-      mimeType,
-      style,
-      moods,
-    });
+  async extractInspiration(
+    videoBase64: string,
+    mimeType: string,
+    style: string,
+    moods: string,
+    options?: GeminiCallOptions,
+  ) {
+    return callGemini<string | undefined>(
+      {
+        op: 'extractInspiration',
+        videoBase64,
+        mimeType,
+        style,
+        moods,
+      },
+      options,
+    );
   },
 };

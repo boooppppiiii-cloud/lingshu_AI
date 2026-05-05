@@ -6,6 +6,8 @@ import { Asset, AssetType } from '../types';
 import { Search, FolderHeart, MessageSquare, FileText, Layout, Copy, Share2, Trash2, CheckCircle2, Plus, X, Heart, Edit3, Sparkles, Zap } from 'lucide-react';
 import { pb } from '../lib/pb';
 import { buildAssetCreateBody, buildMarketCreateBody, recordToAsset } from '../lib/recordMappers';
+import { logUsageEvent } from '../lib/logUsageEvent';
+import { USAGE_EVENT } from '../lib/usageEvents';
 import Markdown from 'react-markdown';
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -179,6 +181,14 @@ export default function AssetCardView() {
           })
         );
         setAssets((prev) => [recordToAsset(record), ...prev]);
+        if (activeTab === 'inspiration') {
+          void logUsageEvent(user.uid, USAGE_EVENT.CREATIVE_INSPIRATION_SAVED, {
+            source: 'asset_card_view',
+            refCollection: 'assets',
+            refId: record.id,
+            meta: { asset_type: activeTab },
+          });
+        }
       }
 
       setShowCreateModal(false);
@@ -272,7 +282,7 @@ export default function AssetCardView() {
     }
 
     try {
-      await pb.collection('market').create(
+      const marketRecord = await pb.collection('market').create(
         buildMarketCreateBody({
           userId: user.uid,
           userNickname: user.displayName || '匿名用户',
@@ -285,6 +295,12 @@ export default function AssetCardView() {
           likedBy: [],
         })
       );
+      void logUsageEvent(user.uid, USAGE_EVENT.MARKET_PUBLISHED, {
+        source: 'asset_card_view',
+        refCollection: 'market',
+        refId: marketRecord.id,
+        meta: { asset_id: asset.id, type: asset.type },
+      });
       showToast('已成功上传至灵感市场！');
     } catch (e) {
       console.error(e);
