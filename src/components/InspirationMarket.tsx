@@ -224,7 +224,7 @@ export default function InspirationMarket() {
   };
 
   return (
-    <div className="max-w-7xl mx-auto py-8 px-4">
+    <div className="max-w-6xl mx-auto py-8 px-4">
       <AnimatePresence>
         {showEditModal && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
@@ -288,66 +288,83 @@ export default function InspirationMarket() {
         )}
       </AnimatePresence>
 
-      <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-12">
-        <div className="max-w-2xl">
-          <div className="flex items-center gap-4 mb-4">
-            <div className="p-4 bg-accent-blue/5 rounded-3xl shadow-inner shadow-accent-blue/10">
-              <Zap className="w-10 h-10 text-accent-blue" />
-            </div>
-            <h1 className="text-5xl font-black text-primary-blue tracking-tighter">灵感市场</h1>
-          </div>
-          <p className="text-slate-500 text-lg">汇聚全球指挥官的奇思妙想，发现最动人的创意瞬间。</p>
+      {/* 顶栏：与资产卡片一致 — 标题左、类型标签右 */}
+      <div className="mb-6 flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <h1 className="mb-2 flex items-center gap-3 text-3xl font-bold tracking-tight text-primary-blue lg:text-4xl">
+            <Zap className="h-8 w-8 shrink-0 text-accent-blue lg:h-9 lg:w-9" />
+            灵感市场
+          </h1>
+          <p className="max-w-lg text-sm leading-relaxed text-slate-500">
+            汇聚全球指挥官的奇思妙想，发现最动人的创意瞬间。
+          </p>
         </div>
-        
-        <div className="relative group w-full md:w-96">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 w-5 h-5 group-focus-within:text-accent-blue transition-colors" />
+        <div className="flex shrink-0 flex-wrap items-center gap-2 lg:justify-end">
+          <div className="flex flex-wrap rounded-xl border border-slate-200 bg-slate-100 p-1">
+            {(['all', 'prompt', 'full_script', 'storyboard'] as const).map((tab) => (
+              <button
+                key={`m-tab-${tab}`}
+                type="button"
+                onClick={() => {
+                  setActiveTab(tab);
+                  setFilters({
+                    theme: '',
+                    plot: '',
+                    mood: '',
+                    hook: '',
+                    selling_point: '',
+                    conflict: '',
+                    shot: '',
+                    camera: '',
+                    frame: '',
+                    action: '',
+                    audio: '',
+                  });
+                }}
+                className={`rounded-lg px-3 py-2 text-xs font-bold transition-all sm:px-4 sm:text-sm ${
+                  activeTab === tab
+                    ? 'bg-white text-primary-blue shadow-sm'
+                    : 'text-slate-500 hover:text-slate-800'
+                }`}
+              >
+                {labelMap[tab]}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* 搜索：与顶栏同宽，左右边缘与标题+标签组合对齐 */}
+      <div className="mb-8 w-full">
+        <div className="group relative w-full">
+          <Search className="pointer-events-none absolute left-4 top-1/2 h-5 w-5 -translate-y-1/2 text-slate-400 transition-colors group-focus-within:text-accent-blue" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="搜索创意、作者或内容..."
-            className="w-full bg-white border border-slate-200 rounded-2xl py-4 pl-12 pr-4 outline-none focus:border-accent-blue transition-all text-slate-700 shadow-sm"
+            className="w-full rounded-2xl border border-slate-200 bg-white py-3.5 pl-12 pr-4 text-sm text-slate-700 shadow-sm outline-none transition-all focus:border-accent-blue"
           />
         </div>
       </div>
 
-      <div className="space-y-8 mb-12">
-        <div className="flex flex-wrap items-center gap-3">
-          {(['all', 'prompt', 'full_script', 'storyboard'] as const).map(tab => (
-            <button
-              key={`m-tab-${tab}`}
-              onClick={() => {
-                setActiveTab(tab);
-                setFilters({
-                  theme: '', plot: '', mood: '', hook: '', selling_point: '',
-                  conflict: '', shot: '', camera: '', frame: '', action: '', audio: ''
-                });
-              }}
-              className={`px-8 py-3 rounded-2xl text-sm font-black transition-all border cursor-pointer ${activeTab === tab ? 'bg-primary-blue text-white border-primary-blue shadow-lg shadow-slate-200' : 'bg-white text-slate-500 border-slate-200 hover:text-primary-blue hover:bg-slate-50'}`}
-            >
-              {labelMap[tab]}
-            </button>
+      {activeTab !== 'all' && activeTab !== 'prompt' && CATEGORIES_BY_TAB[activeTab] && (
+        <div className="mx-auto mb-10 grid w-full max-w-5xl grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-8 lg:gap-3">
+          {CATEGORIES_BY_TAB[activeTab].map((cat) => (
+            <DropdownFilter
+              key={cat}
+              label={CATEGORY_LABELS[cat] || cat.toUpperCase()}
+              options={filterOptions[cat]}
+              value={filters[cat]}
+              onChange={(val) => setFilters((prev) => ({ ...prev, [cat]: val }))}
+            />
           ))}
         </div>
-
-        {activeTab !== 'all' && activeTab !== 'prompt' && CATEGORIES_BY_TAB[activeTab] && (
-          <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-8 gap-4">
-            {CATEGORIES_BY_TAB[activeTab].map(cat => (
-              <DropdownFilter 
-                key={cat}
-                label={CATEGORY_LABELS[cat] || cat.toUpperCase()}
-                options={filterOptions[cat]}
-                value={filters[cat]}
-                onChange={(val) => setFilters(prev => ({ ...prev, [cat]: val }))}
-              />
-            ))}
-          </div>
-        )}
-      </div>
+      )}
 
       {loading ? (
-        <div className="flex justify-center py-40">
-          <div className="w-12 h-12 border-4 border-sea-green border-t-transparent rounded-full animate-spin" />
+        <div className="flex justify-center py-24">
+          <div className="h-10 w-10 animate-spin rounded-full border-4 border-sea-green border-t-transparent" />
         </div>
       ) : filteredItems.length > 0 ? (
         <div className="columns-1 md:columns-2 lg:columns-3 gap-6 space-y-6">
@@ -367,9 +384,9 @@ export default function InspirationMarket() {
           ))}
         </div>
       ) : (
-        <div className="text-center py-60 glass-card border-dashed">
-          <Zap className="w-20 h-20 text-slate-700 mx-auto mb-6 opacity-20" />
-          <p className="text-xl text-slate-500 font-bold">灵感尚未降临，快去创意工坊分享第一个吧</p>
+        <div className="glass-card border-dashed py-24 text-center">
+          <Zap className="mx-auto mb-4 h-16 w-16 text-slate-700 opacity-20" />
+          <p className="text-base font-bold text-slate-500 sm:text-lg">灵感尚未降临，快去创意工坊分享第一个吧</p>
         </div>
       )}
     </div>
@@ -387,8 +404,9 @@ function DropdownFilter({ label, options, value, onChange }: {
   return (
     <div className="relative">
       <button
+        type="button"
         onClick={() => setIsOpen(!isOpen)}
-        className={`w-full flex items-center justify-between px-4 py-3 bg-white border rounded-2xl text-xs font-black transition-all ${value ? 'border-accent-blue text-accent-blue shadow-sm' : 'border-slate-200 text-slate-400 hover:border-slate-300'}`}
+        className={`flex w-full items-center justify-between rounded-xl border bg-white px-3 py-2.5 text-[11px] font-black transition-all sm:text-xs ${value ? 'border-accent-blue text-accent-blue shadow-sm' : 'border-slate-200 text-slate-400 hover:border-slate-300'}`}
       >
         <span>{value ? `${label}: ${value}` : label}</span>
         <ChevronDown className={`w-4 h-4 transition-transform ${isOpen ? 'rotate-180' : ''}`} />

@@ -1,6 +1,6 @@
 import { useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sparkles, Zap, Send, RefreshCw, MessageSquare, ChevronDown, Bookmark, Copy, CheckCircle2, Layout, FileText, Lightbulb, Image as ImageIcon, Upload, X } from 'lucide-react';
+import { Sparkles, Zap, Send, RefreshCw, MessageSquare, ChevronDown, Bookmark, Copy, CheckCircle2, FileText, Lightbulb, Image as ImageIcon, Upload, X } from 'lucide-react';
 import ContentIteration from './ContentIteration';
 import InspirationExtraction from './InspirationExtraction';
 import { WorkshopTab, AssetType } from '../types';
@@ -262,12 +262,6 @@ export default function CreativeWorkshop() {
     }
   };
 
-  const splitStoryboard = (script: string) => {
-    const parts = script.split('【分镜脚本】');
-    if (parts.length < 2) return null;
-    return parts[1].trim();
-  };
-
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl w-fit mx-auto mb-8 mt-4 sticky top-24 z-20 backdrop-blur-md border border-slate-200">
@@ -406,10 +400,10 @@ export default function CreativeWorkshop() {
                         <button
                           onClick={() => handleFlashGenerate('script')}
                           disabled={isGenerating || (!prompt.trim() && !uploadedImage)}
-                          className={`flex items-center gap-2 px-6 py-3 rounded-2xl font-bold transition-all disabled:opacity-50 active:scale-95 shadow-xl ${
+                          className={`flex items-center gap-2 px-6 py-3 rounded-2xl font-bold border-2 transition-all disabled:opacity-50 active:scale-95 shadow-xl bg-white text-black border-black ${
                             inspirationMode === 'script'
-                              ? 'bg-primary-blue text-white border-primary-blue scale-105 shadow-primary-blue/20'
-                              : 'bg-primary-blue text-white border-primary-blue hover:brightness-110 shadow-primary-blue/20'
+                              ? 'scale-105 shadow-black/15'
+                              : 'hover:bg-slate-50 shadow-slate-200/80'
                           }`}
                         >
                           {isGenerating && inspirationMode === 'script' ? (
@@ -478,10 +472,19 @@ export default function CreativeWorkshop() {
                       
                       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                         {inspirations.map((insp, i) => (
-                          <div 
-                            key={`insp-${i}-${insp.title}`} 
-                            className={`p-6 rounded-[2rem] border transition-all group relative ${activeInspirationIndex === i ? 'bg-accent-blue/5 border-accent-blue ring-4 ring-accent-blue/5' : 'bg-white border-slate-200 hover:border-accent-blue/30'}`}
+                          <div
+                            key={`insp-${i}-${insp.title}`}
+                            className={`p-6 rounded-[2rem] border transition-all group relative overflow-hidden ${activeInspirationIndex === i ? 'bg-accent-blue/5 border-accent-blue ring-4 ring-accent-blue/5' : 'bg-white border-slate-200 hover:border-accent-blue/30'}`}
                           >
+                            {isGenerating && activeInspirationIndex === i ? (
+                              <div
+                                className="absolute inset-0 z-20 flex items-center justify-center rounded-[2rem] bg-white/85 backdrop-blur-[2px]"
+                                aria-live="polite"
+                                aria-busy="true"
+                              >
+                                <p className="text-sm font-black text-primary-blue tracking-tight">脚本生成中...</p>
+                              </div>
+                            ) : null}
                             <div className="flex items-center justify-between mb-3">
                               <span className="text-[10px] font-black text-accent-blue uppercase tracking-widest">灵感 0{i + 1}</span>
                               <div className="flex items-center gap-2">
@@ -492,12 +495,17 @@ export default function CreativeWorkshop() {
                                 >
                                   {saveStatus['inspiration' + insp.title] ? <CheckCircle2 className="w-4 h-4" /> : <Bookmark className="w-4 h-4" />}
                                 </button>
-                                <button 
+                                <button
+                                  type="button"
                                   onClick={() => handleGenerateFromInspiration(i)}
-                                  className="p-1.5 text-slate-400 hover:text-primary-blue transition-colors"
+                                  disabled={isGenerating}
                                   title="基于此灵感生成脚本"
+                                  className="group/script flex flex-col items-center justify-center gap-0.5 min-w-[3.5rem] px-2 py-1 rounded-xl border border-transparent text-slate-400 transition-all duration-200 hover:scale-105 hover:border-primary-blue hover:bg-primary-blue hover:text-white active:scale-100 disabled:pointer-events-none disabled:opacity-40 disabled:hover:scale-100 disabled:hover:bg-transparent disabled:hover:border-transparent disabled:hover:text-slate-400"
                                 >
-                                  <FileText className="w-4 h-4" />
+                                  <FileText className="w-4 h-4 shrink-0" />
+                                  <span className="text-[9px] font-black leading-tight text-center max-h-0 opacity-0 overflow-hidden group-hover/script:max-h-5 group-hover/script:opacity-100 transition-all duration-200">
+                                    生成脚本
+                                  </span>
                                 </button>
                               </div>
                             </div>
@@ -572,25 +580,6 @@ export default function CreativeWorkshop() {
                           </div>
                         )}
                       </div>
-
-                      {splitStoryboard(generatedScript) && (
-                        <div className="flex items-center justify-end gap-3 mt-4">
-                          <span className="text-xs text-slate-500 mr-auto font-medium">✨ 发现分镜部分，支持快速操作：</span>
-                          <button 
-                            onClick={() => handleCopy(splitStoryboard(generatedScript)!)}
-                            className="text-[10px] font-bold text-slate-500 hover:text-primary-blue px-3 py-1.5 bg-white rounded-full border border-slate-200 shadow-sm transition-all flex items-center gap-1.5"
-                          >
-                            <Layout className="w-3 h-3" /> 复制分镜
-                          </button>
-                          <button 
-                            onClick={() => handleSaveAsset('full_script', splitStoryboard(generatedScript)!, prompt.slice(0, 15) + '_分镜')}
-                            className={`text-[10px] font-bold px-3 py-1.5 rounded-full border transition-all flex items-center gap-1.5 ${saveStatus['full_script' + prompt.slice(0, 15) + '_分镜'] ? 'bg-accent-blue/10 border-accent-blue text-accent-blue' : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100 hover:border-slate-300'}`}
-                          >
-                            {saveStatus['full_script' + prompt.slice(0, 15) + '_分镜'] ? <CheckCircle2 className="w-3 h-3" /> : <Bookmark className="w-3 h-3" />}
-                            收藏分镜 (至整篇脚本)
-                          </button>
-                        </div>
-                      )}
                     </motion.div>
                   )}
                 </AnimatePresence>

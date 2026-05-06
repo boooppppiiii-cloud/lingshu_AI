@@ -48,13 +48,6 @@ export default function AssetCardView() {
       { id: 'mood', label: '情绪' }
     ],
     storyboard: [
-      { id: 'theme', label: '主题' },
-      { id: 'hook', label: '钩子' },
-      { id: 'selling_point', label: '卖点' },
-      { id: 'mood', label: '情绪' }
-    ],
-    // These are for the market but we keep them here if needed for parsing
-    _storyboard_market: [
       { id: 'conflict', label: '冲突' },
       { id: 'mood', label: '情绪' },
       { id: 'shot', label: '景别' },
@@ -62,8 +55,8 @@ export default function AssetCardView() {
       { id: 'frame', label: '画面' },
       { id: 'action', label: '动作' },
       { id: 'audio', label: '配音' },
-      { id: 'selling_point', label: '卖点' }
-    ]
+      { id: 'selling_point', label: '卖点' },
+    ],
   };
 
   useEffect(() => {
@@ -337,16 +330,21 @@ export default function AssetCardView() {
           <p className="text-slate-500">管理你的私人灵感库，收藏优秀的创意与脚本。</p>
         </div>
         
-        <div className="flex items-center gap-4">
+        <div className="flex items-stretch gap-3">
           <button
+            type="button"
             onClick={() => setShowCreateModal(true)}
-            className="flex items-center gap-2 bg-primary-blue hover:bg-slate-800 text-white px-6 py-2.5 rounded-xl font-bold transition-all shadow-lg shadow-slate-200 cursor-pointer"
+            className="flex min-h-0 w-[50px] shrink-0 cursor-pointer flex-col items-center justify-center gap-1 self-stretch rounded-xl bg-accent-blue px-0 py-2 text-white shadow-sm transition-all hover:bg-accent-blue/90 active:scale-[0.98] box-border"
           >
-            <Plus className="w-5 h-5" />
-            手动上传
+            <Plus className="h-3.5 w-3.5 shrink-0" />
+            <span className="flex flex-col items-center text-center text-[12px] font-bold leading-none">
+              {'手动上传'.split('').map((ch, i) => (
+                <span key={`${ch}-${i}`}>{ch}</span>
+              ))}
+            </span>
           </button>
-          
-          <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
+
+          <div className="flex min-h-0 rounded-xl border border-slate-200 bg-slate-100 p-1">
             {(['prompt', 'inspiration', 'visual_detail', 'full_script', 'storyboard'] as AssetType[]).map(tab => (
               <button
                 key={tab}
