@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '../lib/AuthContext';
 import { useToast } from '../lib/ToastContext';
 import { AssetType, MarketItem } from '../types';
-import { Search, Zap, MessageSquare, FileText, Layout, Heart, Share2, ChevronDown, Check, Trash2, Edit3, X } from 'lucide-react';
+import { Search, Zap, MessageSquare, FileText, Layout, Heart, Copy, ChevronDown, Check, Trash2, Edit3, X } from 'lucide-react';
 import { pb } from '../lib/pb';
 import { recordToMarketItem } from '../lib/recordMappers';
 import { logUsageEvent } from '../lib/logUsageEvent';
@@ -459,11 +459,19 @@ function MarketCard({ item, onLike, isLiked, isOwner, onDelete, onEdit, icon }: 
   icon: React.ReactNode;
 }) {
   const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(false);
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(item.content);
+  const handleCopy = (e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    void navigator.clipboard.writeText(item.content);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleCardDoubleClick = (e: React.MouseEvent) => {
+    const t = e.target as HTMLElement;
+    if (t.closest('button, a, input, textarea, [role="button"]')) return;
+    setExpanded((v) => !v);
   };
 
   return (
@@ -471,55 +479,69 @@ function MarketCard({ item, onLike, isLiked, isOwner, onDelete, onEdit, icon }: 
       layout
       initial={{ opacity: 0, y: 30 }}
       animate={{ opacity: 1, y: 0 }}
+      title={expanded ? '双击收起正文' : '双击展开正文'}
+      onDoubleClick={handleCardDoubleClick}
       className="break-inside-avoid glass-card group flex flex-col hover:border-accent-blue/30 transition-all duration-500"
     >
       <div className="p-8">
-        <div className="flex items-center justify-between mb-6">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400 group-hover:text-accent-blue transition-colors">
+        <div className="relative mb-6 flex items-start justify-between gap-3">
+          <div className={`flex min-w-0 flex-1 items-center gap-3 ${isOwner ? 'pr-44 sm:pr-48' : 'pr-28 sm:pr-32'}`}>
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl border border-slate-100 bg-slate-50 text-slate-400 transition-colors group-hover:text-accent-blue">
               {icon}
             </div>
-            <div>
-              <div className="text-[10px] font-black text-slate-500 uppercase tracking-widest">{item.userNickname}</div>
+            <div className="min-w-0">
+              <div className="text-[10px] font-black uppercase tracking-widest text-slate-500">{item.userNickname}</div>
               <div className="text-xs text-slate-400">
                 {item.createdAt ? new Date(item.createdAt.seconds * 1000).toLocaleDateString() : '刚刚'}
               </div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="absolute right-0 top-0 flex shrink-0 items-center gap-1">
             <button
-              onClick={handleCopy}
-              className="p-2 text-slate-400 hover:text-primary-blue transition-colors"
-              title="复制"
+              type="button"
+              onClick={(e) => handleCopy(e)}
+              className="flex items-center gap-1 rounded-xl border border-slate-200 bg-white px-2.5 py-1.5 text-[11px] font-black text-slate-600 shadow-sm transition-colors hover:border-accent-blue/40 hover:text-primary-blue"
+              title="复制全文（纯文本）"
             >
-               {copied ? <Check className="w-5 h-5 text-accent-blue" /> : <Share2 className="w-5 h-5" />}
+              {copied ? <Check className="h-3.5 w-3.5 text-accent-blue" /> : <Copy className="h-3.5 w-3.5" />}
+              <span>{copied ? '已复制' : '全文复制'}</span>
             </button>
             {isOwner && (
               <>
                 <button
+                  type="button"
                   onClick={onEdit}
-                  className="p-2 text-slate-400 hover:text-accent-blue transition-colors"
+                  className="p-2 text-slate-400 transition-colors hover:text-accent-blue"
                   title="编辑"
                 >
-                  <Edit3 className="w-5 h-5" />
+                  <Edit3 className="h-5 w-5" />
                 </button>
                 <button
+                  type="button"
                   onClick={onDelete}
-                  className="p-2 text-slate-400 hover:text-red-500 transition-colors"
+                  className="p-2 text-slate-400 transition-colors hover:text-red-500"
                   title="删除"
                 >
-                  <Trash2 className="w-5 h-5" />
+                  <Trash2 className="h-5 w-5" />
                 </button>
               </>
             )}
           </div>
         </div>
 
-        <h3 className="text-xl font-black text-primary-blue mb-4 tracking-tight leading-tight">{item.title}</h3>
+        <h3 className="mb-4 text-xl font-black leading-tight tracking-tight text-primary-blue">{item.title}</h3>
         
-        <div className="markdown-body prose prose-slate prose-sm text-slate-600 mb-8 max-h-96 overflow-hidden relative">
+        <div
+          className={`markdown-body prose prose-slate prose-sm relative mb-8 text-slate-600 ${
+            expanded
+              ? 'max-h-[min(75vh,1200px)] overflow-y-auto overflow-x-hidden pr-1 custom-scrollbar select-text'
+              : 'max-h-96 overflow-hidden'
+          }`}
+        >
           <Markdown>{item.content}</Markdown>
-          <div className="absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-white to-transparent pointer-events-none" />
+          {!expanded && (
+            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-12 bg-gradient-to-t from-white to-transparent" />
+          )}
         </div>
 
         <div className="flex items-center justify-between pt-6 border-t border-slate-100">
