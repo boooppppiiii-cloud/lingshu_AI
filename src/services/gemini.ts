@@ -14,6 +14,20 @@ export type VideoHighlights = {
 
 export type ThemeCard = { title: string; description: string };
 
+export type FlashEmotionPoint = { t: number; intensity: number; note?: string };
+export type FlashScriptAxisDiag = {
+  status: 'strong' | 'ok' | 'weak';
+  score: number;
+  finding: string;
+  suggestions: string[];
+};
+export type FlashScriptDiagnosis = {
+  totalSeconds: number;
+  emotionCurve: FlashEmotionPoint[];
+  hook3s: FlashScriptAxisDiag;
+  selling8s: FlashScriptAxisDiag;
+};
+
 export const FLASH_SCRIPT_DURATION_PRESETS = ['1-5', '5-10', '10-15', '15-25'] as const;
 export type FlashScriptDurationPreset = (typeof FLASH_SCRIPT_DURATION_PRESETS)[number];
 
@@ -262,6 +276,21 @@ export const geminiService = {
         mimeType,
         style,
         moods,
+      },
+      options,
+    );
+  },
+
+  async diagnoseFlashScript(
+    script: string,
+    sellingPoints: string | undefined,
+    options?: GeminiCallOptions,
+  ) {
+    return callGemini<FlashScriptDiagnosis | null>(
+      {
+        op: 'diagnoseFlashScript',
+        script,
+        sellingPoints: sellingPoints?.trim() || undefined,
       },
       options,
     );

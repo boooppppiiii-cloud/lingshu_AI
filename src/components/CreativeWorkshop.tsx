@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Sparkles, Zap, Send, RefreshCw, MessageSquare, ChevronDown, Bookmark, Copy, CheckCircle2, FileText, Lightbulb, Image as ImageIcon, Upload, X, Timer } from 'lucide-react';
 import ContentIteration from './ContentIteration';
@@ -8,12 +8,14 @@ import {
   geminiService,
   FLASH_SCRIPT_DURATION_LABEL,
   FLASH_SCRIPT_DURATION_PRESETS,
+  type FlashScriptDiagnosis,
   type FlashScriptDurationPreset,
 } from '../services/gemini';
 import { useAuth } from '../lib/AuthContext';
 import { pb } from '../lib/pb';
 import { buildAssetCreateBody } from '../lib/recordMappers';
 import Markdown from 'react-markdown';
+import FlashScriptDiagnosisPanel from './FlashScriptDiagnosisPanel';
 
 import { useToast } from '../lib/ToastContext';
 import { createLeadingDebouncer } from '../lib/leadingDebounce';
@@ -42,6 +44,9 @@ export default function CreativeWorkshop() {
   const [saveStatus, setSaveStatus] = useState<{[key: string]: boolean}>({});
   const [geminiRetryLabel, setGeminiRetryLabel] = useState<string | null>(null);
   const [scriptDurationPreset, setScriptDurationPreset] = useState<FlashScriptDurationPreset>('10-15');
+  const [scriptDiagnosis, setScriptDiagnosis] = useState<FlashScriptDiagnosis | null>(null);
+  const [scriptDiagnosisLoading, setScriptDiagnosisLoading] = useState(false);
+  const [scriptDiagnosisError, setScriptDiagnosisError] = useState<string | null>(null);
 
   const geminiOpts = useMemo(
     () => ({
@@ -56,6 +61,11 @@ export default function CreativeWorkshop() {
       analyticsUserId: user?.uid,
     }),
     [geminiOpts, user?.uid],
+  );
+
+  const flashSellingSummary = useMemo(
+    () => (sellingPoint === '其他' ? customSellingPoint : sellingPoint).trim(),
+    [sellingPoint, customSellingPoint],
   );
 
   const SELLING_POINTS = [
@@ -86,6 +96,74 @@ export default function CreativeWorkshop() {
     '其他'
   ];
 
+  useEffect(() => {
+    if (activeTab !== 'flash') return;
+    if (inspirationMode === 'description') {
+      setScriptDiagnosis(null);
+      setScriptDiagnosisLoading(false);
+      setScriptDiagnosisError(null);
+      return;
+    }
+    const text = generatedScript.trim();
+    const looksLikeBoardScript =
+      text.length >= 60 && /【分镜脚本】|【分镜标签】|\[00:\d{2}-\d{2}:\d{2}\]/.test(text);
+    if (!looksLikeBoardScript) {
+      setScriptDiagnosis(null);
+      setScriptDiagnosisLoading(false);
+      setScriptDiagnosisError(null);
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      void (async () => {
+        if (cancelled) return;
+        setScriptDiagnosisLoading(true);
+        setScriptDiagnosisError(null);
+        try {
+          const data = await geminiService.diagnoseFlashScript(
+            text,
+            flashSellingSummary || undefined,
+            geminiCallOpts,
+          );
+          if (cancelled) return;
+          if (!data || !data.emotionCurve?.length) {
+            setScriptDiagnosis(null);
+            setScriptDiagnosisError('诊断未完成或格式异常，请稍后再试。');
+          } else {
+            setScriptDiagnosis(data);
+            if (user?.uid) {
+              void logUsageEvent(user.uid, USAGE_EVENT.SCRIPT_DIAGNOSED, {
+                source: 'creative_workshop_flash',
+                meta: {
+                  hook3_status: data.hook3s.status,
+                  hook3_score: data.hook3s.score,
+                  sell8_status: data.selling8s.status,
+                  sell8_score: data.selling8s.score,
+                  total_seconds: data.totalSeconds,
+                },
+              });
+            }
+          }
+        } catch (e) {
+          if (cancelled) return;
+          setScriptDiagnosis(null);
+          setScriptDiagnosisError(e instanceof Error ? e.message : '诊断请求失败');
+        } finally {
+          if (!cancelled) {
+            setScriptDiagnosisLoading(false);
+          }
+        }
+      })();
+    }, 720);
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+      setScriptDiagnosisLoading(false);
+    };
+  }, [activeTab, inspirationMode, generatedScript, flashSellingSummary, geminiCallOpts, user?.uid]);
+
   const handleFlashGenerateImpl = async (mode: 'ideas' | 'script' | 'description') => {
     const finalSellingPoint = sellingPoint === '其他' ? customSellingPoint : sellingPoint;
     const finalStyle = selectedStyle === '其他' ? customStyle : selectedStyle;
@@ -100,6 +178,9 @@ export default function CreativeWorkshop() {
     setInspirations([]);
     setIsEditing(false);
     setActiveInspirationIndex(null);
+    setScriptDiagnosis(null);
+    setScriptDiagnosisError(null);
+    setScriptDiagnosisLoading(false);
 
     try {
       if (mode === 'ideas') {
@@ -189,6 +270,9 @@ export default function CreativeWorkshop() {
      setActiveInspirationIndex(index);
      setGeneratedScript('');
      setIsEditing(false);
+     setScriptDiagnosis(null);
+     setScriptDiagnosisError(null);
+     setScriptDiagnosisLoading(false);
 
      try {
        const scriptPrompt = `根据创意灵感点生成全文脚本：\n标题：${insp.title}\n核心梗：${insp.concept}\n爆点：${insp.hook}\n原始需求：${prompt}`;
@@ -201,6 +285,7 @@ export default function CreativeWorkshop() {
          scriptDurationPreset,
        );
        setGeneratedScript(result || '');
+       setInspirationMode('script');
        if (user?.uid) {
          void logUsageEvent(user.uid, USAGE_EVENT.SCRIPT_GENERATED, {
            source: 'creative_workshop_flash',
@@ -613,6 +698,14 @@ export default function CreativeWorkshop() {
                           </div>
                         )}
                       </div>
+
+                      {inspirationMode !== 'description' ? (
+                        <FlashScriptDiagnosisPanel
+                          data={scriptDiagnosis}
+                          loading={scriptDiagnosisLoading}
+                          error={scriptDiagnosisError}
+                        />
+                      ) : null}
                     </motion.div>
                   )}
                 </AnimatePresence>

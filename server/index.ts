@@ -9,7 +9,6 @@
  * 指向同一实现的 fetch，这样 @google/genai 使用的全局 fetch 也会走代理。
  * （部分环境无内置 `node:undici` 模块，会直接导致 dev:api 起不来、8787 ECONNREFUSED。）
  *
- * 环境策略：非 production 且未配置任何代理时，默认走本机 http://127.0.0.1:7890；
  * production（云服务器）未配置代理则直连 Gemini。可用 LOCAL_GEMINI_DIRECT=1 在本地跳过默认代理。
  */
 import fs from 'node:fs';
@@ -78,7 +77,7 @@ const isProd = process.env.NODE_ENV === 'production';
 const skipLocalDefault =
   process.env.LOCAL_GEMINI_DIRECT === '1' || /^true$/i.test(process.env.LOCAL_GEMINI_DIRECT ?? '');
 
-const defaultLocalProxy = 'http://127.0.0.1:7890';
+const defaultLocalProxy = '';
 const outboundProxy =
   proxyFromEnv ||
   (isProd || skipLocalDefault ? '' : defaultLocalProxy);

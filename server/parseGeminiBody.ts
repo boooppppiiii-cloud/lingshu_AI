@@ -9,6 +9,7 @@ const VALID_OPS = new Set<string>([
   'generateThemes',
   'generateFinalScript',
   'extractInspiration',
+  'diagnoseFlashScript',
 ]);
 
 export function parseGeminiRequest(raw: unknown): { opBody: GeminiOpBody; analyticsUserId?: string } {

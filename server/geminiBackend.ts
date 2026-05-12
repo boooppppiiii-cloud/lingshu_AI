@@ -82,7 +82,8 @@ export type GeminiOpBody =
   | { op: 'extractHighlights'; videoBase64: string; mimeType: string }
   | { op: 'generateThemes'; selectedHighlights: string[]; sellingPoints: string }
   | { op: 'generateFinalScript'; themeTitle: string; themeDescription: string; style: string; moods: string }
-  | { op: 'extractInspiration'; videoBase64: string; mimeType: string; style: string; moods: string };
+  | { op: 'extractInspiration'; videoBase64: string; mimeType: string; style: string; moods: string }
+  | { op: 'diagnoseFlashScript'; script: string; sellingPoints?: string };
 
 function client() {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
@@ -345,6 +346,72 @@ ${scriptFormatInstruction(10, 25)}
         config: { systemInstruction },
       });
       return response.text;
+    }
+
+    case 'diagnoseFlashScript': {
+      const selling = (body.sellingPoints ?? '').trim() || '（未指定，按脚本内卖点与核心冲突推断）';
+      const systemInstruction = `你是短视频买量脚本诊断专家。根据用户提供的分镜脚本全文，只做结构化分析，不要复述脚本。
+
+诊断框架（买量常见节奏）：
+1. 「3 秒吸睛」：检查 0–3 秒内是否具备强钩子（冲突、反转预兆、视觉奇观、悬念、情绪爆点之一即可）。
+2. 「8 秒卖点」：检查 0–8 秒内是否清晰传达可感知的利益点或游戏价值（与脚本中的核心卖点、玩法或奖励相关）。
+
+同时根据脚本各段落的戏剧张力与情绪起伏，生成一条「情绪曲线」：横轴为时间（秒），纵轴为 0–100 的情绪/冲突强度（主观但需与分镜内容一致）。
+
+只输出一个 JSON 对象，禁止 Markdown、禁止代码块、禁止任何开场白。字段要求：
+- totalSeconds: number，推断的脚本总时长（秒），须与分镜时间戳逻辑一致，至少为 5。
+- emotionCurve: 数组，10–16 个元素，每个为 { "t": number（秒，0 到 totalSeconds）, "intensity": number（0–100）, "note": string（可选，≤12 字） }，按 t 严格升序，首尾 t 建议为 0 与 totalSeconds。
+- hook3s: { "status": "strong" | "ok" | "weak", "score": number（1–10）, "finding": string（一句中文）, "suggestions": string[]（2–4 条可执行改写建议） }
+- selling8s: { "status": "strong" | "ok" | "weak", "score": number（1–10）, "finding": string（一句中文）, "suggestions": string[]（2–4 条可执行改写建议） }
+
+用户侧卖点参考（诊断 8 秒卖点时可对照，脚本未体现则判弱并建议）：${selling}`;
+
+      const response = await ai.models.generateContent({
+        model: modelId(),
+        contents: `以下为待诊断脚本全文：\n\n${body.script}`,
+        config: {
+          systemInstruction,
+          responseMimeType: 'application/json',
+        },
+      });
+      try {
+        const raw = JSON.parse(response.text || '{}') as Record<string, unknown>;
+        const totalSeconds = Math.max(5, Math.min(120, Number(raw.totalSeconds) || 15));
+        let curve = Array.isArray(raw.emotionCurve) ? raw.emotionCurve : [];
+        curve = curve
+          .map((p) => {
+            const o = p as Record<string, unknown>;
+            return {
+              t: Math.max(0, Math.min(totalSeconds, Number(o.t) || 0)),
+              intensity: Math.max(0, Math.min(100, Number(o.intensity) || 0)),
+              note: typeof o.note === 'string' ? o.note.slice(0, 24) : undefined,
+            };
+          })
+          .sort((a, b) => a.t - b.t);
+        const hook3s = raw.hook3s && typeof raw.hook3s === 'object' ? (raw.hook3s as Record<string, unknown>) : {};
+        const selling8Raw =
+          raw.selling8s && typeof raw.selling8s === 'object'
+            ? (raw.selling8s as Record<string, unknown>)
+            : raw.sellPoint8s && typeof raw.sellPoint8s === 'object'
+              ? (raw.sellPoint8s as Record<string, unknown>)
+              : {};
+        const pickDiag = (o: Record<string, unknown>) => ({
+          status: (['strong', 'ok', 'weak'].includes(String(o.status)) ? o.status : 'ok') as 'strong' | 'ok' | 'weak',
+          score: Math.max(1, Math.min(10, Math.round(Number(o.score) || 5))),
+          finding: typeof o.finding === 'string' ? o.finding : '',
+          suggestions: Array.isArray(o.suggestions)
+            ? (o.suggestions as unknown[]).filter((s): s is string => typeof s === 'string').slice(0, 6)
+            : [],
+        });
+        return {
+          totalSeconds,
+          emotionCurve: curve,
+          hook3s: pickDiag(hook3s),
+          selling8s: pickDiag(selling8Raw),
+        };
+      } catch {
+        return null;
+      }
     }
 
     default:

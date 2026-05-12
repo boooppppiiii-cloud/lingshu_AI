@@ -3,7 +3,9 @@ import { formatUsageDayShanghai } from './usageDay';
 
 /**
  * 写入 `usage_events` 日流水（需登录；失败仅 console.warn，不影响主流程）。
- * PocketBase 集合字段：day, event, user, source?, ref_collection?, ref_id?, meta?
+ *
+ * PocketBase：只需一个**顶层**集合 `usage_events`（不要嵌在 assets / market 里）。
+ * 建议字段：day, event, user, source?, ref_collection?, ref_id?, meta?（JSON）
  */
 export async function logUsageEvent(
   userId: string,
