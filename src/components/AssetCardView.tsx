@@ -463,7 +463,7 @@ export default function AssetCardView() {
                     type="text"
                     value={newTags}
                     onChange={(e) => setNewTags(e.target.value)}
-                    placeholder="例如：反转, 治愈, 深海花园..."
+                    placeholder="例如：反转, 治愈, 种花经营..."
                     className="w-full bg-slate-50 border border-slate-200 rounded-2xl p-4 outline-none focus:border-accent-blue/50 transition-all text-slate-800"
                   />
                 </div>

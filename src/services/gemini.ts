@@ -14,6 +14,17 @@ export type VideoHighlights = {
 
 export type ThemeCard = { title: string; description: string };
 
+export const FLASH_SCRIPT_DURATION_PRESETS = ['1-5', '5-10', '10-15', '15-25'] as const;
+export type FlashScriptDurationPreset = (typeof FLASH_SCRIPT_DURATION_PRESETS)[number];
+
+/** 灵光一闪脚本时长选项的界面文案（与 API `durationPreset` 键一致） */
+export const FLASH_SCRIPT_DURATION_LABEL: Record<FlashScriptDurationPreset, string> = {
+  '1-5': '1-5秒',
+  '5-10': '5-10秒',
+  '10-15': '10-15秒',
+  '15-25': '15-25秒',
+};
+
 export type GeminiCallOptions = {
   onRetryAttempt?: (attempt: number, maxAttempts: number) => void;
   /** 登录用户 id，供服务端写入 `gemini.call` 流水 */
@@ -118,6 +129,7 @@ export const geminiService = {
     style: string,
     moods: string,
     options?: GeminiCallOptions,
+    durationPreset: FlashScriptDurationPreset = '10-15',
   ) {
     return callGemini<string | undefined>(
       {
@@ -126,6 +138,7 @@ export const geminiService = {
         sellingPoints,
         style,
         moods,
+        durationPreset,
       },
       options,
     );

@@ -1,10 +1,15 @@
 import { useMemo, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sparkles, Zap, Send, RefreshCw, MessageSquare, ChevronDown, Bookmark, Copy, CheckCircle2, FileText, Lightbulb, Image as ImageIcon, Upload, X } from 'lucide-react';
+import { Sparkles, Zap, Send, RefreshCw, MessageSquare, ChevronDown, Bookmark, Copy, CheckCircle2, FileText, Lightbulb, Image as ImageIcon, Upload, X, Timer } from 'lucide-react';
 import ContentIteration from './ContentIteration';
 import InspirationExtraction from './InspirationExtraction';
 import { WorkshopTab, AssetType } from '../types';
-import { geminiService } from '../services/gemini';
+import {
+  geminiService,
+  FLASH_SCRIPT_DURATION_LABEL,
+  FLASH_SCRIPT_DURATION_PRESETS,
+  type FlashScriptDurationPreset,
+} from '../services/gemini';
 import { useAuth } from '../lib/AuthContext';
 import { pb } from '../lib/pb';
 import { buildAssetCreateBody } from '../lib/recordMappers';
@@ -36,6 +41,7 @@ export default function CreativeWorkshop() {
   const [isEditing, setIsEditing] = useState(false);
   const [saveStatus, setSaveStatus] = useState<{[key: string]: boolean}>({});
   const [geminiRetryLabel, setGeminiRetryLabel] = useState<string | null>(null);
+  const [scriptDurationPreset, setScriptDurationPreset] = useState<FlashScriptDurationPreset>('10-15');
 
   const geminiOpts = useMemo(
     () => ({
@@ -117,12 +123,13 @@ export default function CreativeWorkshop() {
           finalStyle,
           finalMoods,
           geminiCallOpts,
+          scriptDurationPreset,
         );
         setGeneratedScript(result || '');
         if (user?.uid) {
           void logUsageEvent(user.uid, USAGE_EVENT.SCRIPT_GENERATED, {
             source: 'creative_workshop_flash',
-            meta: { variant: 'direct_prompt' },
+            meta: { variant: 'direct_prompt', durationPreset: scriptDurationPreset },
           });
         }
       } else if (mode === 'description') {
@@ -191,12 +198,13 @@ export default function CreativeWorkshop() {
          finalStyle,
          finalMoods,
          geminiCallOpts,
+         scriptDurationPreset,
        );
        setGeneratedScript(result || '');
        if (user?.uid) {
          void logUsageEvent(user.uid, USAGE_EVENT.SCRIPT_GENERATED, {
            source: 'creative_workshop_flash',
-           meta: { variant: 'from_inspiration' },
+           meta: { variant: 'from_inspiration', durationPreset: scriptDurationPreset },
          });
        }
      } catch (error) {
@@ -418,6 +426,31 @@ export default function CreativeWorkshop() {
                         <p className="absolute bottom-2 left-8 text-[10px] text-slate-500">{geminiRetryLabel}</p>
                       ) : null}
                     </div>
+                  </div>
+
+                  <div className="space-y-3">
+                    <label className="text-xs font-black text-slate-500 uppercase tracking-[0.2em] flex items-center gap-2 ml-1">
+                      <Timer className="w-4 h-4 text-accent-blue" /> 脚本时长
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      {FLASH_SCRIPT_DURATION_PRESETS.map((preset) => (
+                        <button
+                          key={preset}
+                          type="button"
+                          onClick={() => setScriptDurationPreset(preset)}
+                          className={`px-4 py-2 rounded-xl text-xs font-bold border-2 transition-all ${
+                            scriptDurationPreset === preset
+                              ? 'border-accent-blue bg-accent-blue/10 text-primary-blue shadow-sm'
+                              : 'border-slate-200 bg-white text-slate-600 hover:border-accent-blue/40'
+                          }`}
+                        >
+                          {FLASH_SCRIPT_DURATION_LABEL[preset]}
+                        </button>
+                      ))}
+                    </div>
+                    <p className="text-[11px] text-slate-400 ml-1">
+                      仅作用于「全文脚本」及从灵感卡片生成脚本；灵感列表与画面描述不受影响。
+                    </p>
                   </div>
 
                   {/* Horizontal Selectors */}

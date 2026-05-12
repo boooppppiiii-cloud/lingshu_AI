@@ -8,7 +8,26 @@ function modelId() {
   return process.env.GEMINI_MODEL?.trim() || 'gemini-3-flash-preview';
 }
 
-const SCRIPT_FORMAT_INSTRUCTION = `
+/** 灵光一闪等接口可传档位；缺省或与约定不符时按 10–15 秒 */
+const FLASH_DURATION_PRESET_RANGES: Record<string, [number, number]> = {
+  '1-5': [1, 5],
+  '5-10': [5, 10],
+  '10-15': [10, 15],
+  '15-25': [15, 25],
+};
+
+function flashScriptDurationRange(preset: string | undefined): [number, number] {
+  if (preset && preset in FLASH_DURATION_PRESET_RANGES) {
+    return FLASH_DURATION_PRESET_RANGES[preset]!;
+  }
+  return [10, 15];
+}
+
+/** 脚本与创意输出勿默认写成深海/海洋世界观，除非用户明确要求 */
+const AVOID_DEEP_SEA_SCENE_RULE = `场景与意象约束：除非用户在需求描述中明确要求，否则禁止在标题、灵感点、画面、台词与设定中强调「深海、海底、海洋深处、水族馆、潜水、潜艇、浪下世界」等与深海或大洋强绑定的元素或隐喻；默认优先花园、阳台、阳光花房、客厅绿植、小院露台、花店等生活化种花与居家疗愈场景。`;
+
+function scriptFormatInstruction(totalDurationMin: number, totalDurationMax: number): string {
+  return `
 输出格式严格遵守以下结构：
 
 【分镜标签】
@@ -31,15 +50,25 @@ const SCRIPT_FORMAT_INSTRUCTION = `
 [00:00-00:05] 景别; 运镜; 画面内容细节; 音效/BGM；
 台词内容必须严格遵循“人物说：‘内容’”的格式，若无台词则省略，例如：小明说：“这也太解压了吧！”
 
-1. 脚本总时长必须严格控制在 10-25 秒之间。
+1. 脚本总时长必须严格控制在 ${totalDurationMin}-${totalDurationMax} 秒之间；各分镜时间戳须连贯铺满从 [00:00] 到结束，且首尾时间与总时长一致。
 2. 每个分镜必须分行/分段输出，不得连成一段。
 3. 动作描述保持夸张、戏剧化（Drama），符合买量广告高强度吸睛的需求。
 4. 台词必须采用中文引号。
 
+${AVOID_DEEP_SEA_SCENE_RULE}
+
 使用中文。`;
+}
 
 export type GeminiOpBody =
-  | { op: 'generateFlashInspiration'; prompt: string; sellingPoints: string; style: string; moods: string }
+  | {
+      op: 'generateFlashInspiration';
+      prompt: string;
+      sellingPoints: string;
+      style: string;
+      moods: string;
+      durationPreset?: string;
+    }
   | { op: 'generateInspirationIdeas'; prompt: string; sellingPoints: string; style: string; moods: string }
   | {
       op: 'generateImageDescription';
@@ -66,12 +95,13 @@ export async function runGeminiOp(body: GeminiOpBody): Promise<unknown> {
 
   switch (body.op) {
     case 'generateFlashInspiration': {
-      const systemInstruction = `你是一位顶尖受众心理学家。你的任务是根据用户的需求，为治愈系手游《深海花园》生成极具爆发力的买量广告脚本。
-${SCRIPT_FORMAT_INSTRUCTION}
+      const [dMin, dMax] = flashScriptDurationRange(body.durationPreset);
+      const systemInstruction = `你是一位顶尖受众心理学家。你的任务是根据用户的需求，为治愈系种花经营手游生成极具爆发力的买量广告脚本。
+${scriptFormatInstruction(dMin, dMax)}
 本次广告必填卖点：${body.sellingPoints}
 指定画风：${body.style}
 核心情绪：${body.moods}
-游戏背景：深海花园（治愈系经营手游，包含种花、装饰、互动、解压治愈）。`;
+游戏类型：治愈系种花经营手游，包含种花、装饰、互动、解压治愈。`;
 
       const response = await ai.models.generateContent({
         model: modelId(),
@@ -85,6 +115,8 @@ ${SCRIPT_FORMAT_INSTRUCTION}
       const systemInstruction = `你是一位顶尖短视频买量广告创意总监。
 你的任务是根据用户的核心创意描述和需求，生成 10 个简短且极具爆发力的创意灵感点。
 
+${AVOID_DEEP_SEA_SCENE_RULE}
+
 每个灵感点应包含：
 1. 标题：一个吸引人的短句。
 2. 核心梗：一句话说明这个创意的精髓（反转、悬念、视觉奇丽等）。
@@ -95,7 +127,7 @@ ${SCRIPT_FORMAT_INSTRUCTION}
 不要包含任何 MarkDown 代码块包裹或解释性文字。
 严格遵循 JSON 格式。`;
 
-      const userPrompt = `需求描述：${body.prompt}\n游戏背景：深海花园（治愈系经营手游，包含种花、装饰、互动、解压治愈）\n卖点：${body.sellingPoints}\n风格：${body.style}\n情绪：${body.moods}`;
+      const userPrompt = `需求描述：${body.prompt}\n游戏类型：治愈系种花经营手游，包含种花、装饰、互动、解压治愈\n卖点：${body.sellingPoints}\n风格：${body.style}\n情绪：${body.moods}`;
 
       const response = await ai.models.generateContent({
         model: modelId(),
@@ -115,6 +147,8 @@ ${SCRIPT_FORMAT_INSTRUCTION}
     case 'generateImageDescription': {
       const systemInstruction = `你是一位顶尖买量广告视觉指导和视频大模型提示词专家。
 你的任务是根据提供的图片（若有）和创意描述，生成详细的【画面描述】和 3-5 条专为 Seedance、Runway 等视频生成模型设计的【动态口令】（运动脚本）。
+
+${AVOID_DEEP_SEA_SCENE_RULE}
 
 【画面描述】要求：
 1. 极其精准：涵盖景别、构图、光影、材质和静态细节。
@@ -212,7 +246,8 @@ ${SCRIPT_FORMAT_INSTRUCTION}
 要求：
 1. 每个维度必须输出至少 4 个具体的中文亮点，不含多余解释。
 2. 'mood'（氛围）维度的标签必须严格限制为 2 个汉字（例如：治愈、反转、打脸、温情）。
-3. 'hook'（钩子）维度必须极度聚焦于视频前 3 秒的画面内容、视觉冲击或悬念。`;
+3. 'hook'（钩子）维度必须极度聚焦于视频前 3 秒的画面内容、视觉冲击或悬念。
+4. 若原视频未直接呈现深海、海底或海洋场景，各维度亮点中不得主动加入或强化深海、海洋类意象与措辞。`;
 
       const response = await ai.models.generateContent({
         model: modelId(),
@@ -237,12 +272,15 @@ ${SCRIPT_FORMAT_INSTRUCTION}
     }
 
     case 'generateThemes': {
-      const systemInstruction = `你是《深海花园》（20-40岁女性治愈手游）的营销专家。
+      const systemInstruction = `你是一款治愈系种花经营手游（面向20-40岁女性）的营销专家。
 任务 1：结合用户选中的灵感点和元素配置，生成 5 版不同的创意主题（包含标题和 100 字内描述）。
+
+${AVOID_DEEP_SEA_SCENE_RULE}
+
 创意风格要求：
 1. 必须全部是【剧情类】或【戏剧性的人物互动】。
 2. 核心冲突点应聚焦于：反转、打脸、攀比、误会或情感波动。
-3. 描述中要体现出《深海花园》的特色（如：种花配送真花、精致经营）。
+3. 描述中要体现出种花类治愈经营手游的特色（如：种花配送真花、精致经营）。
 要求：以 JSON 数组格式输出，每个对象包含 title 和 description。
 禁令：禁止任何开场白，直接输出 JSON。`;
 
@@ -264,10 +302,10 @@ ${SCRIPT_FORMAT_INSTRUCTION}
     }
 
     case 'generateFinalScript': {
-      const systemInstruction = `你是《深海花园》（20-40岁女性治愈手游）的营销专家。
+      const systemInstruction = `你是一款治愈系种花经营手游（面向20-40岁女性）的营销专家。
 任务 2：当用户选定主题后，将其转化为脚本。
 
-${SCRIPT_FORMAT_INSTRUCTION}
+${scriptFormatInstruction(10, 25)}
 指定画风：${body.style}
 核心情绪：${body.moods}
 
@@ -288,10 +326,10 @@ ${SCRIPT_FORMAT_INSTRUCTION}
 
     case 'extractInspiration': {
       const systemInstruction = `你是一位创意黑客。请分析用户提供的视频，并严格按以下要求输出灵感提取版本：
-${SCRIPT_FORMAT_INSTRUCTION}
+${scriptFormatInstruction(10, 25)}
 指定画风：${body.style}
 核心情绪：${body.moods}
-主要任务：从视频中提取最吸睛的卖点逻辑，并根据深海花园的设定进行二次重构。
+主要任务：从视频中提取最吸睛的卖点逻辑，并结合治愈系种花经营手游的设定进行二次重构。
 禁令：禁止任何开场白，直接输出脚本内容。`;
 
       const response = await ai.models.generateContent({
