@@ -2,8 +2,65 @@
  * Gemini 调用仅在此文件执行，使用服务端环境变量 GEMINI_API_KEY。
  */
 import { GoogleGenAI, type Content } from '@google/genai';
+import {
+  buildFlowerExtractHighlightsSystemInstruction,
+  buildFlowerExtractInspirationSystemInstruction,
+  buildFlowerFlashInspirationSystemInstruction,
+  buildFlowerGenerateFinalScriptSystemInstruction,
+  buildFlowerGenerateThemesSystemInstruction,
+  buildFlowerImageDescriptionSystemInstruction,
+  buildFlowerInspirationIdeasSystemInstruction,
+  buildFlowerInspirationIdeasUserPrompt,
+  buildFlowerVoiceoverGameBlock,
+  buildFlowerVoiceoverSystemInstruction,
+  FLOWER_IMAGE_DESCRIPTION_FALLBACK_USER_TEXT,
+} from './flowerGamePrompts';
+import { aceMechaDisplayProductionStyleReferenceExample } from './aceMechaGamePrompts';
+import {
+  buildAceMechaExtractHighlightsSystemInstruction,
+  buildAceMechaExtractInspirationSystemInstruction,
+  buildAceMechaFlashInspirationSystemInstruction,
+  buildAceMechaGenerateFinalScriptSystemInstruction,
+  buildAceMechaGenerateThemesSystemInstruction,
+  buildAceMechaImageDescriptionSystemInstruction,
+  buildAceMechaInspirationIdeasSystemInstruction,
+  buildAceMechaInspirationIdeasUserPrompt,
+  buildAceMechaVoiceoverGameBlock,
+  buildAceMechaVoiceoverSystemInstruction,
+  ACE_MECHA_IMAGE_DESCRIPTION_FALLBACK_USER_TEXT,
+} from './aceMechaGamePrompts';
+import { newGameDisplayProductionStyleReferenceExample } from './gamePromptProfiles/new-game.prompts';
+import {
+  buildXiyouExtractHighlightsSystemInstruction,
+  buildXiyouExtractInspirationSystemInstruction,
+  buildXiyouFlashInspirationSystemInstruction,
+  buildXiyouGenerateFinalScriptSystemInstruction,
+  buildXiyouGenerateThemesSystemInstruction,
+  buildXiyouImageDescriptionSystemInstruction,
+  buildXiyouInspirationIdeasSystemInstruction,
+  buildXiyouInspirationIdeasUserPrompt,
+  buildXiyouVoiceoverGameBlock,
+  buildXiyouVoiceoverSystemInstruction,
+  XIYOU_IMAGE_DESCRIPTION_FALLBACK_USER_TEXT,
+} from './xiyouGamePrompts';
 
-/** 在请求时读取，确保主进程已执行 dotenv.config；可用 GEMINI_MODEL 覆盖 */
+export type GameProfileId = 'flower' | 'xiyou_card' | 'ace_mecha';
+
+type WithGameProfile<T> = T & { gameProfileId?: GameProfileId };
+
+/** 请求体可选 gameProfileId；未知值时走种花（flower）配置 */
+export function resolveGameProfileId(body: { gameProfileId?: unknown }): GameProfileId {
+  const raw = body.gameProfileId;
+  if (raw === 'xiyou_card' || raw === 'ace_mecha') return raw;
+  return 'flower';
+}
+
+function profilePick<T>(profile: GameProfileId, flower: T, xiyou: T, aceMecha: T): T {
+  if (profile === 'xiyou_card') return xiyou;
+  if (profile === 'ace_mecha') return aceMecha;
+  return flower;
+}
+
 function modelId() {
   return process.env.GEMINI_MODEL?.trim() || 'gemini-3-flash-preview';
 }
@@ -14,6 +71,7 @@ const FLASH_DURATION_PRESET_RANGES: Record<string, [number, number]> = {
   '5-10': [5, 10],
   '10-15': [10, 15],
   '15-25': [15, 25],
+  '50-60': [50, 60],
 };
 
 function flashScriptDurationRange(preset: string | undefined): [number, number] {
@@ -23,67 +81,63 @@ function flashScriptDurationRange(preset: string | undefined): [number, number] 
   return [10, 15];
 }
 
-/** 脚本与创意输出勿默认写成深海/海洋世界观，除非用户明确要求 */
-const AVOID_DEEP_SEA_SCENE_RULE = `场景与意象约束：除非用户在需求描述中明确要求，否则禁止在标题、灵感点、画面、台词与设定中强调「深海、海底、海洋深处、水族馆、潜水、潜艇、浪下世界」等与深海或大洋强绑定的元素或隐喻；默认优先花园、阳台、阳光花房、客厅绿植、小院露台、花店等生活化种花与居家疗愈场景。`;
-
-function scriptFormatInstruction(totalDurationMin: number, totalDurationMax: number): string {
-  return `
-输出格式严格遵守以下结构：
-
-【分镜标签】
-核心冲突：[内容]
-情绪：[内容]
-景别：[内容]
-运镜：[内容]
-画面：[内容]
-动作：[内容]
-配音：[内容]
-核心卖点：[必须从以下选择：种花送时装、种花送家装、种花治愈、种花经营、种花送真花、萌宠及其他]
-
-【基本要求】
-规定本脚本的画风、主要场景、核心情绪、氛围基调。
-
-【分镜脚本】
-每个分镜必须单独分段输出（严禁合并在一段内），每个分镜段落必须以具体的时间戳开头，例如：[00:00-00:05]。
-
-格式示例：
-[00:00-00:05] 景别; 运镜; 画面内容细节; 音效/BGM；
-台词内容必须严格遵循“人物说：‘内容’”的格式，若无台词则省略，例如：小明说：“这也太解压了吧！”
-
-1. 脚本总时长必须严格控制在 ${totalDurationMin}-${totalDurationMax} 秒之间；各分镜时间戳须连贯铺满从 [00:00] 到结束，且首尾时间与总时长一致。
-2. 每个分镜必须分行/分段输出，不得连成一段。
-3. 动作描述保持夸张、戏剧化（Drama），符合买量广告高强度吸睛的需求。
-4. 台词必须采用中文引号。
-
-${AVOID_DEEP_SEA_SCENE_RULE}
-
-使用中文。`;
-}
-
 export type GeminiOpBody =
-  | {
+  | WithGameProfile<{
       op: 'generateFlashInspiration';
       prompt: string;
       sellingPoints: string;
       style: string;
       moods: string;
       durationPreset?: string;
-    }
-  | { op: 'generateInspirationIdeas'; prompt: string; sellingPoints: string; style: string; moods: string }
-  | {
+    }>
+  | WithGameProfile<{
+      op: 'generateVoiceoverScript';
+      prompt: string;
+      durationPreset?: string;
+      flowerGame: boolean;
+      voiceIdentity: string;
+      voiceScene: string;
+      voiceEmotion: string;
+    }>
+  | WithGameProfile<{ op: 'generateInspirationIdeas'; prompt: string; sellingPoints: string; style: string; moods: string }>
+  | WithGameProfile<{
       op: 'generateImageDescription';
       imageBase64: string | null;
       prompt: string;
       sellingPoints: string;
       style: string;
       moods: string;
-    }
-  | { op: 'analyzeVideoIteration'; videoBase64: string; mimeType: string; style: string; moods: string }
-  | { op: 'extractHighlights'; videoBase64: string; mimeType: string }
-  | { op: 'generateThemes'; selectedHighlights: string[]; sellingPoints: string }
-  | { op: 'generateFinalScript'; themeTitle: string; themeDescription: string; style: string; moods: string }
-  | { op: 'extractInspiration'; videoBase64: string; mimeType: string; style: string; moods: string }
-  | { op: 'diagnoseFlashScript'; script: string; sellingPoints?: string };
+    }>
+  | WithGameProfile<{
+      op: 'generateDisplayProductionScript';
+      motionCardText: string;
+      durationSeconds: number;
+      visualDescription: string;
+      sellingPoints: string;
+      style: string;
+      moods: string;
+    }>
+  | WithGameProfile<{ op: 'analyzeVideoIteration'; videoBase64: string; mimeType: string; style: string; moods: string }>
+  | WithGameProfile<{ op: 'extractHighlights'; videoBase64: string; mimeType: string }>
+  | WithGameProfile<{ op: 'generateThemes'; selectedHighlights: string[]; sellingPoints: string }>
+  | WithGameProfile<{
+      op: 'generateFinalScript';
+      themeTitle: string;
+      themeDescription: string;
+      style: string;
+      moods: string;
+      extraPrompt?: string;
+    }>
+  | WithGameProfile<{ op: 'extractInspiration'; videoBase64: string; mimeType: string; style: string; moods: string }>
+  | WithGameProfile<{ op: 'diagnoseFlashScript'; script: string; sellingPoints?: string }>
+  | WithGameProfile<{
+      op: 'analyzeBuyingVideo';
+      videoBase64: string;
+      mimeType: string;
+      fileName: string;
+      /** 为 true 时额外输出前 5 秒与首卖点深度分析（找钩子模式） */
+      includeHookDeepAnalysis: boolean;
+    }>;
 
 function client() {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
@@ -91,116 +145,14 @@ function client() {
   return new GoogleGenAI({ apiKey });
 }
 
-export async function runGeminiOp(body: GeminiOpBody): Promise<unknown> {
-  const ai = client();
-
-  switch (body.op) {
-    case 'generateFlashInspiration': {
-      const [dMin, dMax] = flashScriptDurationRange(body.durationPreset);
-      const systemInstruction = `你是一位顶尖受众心理学家。你的任务是根据用户的需求，为治愈系种花经营手游生成极具爆发力的买量广告脚本。
-${scriptFormatInstruction(dMin, dMax)}
-本次广告必填卖点：${body.sellingPoints}
-指定画风：${body.style}
-核心情绪：${body.moods}
-游戏类型：治愈系种花经营手游，包含种花、装饰、互动、解压治愈。`;
-
-      const response = await ai.models.generateContent({
-        model: modelId(),
-        contents: body.prompt,
-        config: { systemInstruction },
-      });
-      return response.text;
-    }
-
-    case 'generateInspirationIdeas': {
-      const systemInstruction = `你是一位顶尖短视频买量广告创意总监。
-你的任务是根据用户的核心创意描述和需求，生成 10 个简短且极具爆发力的创意灵感点。
-
-${AVOID_DEEP_SEA_SCENE_RULE}
-
-每个灵感点应包含：
-1. 标题：一个吸引人的短句。
-2. 核心梗：一句话说明这个创意的精髓（反转、悬念、视觉奇丽等）。
-3. 爆点分析：为什么这段内容能火。
-
-输出格式要求：
-请务必以 JSON 数组格式输出，数组每个元素包含 "title", "concept", "hook" 三个字段。
-不要包含任何 MarkDown 代码块包裹或解释性文字。
-严格遵循 JSON 格式。`;
-
-      const userPrompt = `需求描述：${body.prompt}\n游戏类型：治愈系种花经营手游，包含种花、装饰、互动、解压治愈\n卖点：${body.sellingPoints}\n风格：${body.style}\n情绪：${body.moods}`;
-
-      const response = await ai.models.generateContent({
-        model: modelId(),
-        contents: userPrompt,
-        config: {
-          systemInstruction,
-          responseMimeType: 'application/json',
-        },
-      });
-      try {
-        return JSON.parse(response.text || '[]');
-      } catch {
-        return [];
-      }
-    }
-
-    case 'generateImageDescription': {
-      const systemInstruction = `你是一位顶尖买量广告视觉指导和视频大模型提示词专家。
-你的任务是根据提供的图片（若有）和创意描述，生成详细的【画面描述】和 3-5 条专为 Seedance、Runway 等视频生成模型设计的【动态口令】（运动脚本）。
-
-${AVOID_DEEP_SEA_SCENE_RULE}
-
-【画面描述】要求：
-1. 极其精准：涵盖景别、构图、光影、材质和静态细节。
-2. 风格匹配：必须符合指定的画风：${body.style}。
-3. 氛围感：符合核心情绪：${body.moods}。
-
-【动态口令】（动画脚本）要求：
-1. 专为视频大模型设计：描述镜头推进、主体动作变化、光影流转或粒子流动。
-2. 动态自然：追求平滑的运动感，确保动态与${body.style}画风相符。
-3. 脚本化语言：使用类似“镜头缓慢平移”、“主体微微转头”、“光效如呼吸般闪烁”等指令。
-4. 如果指定了卖点，通过动态表现出来：${body.sellingPoints}。
-
-输出格式：
-请用 Markdown 格式输出。
-### 画面描述
-[内容]
-
-### 动态口令 (Seedance/Luma 指令)
-1. [运动脚本1]
-2. [运动脚本2]
-...`;
-
-      const contents: Content[] = [];
-      if (body.imageBase64) {
-        const base64Data = body.imageBase64.includes(',') ? body.imageBase64.split(',')[1] : body.imageBase64;
-        const mimeType = body.imageBase64.includes(';')
-          ? body.imageBase64.split(';')[0].split(':')[1]
-          : 'image/jpeg';
-
-        contents.push({
-          parts: [
-            { inlineData: { data: base64Data, mimeType } },
-            { text: body.prompt || '请根据这张图片生成画面描述和口令。' },
-          ],
-        });
-      } else {
-        contents.push({
-          parts: [{ text: body.prompt || '请根据治愈系卖点生成画面描述和口令。' }],
-        });
-      }
-
-      const response = await ai.models.generateContent({
-        model: modelId(),
-        contents,
-        config: { systemInstruction },
-      });
-      return response.text;
-    }
-
-    case 'analyzeVideoIteration': {
-      const systemInstruction = `你是一位专业的短视频拆解分析师。你的任务是对用户提供的视频进行 1:1 的脚本解析与复述，严禁进行任何形式的“自动加工”、“创意迭代”或“二次创作”。
+/** 创意迭代：视频 1:1 拆解（非流式与流式共用） */
+function buildAnalyzeVideoIterationParams(body: {
+  style: string;
+  moods: string;
+  videoBase64: string;
+  mimeType: string;
+}): { systemInstruction: string; contents: Content[] } {
+  const systemInstruction = `你是一位专业的短视频拆解分析师。你的任务是对用户提供的视频进行 1:1 的脚本解析与复述，严禁进行任何形式的“自动加工”、“创意迭代”或“二次创作”。
 
 请务必按以下结构精准还原视频内容：
 
@@ -221,34 +173,267 @@ ${AVOID_DEEP_SEA_SCENE_RULE}
 
 禁令：禁止任何开场白，直接输出内容。`;
 
+  const contents: Content[] = [
+    {
+      parts: [
+        { inlineData: { data: body.videoBase64, mimeType: body.mimeType } },
+        { text: '请拆解这段视频。' },
+      ],
+    },
+  ];
+  return { systemInstruction, contents };
+}
+
+/**
+ * 流式输出创意迭代拆解文本片段（每个 chunk 的增量文本，由调用方拼接）。
+ */
+export async function* streamAnalyzeVideoIterationDeltas(body: {
+  videoBase64: string;
+  mimeType: string;
+  style: string;
+  moods: string;
+}): AsyncGenerator<string, void, unknown> {
+  const ai = client();
+  const { systemInstruction, contents } = buildAnalyzeVideoIterationParams(body);
+  const stream = await ai.models.generateContentStream({
+    model: modelId(),
+    contents,
+    config: { systemInstruction },
+  });
+  for await (const chunk of stream) {
+    const t = chunk.text;
+    if (t) yield t;
+  }
+}
+
+export type GenerateDisplayProductionScriptInput = Omit<
+  Extract<GeminiOpBody, { op: 'generateDisplayProductionScript' }>,
+  'op'
+>;
+
+function buildGenerateDisplayProductionScriptParams(
+  body: GenerateDisplayProductionScriptInput,
+  profile: GameProfileId,
+): {
+  systemInstruction: string;
+  contents: string;
+} {
+  const sec = Math.min(600, Math.max(1, Math.floor(Number(body.durationSeconds)) || 15));
+  const flowerStyleExample = `固定镜头，画面中，一群可爱的猫咪在泳池乐园玩耍，中间的布偶猫躺在草莓泳圈上开心地笑着，其他猫咪或在泳圈上漂浮、或滑滑梯，背景是彩虹、棕榈树和遮阳伞。运镜：全程固定镜头，画面稳定不推拉摇移，动态细节按顺序呈现。动态细节：微风轻拂下，棕榈树叶轻轻摇曳，阳光在水面上洒下波光粼粼的光斑；中心的布偶猫开心地晃着爪子和尾巴，身体随着水波轻轻晃动；滑梯上的猫咪带着水花滑入泳池，溅起层层涟漪；西瓜泳圈上的小猫戴着草帽，歪头张望；其他泳圈上的猫咪随着水波缓缓漂浮，尾巴和耳朵微微摆动；透明泡泡和玩具球在水面上轻轻漂浮，彩虹和云朵带着轻微的光影变化，营造慵懒治愈的夏日派对氛围。整体线条柔和，色彩通透清新，无文字干扰、无变形，动态自然丝滑无卡顿。`;
+  const styleExample = `${profilePick(
+    profile,
+    flowerStyleExample,
+    newGameDisplayProductionStyleReferenceExample,
+    aceMechaDisplayProductionStyleReferenceExample,
+  )}
+【自动根据剧情匹配合适的音效】`;
+
+  const systemInstruction = `你是短视频/买量广告制作向的脚本编剧兼分镜指导。用户已从「动态口令」中选定一条作为创意核心，并给出目标成片时长（约 ${sec} 秒）。请将该口令与画面描述融合，扩展为**一条连贯、可拍摄**的完整制作脚本。
+
+硬性要求：
+1. 全文以自然段为主输出；不要使用 Markdown 的 # 标题层级。可按叙事需要穿插简短中文引导语（如「运镜：」「动态细节：」），但禁止机械分栏堆砌无意义小标题。
+2. 必须包含：明确的运镜指令（含稳定器/固定镜头等画面稳定要求）；按时间顺序展开、逻辑连续、前后不自相矛盾的动态细节分镜；环境氛围与光影质感描写；智能配音语气与音效/环境声建议（可用括号内短注形式）。
+3. 画面稳定原则：强调少无关晃动、主体运动与镜头运动有目的性，剪辑点清晰。
+4. 必须与【画面描述参考】及【用户选中的动态口令】在人物/场景/动作上严格延续，可合理细化，禁止凭空更换世界观或主体。
+5. 目标总观感时长约 ${sec} 秒（不必逐秒写时间码，但整体信息密度与节奏应与之匹配）。
+6. 全文最后一行且单独成行，**必须且仅能**输出以下标记（一字不改）：【自动根据剧情匹配合适的音效】
+
+风格与结构参考（勿照抄题材与物象，只学习「运镜 + 动态细节 + 氛围 + 音效行」的写法）：
+${styleExample}
+
+卖点（可为空）：${body.sellingPoints}
+画风：${body.style}
+情绪：${body.moods}
+
+【画面描述参考】
+${body.visualDescription || '（无）'}
+
+【用户选中的动态口令】
+${body.motionCardText}`;
+
+  const contents = '请直接输出完整制作脚本正文（从第一段画面叙述开始，不要开场白）。';
+  return { systemInstruction, contents };
+}
+
+/** 流式输出展示类「全文制作脚本」文本片段（由调用方拼接）。 */
+export async function* streamGenerateDisplayProductionScriptDeltas(
+  body: GenerateDisplayProductionScriptInput,
+): AsyncGenerator<string, void, unknown> {
+  const ai = client();
+  const profile = resolveGameProfileId(body);
+  const { systemInstruction, contents } = buildGenerateDisplayProductionScriptParams(body, profile);
+  const stream = await ai.models.generateContentStream({
+    model: modelId(),
+    contents,
+    config: { systemInstruction },
+  });
+  for await (const chunk of stream) {
+    const t = chunk.text;
+    if (t) yield t;
+  }
+}
+
+export async function runGeminiOp(body: GeminiOpBody): Promise<unknown> {
+  const ai = client();
+  const profile = resolveGameProfileId(body);
+
+  switch (body.op) {
+    case 'generateFlashInspiration': {
+      const [dMin, dMax] = flashScriptDurationRange(body.durationPreset);
+      const systemInstruction = profilePick(
+        profile,
+        buildFlowerFlashInspirationSystemInstruction(
+          dMin,
+          dMax,
+          body.sellingPoints,
+          body.style,
+          body.moods,
+        ),
+        buildXiyouFlashInspirationSystemInstruction(dMin, dMax, body.sellingPoints, body.style, body.moods),
+        buildAceMechaFlashInspirationSystemInstruction(dMin, dMax, body.sellingPoints, body.style, body.moods),
+      );
+
       const response = await ai.models.generateContent({
         model: modelId(),
-        contents: [
-          {
-            parts: [
-              { inlineData: { data: body.videoBase64, mimeType: body.mimeType } },
-              { text: '请拆解这段视频。' },
-            ],
-          },
-        ],
+        contents: body.prompt,
+        config: { systemInstruction },
+      });
+      return response.text;
+    }
+
+    case 'generateVoiceoverScript': {
+      const [dMin, dMax] = flashScriptDurationRange(body.durationPreset);
+      const anchor = Boolean(body.flowerGame);
+      const identity = (body.voiceIdentity || '').trim();
+      const scene = (body.voiceScene || '').trim();
+      const emotion = (body.voiceEmotion || '').trim();
+      const userPrompt = (body.prompt || '').trim();
+
+      const gameBlock = profilePick(
+        profile,
+        buildFlowerVoiceoverGameBlock(anchor, identity, scene, emotion),
+        buildXiyouVoiceoverGameBlock(anchor, identity, scene, emotion),
+        buildAceMechaVoiceoverGameBlock(anchor, identity, scene, emotion),
+      );
+      const systemInstruction = profilePick(
+        profile,
+        buildFlowerVoiceoverSystemInstruction(dMin, dMax, gameBlock),
+        buildXiyouVoiceoverSystemInstruction(dMin, dMax, gameBlock),
+        buildAceMechaVoiceoverSystemInstruction(dMin, dMax, gameBlock),
+      );
+
+      const contents = `请根据系统指令生成口播台词。\n\n【用户提示词】\n${userPrompt || '（无）'}`;
+
+      const response = await ai.models.generateContent({
+        model: modelId(),
+        contents,
+        config: { systemInstruction },
+      });
+      return response.text;
+    }
+
+    case 'generateInspirationIdeas': {
+      const systemInstruction = profilePick(
+        profile,
+        buildFlowerInspirationIdeasSystemInstruction(),
+        buildXiyouInspirationIdeasSystemInstruction(),
+        buildAceMechaInspirationIdeasSystemInstruction(),
+      );
+      const userPrompt = profilePick(
+        profile,
+        buildFlowerInspirationIdeasUserPrompt(body.prompt, body.sellingPoints, body.style, body.moods),
+        buildXiyouInspirationIdeasUserPrompt(body.prompt, body.sellingPoints, body.style, body.moods),
+        buildAceMechaInspirationIdeasUserPrompt(body.prompt, body.sellingPoints, body.style, body.moods),
+      );
+
+      const response = await ai.models.generateContent({
+        model: modelId(),
+        contents: userPrompt,
+        config: {
+          systemInstruction,
+          responseMimeType: 'application/json',
+        },
+      });
+      try {
+        return JSON.parse(response.text || '[]');
+      } catch {
+        return [];
+      }
+    }
+
+    case 'generateImageDescription': {
+      const systemInstruction = profilePick(
+        profile,
+        buildFlowerImageDescriptionSystemInstruction(body.style, body.moods, body.sellingPoints),
+        buildXiyouImageDescriptionSystemInstruction(body.style, body.moods, body.sellingPoints),
+        buildAceMechaImageDescriptionSystemInstruction(body.style, body.moods, body.sellingPoints),
+      );
+
+      const contents: Content[] = [];
+      const fallbackText = profilePick(
+        profile,
+        FLOWER_IMAGE_DESCRIPTION_FALLBACK_USER_TEXT,
+        XIYOU_IMAGE_DESCRIPTION_FALLBACK_USER_TEXT,
+        ACE_MECHA_IMAGE_DESCRIPTION_FALLBACK_USER_TEXT,
+      );
+      if (body.imageBase64) {
+        const base64Data = body.imageBase64.includes(',') ? body.imageBase64.split(',')[1] : body.imageBase64;
+        const mimeType = body.imageBase64.includes(';')
+          ? body.imageBase64.split(';')[0].split(':')[1]
+          : 'image/jpeg';
+
+        contents.push({
+          parts: [
+            { inlineData: { data: base64Data, mimeType } },
+            { text: body.prompt || '请根据这张图片生成画面描述和口令。' },
+          ],
+        });
+      } else {
+        contents.push({
+          parts: [{ text: body.prompt || fallbackText }],
+        });
+      }
+
+      const response = await ai.models.generateContent({
+        model: modelId(),
+        contents,
+        config: { systemInstruction },
+      });
+      return response.text;
+    }
+
+    case 'generateDisplayProductionScript': {
+      const { systemInstruction, contents } = buildGenerateDisplayProductionScriptParams(body, profile);
+      const response = await ai.models.generateContent({
+        model: modelId(),
+        contents,
+        config: { systemInstruction },
+      });
+      return response.text;
+    }
+
+    case 'analyzeVideoIteration': {
+      const { systemInstruction, contents } = buildAnalyzeVideoIterationParams({
+        style: body.style,
+        moods: body.moods,
+        videoBase64: body.videoBase64,
+        mimeType: body.mimeType,
+      });
+      const response = await ai.models.generateContent({
+        model: modelId(),
+        contents,
         config: { systemInstruction },
       });
       return response.text;
     }
 
     case 'extractHighlights': {
-      const systemInstruction = `你是一位创意策划。请分析视频并提取全文核心灵感亮点，仅以 JSON 格式输出：
-{
-"theme": ["亮点1", "亮点2", "亮点3", "亮点4"],
-"plot": ["亮点1", "亮点2", "亮点3", "亮点4"],
-"mood": ["亮点1", "亮点2", "亮点3", "亮点4"],
-"hook": ["亮点1", "亮点2", "亮点3", "亮点4"]
-}
-要求：
-1. 每个维度必须输出至少 4 个具体的中文亮点，不含多余解释。
-2. 'mood'（氛围）维度的标签必须严格限制为 2 个汉字（例如：治愈、反转、打脸、温情）。
-3. 'hook'（钩子）维度必须极度聚焦于视频前 3 秒的画面内容、视觉冲击或悬念。
-4. 若原视频未直接呈现深海、海底或海洋场景，各维度亮点中不得主动加入或强化深海、海洋类意象与措辞。`;
+      const systemInstruction = profilePick(
+        profile,
+        buildFlowerExtractHighlightsSystemInstruction(),
+        buildXiyouExtractHighlightsSystemInstruction(),
+        buildAceMechaExtractHighlightsSystemInstruction(),
+      );
 
       const response = await ai.models.generateContent({
         model: modelId(),
@@ -273,17 +458,12 @@ ${AVOID_DEEP_SEA_SCENE_RULE}
     }
 
     case 'generateThemes': {
-      const systemInstruction = `你是一款治愈系种花经营手游（面向20-40岁女性）的营销专家。
-任务 1：结合用户选中的灵感点和元素配置，生成 5 版不同的创意主题（包含标题和 100 字内描述）。
-
-${AVOID_DEEP_SEA_SCENE_RULE}
-
-创意风格要求：
-1. 必须全部是【剧情类】或【戏剧性的人物互动】。
-2. 核心冲突点应聚焦于：反转、打脸、攀比、误会或情感波动。
-3. 描述中要体现出种花类治愈经营手游的特色（如：种花配送真花、精致经营）。
-要求：以 JSON 数组格式输出，每个对象包含 title 和 description。
-禁令：禁止任何开场白，直接输出 JSON。`;
+      const systemInstruction = profilePick(
+        profile,
+        buildFlowerGenerateThemesSystemInstruction(),
+        buildXiyouGenerateThemesSystemInstruction(),
+        buildAceMechaGenerateThemesSystemInstruction(),
+      );
 
       const prompt = `选中的灵感点：${body.selectedHighlights.join(', ')}\n元素配置：${body.sellingPoints}`;
 
@@ -303,19 +483,18 @@ ${AVOID_DEEP_SEA_SCENE_RULE}
     }
 
     case 'generateFinalScript': {
-      const systemInstruction = `你是一款治愈系种花经营手游（面向20-40岁女性）的营销专家。
-任务 2：当用户选定主题后，将其转化为脚本。
+      const systemInstruction = profilePick(
+        profile,
+        buildFlowerGenerateFinalScriptSystemInstruction(body.style, body.moods),
+        buildXiyouGenerateFinalScriptSystemInstruction(body.style, body.moods),
+        buildAceMechaGenerateFinalScriptSystemInstruction(body.style, body.moods),
+      );
 
-${scriptFormatInstruction(10, 25)}
-指定画风：${body.style}
-核心情绪：${body.moods}
-
-脚本要求：
-1. 剧情核心：必须包含强烈的戏剧冲突或反转，侧重于人物之间的互动。
-2. 戏剧性强调：必须通过夸张的对比或情绪爆发展示“反转”、“打脸”或“冲突”。
-禁令：禁止任何开场白，直接输出内容。`;
-
-      const prompt = `选定的主题：${body.themeTitle}\n描述：${body.themeDescription}`;
+      const extra = (body.extraPrompt ?? '').trim();
+      const prompt =
+        extra.length > 0
+          ? `选定的主题：${body.themeTitle}\n描述：${body.themeDescription}\n\n用户补充说明（请尽量落实）：\n${extra}`
+          : `选定的主题：${body.themeTitle}\n描述：${body.themeDescription}`;
 
       const response = await ai.models.generateContent({
         model: modelId(),
@@ -326,12 +505,12 @@ ${scriptFormatInstruction(10, 25)}
     }
 
     case 'extractInspiration': {
-      const systemInstruction = `你是一位创意黑客。请分析用户提供的视频，并严格按以下要求输出灵感提取版本：
-${scriptFormatInstruction(10, 25)}
-指定画风：${body.style}
-核心情绪：${body.moods}
-主要任务：从视频中提取最吸睛的卖点逻辑，并结合治愈系种花经营手游的设定进行二次重构。
-禁令：禁止任何开场白，直接输出脚本内容。`;
+      const systemInstruction = profilePick(
+        profile,
+        buildFlowerExtractInspirationSystemInstruction(body.style, body.moods),
+        buildXiyouExtractInspirationSystemInstruction(body.style, body.moods),
+        buildAceMechaExtractInspirationSystemInstruction(body.style, body.moods),
+      );
 
       const response = await ai.models.generateContent({
         model: modelId(),
@@ -346,6 +525,110 @@ ${scriptFormatInstruction(10, 25)}
         config: { systemInstruction },
       });
       return response.text;
+    }
+
+    case 'analyzeBuyingVideo': {
+      const fileName = (body.fileName || 'video.mp4').trim().slice(0, 200);
+      const deep = Boolean(body.includeHookDeepAnalysis);
+      const systemInstruction = `你是买量短视频素材分析助手。用户上传的是广告/买量类视频，另附原始文件名供你推断产品名。
+
+硬性要求：
+1. 只输出**一个** JSON 对象，禁止 Markdown、禁止代码块、禁止任何开场白或尾注。
+2. 所有中文描述须**简短**，便于大屏一行展示，不要长句堆砌。
+
+JSON 字段说明：
+- gameName: string，结合画面与原始文件名「${fileName}」推断游戏或产品简称；≤8 个汉字（或等宽英文字母/数字组合）；无法识别填「未知」。
+- videoType: string，必须是且只能是以下之一：「序列帧混剪类」「剧情类」「审美展示类」。
+- hook3sTags: string 数组，**恰好 2 个元素**。分别概括视频**首 3 秒内**的视觉焦点与音画冲击力（各一个核心标签），每个标签≤6 个汉字，不要标点符号。
+${
+        deep
+          ? `- hooksDeep: 对象（禁止为 null），包含：
+  - first5sSummary: string，概括前 5 秒画面与节奏，≤42 字。
+  - firstSellingPoint: object，含 approxTimeSec（number，首次核心卖点大致出现秒数，0–120）、method（≤16 字，如口播/字幕/UI演示/对比等）、visualAnalysis（≤42 字，该时刻画面与信息呈现）。`
+          : `- hooksDeep: 必须为 null（不要输出对象）。`
+      }
+
+若视频过短仍尽力按可见内容推断；不确定的时间用合理估计并偏小。`;
+
+      const rawB64 = body.videoBase64.includes(',') ? body.videoBase64.split(',')[1]! : body.videoBase64;
+      const mime = (body.mimeType || 'video/mp4').trim() || 'video/mp4';
+
+      const response = await ai.models.generateContent({
+        model: modelId(),
+        contents: [
+          {
+            parts: [
+              { inlineData: { data: rawB64, mimeType: mime } },
+              { text: `原始文件名：${fileName}\n请严格按系统指令只输出 JSON。` },
+            ],
+          },
+        ],
+        config: {
+          systemInstruction,
+          responseMimeType: 'application/json',
+        },
+      });
+
+      const types = new Set(['序列帧混剪类', '剧情类', '审美展示类']);
+      const clamp = (s: unknown, max: number) => (typeof s === 'string' ? s.replace(/\s+/g, ' ').trim().slice(0, max) : '');
+
+      try {
+        const raw = JSON.parse(response.text || '{}') as Record<string, unknown>;
+        const gameName = clamp(raw.gameName, 10) || '未知';
+        const vt = clamp(raw.videoType, 12);
+        const videoType = types.has(vt) ? vt : '剧情类';
+        let hook3sTags: string[] = [];
+        if (Array.isArray(raw.hook3sTags)) {
+          hook3sTags = (raw.hook3sTags as unknown[])
+            .filter((x): x is string => typeof x === 'string')
+            .map((t) => t.replace(/\s+/g, '').slice(0, 8))
+            .filter(Boolean)
+            .slice(0, 2);
+        }
+        while (hook3sTags.length < 2) {
+          hook3sTags.push(hook3sTags.length === 0 ? '吸睛画面' : '节奏紧凑');
+        }
+
+        let hooksDeep: Record<string, unknown> | null = null;
+        if (deep && raw.hooksDeep && typeof raw.hooksDeep === 'object' && raw.hooksDeep !== null) {
+          const hd = raw.hooksDeep as Record<string, unknown>;
+          const fsp = hd.firstSellingPoint && typeof hd.firstSellingPoint === 'object' ? (hd.firstSellingPoint as Record<string, unknown>) : {};
+          hooksDeep = {
+            firstFiveSecondsSummary: clamp(hd.first5sSummary ?? hd.firstFiveSecondsSummary, 48),
+            firstSellingPoint: {
+              approxTimeSec: Math.max(0, Math.min(120, Number(fsp.approxTimeSec) || 0)),
+              method: clamp(fsp.method, 20),
+              visualAnalysis: clamp(fsp.visualAnalysis, 48),
+            },
+          };
+        }
+
+        if (deep && hooksDeep === null) {
+          hooksDeep = {
+            firstFiveSecondsSummary: '（模型未返回细分分析）',
+            firstSellingPoint: { approxTimeSec: 0, method: '', visualAnalysis: '' },
+          };
+        }
+
+        return {
+          gameName,
+          videoType,
+          hook3sTags: hook3sTags.slice(0, 2),
+          hooksDeep,
+        };
+      } catch {
+        return {
+          gameName: fileName.replace(/\.[^.]+$/, '').slice(0, 8) || '未知',
+          videoType: '剧情类',
+          hook3sTags: ['待分析', '待分析'],
+          hooksDeep: deep
+            ? {
+                firstFiveSecondsSummary: '解析失败，请重试上传。',
+                firstSellingPoint: { approxTimeSec: 0, method: '', visualAnalysis: '' },
+              }
+            : null,
+        };
+      }
     }
 
     case 'diagnoseFlashScript': {

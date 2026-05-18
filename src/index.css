@@ -8,6 +8,18 @@
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
 }
 
+/* 西游卡牌：白底 + 绿色主色（覆盖 @theme 中的 primary / accent 命名 token，组件仍用 *-blue 类名） */
+[data-game-theme="xiyou_card"] {
+  --color-primary-blue: #14532d;
+  --color-accent-blue: #15803d;
+}
+
+/* 王牌机甲：深蓝灰 + 橙青强调 */
+[data-game-theme="ace_mecha"] {
+  --color-primary-blue: #0f172a;
+  --color-accent-blue: #ea580c;
+}
+
 @layer base {
   body {
     @apply bg-white text-slate-800 min-h-screen font-sans;

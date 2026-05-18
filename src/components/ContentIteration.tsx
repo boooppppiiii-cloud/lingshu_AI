@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Loader2, Sparkles, FileText, Bookmark, Copy, CheckCircle2 } from 'lucide-react';
 import { motion } from 'motion/react';
 import ReactMarkdown from 'react-markdown';
@@ -6,27 +6,63 @@ import VideoUploader from './VideoUploader';
 import { geminiService } from '../services/gemini';
 import { useAuth } from '../lib/AuthContext';
 import { useToast } from '../lib/ToastContext';
+import { useGameProfile } from '../lib/GameProfileContext';
 import { pb } from '../lib/pb';
 import { createLeadingDebouncer } from '../lib/leadingDebounce';
 import { logUsageEvent } from '../lib/logUsageEvent';
 import { USAGE_EVENT } from '../lib/usageEvents';
 import { buildAssetCreateBody } from '../lib/recordMappers';
+import { getGameCreativeProfile } from '../lib/gameProfiles';
+import type { IterationHandoff } from '../lib/iterationHandoff';
 import { AssetType } from '../types';
 
 const FULL_SCRIPT_SAVE_KEY = 'iteration:full_script';
-const DEFAULT_STYLE = '真人3D写实风格';
-const DEFAULT_MOODS = '治愈、惊喜';
 
-export default function ContentIteration() {
+type AnalyzePhase = 'read_video' | 'upload_model' | 'streaming';
+
+const PHASE_LABEL: Record<AnalyzePhase, string> = {
+  read_video: '正在读取视频…',
+  upload_model: '正在上传并请求模型分析（耗时因视频大小与网络而异）…',
+  streaming: '正在流式生成拆解内容…',
+};
+
+function IterationResultSkeleton() {
+  return (
+    <div className="space-y-4 animate-pulse p-2" aria-hidden>
+      <div className="h-4 w-2/3 rounded-lg bg-slate-200/90" />
+      <div className="h-3 w-full rounded-lg bg-slate-200/70" />
+      <div className="h-3 w-full rounded-lg bg-slate-200/70" />
+      <div className="h-3 w-5/6 rounded-lg bg-slate-200/70" />
+      <div className="h-24 w-full rounded-2xl bg-slate-200/50" />
+      <div className="h-3 w-full rounded-lg bg-slate-200/70" />
+      <div className="h-3 w-4/5 rounded-lg bg-slate-200/70" />
+    </div>
+  );
+}
+
+type ContentIterationProps = {
+  handoff?: IterationHandoff | null;
+  onHandoffConsumed?: () => void;
+};
+
+export default function ContentIteration({
+  handoff = null,
+  onHandoffConsumed,
+}: ContentIterationProps) {
   const { user } = useAuth();
   const { showToast } = useToast();
+  const { gameProfileId } = useGameProfile();
+  const creativeProfile = useMemo(() => getGameCreativeProfile(gameProfileId), [gameProfileId]);
   const [video, setVideo] = useState<{ base64: string; mimeType: string; size?: number } | null>(null);
   const [loading, setLoading] = useState(false);
-  const [progress, setProgress] = useState(0);
+  const [phase, setPhase] = useState<AnalyzePhase>('read_video');
+  const [analyzeFailed, setAnalyzeFailed] = useState(false);
+  const [failureMessage, setFailureMessage] = useState<string | null>(null);
   const [result, setResult] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
-  const [saveStatus, setSaveStatus] = useState<{[key: string]: boolean}>({});
+  const [saveStatus, setSaveStatus] = useState<{ [key: string]: boolean }>({});
   const [geminiRetryLabel, setGeminiRetryLabel] = useState<string | null>(null);
+  const streamingStartedRef = useRef(false);
 
   const geminiOpts = useMemo(
     () => ({
@@ -39,43 +75,20 @@ export default function ContentIteration() {
     () => ({
       ...geminiOpts,
       analyticsUserId: user?.uid,
+      gameProfileId,
     }),
-    [geminiOpts, user?.uid],
+    [geminiOpts, user?.uid, gameProfileId],
   );
 
-  /**
-   * 预处理视频逻辑 - 集成 ffmpeg.wasm 占位
-   */
-  const preProcessVideo = async (inputBase64: string): Promise<string> => {
-    return new Promise((resolve) => {
-      // 阶段一：音视频分离与压制
-      setProgress(20);
-      
-      console.log('FFMPEG Action: ffmpeg.load()');
-      
-      setTimeout(() => {
-        console.log('FFMPEG Action: ffmpeg.FS writing input file (Original Size: ~' + (inputBase64.length * 0.75 / (1024 * 1024)).toFixed(2) + ' MB)');
-        console.log('FFMPEG Action: ffmpeg.run -i input.mp4 -vf "fps=5,scale=-1:480" -c:v libx264 -crf 31 -c:a aac -b:a 64k output.mp4');
-        console.log('FFMPEG Action: Compression finished. Simulated Output Size: ~' + (inputBase64.length * 0.15 / (1024 * 1024)).toFixed(2) + ' MB (Reduction: 85%)');
-        
-        // 阶段二：传输至创意中心
-        setProgress(50);
-        
-        setTimeout(() => {
-          // 阶段三：灵感提取中
-          setProgress(80);
-          
-          resolve(inputBase64); // 目前直接返回原数据，模拟处理完成
-        }, 1500);
-      }, 2000);
-    });
-  };
+  const handoffAppliedRef = useRef<string | null>(null);
 
-  const handleAnalyzeImpl = async () => {
-    if (!video) return;
+  const handleAnalyzeImpl = async (
+    target?: { base64: string; mimeType: string; size?: number } | null,
+  ) => {
+    const payload = target ?? video;
+    if (!payload) return;
 
-    // 检查体积是否超过 200MB
-    const fileSizeInMB = (video.size || 0) / (1024 * 1024);
+    const fileSizeInMB = (payload.size || 0) / (1024 * 1024);
     if (fileSizeInMB > 200) {
       console.error('Video size exceeds 200MB limit.');
       alert('视频体积较大（超过 200MB），请处理后再上传以保证稳定性。');
@@ -83,33 +96,52 @@ export default function ContentIteration() {
     }
 
     setLoading(true);
+    setAnalyzeFailed(false);
+    setFailureMessage(null);
     setGeminiRetryLabel(null);
-    setResult(null);
-    setProgress(0);
-    try {
-      // 执行预处理
-      const processedBase64 = await preProcessVideo(video.base64);
+    setResult('');
+    setIsEditing(false);
+    setPhase('read_video');
+    streamingStartedRef.current = false;
 
-      // 最终提取阶段
-      const script = await geminiService.analyzeVideoIteration(
-        processedBase64,
-        video.mimeType,
-        DEFAULT_STYLE,
-        DEFAULT_MOODS,
-        geminiCallOpts,
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+    setPhase('upload_model');
+
+    try {
+      const script = await geminiService.analyzeVideoIterationStream(
+        payload.base64,
+        payload.mimeType,
+        creativeProfile.defaultStyle,
+        creativeProfile.defaultMoods,
+        {
+          ...geminiCallOpts,
+          onDelta: (_delta, accumulated) => {
+            if (!streamingStartedRef.current) {
+              streamingStartedRef.current = true;
+              setPhase('streaming');
+            }
+            setResult(accumulated);
+          },
+        },
       );
-      setResult(script || "分析失败，请重试。");
-      if (user?.uid) {
+
+      const trimmed = script?.trim() ?? '';
+      setResult(trimmed || '分析失败，请重试。');
+      if (user?.uid && trimmed) {
         void logUsageEvent(user.uid, USAGE_EVENT.SCRIPT_GENERATED, {
           source: 'content_iteration',
-          meta: { variant: 'analyze_video_iteration' },
+          meta: { variant: 'analyze_video_iteration_stream' },
         });
       }
-      setProgress(100);
-      setIsEditing(false);
     } catch (error) {
       console.error(error);
-      setResult("发生错误，请检查网络或 API 配置。");
+      const msg =
+        error instanceof Error ? error.message : '发生错误，请检查网络或 API 配置。';
+      setAnalyzeFailed(true);
+      setFailureMessage(msg);
+      setResult(null);
     } finally {
       setGeminiRetryLabel(null);
       setLoading(false);
@@ -118,6 +150,28 @@ export default function ContentIteration() {
 
   const handleAnalyzeRef = useRef(handleAnalyzeImpl);
   handleAnalyzeRef.current = handleAnalyzeImpl;
+
+  useEffect(() => {
+    if (!handoff) {
+      handoffAppliedRef.current = null;
+      return;
+    }
+    const key = `${handoff.video.base64.slice(0, 32)}:${handoff.video.size ?? 0}`;
+    if (handoffAppliedRef.current === key) return;
+    handoffAppliedRef.current = key;
+
+    setVideo(handoff.video);
+    setResult(null);
+    setAnalyzeFailed(false);
+    setFailureMessage(null);
+    onHandoffConsumed?.();
+
+    if (handoff.autoAnalyze) {
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => void handleAnalyzeRef.current(handoff.video));
+      });
+    }
+  }, [handoff, onHandoffConsumed]);
 
   const handleAnalyze = useMemo(
     () => createLeadingDebouncer(500)(() => void handleAnalyzeRef.current()),
@@ -132,7 +186,7 @@ export default function ContentIteration() {
     type: AssetType,
     content: string,
     title: string,
-    saveStatusKey: string = `${type}:${title}`
+    saveStatusKey: string = `${type}:${title}`,
   ) => {
     if (!user) return alert('请先登录以收藏资产');
 
@@ -140,13 +194,14 @@ export default function ContentIteration() {
       const record = await pb.collection('assets').create(
         buildAssetCreateBody({
           userId: user.uid,
+          gameProfileId,
           type,
           title,
           content,
-          tags: ['创意迭代', DEFAULT_STYLE, DEFAULT_MOODS],
+          tags: ['创意迭代', creativeProfile.defaultStyle, creativeProfile.defaultMoods],
           likes: 0,
           likedBy: [],
-        })
+        }),
       );
 
       if (type === 'inspiration') {
@@ -168,27 +223,30 @@ export default function ContentIteration() {
 
       showToast(`已收藏至资产卡片：${labelMap[type] || type}`, 'success');
       setSaveStatus((prev) => ({ ...prev, [saveStatusKey]: true }));
-      setTimeout(
-        () => setSaveStatus((prev) => ({ ...prev, [saveStatusKey]: false })),
-        2000
-      );
+      setTimeout(() => setSaveStatus((prev) => ({ ...prev, [saveStatusKey]: false })), 2000);
     } catch (err) {
       console.error(err);
       showToast('保存失败，请检查 PocketBase 与 assets 集合配置', 'error');
     }
   };
 
+  const showResultPanel = loading || Boolean(result && result.trim().length > 0);
+  const resultTrim = result?.trim() ?? '';
+  const showSkeletonInPanel = loading && !resultTrim;
+
   return (
     <div className="max-w-4xl mx-auto py-8 px-4">
       <div className="mb-12 text-center md:text-left">
         <h1 className="text-4xl font-bold text-primary-blue mb-4">创意迭代</h1>
-        <p className="text-slate-500 text-lg">上传参考视频，进行 1:1 脚本解析与原版复述，精准还原分镜与台词。</p>
+        <p className="text-slate-500 text-lg">
+          上传参考视频，进行 1:1 脚本解析与原版复述，精准还原分镜与台词。
+        </p>
       </div>
 
       <div className="space-y-8">
         <div className="glass-card p-8 bg-white border-slate-200 shadow-sm">
           <VideoUploader onUpload={(base64, mimeType, size) => setVideo({ base64, mimeType, size })} />
-          
+
           <div className="mt-8 space-y-6">
             <div className="flex flex-col items-center pt-4 space-y-6">
               <button
@@ -211,29 +269,42 @@ export default function ContentIteration() {
 
               {loading && (
                 <div className="w-full max-w-md space-y-3">
-                  <div className="flex justify-between items-center text-sm mb-1 w-full min-w-0">
-                    <span className="text-accent-blue font-medium animate-pulse shrink-0">当前进度</span>
-                    <span className="text-slate-400 font-mono tabular-nums shrink-0">{progress}%</span>
+                  <div className="flex justify-between items-center text-sm mb-1 w-full min-w-0 gap-2">
+                    <span className="text-accent-blue font-medium shrink min-w-0">{PHASE_LABEL[phase]}</span>
                   </div>
-                  <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
-                    <motion.div 
-                      className="h-full bg-accent-blue"
-                      initial={{ width: 0 }}
-                      animate={{ width: `${progress}%` }}
-                      transition={{ duration: 0.5 }}
+                  <div className="relative w-full h-2 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
+                    <motion.div
+                      className="absolute top-0 h-full w-1/3 rounded-full bg-accent-blue"
+                      initial={false}
+                      animate={{ left: ['-34%', '100%'] }}
+                      transition={{ duration: 1.25, repeat: Infinity, ease: 'easeInOut' }}
                     />
                   </div>
-                  <p className="text-[10px] text-slate-400 text-center">正在使用深度学习模型提取视觉灵感与核心卖点</p>
+                  <p className="text-[10px] text-slate-400 text-center">
+                    模型返回后将逐字显示；大文件请耐心等待首段内容。
+                  </p>
                   {geminiRetryLabel ? (
                     <p className="text-[10px] text-slate-500 text-center">{geminiRetryLabel}</p>
                   ) : null}
+                </div>
+              )}
+
+              {analyzeFailed && !loading && (
+                <div className="w-full max-w-md rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-900 shadow-sm">
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className="font-black text-rose-700 uppercase tracking-wide text-xs">失败</span>
+                    <div className="flex-1 h-2 rounded-full bg-rose-200 overflow-hidden">
+                      <div className="h-full w-full bg-rose-500 rounded-full" />
+                    </div>
+                  </div>
+                  <p className="text-rose-800/95 leading-relaxed break-words text-xs">{failureMessage}</p>
                 </div>
               )}
             </div>
           </div>
         </div>
 
-        {result && (
+        {showResultPanel && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -245,23 +316,25 @@ export default function ContentIteration() {
                 <h2 className="text-2xl font-bold text-primary-blue tracking-tight">拆解结果</h2>
               </div>
               <div className="flex items-center gap-2">
-                <ActionButton 
-                  onClick={() => setIsEditing(!isEditing)} 
-                  icon={<FileText className="w-4 h-4" />} 
-                  label={isEditing ? '预览' : '编辑'} 
+                <ActionButton
+                  onClick={() => setIsEditing(!isEditing)}
+                  icon={<FileText className="w-4 h-4" />}
+                  label={isEditing ? '预览' : '编辑'}
+                  disabled={loading || !resultTrim}
                 />
-                <ActionButton 
-                  onClick={() => handleCopy(result)} 
-                  icon={<Copy className="w-4 h-4" />} 
-                  label="复制" 
+                <ActionButton
+                  onClick={() => result && handleCopy(result)}
+                  icon={<Copy className="w-4 h-4" />}
+                  label="复制"
+                  disabled={loading || !resultTrim}
                 />
                 <ActionButton
                   onClick={() =>
                     void handleSaveAsset(
                       'full_script',
-                      result,
+                      result ?? '',
                       '分析脚本_' + new Date().toLocaleTimeString(),
-                      FULL_SCRIPT_SAVE_KEY
+                      FULL_SCRIPT_SAVE_KEY,
                     )
                   }
                   icon={
@@ -273,20 +346,23 @@ export default function ContentIteration() {
                   }
                   label="收藏脚本"
                   active={saveStatus[FULL_SCRIPT_SAVE_KEY]}
+                  disabled={loading || !resultTrim}
                 />
               </div>
             </div>
 
-            <div className="p-8 bg-slate-50 rounded-[2rem] border border-slate-100 group relative">
-              {isEditing ? (
+            <div className="p-8 bg-slate-50 rounded-[2rem] border border-slate-100 group relative min-h-[200px]">
+              {showSkeletonInPanel ? (
+                <IterationResultSkeleton />
+              ) : isEditing ? (
                 <textarea
-                  value={result}
+                  value={result ?? ''}
                   onChange={(e) => setResult(e.target.value)}
                   className="w-full bg-transparent border-none outline-none resize-none text-slate-700 leading-relaxed font-sans min-h-[400px] text-lg"
                 />
               ) : (
                 <div className="markdown-body prose prose-slate prose-blue max-w-none">
-                  <ReactMarkdown>{result}</ReactMarkdown>
+                  <ReactMarkdown>{result ?? ''}</ReactMarkdown>
                 </div>
               )}
             </div>
@@ -297,11 +373,29 @@ export default function ContentIteration() {
   );
 }
 
-function ActionButton({ onClick, icon, label, active }: { onClick: () => void, icon: React.ReactNode, label: string, active?: boolean }) {
+function ActionButton({
+  onClick,
+  icon,
+  label,
+  active,
+  disabled,
+}: {
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+  active?: boolean;
+  disabled?: boolean;
+}) {
   return (
     <button
+      type="button"
       onClick={onClick}
-      className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all cursor-pointer ${active ? 'bg-primary-blue text-white border-primary-blue' : 'bg-white border-slate-200 text-slate-500 hover:text-primary-blue hover:border-slate-300'}`}
+      disabled={disabled}
+      className={`flex items-center gap-2 px-3 py-1.5 rounded-lg border text-xs font-bold transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none ${
+        active
+          ? 'bg-primary-blue text-white border-primary-blue'
+          : 'bg-white border-slate-200 text-slate-500 hover:text-primary-blue hover:border-slate-300'
+      }`}
     >
       {icon}
       {label}

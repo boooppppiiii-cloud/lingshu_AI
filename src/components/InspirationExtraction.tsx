@@ -12,6 +12,12 @@ import { createLeadingDebouncer } from '../lib/leadingDebounce';
 import { logUsageEvent } from '../lib/logUsageEvent';
 import { USAGE_EVENT } from '../lib/usageEvents';
 import { AssetType } from '../types';
+import { useGameProfile } from '../lib/GameProfileContext';
+import { gameProfileScopeFilterExpr, getGameCreativeProfile } from '../lib/gameProfiles';
+
+function isCustomSellingSelection(v: string) {
+  return v === '其他' || v === '其他（须填写）';
+}
 
 interface Highlights {
   theme: string[];
@@ -28,6 +34,8 @@ interface CreativeTheme {
 export default function InspirationExtraction() {
   const { user } = useAuth();
   const { showToast } = useToast();
+  const { gameProfileId } = useGameProfile();
+  const creativeProfile = useMemo(() => getGameCreativeProfile(gameProfileId), [gameProfileId]);
   const [step, setStep] = useState(1);
   const [video, setVideo] = useState<{ base64: string; mimeType: string } | null>(null);
   const [loading, setLoading] = useState(false);
@@ -44,59 +52,66 @@ export default function InspirationExtraction() {
     () => ({
       ...geminiOpts,
       analyticsUserId: user?.uid,
+      gameProfileId,
     }),
-    [geminiOpts, user?.uid],
+    [geminiOpts, user?.uid, gameProfileId],
   );
 
-  // Step 1 data
+  useEffect(() => {
+    setSellingPoint('');
+    setCustomSellingPoint('');
+    setSelectedStyle('');
+    setSelectedMoods([]);
+    setStep(1);
+    setVideo(null);
+    setHighlights(null);
+    setSelectedHighlights([]);
+    setThemes([]);
+    setSelectedThemeIndex(null);
+    setScriptsCache({});
+    setScriptExtraPrompt('');
+  }, [gameProfileId]);
   const [highlights, setHighlights] = useState<Highlights | null>(null);
   const [selectedHighlights, setSelectedHighlights] = useState<string[]>([]);
   const [popularTags, setPopularTags] = useState<string[]>([]);
 
   // Step 2 data
-  const SELLING_POINTS = [
-    '种花送时装',
-    '种花送家装',
-    '种花领限定花种',
-    '种花送真花',
-    '种花解锁多种玩法'
-  ];
-
-  const STYLES = [
-    '真人3D写实风格',
-    '华丽建模动画画风',
-    'Q版动漫人物画风',
-    '赛博奇幻画风'
-  ];
-
-  const MOODS = [
-    '温情',
-    '治愈',
-    '热血',
-    '悲伤',
-    '惊喜',
-    '戏剧性',
-    '反转打脸'
-  ];
+  const SELLING_POINTS = useMemo(() => [...creativeProfile.sellingPoints], [creativeProfile]);
+  const SELLING_POINT_CHIPS = useMemo(
+    () => SELLING_POINTS.filter((s) => s !== '其他' && s !== '其他（须填写）'),
+    [SELLING_POINTS],
+  );
+  const STYLES = useMemo(() => [...creativeProfile.styles], [creativeProfile]);
+  const MOODS = useMemo(() => [...creativeProfile.moods], [creativeProfile]);
 
   const [sellingPoint, setSellingPoint] = useState<string>('');
+  const [customSellingPoint, setCustomSellingPoint] = useState('');
   const [themes, setThemes] = useState<CreativeTheme[]>([]);
   const [selectedThemeIndex, setSelectedThemeIndex] = useState<number | null>(null);
+
+  const sellingSummary = useMemo(
+    () => (isCustomSellingSelection(sellingPoint) ? customSellingPoint : sellingPoint).trim(),
+    [sellingPoint, customSellingPoint],
+  );
 
   // Step 3 data
   const [selectedStyle, setSelectedStyle] = useState<string>('');
   const [selectedMoods, setSelectedMoods] = useState<string[]>([]);
+  const [scriptExtraPrompt, setScriptExtraPrompt] = useState('');
   const [scriptsCache, setScriptsCache] = useState<{[key: number]: string}>({});
   const [isEditing, setIsEditing] = useState(false);
   const [saveStatus, setSaveStatus] = useState<{[key: string]: boolean}>({});
 
   useEffect(() => {
     void fetchPopularTags();
-  }, []);
+  }, [gameProfileId]);
 
   const fetchPopularTags = async () => {
     try {
-      const records = await pb.collection('market').getFullList({ sort: '-likes' });
+      const records = await pb.collection('market').getFullList({
+        filter: `(${gameProfileScopeFilterExpr('gameProfileId', gameProfileId)})`,
+        sort: '-likes',
+      });
       const tagMap: { [key: string]: number } = {};
 
       records.forEach((item) => {
@@ -146,14 +161,22 @@ export default function InspirationExtraction() {
   );
 
   const handleGenerateThemesImpl = async () => {
-    if (selectedHighlights.length === 0 || !sellingPoint) {
-      alert("请选择至少一个灵感点和卖点");
+    if (selectedHighlights.length === 0) {
+      alert('请选择至少一个灵感点');
+      return;
+    }
+    if (!sellingPoint) {
+      alert('请选择核心卖点，或选择「其他」并填写自定义卖点');
+      return;
+    }
+    if (isCustomSellingSelection(sellingPoint) && !customSellingPoint.trim()) {
+      alert('请填写自定义核心卖点');
       return;
     }
     setLoading(true);
     setGeminiRetryLabel(null);
     try {
-      const data = await geminiService.generateThemes(selectedHighlights, sellingPoint, geminiCallOpts);
+      const data = await geminiService.generateThemes(selectedHighlights, sellingSummary, geminiCallOpts);
       setThemes(data);
       // Auto select first theme
       if (data.length > 0) {
@@ -193,9 +216,10 @@ export default function InspirationExtraction() {
       const script = await geminiService.generateFinalScript(
         theme.title,
         theme.description,
-        selectedStyle || '真人3D写实风格',
-        selectedMoods.length > 0 ? selectedMoods.join('、') : '治愈、惊喜',
+        selectedStyle || creativeProfile.defaultStyle,
+        selectedMoods.length > 0 ? selectedMoods.join('、') : creativeProfile.defaultMoods,
         geminiCallOpts,
+        scriptExtraPrompt,
       );
       setScriptsCache((prev) => ({ ...prev, [index]: script }));
       if (user?.uid) {
@@ -227,10 +251,11 @@ export default function InspirationExtraction() {
       const record = await pb.collection('assets').create(
         buildAssetCreateBody({
           userId: user.uid,
+          gameProfileId,
           type,
           title,
           content,
-          tags: [sellingPoint, selectedStyle, ...selectedMoods, ...selectedHighlights].filter(Boolean),
+          tags: [sellingSummary, selectedStyle, ...selectedMoods, ...selectedHighlights].filter(Boolean),
           likes: 0,
           likedBy: [],
         })
@@ -394,20 +419,55 @@ export default function InspirationExtraction() {
                   <Sparkles className="w-6 h-6 text-accent-blue" /> 2. 核心卖点注魂
                 </h3>
                 <div className="flex flex-wrap gap-3 mb-8">
-                  {SELLING_POINTS.map((sp, idx) => (
+                  {SELLING_POINT_CHIPS.map((sp, idx) => (
                     <button
                       key={`sp-${idx}-${sp}`}
+                      type="button"
                       onClick={() => setSellingPoint(sp)}
                       className={`px-6 py-3 rounded-2xl text-sm font-bold transition-all border cursor-pointer ${sellingPoint === sp ? 'bg-primary-blue text-white border-primary-blue' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'}`}
                     >
                       {sp}
                     </button>
                   ))}
+                  <button
+                    type="button"
+                    onClick={() => setSellingPoint('其他')}
+                    className={`px-6 py-3 rounded-2xl text-sm font-bold transition-all border cursor-pointer ${isCustomSellingSelection(sellingPoint) ? 'bg-primary-blue text-white border-primary-blue' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-300'}`}
+                  >
+                    其他
+                  </button>
                 </div>
-                
+                {isCustomSellingSelection(sellingPoint) ? (
+                  <div className="mb-8">
+                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">
+                      自定义核心卖点
+                    </label>
+                    <input
+                      type="text"
+                      value={customSellingPoint}
+                      onChange={(e) => setCustomSellingPoint(e.target.value)}
+                      placeholder={creativeProfile.customSellingPlaceholder}
+                      className="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm text-slate-700 outline-none focus:border-accent-blue transition-all"
+                    />
+                  </div>
+                ) : null}
+
+                <div className="mb-6">
+                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">
+                    补充提示词（选填）
+                  </label>
+                  <textarea
+                    value={scriptExtraPrompt}
+                    onChange={(e) => setScriptExtraPrompt(e.target.value)}
+                    rows={4}
+                    placeholder="可填写必须出现的元素、禁忌、口播侧重等；生成最终脚本时会一并传给模型。修改后请在第三步点击重新生成。"
+                    className="w-full bg-white border border-slate-200 rounded-xl p-3 text-xs text-slate-700 outline-none focus:border-accent-blue transition-all resize-y min-h-[88px] leading-relaxed"
+                  />
+                </div>
+
                 <button
                   onClick={handleGenerateThemes}
-                  disabled={loading || selectedHighlights.length === 0 || !sellingPoint}
+                  disabled={loading || selectedHighlights.length === 0 || !sellingSummary}
                   className="bg-accent-blue text-white px-8 py-5 rounded-2xl font-bold w-full flex items-center justify-center gap-2 shadow-lg shadow-slate-200 hover:bg-slate-800 transition-all disabled:opacity-50 cursor-pointer"
                 >
                   {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
@@ -481,7 +541,9 @@ export default function InspirationExtraction() {
                     onChange={(e) => setSelectedStyle(e.target.value)}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl p-3 text-xs text-slate-700 outline-none focus:border-accent-blue transition-all"
                   >
-                    <option value="">真人3D写实 (默认)</option>
+                    <option value="">
+                      {creativeProfile.defaultStyleLabel}
+                    </option>
                     {STYLES.map((s, idx) => <option key={`style-${idx}-${s}`} value={s}>{s}</option>)}
                   </select>
                   <div className="flex flex-wrap gap-1.5">

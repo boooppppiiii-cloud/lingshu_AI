@@ -3,84 +3,130 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { AuthProvider } from './lib/AuthContext';
+import { AuthProvider, useAuth } from './lib/AuthContext';
 import { ToastProvider } from './lib/ToastContext';
+import { GameProfileProvider, useGameProfile } from './lib/GameProfileContext';
+import {
+  getDefaultViewForRole,
+  isViewAllowedForRole,
+  resolveEffectiveRole,
+} from './lib/userRoles';
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import AuthModal from './components/AuthModal';
 import CreativeWorkshop from './components/CreativeWorkshop';
 import InspirationMarket from './components/InspirationMarket';
+import BuyingDashboard from './components/BuyingDashboard';
 import AssetCardView from './components/AssetCardView';
 import UserProfileView from './components/UserProfileView';
+import VolumeSpaceView from './components/VolumeSpaceView';
+import TeamCasesView from './components/TeamCasesView';
+import type { IterationHandoff, IterationVideoPayload } from './lib/iterationHandoff';
 import { ViewState } from './types';
 
 function AppShell() {
-  const [activeView, setActiveView] = useState<ViewState>('workshop');
+  const { user, loading: authLoading } = useAuth();
+  const effectiveRole = resolveEffectiveRole(user?.role);
+  const [activeView, setActiveView] = useState<ViewState>(() => getDefaultViewForRole(effectiveRole));
   const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [iterationHandoff, setIterationHandoff] = useState<IterationHandoff | null>(null);
+  const { gameProfileId } = useGameProfile();
+  const themeAttr = gameProfileId;
+  const canAccessWorkshop = isViewAllowedForRole('workshop', effectiveRole);
+
+  const sendBuyingVideoToIteration = useCallback(
+    (video: IterationVideoPayload) => {
+      if (!canAccessWorkshop) return;
+      setIterationHandoff({ video, autoAnalyze: true });
+      setActiveView('workshop');
+    },
+    [canAccessWorkshop],
+  );
+
+  const clearIterationHandoff = useCallback(() => {
+    setIterationHandoff(null);
+  }, []);
+
+  useEffect(() => {
+    if (authLoading) return;
+    setActiveView((current) =>
+      isViewAllowedForRole(current, effectiveRole) ? current : getDefaultViewForRole(effectiveRole),
+    );
+  }, [authLoading, effectiveRole, user?.uid]);
+
+  const viewMotion = (key: string, children: React.ReactNode) => (
+    <motion.div
+      key={key}
+      initial={{ opacity: 0, x: 20 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: -20 }}
+      transition={{ duration: 0.3 }}
+    >
+      {children}
+    </motion.div>
+  );
 
   return (
     <ToastProvider>
-      <div className="min-h-screen bg-slate-50 text-slate-800 font-sans selection:bg-accent-blue/10 selection:text-accent-blue">
+      <div
+        data-game-theme={themeAttr}
+        className="min-h-screen bg-slate-50 text-slate-800 font-sans selection:bg-accent-blue/10 selection:text-accent-blue"
+      >
         <Sidebar activeView={activeView} onViewChange={setActiveView} />
 
         <Header onAuthClick={() => setAuthModalOpen(true)} />
 
-        {/* Main Content Area */}
         <main className="ml-64 min-h-[calc(100vh-80px)] relative">
-          {/* Background Decorative Gradient - Subtle for light version */}
           <div className="absolute top-0 left-1/2 -translate-x-1/2 w-full h-full pointer-events-none overflow-hidden -z-10 opacity-40">
-            <div className="absolute -top-[20%] -left-[10%] w-[60%] h-[60%] bg-accent-blue/5 rounded-full blur-[120px]" />
-            <div className="absolute top-[20%] -right-[10%] w-[50%] h-[50%] bg-blue-400/5 rounded-full blur-[120px]" />
+            {gameProfileId === 'xiyou_card' ? (
+              <>
+                <div className="absolute -top-[20%] -left-[10%] w-[60%] h-[60%] bg-emerald-500/10 rounded-full blur-[120px]" />
+                <div className="absolute top-[20%] -right-[10%] w-[50%] h-[50%] bg-green-400/10 rounded-full blur-[120px]" />
+              </>
+            ) : gameProfileId === 'ace_mecha' ? (
+              <>
+                <div className="absolute -top-[20%] -left-[10%] w-[60%] h-[60%] bg-orange-500/10 rounded-full blur-[120px]" />
+                <div className="absolute top-[20%] -right-[10%] w-[50%] h-[50%] bg-cyan-400/10 rounded-full blur-[120px]" />
+              </>
+            ) : (
+              <>
+                <div className="absolute -top-[20%] -left-[10%] w-[60%] h-[60%] bg-accent-blue/5 rounded-full blur-[120px]" />
+                <div className="absolute top-[20%] -right-[10%] w-[50%] h-[50%] bg-blue-400/5 rounded-full blur-[120px]" />
+              </>
+            )}
           </div>
 
-          <div className="p-8 max-w-7xl mx-auto">
+          <div
+            className={`p-8 mx-auto ${
+              activeView === 'buying_dashboard' ? 'max-w-[min(100%,1920px)]' : 'max-w-7xl'
+            }`}
+          >
             <AnimatePresence mode="wait">
-              {activeView === 'market' && (
-                <motion.div
-                  key="market"
-                  initial={{ opacity: 0, x: 20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -20 }}
-                  transition={{ duration: 0.3 }}
-                >
-                  <InspirationMarket />
-                </motion.div>
-              )}
-              {activeView === 'workshop' && (
-                <motion.div
-                  key="workshop"
-                  initial={{ opacity: 0, x: 20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -20 }}
-                  transition={{ duration: 0.3 }}
-                >
-                  <CreativeWorkshop />
-                </motion.div>
-              )}
-              {activeView === 'assets' && (
-                <motion.div
-                  key="assets"
-                  initial={{ opacity: 0, x: 20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -20 }}
-                  transition={{ duration: 0.3 }}
-                >
-                  <AssetCardView />
-                </motion.div>
-              )}
-              {activeView === 'profile' && (
-                <motion.div
-                  key="profile"
-                  initial={{ opacity: 0, x: 20 }}
-                  animate={{ opacity: 1, x: 0 }}
-                  exit={{ opacity: 0, x: -20 }}
-                  transition={{ duration: 0.3 }}
-                >
-                  <UserProfileView onRequestLogin={() => setAuthModalOpen(true)} />
-                </motion.div>
-              )}
+              {activeView === 'market' && viewMotion('market', <InspirationMarket />)}
+              {activeView === 'buying_dashboard' &&
+                viewMotion(
+                  'buying_dashboard',
+                  <BuyingDashboard
+                    canAccessWorkshop={canAccessWorkshop}
+                    onSendToIteration={sendBuyingVideoToIteration}
+                    onRequestLogin={() => setAuthModalOpen(true)}
+                  />,
+                )}
+              {activeView === 'workshop' &&
+                viewMotion(
+                  'workshop',
+                  <CreativeWorkshop
+                    iterationHandoff={iterationHandoff}
+                    onIterationHandoffConsumed={clearIterationHandoff}
+                  />,
+                )}
+              {activeView === 'assets' && viewMotion('assets', <AssetCardView />)}
+              {activeView === 'volume_space' && viewMotion('volume_space', <VolumeSpaceView />)}
+              {activeView === 'team_cases' && viewMotion('team_cases', <TeamCasesView />)}
+              {activeView === 'profile' &&
+                viewMotion('profile', <UserProfileView onRequestLogin={() => setAuthModalOpen(true)} />)}
             </AnimatePresence>
           </div>
         </main>
@@ -94,7 +140,9 @@ function AppShell() {
 export default function App() {
   return (
     <AuthProvider>
-      <AppShell />
+      <GameProfileProvider>
+        <AppShell />
+      </GameProfileProvider>
     </AuthProvider>
   );
 }

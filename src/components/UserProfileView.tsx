@@ -1,5 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useAuth } from '../lib/AuthContext';
+import { USER_ROLE_LABELS } from '../lib/userRoles';
+import { useGameProfile } from '../lib/GameProfileContext';
+import { gameProfileScopeFilterExpr } from '../lib/gameProfiles';
 import { pb } from '../lib/pb';
 import { UserProfile } from '../types';
 import { User, Mail, Heart, Edit3, Save, LogOut, LogIn } from 'lucide-react';
@@ -10,6 +13,7 @@ interface UserProfileViewProps {
 
 export default function UserProfileView({ onRequestLogin }: UserProfileViewProps) {
   const { user, signOut } = useAuth();
+  const { gameProfileId } = useGameProfile();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [totalLikes, setTotalLikes] = useState(0);
   const [isEditing, setIsEditing] = useState(false);
@@ -45,7 +49,7 @@ export default function UserProfileView({ onRequestLogin }: UserProfileViewProps
 
       try {
         const records = await pb.collection('market').getFullList({
-          filter: `userId = ${JSON.stringify(user.uid)}`,
+          filter: `userId = ${JSON.stringify(user.uid)} && (${gameProfileScopeFilterExpr('gameProfileId', gameProfileId)})`,
         });
         let count = 0;
         records.forEach((r) => {
@@ -60,7 +64,7 @@ export default function UserProfileView({ onRequestLogin }: UserProfileViewProps
     };
 
     void fetchProfileAndLikes();
-  }, [user]);
+  }, [user, gameProfileId]);
 
   const handleUpdateNickname = () => {
     if (!user || !nickname.trim()) return;
@@ -148,7 +152,10 @@ export default function UserProfileView({ onRequestLogin }: UserProfileViewProps
                   </>
                 )}
               </div>
-              <p className="text-slate-500 mt-1 flex items-center gap-2">
+              <p className="text-slate-500 mt-1 flex flex-wrap items-center gap-2">
+                <span className="rounded-lg bg-accent-blue/10 px-2 py-0.5 text-[11px] font-bold text-primary-blue">
+                  {USER_ROLE_LABELS[user.role]}
+                </span>
                 <Mail className="w-4 h-4 text-slate-400" />
                 {profile?.email}
               </p>
@@ -186,7 +193,7 @@ export default function UserProfileView({ onRequestLogin }: UserProfileViewProps
               <div className="w-16 h-16 bg-accent-blue/10 rounded-full flex items-center justify-center mb-4">
                 <User className="w-8 h-8 text-accent-blue" />
               </div>
-              <h4 className="text-primary-blue font-bold mb-2">欢迎来到 script ai</h4>
+              <h4 className="text-primary-blue font-bold mb-2">欢迎来到创意工坊</h4>
               <p className="text-slate-500 text-sm leading-relaxed">
                 在这里你可以保存你的每一个创意灵感。多去灵感市场看看吧，那里有全球伙伴的奇思妙想。
               </p>

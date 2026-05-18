@@ -119,3 +119,71 @@ export async function logGeminiCallUsage(input: {
 
   void adminCreateUsageRecord(body);
 }
+
+export const BUYING_VIDEOS = 'buying_videos';
+
+/** Admin GET /api/collections/:name/records/:id */
+export async function pbAdminGetRecord(
+  collectionName: string,
+  recordId: string,
+): Promise<Record<string, unknown> | null> {
+  const token = await getAdminToken();
+  if (!token) return null;
+  try {
+    const res = await fetch(
+      `${PB_URL}/api/collections/${encodeURIComponent(collectionName)}/records/${encodeURIComponent(recordId)}`,
+      { headers: { Authorization: token } },
+    );
+    if (!res.ok) return null;
+    return (await res.json()) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+/** Admin PATCH /api/collections/:name/records/:id */
+export async function pbAdminPatchRecord(
+  collectionName: string,
+  recordId: string,
+  data: Record<string, unknown>,
+): Promise<boolean> {
+  const token = await getAdminToken();
+  if (!token) return false;
+  try {
+    const res = await fetch(
+      `${PB_URL}/api/collections/${encodeURIComponent(collectionName)}/records/${encodeURIComponent(recordId)}`,
+      {
+        method: 'PATCH',
+        headers: {
+          Authorization: token,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(data),
+      },
+    );
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/** 下载集合内文件（需 Admin token；与前端 pb.files.getURL 路径规则一致） */
+export async function pbAdminDownloadFile(
+  collectionName: string,
+  recordId: string,
+  fileName: string,
+): Promise<{ buf: Buffer; contentType: string } | null> {
+  const token = await getAdminToken();
+  if (!token) return null;
+  const url = `${PB_URL}/api/files/${encodeURIComponent(collectionName)}/${encodeURIComponent(recordId)}/${encodeURIComponent(fileName)}`;
+  try {
+    const res = await fetch(url, { headers: { Authorization: token } });
+    if (!res.ok) return null;
+    const ab = await res.arrayBuffer();
+    const ct = res.headers.get('content-type') || 'application/octet-stream';
+    return { buf: Buffer.from(ab), contentType: ct };
+  } catch {
+    return null;
+  }
+}
+

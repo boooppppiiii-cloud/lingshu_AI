@@ -1,4 +1,5 @@
 import { useAuth } from '../lib/AuthContext';
+import { USER_ROLE_LABELS } from '../lib/userRoles';
 import { User, LogOut } from 'lucide-react';
 
 interface HeaderProps {
@@ -16,8 +17,10 @@ export default function Header({ onAuthClick }: HeaderProps) {
         ) : user ? (
           <div className="flex items-center gap-4">
             <div className="text-right">
-              <div className="text-sm font-bold text-primary-blue leading-none mb-1">{user.displayName || '创意师'}</div>
-              <div className="text-[10px] text-slate-500">{user.email}</div>
+              <div className="text-sm font-bold text-primary-blue leading-none mb-1">{user.displayName || '用户'}</div>
+              <div className="text-[10px] text-slate-500">
+                {USER_ROLE_LABELS[user.role]} · {user.email}
+              </div>
             </div>
             <button 
               onClick={() => signOut()}

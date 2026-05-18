@@ -3,6 +3,8 @@ import { motion, AnimatePresence } from 'motion/react';
 import { X } from 'lucide-react';
 import { ClientResponseError } from 'pocketbase';
 import { useAuth, type SignUpInput } from '../lib/AuthContext';
+import { USER_ROLE_LABELS } from '../lib/userRoles';
+import type { UserRole } from '../types';
 
 function formatPbError(err: unknown): string {
   if (err instanceof ClientResponseError) {
@@ -31,6 +33,7 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
   const [password, setPassword] = useState('');
   const [passwordConfirm, setPasswordConfirm] = useState('');
   const [name, setName] = useState('');
+  const [userRole, setUserRole] = useState<UserRole>('design');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -68,6 +71,7 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
           password,
           passwordConfirm,
           name: name.trim() || undefined,
+          userRole,
         };
         await signUp(payload);
       }
@@ -145,6 +149,34 @@ export default function AuthModal({ open, onClose }: AuthModalProps) {
             </div>
 
             <form onSubmit={(e) => void handleSubmit(e)} className="space-y-4">
+              {mode === 'register' && (
+                <div>
+                  <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">
+                    身份类型
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {(['design', 'placement'] as const).map((role) => (
+                      <button
+                        key={role}
+                        type="button"
+                        onClick={() => setUserRole(role)}
+                        className={`rounded-xl border px-3 py-3 text-left transition ${
+                          userRole === role
+                            ? 'border-accent-blue bg-accent-blue/10 text-primary-blue shadow-sm'
+                            : 'border-slate-200 bg-white text-slate-600 hover:border-accent-blue/40'
+                        }`}
+                      >
+                        <div className="text-sm font-bold">{USER_ROLE_LABELS[role]}</div>
+                        <p className="mt-1 text-[11px] leading-snug opacity-80">
+                          {role === 'design'
+                            ? '灵感市场、创意工坊、资产卡片等'
+                            : '买量大屏、起量空间、团队案例等'}
+                        </p>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               {mode === 'register' && (
                 <div>
                   <label className="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-1.5">

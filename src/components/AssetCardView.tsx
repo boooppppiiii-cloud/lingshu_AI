@@ -6,6 +6,8 @@ import { Asset, AssetType } from '../types';
 import { Search, FolderHeart, MessageSquare, FileText, Layout, Copy, Share2, Trash2, CheckCircle2, Plus, X, Heart, Edit3, Sparkles, Zap } from 'lucide-react';
 import { pb } from '../lib/pb';
 import { buildAssetCreateBody, buildMarketCreateBody, recordToAsset } from '../lib/recordMappers';
+import { useGameProfile } from '../lib/GameProfileContext';
+import { gameProfileScopeFilterExpr } from '../lib/gameProfiles';
 import { logUsageEvent } from '../lib/logUsageEvent';
 import { USAGE_EVENT } from '../lib/usageEvents';
 import Markdown from 'react-markdown';
@@ -26,6 +28,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 
 export default function AssetCardView() {
   const { user } = useAuth();
+  const { gameProfileId } = useGameProfile();
   const { showToast } = useToast();
   const [activeTab, setActiveTab] = useState<AssetType>('prompt');
   const [searchQuery, setSearchQuery] = useState('');
@@ -66,7 +69,7 @@ export default function AssetCardView() {
     (async () => {
       try {
         const records = await pb.collection('assets').getFullList({
-          filter: `userId = ${JSON.stringify(user.uid)} && type = ${JSON.stringify(activeTab)}`,
+          filter: `userId = ${JSON.stringify(user.uid)} && type = ${JSON.stringify(activeTab)} && (${gameProfileScopeFilterExpr('gameProfileId', gameProfileId)})`,
           sort: '-created',
         });
         if (!cancelled) setAssets(records.map(recordToAsset));
@@ -80,7 +83,7 @@ export default function AssetCardView() {
     return () => {
       cancelled = true;
     };
-  }, [user, activeTab]);
+  }, [user, activeTab, gameProfileId]);
 
   const filteredAssets = assets
     .filter(a => 
@@ -165,6 +168,7 @@ export default function AssetCardView() {
         const record = await pb.collection('assets').create(
           buildAssetCreateBody({
             userId: user.uid,
+            gameProfileId,
             type: activeTab,
             title: newTitle,
             content: finalContent,
@@ -280,6 +284,7 @@ export default function AssetCardView() {
           userId: user.uid,
           userNickname: user.displayName || '匿名用户',
           assetId: asset.id,
+          gameProfileId: asset.gameProfileId,
           type: asset.type,
           title: asset.title,
           content: asset.content,

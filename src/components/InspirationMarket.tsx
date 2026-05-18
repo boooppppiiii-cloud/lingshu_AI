@@ -1,6 +1,8 @@
 import { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useAuth } from '../lib/AuthContext';
+import { useGameProfile } from '../lib/GameProfileContext';
+import { gameProfileScopeFilterExpr } from '../lib/gameProfiles';
 import { useToast } from '../lib/ToastContext';
 import { AssetType, MarketItem } from '../types';
 import { Search, Zap, MessageSquare, FileText, Layout, Heart, Copy, ChevronDown, Check, Trash2, Edit3, X } from 'lucide-react';
@@ -33,6 +35,7 @@ const CATEGORY_LABELS: Record<string, string> = {
 
 export default function InspirationMarket() {
   const { user } = useAuth();
+  const { gameProfileId } = useGameProfile();
   const { showToast } = useToast();
   const [items, setItems] = useState<MarketItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -63,7 +66,10 @@ export default function InspirationMarket() {
     (async () => {
       setLoading(true);
       try {
-        const records = await pb.collection('market').getFullList({ sort: '-likes' });
+        const records = await pb.collection('market').getFullList({
+          filter: `(${gameProfileScopeFilterExpr('gameProfileId', gameProfileId)})`,
+          sort: '-likes',
+        });
         const mapped = records.map(recordToMarketItem);
         if (!cancelled) {
           setItems(mapped.sort((a, b) => (b.likes || 0) - (a.likes || 0)));
@@ -81,7 +87,7 @@ export default function InspirationMarket() {
     return () => {
       cancelled = true;
     };
-  }, [showToast]);
+  }, [showToast, gameProfileId]);
 
   // Extract unique values for each category from existing items
   const filterOptions = useMemo(() => {

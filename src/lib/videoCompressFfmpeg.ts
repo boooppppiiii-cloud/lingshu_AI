@@ -182,3 +182,96 @@ export async function compressVideoWithFfmpeg(
   onProgress({ overall: 1, phase: 'encode' });
   return { blob: new Blob([best], { type: 'video/mp4' }), mimeType: 'video/mp4' };
 }
+
+const POSTER_JPG = 'poster.jpg';
+const PREVIEW_OUT = 'preview_buying.mp4';
+
+/**
+ * 买量大屏：用 FFmpeg 从视频中截 JPG 封面，并生成低码率 MP4 预览（浏览器端 wasm）。
+ * 同一输入文件顺序执行，避免重复 writeFile。
+ */
+export async function generateBuyingVideoMediaArtifacts(
+  file: File,
+  onProgress: (info: { overall: number; phase: 'load' | 'poster' | 'preview' }) => void,
+): Promise<{ posterJpeg: Blob; previewMp4: Blob }> {
+  const ffmpeg = await loadFfmpeg((phase, p01) => {
+    if (phase === 'load') onProgress({ overall: p01 * 0.12, phase: 'load' });
+  });
+
+  const inputName = 'input.mp4';
+  await ffmpeg.writeFile(inputName, await fetchFile(file));
+
+  try {
+    await ffmpeg.deleteFile(POSTER_JPG).catch(() => undefined);
+    await ffmpeg.deleteFile(PREVIEW_OUT).catch(() => undefined);
+
+    onProgress({ overall: 0.14, phase: 'poster' });
+    const exitPoster = await ffmpeg.exec([
+      '-ss',
+      '0.5',
+      '-i',
+      inputName,
+      '-frames:v',
+      '1',
+      '-q:v',
+      '2',
+      POSTER_JPG,
+    ]);
+    if (exitPoster !== 0) {
+      throw new Error(`ffmpeg 截封面失败（退出码 ${exitPoster}）`);
+    }
+    const posterRaw = await ffmpeg.readFile(POSTER_JPG);
+    if (!(posterRaw instanceof Uint8Array)) {
+      throw new Error('无法读取封面图');
+    }
+    const posterJpeg = new Blob([posterRaw], { type: 'image/jpeg' });
+    onProgress({ overall: 0.35, phase: 'poster' });
+
+    const onProg = ({ progress }: { progress: number }) => {
+      onProgress({ overall: Math.min(0.98, 0.35 + progress * 0.63), phase: 'preview' });
+    };
+    ffmpeg.on('progress', onProg);
+    let exitPreview = 1;
+    try {
+      exitPreview = await ffmpeg.exec([
+        '-i',
+        inputName,
+        '-vf',
+        'scale=-2:480:flags=lanczos',
+        '-c:v',
+        'libx264',
+        '-preset',
+        'veryfast',
+        '-crf',
+        '35',
+        '-c:a',
+        'aac',
+        '-b:a',
+        '48k',
+        '-ac',
+        '2',
+        '-movflags',
+        '+faststart',
+        '-pix_fmt',
+        'yuv420p',
+        PREVIEW_OUT,
+      ]);
+    } finally {
+      ffmpeg.off('progress', onProg);
+    }
+    if (exitPreview !== 0) {
+      throw new Error(`ffmpeg 预览转码失败（退出码 ${exitPreview}）`);
+    }
+    const previewRaw = await ffmpeg.readFile(PREVIEW_OUT);
+    if (!(previewRaw instanceof Uint8Array)) {
+      throw new Error('无法读取预览视频');
+    }
+    const previewMp4 = new Blob([previewRaw], { type: 'video/mp4' });
+    onProgress({ overall: 1, phase: 'preview' });
+    return { posterJpeg, previewMp4 };
+  } finally {
+    await ffmpeg.deleteFile(inputName).catch(() => undefined);
+    await ffmpeg.deleteFile(POSTER_JPG).catch(() => undefined);
+    await ffmpeg.deleteFile(PREVIEW_OUT).catch(() => undefined);
+  }
+}

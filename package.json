@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "concurrently -k \"npm:dev:api\" \"npm:dev:vite\"",
+    "dev:stable": "concurrently -k \"npm:dev:api\" \"npm:dev:vite:stable\"",
     "dev:vite": "vite --port=3000 --host=0.0.0.0",
+    "dev:vite:stable": "DISABLE_HMR=true vite --port=3000 --host=0.0.0.0",
     "dev:api": "tsx watch server/index.ts",
     "build": "vite build",
     "preview": "vite preview",

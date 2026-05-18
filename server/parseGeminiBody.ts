@@ -2,14 +2,17 @@ import type { GeminiOpBody } from './geminiBackend';
 
 const VALID_OPS = new Set<string>([
   'generateFlashInspiration',
+  'generateVoiceoverScript',
   'generateInspirationIdeas',
   'generateImageDescription',
+  'generateDisplayProductionScript',
   'analyzeVideoIteration',
   'extractHighlights',
   'generateThemes',
   'generateFinalScript',
   'extractInspiration',
   'diagnoseFlashScript',
+  'analyzeBuyingVideo',
 ]);
 
 export function parseGeminiRequest(raw: unknown): { opBody: GeminiOpBody; analyticsUserId?: string } {

@@ -1,7 +1,23 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import { defineConfig } from 'vite';
+import { defineConfig, type ServerOptions } from 'vite';
+
+/**
+ * 远程用浏览器打开 `http://公网IP:3000` 时，若 HMR WebSocket 连错 host（常见为连到 localhost），
+ * 会出现 `[vite] server connection lost` 后整页刷新。在运行 Vite 的环境（如 .env）里设 `DEV_HMR_HOST=公网IP`。
+ * 不需要热更新时设 `DISABLE_HMR=true` 或 `npm run dev:stable` 可彻底避免该类刷新。
+ */
+function resolveHmr(): ServerOptions['hmr'] {
+  if (process.env.DISABLE_HMR === 'true') return false;
+  const publicHost = process.env.DEV_HMR_HOST?.trim();
+  if (publicHost) {
+    const port = Number(process.env.DEV_HMR_PORT || 3000);
+    const clientPort = Number(process.env.DEV_HMR_CLIENT_PORT || port);
+    return { host: publicHost, port, clientPort };
+  }
+  return true;
+}
 
 export default defineConfig(() => {
   return {
@@ -15,9 +31,7 @@ export default defineConfig(() => {
       },
     },
     server: {
-      // HMR is disabled in AI Studio via DISABLE_HMR env var.
-      // Do not modifyâfile watching is disabled to prevent flickering during agent edits.
-      hmr: process.env.DISABLE_HMR !== 'true',
+      hmr: resolveHmr(),
       proxy: {
         '/api': {
           target: 'http://127.0.0.1:8787',

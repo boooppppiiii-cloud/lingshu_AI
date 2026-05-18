@@ -1,5 +1,6 @@
 import type { RecordModel } from 'pocketbase';
 import type { Asset, AssetType, MarketItem, Timestamp } from '../types';
+import { normalizeGameProfileId, type GameProfileId } from './gameProfiles';
 
 export function pbCreatedToTimestamp(created: string | undefined): Timestamp {
   const ms = created ? new Date(created).getTime() : Date.now();
@@ -15,6 +16,7 @@ export function recordToMarketItem(r: RecordModel): MarketItem {
     userId: String(r.userId ?? ''),
     userNickname: String(r.userNickname ?? ''),
     assetId: String(r.assetId ?? ''),
+    gameProfileId: normalizeGameProfileId(r.gameProfileId),
     type: (r.type as AssetType) || 'full_script',
     title: String(r.title ?? ''),
     content: String(r.content ?? ''),
@@ -32,6 +34,7 @@ export function recordToAsset(r: RecordModel): Asset {
   return {
     id: r.id,
     userId: String(r.userId ?? ''),
+    gameProfileId: normalizeGameProfileId(r.gameProfileId),
     type: (r.type as AssetType) || 'prompt',
     title: String(r.title ?? ''),
     content: String(r.content ?? ''),
@@ -45,6 +48,7 @@ export function recordToAsset(r: RecordModel): Asset {
 /** `assets.create` 请求体（不写 id；时间由 PocketBase `created` 维护） */
 export function buildAssetCreateBody(input: {
   userId: string;
+  gameProfileId: GameProfileId;
   type: AssetType;
   title: string;
   content: string;
@@ -54,6 +58,7 @@ export function buildAssetCreateBody(input: {
 }) {
   return {
     userId: input.userId,
+    gameProfileId: input.gameProfileId,
     type: input.type,
     title: input.title,
     content: input.content,
@@ -68,6 +73,7 @@ export function buildMarketCreateBody(input: {
   userId: string;
   userNickname: string;
   assetId: string;
+  gameProfileId: GameProfileId;
   type: AssetType;
   title: string;
   content: string;
@@ -79,6 +85,7 @@ export function buildMarketCreateBody(input: {
     userId: input.userId,
     userNickname: input.userNickname,
     assetId: input.assetId,
+    gameProfileId: input.gameProfileId,
     type: input.type,
     title: input.title,
     content: input.content,
