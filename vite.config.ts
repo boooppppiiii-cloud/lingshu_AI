@@ -36,6 +36,9 @@ export default defineConfig(() => {
         '/api': {
           target: 'http://127.0.0.1:8787',
           changeOrigin: true,
+          /** 视频分析流式 NDJSON / 大 body，避免默认超时导致 502 / socket hang up */
+          timeout: 0,
+          proxyTimeout: 0,
         },
       },
     },
@@ -44,6 +47,8 @@ export default defineConfig(() => {
         '/api': {
           target: 'http://127.0.0.1:8787',
           changeOrigin: true,
+          timeout: 0,
+          proxyTimeout: 0,
         },
       },
     },

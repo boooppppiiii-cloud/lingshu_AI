@@ -12,17 +12,20 @@ import { createLeadingDebouncer } from '../lib/leadingDebounce';
 import { logUsageEvent } from '../lib/logUsageEvent';
 import { USAGE_EVENT } from '../lib/usageEvents';
 import { buildAssetCreateBody } from '../lib/recordMappers';
+import { base64ToBlob } from '../lib/base64ToBlob';
 import { getGameCreativeProfile } from '../lib/gameProfiles';
 import type { IterationHandoff } from '../lib/iterationHandoff';
 import { AssetType } from '../types';
 
 const FULL_SCRIPT_SAVE_KEY = 'iteration:full_script';
 
-type AnalyzePhase = 'read_video' | 'upload_model' | 'streaming';
+type AnalyzePhase = 'read_video' | 'upload_video' | 'upload_model' | 'streaming';
 
 const PHASE_LABEL: Record<AnalyzePhase, string> = {
-  read_video: '正在读取视频…',
-  upload_model: '正在上传并请求模型分析（耗时因视频大小与网络而异）…',
+  read_video: '正在读取/压缩视频…',
+  upload_video: '正在上传视频到服务器…',
+  upload_model:
+    '正在等待模型解析视频（几 MB 也可能需 30 秒～2 分钟才出现首字，取决于跨境上传与 Google 侧处理）…',
   streaming: '正在流式生成拆解内容…',
 };
 
@@ -53,7 +56,12 @@ export default function ContentIteration({
   const { showToast } = useToast();
   const { gameProfileId } = useGameProfile();
   const creativeProfile = useMemo(() => getGameCreativeProfile(gameProfileId), [gameProfileId]);
-  const [video, setVideo] = useState<{ base64: string; mimeType: string; size?: number } | null>(null);
+  const [video, setVideo] = useState<{
+    base64: string;
+    blob?: Blob;
+    mimeType: string;
+    size?: number;
+  } | null>(null);
   const [loading, setLoading] = useState(false);
   const [phase, setPhase] = useState<AnalyzePhase>('read_video');
   const [analyzeFailed, setAnalyzeFailed] = useState(false);
@@ -83,7 +91,7 @@ export default function ContentIteration({
   const handoffAppliedRef = useRef<string | null>(null);
 
   const handleAnalyzeImpl = async (
-    target?: { base64: string; mimeType: string; size?: number } | null,
+    target?: { base64: string; blob?: Blob; mimeType: string; size?: number } | null,
   ) => {
     const payload = target ?? video;
     if (!payload) return;
@@ -107,16 +115,19 @@ export default function ContentIteration({
     await new Promise<void>((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
     });
-    setPhase('upload_model');
+    setPhase('upload_video');
 
     try {
+      const videoBlob = payload.blob ?? base64ToBlob(payload.base64, payload.mimeType);
       const script = await geminiService.analyzeVideoIterationStream(
-        payload.base64,
+        videoBlob,
         payload.mimeType,
         creativeProfile.defaultStyle,
         creativeProfile.defaultMoods,
         {
           ...geminiCallOpts,
+          onUploadProgress: () => setPhase('upload_video'),
+          onStagingComplete: () => setPhase('upload_model'),
           onDelta: (_delta, accumulated) => {
             if (!streamingStartedRef.current) {
               streamingStartedRef.current = true;
@@ -245,7 +256,11 @@ export default function ContentIteration({
 
       <div className="space-y-8">
         <div className="glass-card p-8 bg-white border-slate-200 shadow-sm">
-          <VideoUploader onUpload={(base64, mimeType, size) => setVideo({ base64, mimeType, size })} />
+          <VideoUploader
+            compressAboveBytes={4 * 1024 * 1024}
+            compressPreset="iteration"
+            onUpload={(base64, mimeType, size, blob) => setVideo({ base64, blob, mimeType, size })}
+          />
 
           <div className="mt-8 space-y-6">
             <div className="flex flex-col items-center pt-4 space-y-6">

@@ -8,6 +8,9 @@ import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { fetchFile } from '@ffmpeg/util';
 import coreJsUrl from '@ffmpeg/core?url';
 import coreWasmUrl from '@ffmpeg/core/wasm?url';
+import { isLikelyVideoFile } from './isLikelyVideoFile';
+
+export { isLikelyVideoFile };
 
 /** 超过此大小的视频在客户端预压缩 */
 const COMPRESS_INPUT_THRESHOLD = 10 * 1024 * 1024;
@@ -19,15 +22,6 @@ let loadPromise: Promise<FFmpeg> | null = null;
 function resetFfmpegLoadState() {
   loadPromise = null;
   ffmpegInstance = null;
-}
-
-/** 部分系统对本地/拖拽视频给出空 MIME，仅靠扩展名识别，否则大文件不会走压缩且可能被前端直接忽略 */
-export function isLikelyVideoFile(file: File): boolean {
-  if (file.type.startsWith('video/')) return true;
-  if (file.type === 'application/octet-stream' || file.type === '') {
-    return /\.(mp4|mov|m4v|webm|mkv|avi|mpeg|mpg|3gp|ogv)(\?.*)?$/i.test(file.name);
-  }
-  return false;
 }
 
 export function inferVideoMimeType(file: File): string {
@@ -49,8 +43,11 @@ export function inferVideoMimeType(file: File): string {
   return file.type || 'video/mp4';
 }
 
-export function shouldCompressVideo(file: File): boolean {
-  return file.size > COMPRESS_INPUT_THRESHOLD && isLikelyVideoFile(file);
+export function shouldCompressVideo(
+  file: File,
+  thresholdBytes: number = COMPRESS_INPUT_THRESHOLD,
+): boolean {
+  return file.size > thresholdBytes && isLikelyVideoFile(file);
 }
 
 async function loadFfmpeg(onPhase: (phase: 'load', p01: number) => void): Promise<FFmpeg> {
@@ -67,6 +64,9 @@ async function loadFfmpeg(onPhase: (phase: 'load', p01: number) => void): Promis
       ffmpegInstance = ffmpeg;
       return ffmpeg;
     })();
+  } else {
+    // 已有加载任务在跑（可能是页面预热触发的），立即给调用方一个初始进度，避免卡在 0%
+    onPhase('load', 0.05);
   }
   try {
     return await loadPromise;
@@ -76,10 +76,18 @@ async function loadFfmpeg(onPhase: (phase: 'load', p01: number) => void): Promis
   }
 }
 
+/**
+ * 页面预热：提前加载 ffmpeg core/wasm，避免首次上传时长时间停在低进度。
+ * 失败时交给调用方决定是否提示，避免影响页面正常使用。
+ */
+export async function warmupFfmpeg(): Promise<void> {
+  await loadFfmpeg(() => undefined);
+}
+
 type ProgressCb = (info: { overall: number; phase: 'load' | 'encode' }) => void;
 
-/** 多档尝试：720p 为主，逐步提高 crf / 降分辨率直至 ≤10MB 或用尽档位 */
-const ENCODE_PRESETS: { height: number; crf: number }[] = [
+/** 多档尝试：720p 为主，逐步提高 crf / 降分辨率直至达标或用尽档位 */
+const ENCODE_PRESETS_DEFAULT: { height: number; crf: number }[] = [
   { height: 720, crf: 26 },
   { height: 720, crf: 30 },
   { height: 720, crf: 34 },
@@ -90,11 +98,36 @@ const ENCODE_PRESETS: { height: number; crf: number }[] = [
   { height: 480, crf: 45 },
 ];
 
+/** 创意迭代：360p 起，尽量压到 4MB 以下 */
+export const ENCODE_PRESETS_ITERATION: { height: number; crf: number }[] = [
+  { height: 360, crf: 28 },
+  { height: 360, crf: 32 },
+  { height: 360, crf: 36 },
+  { height: 360, crf: 40 },
+  { height: 288, crf: 34 },
+  { height: 240, crf: 36 },
+  { height: 240, crf: 42 },
+  { height: 240, crf: 45 },
+];
+
+export type CompressVideoOptions = {
+  /** 超过该大小才压缩；与调用方 shouldCompressVideo 一致 */
+  thresholdBytes?: number;
+  /** 达标即停止尝试下一档；默认 10MB */
+  targetMaxBytes?: number;
+  encodePresets?: { height: number; crf: number }[];
+};
+
 export async function compressVideoWithFfmpeg(
   file: File,
   onProgress: ProgressCb,
+  options?: CompressVideoOptions,
 ): Promise<{ blob: Blob; mimeType: string }> {
-  if (!shouldCompressVideo(file)) {
+  const thresholdBytes = options?.thresholdBytes ?? COMPRESS_INPUT_THRESHOLD;
+  const targetMaxBytes = options?.targetMaxBytes ?? TEN_MB;
+  const encodePresets = options?.encodePresets ?? ENCODE_PRESETS_DEFAULT;
+
+  if (!shouldCompressVideo(file, thresholdBytes)) {
     onProgress({ overall: 1, phase: 'encode' });
     return { blob: file, mimeType: inferVideoMimeType(file) };
   }
@@ -110,10 +143,10 @@ export async function compressVideoWithFfmpeg(
 
   let best: Uint8Array | null = null;
   let bestLen = Infinity;
-  const n = ENCODE_PRESETS.length;
+  const n = encodePresets.length;
 
   for (let i = 0; i < n; i++) {
-    const { height, crf } = ENCODE_PRESETS[i]!;
+    const { height, crf } = encodePresets[i]!;
     await ffmpeg.deleteFile(outputName).catch(() => undefined);
 
     const segment = 0.88 / n;
@@ -128,7 +161,7 @@ export async function compressVideoWithFfmpeg(
         '-i',
         inputName,
         '-vf',
-        `scale=-2:${height}:flags=lanczos`,
+        `scale=-2:${height}:flags=bicubic`,
         '-c:v',
         'libx264',
         '-preset',
@@ -164,7 +197,7 @@ export async function compressVideoWithFfmpeg(
       bestLen = len;
       best = data;
     }
-    if (len <= TEN_MB) {
+    if (len <= targetMaxBytes) {
       await ffmpeg.deleteFile(inputName).catch(() => undefined);
       await ffmpeg.deleteFile(outputName).catch(() => undefined);
       onProgress({ overall: 1, phase: 'encode' });
@@ -237,7 +270,7 @@ export async function generateBuyingVideoMediaArtifacts(
         '-i',
         inputName,
         '-vf',
-        'scale=-2:480:flags=lanczos',
+        'scale=-2:480:flags=bicubic',
         '-c:v',
         'libx264',
         '-preset',

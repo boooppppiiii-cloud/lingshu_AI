@@ -6,6 +6,8 @@ import { gameProfileScopeFilterExpr } from '../lib/gameProfiles';
 import { pb } from '../lib/pb';
 import { UserProfile } from '../types';
 import { User, Mail, Heart, Edit3, Save, LogOut, LogIn } from 'lucide-react';
+import AssistantChatCardsSection from './AssistantChatCardsSection';
+import AssistantAvatarCustomizer from './AssistantAvatarCustomizer';
 
 interface UserProfileViewProps {
   onRequestLogin?: () => void;
@@ -105,7 +107,7 @@ export default function UserProfileView({ onRequestLogin }: UserProfileViewProps
   }
 
   return (
-    <div className="max-w-4xl mx-auto py-12 px-4">
+    <div className="mx-auto max-w-6xl px-4 py-12">
       <div className="glass-card overflow-hidden relative bg-white">
         {/* Profile Header Background */}
         <div className="h-48 bg-gradient-to-r from-primary-blue via-accent-blue/10 to-blue-300/10 relative">
@@ -170,34 +172,24 @@ export default function UserProfileView({ onRequestLogin }: UserProfileViewProps
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 pt-8 border-t border-slate-100">
-            <div className="space-y-6">
-              <h3 className="text-sm font-bold text-slate-400 uppercase tracking-widest">账户设置</h3>
-              
-              <div className="space-y-4">
-                <button
-                  onClick={signOut}
-                  className="w-full flex items-center justify-between p-4 bg-slate-50 rounded-2xl border border-slate-100 hover:bg-red-50 hover:border-red-100 group transition-all cursor-pointer"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="p-2 bg-red-50 rounded-xl group-hover:bg-red-100 text-red-500">
-                      <LogOut className="w-5 h-5" />
-                    </div>
-                    <span className="font-bold text-slate-600 group-hover:text-red-600">退出登录</span>
-                  </div>
-                </button>
-              </div>
-            </div>
+          <div className="grid grid-cols-1 gap-8 border-t border-slate-100 pt-8 lg:grid-cols-2 lg:items-start">
+            <AssistantAvatarCustomizer />
+            <AssistantChatCardsSection onRequestLogin={onRequestLogin} />
+          </div>
 
-            <div className="p-8 bg-blue-50/30 rounded-3xl border border-blue-100/50 flex flex-col items-center justify-center text-center">
-              <div className="w-16 h-16 bg-accent-blue/10 rounded-full flex items-center justify-center mb-4">
-                <User className="w-8 h-8 text-accent-blue" />
+          <div className="border-t border-slate-100 pt-8">
+            <button
+              type="button"
+              onClick={signOut}
+              className="group flex w-full cursor-pointer items-center justify-between rounded-2xl border border-slate-100 bg-slate-50 p-4 transition-all hover:border-red-100 hover:bg-red-50"
+            >
+              <div className="flex items-center gap-3">
+                <div className="rounded-xl bg-red-50 p-2 text-red-500 group-hover:bg-red-100">
+                  <LogOut className="h-5 w-5" />
+                </div>
+                <span className="font-bold text-slate-600 group-hover:text-red-600">退出登录</span>
               </div>
-              <h4 className="text-primary-blue font-bold mb-2">欢迎来到创意工坊</h4>
-              <p className="text-slate-500 text-sm leading-relaxed">
-                在这里你可以保存你的每一个创意灵感。多去灵感市场看看吧，那里有全球伙伴的奇思妙想。
-              </p>
-            </div>
+            </button>
           </div>
         </div>
       </div>

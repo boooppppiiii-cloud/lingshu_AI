@@ -13,7 +13,10 @@
     "preview": "vite preview",
     "start": "NODE_ENV=production tsx server/index.ts",
     "clean": "rm -rf dist",
-    "lint": "eslint . && tsc --noEmit"
+    "lint": "eslint . && tsc --noEmit",
+    "test:outbound-proxy": "tsx server/scripts/testOutboundProxy.ts",
+    "reanalyze:buying-videos": "tsx server/scripts/reanalyzeAllBuyingVideos.ts",
+    "reanalyze:status": "tsx server/scripts/reanalyzeStatus.ts"
   },
   "dependencies": {
     "@ffmpeg/core": "^0.12.6",

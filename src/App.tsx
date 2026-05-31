@@ -3,11 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { AuthProvider, useAuth } from './lib/AuthContext';
 import { ToastProvider } from './lib/ToastContext';
 import { GameProfileProvider, useGameProfile } from './lib/GameProfileContext';
+import { PageAssistantProvider } from './lib/PageAssistantContext';
+import { AssistantAvatarProvider } from './lib/AssistantAvatarContext';
+import { prefetchBuyingVideosList } from './lib/buyingVideosList';
 import {
   getDefaultViewForRole,
   isViewAllowedForRole,
@@ -16,15 +19,24 @@ import {
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import AuthModal from './components/AuthModal';
-import CreativeWorkshop from './components/CreativeWorkshop';
-import InspirationMarket from './components/InspirationMarket';
-import BuyingDashboard from './components/BuyingDashboard';
-import AssetCardView from './components/AssetCardView';
-import UserProfileView from './components/UserProfileView';
-import VolumeSpaceView from './components/VolumeSpaceView';
-import TeamCasesView from './components/TeamCasesView';
 import type { IterationHandoff, IterationVideoPayload } from './lib/iterationHandoff';
 import { ViewState } from './types';
+
+const CreativeWorkshop = lazy(() => import('./components/CreativeWorkshop'));
+const InspirationMarket = lazy(() => import('./components/InspirationMarket'));
+const BuyingDashboard = lazy(() => import('./components/BuyingDashboard'));
+const AssetCardView = lazy(() => import('./components/AssetCardView'));
+const UserProfileView = lazy(() => import('./components/UserProfileView'));
+const VolumeSpaceView = lazy(() => import('./components/VolumeSpaceView'));
+const TeamCasesView = lazy(() => import('./components/TeamCasesView'));
+
+function ViewLoadingFallback() {
+  return (
+    <div className="flex justify-center py-24" role="status" aria-label="加载中">
+      <div className="h-10 w-10 animate-spin rounded-full border-4 border-accent-blue/25 border-t-accent-blue" />
+    </div>
+  );
+}
 
 function AppShell() {
   const { user, loading: authLoading } = useAuth();
@@ -55,6 +67,12 @@ function AppShell() {
       isViewAllowedForRole(current, effectiveRole) ? current : getDefaultViewForRole(effectiveRole),
     );
   }, [authLoading, effectiveRole, user?.uid]);
+
+  /** 登录后预取买量列表，进入买量大屏时可先读 session 缓存再后台同步 */
+  useEffect(() => {
+    if (authLoading || !user) return;
+    prefetchBuyingVideosList(gameProfileId);
+  }, [authLoading, user?.uid, gameProfileId]);
 
   const viewMotion = (key: string, children: React.ReactNode) => (
     <motion.div
@@ -104,29 +122,31 @@ function AppShell() {
             }`}
           >
             <AnimatePresence mode="wait">
-              {activeView === 'market' && viewMotion('market', <InspirationMarket />)}
-              {activeView === 'buying_dashboard' &&
-                viewMotion(
-                  'buying_dashboard',
-                  <BuyingDashboard
-                    canAccessWorkshop={canAccessWorkshop}
-                    onSendToIteration={sendBuyingVideoToIteration}
-                    onRequestLogin={() => setAuthModalOpen(true)}
-                  />,
-                )}
-              {activeView === 'workshop' &&
-                viewMotion(
-                  'workshop',
-                  <CreativeWorkshop
-                    iterationHandoff={iterationHandoff}
-                    onIterationHandoffConsumed={clearIterationHandoff}
-                  />,
-                )}
-              {activeView === 'assets' && viewMotion('assets', <AssetCardView />)}
-              {activeView === 'volume_space' && viewMotion('volume_space', <VolumeSpaceView />)}
-              {activeView === 'team_cases' && viewMotion('team_cases', <TeamCasesView />)}
-              {activeView === 'profile' &&
-                viewMotion('profile', <UserProfileView onRequestLogin={() => setAuthModalOpen(true)} />)}
+              <Suspense fallback={<ViewLoadingFallback />}>
+                {activeView === 'market' && viewMotion('market', <InspirationMarket />)}
+                {activeView === 'buying_dashboard' &&
+                  viewMotion(
+                    'buying_dashboard',
+                    <BuyingDashboard
+                      canAccessWorkshop={canAccessWorkshop}
+                      onSendToIteration={sendBuyingVideoToIteration}
+                      onRequestLogin={() => setAuthModalOpen(true)}
+                    />,
+                  )}
+                {activeView === 'workshop' &&
+                  viewMotion(
+                    'workshop',
+                    <CreativeWorkshop
+                      iterationHandoff={iterationHandoff}
+                      onIterationHandoffConsumed={clearIterationHandoff}
+                    />,
+                  )}
+                {activeView === 'assets' && viewMotion('assets', <AssetCardView />)}
+                {activeView === 'volume_space' && viewMotion('volume_space', <VolumeSpaceView />)}
+                {activeView === 'team_cases' && viewMotion('team_cases', <TeamCasesView />)}
+                {activeView === 'profile' &&
+                  viewMotion('profile', <UserProfileView onRequestLogin={() => setAuthModalOpen(true)} />)}
+              </Suspense>
             </AnimatePresence>
           </div>
         </main>
@@ -141,7 +161,11 @@ export default function App() {
   return (
     <AuthProvider>
       <GameProfileProvider>
-        <AppShell />
+        <AssistantAvatarProvider>
+          <PageAssistantProvider>
+            <AppShell />
+          </PageAssistantProvider>
+        </AssistantAvatarProvider>
       </GameProfileProvider>
     </AuthProvider>
   );

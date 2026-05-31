@@ -6,7 +6,7 @@
  * - 「灵感工坊」顶部 Tab：灵光一闪 | 创意迭代 | 灵感萃取（见前端 CreativeWorkshop / InspirationExtraction 等）。
  * - 「灵光一闪」内三个书签：分镜脚本 | 混剪口播脚本 | 展示类脚本。
  * - 「跨多个工作流复用」：指同一段规则/格式被拼进不同 op 的 system 里，不是指前端同一个按钮。
- * - 未包含在本文件：op `generateDisplayProductionScript`（展示类「全文制作脚本」长示例）、`diagnoseFlashScript`（分镜诊断）仍在 geminiBackend.ts。
+ * - 未包含在本文件：op `generateDisplayProductionScript`（展示类「全文制作脚本」，见 buildDisplayProductionScriptFormatBlock）、`diagnoseFlashScript`（分镜诊断）仍在 geminiBackend.ts。
  * - 「创意迭代」Tab（ContentIteration，视频 1:1 拆解）走 op `analyzeVideoIteration`，与本文件无关。
  */
 
@@ -17,6 +17,74 @@
  * 规定的是「输出里不要默认写深海、优先生活化种花场景」这一类全局偏好，不是某一个书签独有。
  */
 export const FLOWER_AVOID_DEEP_SEA_SCENE_RULE = `场景与意象约束：除非用户在需求描述中明确要求，否则禁止在标题、灵感点、画面、台词与设定中强调「深海、海底、海洋深处、水族馆、潜水、潜艇、浪下世界」等与深海或大洋强绑定的元素或隐喻；默认优先花园、阳台、阳光花房、客厅绿植、小院露台、花店等生活化种花与居家疗愈场景。`;
+
+/** 展示类全文制作脚本 · 分镜标签中的「核心卖点」枚举（种花 profile） */
+export const FLOWER_DISPLAY_PRODUCTION_SELLING_LINE = `核心卖点：[必须从以下选择：种花送时装、种花送家装、种花治愈、种花经营、种花送真花、萌宠及其他]`;
+
+/**
+ * 【仅 · 灵光一闪 → 展示类 → 全文制作脚本】
+ * 独立分镜格式（不复用 flash 分镜 instruction，避免与「运镜/动态细节长段」旧写法混淆）。
+ */
+export function buildDisplayProductionScriptFormatBlock(
+  totalSeconds: number,
+  coreSellingLine: string,
+  sceneConstraint = '',
+): string {
+  const endMm = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+  const endSs = String(totalSeconds % 60).padStart(2, '0');
+  const sceneBlock = sceneConstraint ? `\n${sceneConstraint}\n` : '';
+  return `
+【硬性禁令 — 违反则输出无效】
+1. 禁止以「运镜：」「动态细节：」作为段落标题、小标题或独立栏目（不得写成视频生成口令式长段）。
+2. 禁止单段超长自然段连贯铺陈；禁止末行【自动根据剧情匹配合适的音效】。
+3. 禁止省略【基本要求】【分镜脚本】【分镜标签】任一章节标题；禁止在【基本要求】未写完前开始【分镜脚本】。
+4. 禁止分镜段不以 [MM:SS-MM:SS] 时间戳起首；禁止多个分镜合并在同一段。
+
+【唯一合法结构与顺序】
+必须严格按以下顺序输出（从【基本要求】起笔，禁止任何开场白）：
+
+【基本要求】
+- 风格：（一两句）
+- 主要场景：（一两句）
+- 情绪氛围：（一两句）
+
+【分镜脚本】
+- 每个分镜单独成段；每段以时间戳起首，正文一至两句，只写景别、运镜、主体动作/表情、必要音效（台词宜少或无）。
+- 时间戳须从 [00:00-…] 连贯铺满至约 [${endMm}:${endSs}]，总时长约 ${totalSeconds} 秒。
+
+【分镜标签】
+核心冲突：[内容]
+情绪：[内容]
+景别：[内容]
+运镜：[内容]
+画面：[内容]
+动作：[内容]
+配音：[内容]
+${coreSellingLine}
+
+【合规示例（勿照抄物象，只学结构）】
+【基本要求】
+- 风格：治愈系 3D，柔光通透
+- 主要场景：清晨阳光花房
+- 情绪氛围：静谧、生机
+
+【分镜脚本】
+[00:00-00:05] 近景慢推，月季花蕊晨露特写，背景树影轻晃。
+[00:05-00:10] 中景固定，花瓣微颤、光斑在地面缓慢位移。
+[00:10-00:15] 远景缓拉，花房全景与窗外柔雾，钢琴 BGM 轻起。
+
+【分镜标签】
+核心冲突：无
+情绪：治愈
+景别：近景→中景→远景
+运镜：慢推、固定、缓拉
+画面：晨露花卉、花房
+动作：花瓣轻颤
+配音：环境声+轻柔 BGM
+核心卖点：种花治愈
+${sceneBlock}
+使用中文。`;
+}
 
 /**
  * 【跨多个工作流复用 · 分镜脚本输出格式】

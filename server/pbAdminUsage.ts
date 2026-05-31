@@ -1,20 +1,37 @@
 import { formatUsageDayShanghai } from './usageDay';
 
-export const PB_URL = (
-  process.env.POCKETBASE_URL ||
-  process.env.VITE_POCKETBASE_URL ||
-  'http://127.0.0.1:8090'
-).replace(/\/$/, '');
+export function getPbUrl(): string {
+  return (
+    process.env.POCKETBASE_URL ||
+    process.env.VITE_POCKETBASE_URL ||
+    'http://127.0.0.1:8090'
+  ).replace(/\/$/, '');
+}
 
-const ADMIN_EMAIL = process.env.POCKETBASE_ADMIN_EMAIL?.trim();
-const ADMIN_PASSWORD = process.env.POCKETBASE_ADMIN_PASSWORD?.trim();
+export const PB_URL = getPbUrl();
 
 let cachedToken: string | null = null;
+let cachedForIdentity: string | null = null;
 
-async function getAdminToken(): Promise<string | null> {
-  if (!ADMIN_EMAIL || !ADMIN_PASSWORD) return null;
-  if (cachedToken) return cachedToken;
-  const body = JSON.stringify({ identity: ADMIN_EMAIL, password: ADMIN_PASSWORD });
+function readPbAdminCreds(): { email: string; password: string } | null {
+  const email = process.env.POCKETBASE_ADMIN_EMAIL?.trim();
+  const password = process.env.POCKETBASE_ADMIN_PASSWORD?.trim();
+  if (!email || !password) return null;
+  return { email, password };
+}
+
+export type PbAdminAuthResult =
+  | { ok: true; token: string }
+  | { ok: false; reason: 'missing_creds' | 'auth_failed'; detail?: string };
+
+export async function getPbAdminTokenResult(): Promise<PbAdminAuthResult> {
+  const creds = readPbAdminCreds();
+  if (!creds) return { ok: false, reason: 'missing_creds' };
+  const identityKey = `${creds.email}\0${creds.password}`;
+  if (cachedToken && cachedForIdentity === identityKey) return { ok: true, token: cachedToken };
+  cachedToken = null;
+  cachedForIdentity = identityKey;
+  const body = JSON.stringify({ identity: creds.email, password: creds.password });
   try {
     // PocketBase 0.23+：管理员改为系统集合 `_superusers`
     let res = await fetch(`${PB_URL}/api/collections/_superusers/auth-with-password`, {
@@ -33,16 +50,22 @@ async function getAdminToken(): Promise<string | null> {
     if (!res.ok) {
       const t = await res.text().catch(() => '');
       console.warn('[usage_events admin] auth failed', res.status, t.slice(0, 120));
-      return null;
+      return { ok: false, reason: 'auth_failed', detail: t.slice(0, 200) };
     }
     const json = (await res.json()) as { token?: string };
-    if (!json.token) return null;
+    if (!json.token) return { ok: false, reason: 'auth_failed', detail: 'empty token' };
     cachedToken = json.token;
-    return cachedToken;
+    cachedForIdentity = identityKey;
+    return { ok: true, token: cachedToken };
   } catch (e) {
     console.warn('[usage_events admin]', e);
-    return null;
+    return { ok: false, reason: 'auth_failed', detail: e instanceof Error ? e.message : String(e) };
   }
+}
+
+export async function getPbAdminToken(): Promise<string | null> {
+  const r = await getPbAdminTokenResult();
+  return r.ok ? r.token : null;
 }
 
 /** 用当前登录用户的 PocketBase token 换 user id（auth-refresh） */
@@ -66,7 +89,7 @@ export async function getAuthenticatedUserIdFromPocketBase(
 }
 
 export async function adminCreateUsageRecord(record: Record<string, unknown>): Promise<boolean> {
-  const token = await getAdminToken();
+  const token = await getPbAdminToken();
   if (!token) return false;
   try {
     const res = await fetch(`${PB_URL}/api/collections/usage_events/records`, {
@@ -127,7 +150,7 @@ export async function pbAdminGetRecord(
   collectionName: string,
   recordId: string,
 ): Promise<Record<string, unknown> | null> {
-  const token = await getAdminToken();
+  const token = await getPbAdminToken();
   if (!token) return null;
   try {
     const res = await fetch(
@@ -147,7 +170,7 @@ export async function pbAdminPatchRecord(
   recordId: string,
   data: Record<string, unknown>,
 ): Promise<boolean> {
-  const token = await getAdminToken();
+  const token = await getPbAdminToken();
   if (!token) return false;
   try {
     const res = await fetch(
@@ -173,7 +196,7 @@ export async function pbAdminDownloadFile(
   recordId: string,
   fileName: string,
 ): Promise<{ buf: Buffer; contentType: string } | null> {
-  const token = await getAdminToken();
+  const token = await getPbAdminToken();
   if (!token) return null;
   const url = `${PB_URL}/api/files/${encodeURIComponent(collectionName)}/${encodeURIComponent(recordId)}/${encodeURIComponent(fileName)}`;
   try {

@@ -1,7 +1,7 @@
 /**
  * Gemini 调用仅在此文件执行，使用服务端环境变量 GEMINI_API_KEY。
  */
-import { GoogleGenAI, type Content } from '@google/genai';
+import { GoogleGenAI, MediaResolution, type Content } from '@google/genai';
 import {
   buildFlowerExtractHighlightsSystemInstruction,
   buildFlowerExtractInspirationSystemInstruction,
@@ -13,9 +13,16 @@ import {
   buildFlowerInspirationIdeasUserPrompt,
   buildFlowerVoiceoverGameBlock,
   buildFlowerVoiceoverSystemInstruction,
+  buildDisplayProductionScriptFormatBlock,
+  FLOWER_AVOID_DEEP_SEA_SCENE_RULE,
+  FLOWER_DISPLAY_PRODUCTION_SELLING_LINE,
   FLOWER_IMAGE_DESCRIPTION_FALLBACK_USER_TEXT,
 } from './flowerGamePrompts';
-import { aceMechaDisplayProductionStyleReferenceExample } from './aceMechaGamePrompts';
+import { newGameStoryboardCoreSellingEnumLine } from './gamePromptProfiles/new-game.prompts';
+import { aceMechaStoryboardCoreSellingEnumLine } from './gamePromptProfiles/ace-mecha.prompts';
+import { buildBuyingPageAssistantPrompt } from './buyingPageAssistant';
+import { formatThemeTagCatalogForPrompt } from '../src/lib/buyingThemeTagCatalog';
+import { readVideoStagingBase64 } from './videoStaging';
 import {
   buildAceMechaExtractHighlightsSystemInstruction,
   buildAceMechaExtractInspirationSystemInstruction,
@@ -29,7 +36,6 @@ import {
   buildAceMechaVoiceoverSystemInstruction,
   ACE_MECHA_IMAGE_DESCRIPTION_FALLBACK_USER_TEXT,
 } from './aceMechaGamePrompts';
-import { newGameDisplayProductionStyleReferenceExample } from './gamePromptProfiles/new-game.prompts';
 import {
   buildXiyouExtractHighlightsSystemInstruction,
   buildXiyouExtractInspirationSystemInstruction,
@@ -43,10 +49,14 @@ import {
   buildXiyouVoiceoverSystemInstruction,
   XIYOU_IMAGE_DESCRIPTION_FALLBACK_USER_TEXT,
 } from './xiyouGamePrompts';
+import { BUYING_GENRE_TAG_CLASSIFICATION_PROMPT } from '../src/lib/buyingGenreTag';
+import { BUYING_FIRST3S_HOOK_TYPE_PROMPT_LIST } from '../src/lib/buyingHookTypes';
+import { normalizeBuyingVideoAi } from './buyingVideoAnalysis';
 
 export type GameProfileId = 'flower' | 'xiyou_card' | 'ace_mecha';
+export type GeminiModelChoice = 'preview' | '2.5flash' | '2.5pro' | '3.5flash' | 'flash-latest' | 'lite';
 
-type WithGameProfile<T> = T & { gameProfileId?: GameProfileId };
+type WithGameProfile<T> = T & { gameProfileId?: GameProfileId; modelChoice?: GeminiModelChoice };
 
 /** 请求体可选 gameProfileId；未知值时走种花（flower）配置 */
 export function resolveGameProfileId(body: { gameProfileId?: unknown }): GameProfileId {
@@ -61,8 +71,24 @@ function profilePick<T>(profile: GameProfileId, flower: T, xiyou: T, aceMecha: T
   return flower;
 }
 
-function modelId() {
-  return process.env.GEMINI_MODEL?.trim() || 'gemini-3-flash-preview';
+function modelId(modelChoice?: GeminiModelChoice) {
+  if (modelChoice === '2.5flash') {
+    return process.env.GEMINI_MODEL_25FLASH?.trim() || 'gemini-2.5-flash';
+  }
+  if (modelChoice === '2.5pro') {
+    return process.env.GEMINI_MODEL_25PRO?.trim() || 'gemini-2.5-pro';
+  }
+  if (modelChoice === '3.5flash') {
+    return process.env.GEMINI_MODEL_35FLASH?.trim() || 'gemini-3.5-flash';
+  }
+  if (modelChoice === 'flash-latest') {
+    return process.env.GEMINI_MODEL_FLASH_LATEST?.trim() || 'gemini-flash-latest';
+  }
+  if (modelChoice === 'lite') {
+    return process.env.GEMINI_MODEL_LITE?.trim() || 'gemini-2.5-flash';
+  }
+  // preview and unknown fall back to a stable fast default
+  return process.env.GEMINI_MODEL?.trim() || 'gemini-2.5-flash';
 }
 
 /** 灵光一闪等接口可传档位；缺省或与约定不符时按 10–15 秒 */
@@ -117,7 +143,14 @@ export type GeminiOpBody =
       style: string;
       moods: string;
     }>
-  | WithGameProfile<{ op: 'analyzeVideoIteration'; videoBase64: string; mimeType: string; style: string; moods: string }>
+  | WithGameProfile<{
+      op: 'analyzeVideoIteration';
+      videoBase64?: string;
+      videoStagingId?: string;
+      mimeType: string;
+      style: string;
+      moods: string;
+    }>
   | WithGameProfile<{ op: 'extractHighlights'; videoBase64: string; mimeType: string }>
   | WithGameProfile<{ op: 'generateThemes'; selectedHighlights: string[]; sellingPoints: string }>
   | WithGameProfile<{
@@ -137,12 +170,39 @@ export type GeminiOpBody =
       fileName: string;
       /** 为 true 时额外输出前 5 秒与首卖点深度分析（找钩子模式） */
       includeHookDeepAnalysis: boolean;
+      /** 历史主题标签频次，AI 须优先从中选取 themeTags */
+      existingThemeTags?: { tag: string; count: number }[];
+    }>
+  | WithGameProfile<{
+      op: 'askBuyingPageAssistant';
+      question: string;
+      context: import('../src/lib/buyingPageAssistantContext').BuyingPageAssistantContext;
+      messages?: import('../src/lib/buyingPageAssistantContext').BuyingPageAssistantMessage[];
     }>;
 
 function client() {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) throw new Error('GEMINI_API_KEY is not set on the server');
   return new GoogleGenAI({ apiKey });
+}
+
+/** 创意迭代：从 staging 或 inline base64 解析视频载荷 */
+export async function resolveAnalyzeVideoIterationVideo(body: {
+  videoBase64?: string;
+  videoStagingId?: string;
+  mimeType: string;
+}): Promise<{ videoBase64: string; mimeType: string }> {
+  if (body.videoStagingId) {
+    const staged = await readVideoStagingBase64(body.videoStagingId);
+    return { videoBase64: staged.videoBase64, mimeType: staged.mimeType || body.mimeType };
+  }
+  if (body.videoBase64) {
+    const videoBase64 = body.videoBase64.includes(',')
+      ? body.videoBase64.split(',')[1]!
+      : body.videoBase64;
+    return { videoBase64, mimeType: body.mimeType };
+  }
+  throw new Error('videoBase64 or videoStagingId is required');
 }
 
 /** 创意迭代：视频 1:1 拆解（非流式与流式共用） */
@@ -187,22 +247,45 @@ function buildAnalyzeVideoIterationParams(body: {
 /**
  * 流式输出创意迭代拆解文本片段（每个 chunk 的增量文本，由调用方拼接）。
  */
+const videoAnalyzeConfig = (systemInstruction: string) => ({
+  systemInstruction,
+  /** 降低视频采样分辨率，加快解析（1:1 拆解不依赖超高分辨率） */
+  mediaResolution: MediaResolution.MEDIA_RESOLUTION_LOW,
+});
+
 export async function* streamAnalyzeVideoIterationDeltas(body: {
-  videoBase64: string;
+  videoBase64?: string;
+  videoStagingId?: string;
   mimeType: string;
   style: string;
   moods: string;
+  modelChoice?: GeminiModelChoice;
 }): AsyncGenerator<string, void, unknown> {
   const ai = client();
-  const { systemInstruction, contents } = buildAnalyzeVideoIterationParams(body);
-  const stream = await ai.models.generateContentStream({
-    model: modelId(),
-    contents,
-    config: { systemInstruction },
+  const video = await resolveAnalyzeVideoIterationVideo(body);
+  const { systemInstruction, contents } = buildAnalyzeVideoIterationParams({
+    ...body,
+    ...video,
   });
+  const started = Date.now();
+  console.log(
+    `[gemini] analyzeVideoIteration stream start b64≈${Math.round(video.videoBase64.length * 0.75 / 1024)}KB`,
+  );
+  const stream = await ai.models.generateContentStream({
+    model: modelId(body.modelChoice),
+    contents,
+    config: videoAnalyzeConfig(systemInstruction),
+  });
+  let firstDeltaLogged = false;
   for await (const chunk of stream) {
     const t = chunk.text;
-    if (t) yield t;
+    if (t) {
+      if (!firstDeltaLogged) {
+        console.log(`[gemini] analyzeVideoIteration first delta ${Date.now() - started}ms`);
+        firstDeltaLogged = true;
+      }
+      yield t;
+    }
   }
 }
 
@@ -211,66 +294,104 @@ export type GenerateDisplayProductionScriptInput = Omit<
   'op'
 >;
 
+function displayProductionSellingLine(profile: GameProfileId): string {
+  return profilePick(
+    profile,
+    FLOWER_DISPLAY_PRODUCTION_SELLING_LINE,
+    newGameStoryboardCoreSellingEnumLine,
+    aceMechaStoryboardCoreSellingEnumLine,
+  );
+}
+
+function displayProductionSceneConstraint(profile: GameProfileId): string {
+  return profilePick(profile, FLOWER_AVOID_DEEP_SEA_SCENE_RULE, '', '');
+}
+
+/** 展示类全文脚本是否含分镜三章 + 时间戳，且未落入旧「运镜/动态细节长段」写法 */
+export function isValidDisplayProductionScript(text: string): boolean {
+  const t = text.trim();
+  if (!t.includes('【基本要求】') || !t.includes('【分镜脚本】') || !t.includes('【分镜标签】')) {
+    return false;
+  }
+  if (!/\[\d{2}:\d{2}-\d{2}:\d{2}\]/.test(t)) return false;
+  if (!t.startsWith('【基本要求】')) return false;
+  if (/动态细节[：:]/.test(t)) return false;
+  if (/运镜[：:]\s*全程/.test(t)) return false;
+  if (t.includes('【自动根据剧情匹配合适的音效】')) return false;
+  return true;
+}
+
+function* chunkTextForStream(text: string, size = 48): Generator<string, void, unknown> {
+  for (let i = 0; i < text.length; i += size) {
+    yield text.slice(i, i + size);
+  }
+}
+
 function buildGenerateDisplayProductionScriptParams(
   body: GenerateDisplayProductionScriptInput,
   profile: GameProfileId,
+  retry = false,
 ): {
   systemInstruction: string;
   contents: string;
 } {
   const sec = Math.min(600, Math.max(1, Math.floor(Number(body.durationSeconds)) || 15));
-  const flowerStyleExample = `固定镜头，画面中，一群可爱的猫咪在泳池乐园玩耍，中间的布偶猫躺在草莓泳圈上开心地笑着，其他猫咪或在泳圈上漂浮、或滑滑梯，背景是彩虹、棕榈树和遮阳伞。运镜：全程固定镜头，画面稳定不推拉摇移，动态细节按顺序呈现。动态细节：微风轻拂下，棕榈树叶轻轻摇曳，阳光在水面上洒下波光粼粼的光斑；中心的布偶猫开心地晃着爪子和尾巴，身体随着水波轻轻晃动；滑梯上的猫咪带着水花滑入泳池，溅起层层涟漪；西瓜泳圈上的小猫戴着草帽，歪头张望；其他泳圈上的猫咪随着水波缓缓漂浮，尾巴和耳朵微微摆动；透明泡泡和玩具球在水面上轻轻漂浮，彩虹和云朵带着轻微的光影变化，营造慵懒治愈的夏日派对氛围。整体线条柔和，色彩通透清新，无文字干扰、无变形，动态自然丝滑无卡顿。`;
-  const styleExample = `${profilePick(
-    profile,
-    flowerStyleExample,
-    newGameDisplayProductionStyleReferenceExample,
-    aceMechaDisplayProductionStyleReferenceExample,
-  )}
-【自动根据剧情匹配合适的音效】`;
+  const formatBlock = buildDisplayProductionScriptFormatBlock(
+    sec,
+    displayProductionSellingLine(profile),
+    displayProductionSceneConstraint(profile),
+  );
 
-  const systemInstruction = `你是短视频/买量广告制作向的脚本编剧兼分镜指导。用户已从「动态口令」中选定一条作为创意核心，并给出目标成片时长（约 ${sec} 秒）。请将该口令与画面描述融合，扩展为**一条连贯、可拍摄**的完整制作脚本。
+  const systemInstruction = `你是短视频/买量广告「画面展示类」的分镜脚本编剧。你的输出只能是【基本要求】→【分镜脚本】→【分镜标签】三分镜表格式，不得使用任何其他版式。
 
-硬性要求：
-1. 全文以自然段为主输出；不要使用 Markdown 的 # 标题层级。可按叙事需要穿插简短中文引导语（如「运镜：」「动态细节：」），但禁止机械分栏堆砌无意义小标题。
-2. 必须包含：明确的运镜指令（含稳定器/固定镜头等画面稳定要求）；按时间顺序展开、逻辑连续、前后不自相矛盾的动态细节分镜；环境氛围与光影质感描写；智能配音语气与音效/环境声建议（可用括号内短注形式）。
-3. 画面稳定原则：强调少无关晃动、主体运动与镜头运动有目的性，剪辑点清晰。
-4. 必须与【画面描述参考】及【用户选中的动态口令】在人物/场景/动作上严格延续，可合理细化，禁止凭空更换世界观或主体。
-5. 目标总观感时长约 ${sec} 秒（不必逐秒写时间码，但整体信息密度与节奏应与之匹配）。
-6. 全文最后一行且单独成行，**必须且仅能**输出以下标记（一字不改）：【自动根据剧情匹配合适的音效】
+${formatBlock}
 
-风格与结构参考（勿照抄题材与物象，只学习「运镜 + 动态细节 + 氛围 + 音效行」的写法）：
-${styleExample}
+创作输入：
+- 目标成片时长：${sec} 秒
+- 卖点（可为空）：${body.sellingPoints}
+- 画风：${body.style}
+- 情绪：${body.moods}
+- 画面描述参考：${body.visualDescription || '（无）'}
+- 用户选中的动态口令：${body.motionCardText}
 
-卖点（可为空）：${body.sellingPoints}
-画风：${body.style}
-情绪：${body.moods}
+将动态口令中的运镜与动作拆解为带时间戳的分镜段；与画面描述在人物/场景/主体上严格一致，可细化但不改世界观。`;
 
-【画面描述参考】
-${body.visualDescription || '（无）'}
+  const contents = retry
+    ? `你上一次输出未遵守分镜表格式（可能误用了「运镜：」「动态细节：」长段或缺少【基本要求】/时间戳）。请严格按 system 中的【唯一合法结构】重写，从【基本要求】起笔，不要开场白。`
+    : `请直接输出完整分镜脚本（从【基本要求】起笔，不要开场白）。`;
 
-【用户选中的动态口令】
-${body.motionCardText}`;
-
-  const contents = '请直接输出完整制作脚本正文（从第一段画面叙述开始，不要开场白）。';
   return { systemInstruction, contents };
 }
 
-/** 流式输出展示类「全文制作脚本」文本片段（由调用方拼接）。 */
+async function generateDisplayProductionScriptText(
+  body: GenerateDisplayProductionScriptInput,
+): Promise<string> {
+  const ai = client();
+  const profile = resolveGameProfileId(body);
+  let last = '';
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const { systemInstruction, contents } = buildGenerateDisplayProductionScriptParams(
+      body,
+      profile,
+      attempt > 0,
+    );
+    const response = await ai.models.generateContent({
+      model: modelId(body.modelChoice),
+      contents,
+      config: { systemInstruction },
+    });
+    last = (response.text || '').trim();
+    if (isValidDisplayProductionScript(last)) return last;
+  }
+  return last;
+}
+
+/** 流式输出展示类「全文制作脚本」文本片段（生成后校验格式，必要时重试一次再分块输出）。 */
 export async function* streamGenerateDisplayProductionScriptDeltas(
   body: GenerateDisplayProductionScriptInput,
 ): AsyncGenerator<string, void, unknown> {
-  const ai = client();
-  const profile = resolveGameProfileId(body);
-  const { systemInstruction, contents } = buildGenerateDisplayProductionScriptParams(body, profile);
-  const stream = await ai.models.generateContentStream({
-    model: modelId(),
-    contents,
-    config: { systemInstruction },
-  });
-  for await (const chunk of stream) {
-    const t = chunk.text;
-    if (t) yield t;
-  }
+  const text = await generateDisplayProductionScriptText(body);
+  yield* chunkTextForStream(text);
 }
 
 export async function runGeminiOp(body: GeminiOpBody): Promise<unknown> {
@@ -294,7 +415,7 @@ export async function runGeminiOp(body: GeminiOpBody): Promise<unknown> {
       );
 
       const response = await ai.models.generateContent({
-        model: modelId(),
+        model: modelId(body.modelChoice),
         contents: body.prompt,
         config: { systemInstruction },
       });
@@ -325,7 +446,7 @@ export async function runGeminiOp(body: GeminiOpBody): Promise<unknown> {
       const contents = `请根据系统指令生成口播台词。\n\n【用户提示词】\n${userPrompt || '（无）'}`;
 
       const response = await ai.models.generateContent({
-        model: modelId(),
+        model: modelId(body.modelChoice),
         contents,
         config: { systemInstruction },
       });
@@ -347,7 +468,7 @@ export async function runGeminiOp(body: GeminiOpBody): Promise<unknown> {
       );
 
       const response = await ai.models.generateContent({
-        model: modelId(),
+        model: modelId(body.modelChoice),
         contents: userPrompt,
         config: {
           systemInstruction,
@@ -395,7 +516,7 @@ export async function runGeminiOp(body: GeminiOpBody): Promise<unknown> {
       }
 
       const response = await ai.models.generateContent({
-        model: modelId(),
+        model: modelId(body.modelChoice),
         contents,
         config: { systemInstruction },
       });
@@ -403,26 +524,20 @@ export async function runGeminiOp(body: GeminiOpBody): Promise<unknown> {
     }
 
     case 'generateDisplayProductionScript': {
-      const { systemInstruction, contents } = buildGenerateDisplayProductionScriptParams(body, profile);
-      const response = await ai.models.generateContent({
-        model: modelId(),
-        contents,
-        config: { systemInstruction },
-      });
-      return response.text;
+      return generateDisplayProductionScriptText(body);
     }
 
     case 'analyzeVideoIteration': {
+      const video = await resolveAnalyzeVideoIterationVideo(body);
       const { systemInstruction, contents } = buildAnalyzeVideoIterationParams({
         style: body.style,
         moods: body.moods,
-        videoBase64: body.videoBase64,
-        mimeType: body.mimeType,
+        ...video,
       });
       const response = await ai.models.generateContent({
-        model: modelId(),
+        model: modelId(body.modelChoice),
         contents,
-        config: { systemInstruction },
+        config: videoAnalyzeConfig(systemInstruction),
       });
       return response.text;
     }
@@ -436,7 +551,7 @@ export async function runGeminiOp(body: GeminiOpBody): Promise<unknown> {
       );
 
       const response = await ai.models.generateContent({
-        model: modelId(),
+        model: modelId(body.modelChoice),
         contents: [
           {
             parts: [
@@ -468,7 +583,7 @@ export async function runGeminiOp(body: GeminiOpBody): Promise<unknown> {
       const prompt = `选中的灵感点：${body.selectedHighlights.join(', ')}\n元素配置：${body.sellingPoints}`;
 
       const response = await ai.models.generateContent({
-        model: modelId(),
+        model: modelId(body.modelChoice),
         contents: prompt,
         config: {
           systemInstruction,
@@ -497,7 +612,7 @@ export async function runGeminiOp(body: GeminiOpBody): Promise<unknown> {
           : `选定的主题：${body.themeTitle}\n描述：${body.themeDescription}`;
 
       const response = await ai.models.generateContent({
-        model: modelId(),
+        model: modelId(body.modelChoice),
         contents: prompt,
         config: { systemInstruction },
       });
@@ -513,7 +628,7 @@ export async function runGeminiOp(body: GeminiOpBody): Promise<unknown> {
       );
 
       const response = await ai.models.generateContent({
-        model: modelId(),
+        model: modelId(body.modelChoice),
         contents: [
           {
             parts: [
@@ -529,32 +644,43 @@ export async function runGeminiOp(body: GeminiOpBody): Promise<unknown> {
 
     case 'analyzeBuyingVideo': {
       const fileName = (body.fileName || 'video.mp4').trim().slice(0, 200);
-      const deep = Boolean(body.includeHookDeepAnalysis);
-      const systemInstruction = `你是买量短视频素材分析助手。用户上传的是广告/买量类视频，另附原始文件名供你推断产品名。
+      const themeCatalog = Array.isArray(body.existingThemeTags) ? body.existingThemeTags : [];
+      const catalogPrompt = formatThemeTagCatalogForPrompt(themeCatalog);
+      const systemInstruction = `你是买量短视频素材分析助手。请**通看全片**（重点前 3 秒钩子 + 全片卖点 + 结尾引导），判断题材与主题，输出结构化钩子分析与情绪节奏。
 
 硬性要求：
 1. 只输出**一个** JSON 对象，禁止 Markdown、禁止代码块、禁止任何开场白或尾注。
-2. 所有中文描述须**简短**，便于大屏一行展示，不要长句堆砌。
+2. 所有中文须**简短**；标签类不要标点；卖点总结用顿号或逗号分隔关键词即可。
 
-JSON 字段说明：
-- gameName: string，结合画面与原始文件名「${fileName}」推断游戏或产品简称；≤8 个汉字（或等宽英文字母/数字组合）；无法识别填「未知」。
-- videoType: string，必须是且只能是以下之一：「序列帧混剪类」「剧情类」「审美展示类」。
-- hook3sTags: string 数组，**恰好 2 个元素**。分别概括视频**首 3 秒内**的视觉焦点与音画冲击力（各一个核心标签），每个标签≤6 个汉字，不要标点符号。
-${
-        deep
-          ? `- hooksDeep: 对象（禁止为 null），包含：
-  - first5sSummary: string，概括前 5 秒画面与节奏，≤42 字。
-  - firstSellingPoint: object，含 approxTimeSec（number，首次核心卖点大致出现秒数，0–120）、method（≤16 字，如口播/字幕/UI演示/对比等）、visualAnalysis（≤42 字，该时刻画面与信息呈现）。`
-          : `- hooksDeep: 必须为 null（不要输出对象）。`
-      }
+${catalogPrompt}
 
-若视频过短仍尽力按可见内容推断；不确定的时间用合理估计并偏小。`;
+JSON 字段（必须全部输出）：
+- genreTag: string，题材标签，**必须且只能是**：「剧情」「游戏玩法」「画面展示」三者之一（≤4字）。
+${BUYING_GENRE_TAG_CLASSIFICATION_PROMPT}
+- themeTags: string 数组，**恰好 2 个**主题标签，概括全片主题/梗/风格；**优先从上方现有标签库选取**（可同库内选两个不同标签），仅当库中无任何贴切项时才新增≤4字标签。
+- hookAnalysis: 对象（禁止为 null），包含：
+  - first3sVisual: **前3秒**画面呈现（主体、动作、字幕/贴纸、色调氛围），≤72字。
+  - first3sDialogue: **前3秒**台词/字幕要点（无对白则写「无对白」并简述音效/BGM），≤72字。
+  - first3sHookType: string，**前3秒**钩子类型，**必须且只能是**以下之一：${BUYING_FIRST3S_HOOK_TYPE_PROMPT_LIST}。审美视觉=前3秒以画面美感/美术/氛围抓眼；猎奇搞笑=猎奇、荒诞或搞笑反差抓眼。若无法归入前七类则填「其他」。
+  - first3sHookTypeOther: string，仅当 first3sHookType 为「其他」时可写一句归类说明（≤24字）；否则输出空字符串 ""。
+  - coreGameplaySellingPoints: string，**全片**出现的核心玩法卖点总结（如零氪体验、无需重度游玩、新手易上手），≤96字。
+  - coreWelfareSellingPoints: string，**全片**出现的核心福利卖点总结（如可兑换小额红包、新手登录礼），≤96字。
+  - endingGuidance: string，视频**结尾**引导语/CTA 原文或近义复述（如下方点击、领红包、下载试玩），≤72字；无明确口播则据画面字幕概括。
+  - reusableViralPattern: string，**可复用爆款套路**分析：钩子如何抓注意力、绑定了哪些卖点、节奏与人群契合点，≤120字。
+  - fullAnalysis: 对象（禁止为 null），全片情绪与卖点节奏：
+    - totalSeconds: number，推断视频总时长（秒），至少 3，不超过 120。
+    - emotionCurve: 数组，10–16 个元素，每个 { "t": number（0 到 totalSeconds）, "intensity": number（0–100 情绪/冲突强度）, "note": string（可选，≤12字） }，按 t 升序，首尾建议含 0 与 totalSeconds。
+    - peak3sSec: number，**0–3 秒**内情绪/冲突强度峰值所在时刻（秒）。
+    - peakFullSec: number，**全片**情绪/冲突强度峰值所在时刻（秒）。
+    - firstSellingPointSec: number，游戏卖点/利益点/玩法价值**首次清晰出现**的时刻（秒）；若全片无明确卖点则取最接近的悬念或 CTA 时刻。
+
+若视频不足3秒，按可见部分尽力分析。文件名「${fileName}」仅作辅助。`;
 
       const rawB64 = body.videoBase64.includes(',') ? body.videoBase64.split(',')[1]! : body.videoBase64;
       const mime = (body.mimeType || 'video/mp4').trim() || 'video/mp4';
 
       const response = await ai.models.generateContent({
-        model: modelId(),
+        model: modelId(body.modelChoice),
         contents: [
           {
             parts: [
@@ -569,65 +695,37 @@ ${
         },
       });
 
-      const types = new Set(['序列帧混剪类', '剧情类', '审美展示类']);
-      const clamp = (s: unknown, max: number) => (typeof s === 'string' ? s.replace(/\s+/g, ' ').trim().slice(0, max) : '');
-
       try {
         const raw = JSON.parse(response.text || '{}') as Record<string, unknown>;
-        const gameName = clamp(raw.gameName, 10) || '未知';
-        const vt = clamp(raw.videoType, 12);
-        const videoType = types.has(vt) ? vt : '剧情类';
-        let hook3sTags: string[] = [];
-        if (Array.isArray(raw.hook3sTags)) {
-          hook3sTags = (raw.hook3sTags as unknown[])
-            .filter((x): x is string => typeof x === 'string')
-            .map((t) => t.replace(/\s+/g, '').slice(0, 8))
-            .filter(Boolean)
-            .slice(0, 2);
-        }
-        while (hook3sTags.length < 2) {
-          hook3sTags.push(hook3sTags.length === 0 ? '吸睛画面' : '节奏紧凑');
-        }
-
-        let hooksDeep: Record<string, unknown> | null = null;
-        if (deep && raw.hooksDeep && typeof raw.hooksDeep === 'object' && raw.hooksDeep !== null) {
-          const hd = raw.hooksDeep as Record<string, unknown>;
-          const fsp = hd.firstSellingPoint && typeof hd.firstSellingPoint === 'object' ? (hd.firstSellingPoint as Record<string, unknown>) : {};
-          hooksDeep = {
-            firstFiveSecondsSummary: clamp(hd.first5sSummary ?? hd.firstFiveSecondsSummary, 48),
-            firstSellingPoint: {
-              approxTimeSec: Math.max(0, Math.min(120, Number(fsp.approxTimeSec) || 0)),
-              method: clamp(fsp.method, 20),
-              visualAnalysis: clamp(fsp.visualAnalysis, 48),
-            },
-          };
-        }
-
-        if (deep && hooksDeep === null) {
-          hooksDeep = {
-            firstFiveSecondsSummary: '（模型未返回细分分析）',
-            firstSellingPoint: { approxTimeSec: 0, method: '', visualAnalysis: '' },
-          };
-        }
-
-        return {
-          gameName,
-          videoType,
-          hook3sTags: hook3sTags.slice(0, 2),
-          hooksDeep,
-        };
+        return normalizeBuyingVideoAi(raw, { themeTagCatalog: themeCatalog });
       } catch {
-        return {
-          gameName: fileName.replace(/\.[^.]+$/, '').slice(0, 8) || '未知',
-          videoType: '剧情类',
-          hook3sTags: ['待分析', '待分析'],
-          hooksDeep: deep
-            ? {
-                firstFiveSecondsSummary: '解析失败，请重试上传。',
-                firstSellingPoint: { approxTimeSec: 0, method: '', visualAnalysis: '' },
-              }
-            : null,
-        };
+        return normalizeBuyingVideoAi(
+          {
+            genreTag: '剧情',
+            themeTags: ['待分析', '待分析'],
+            hookAnalysis: {
+              first3sVisual: '解析失败，请重试上传。',
+              first3sDialogue: '—',
+              first3sHookType: '其他',
+              first3sHookTypeOther: '',
+              coreGameplaySellingPoints: '—',
+              coreWelfareSellingPoints: '—',
+              endingGuidance: '—',
+              reusableViralPattern: '—',
+              fullAnalysis: {
+                totalSeconds: 15,
+                emotionCurve: [
+                  { t: 0, intensity: 45 },
+                  { t: 15, intensity: 50 },
+                ],
+                peak3sSec: 1.5,
+                peakFullSec: 8,
+                firstSellingPointSec: 8,
+              },
+            },
+          },
+          { themeTagCatalog: themeCatalog },
+        );
       }
     }
 
@@ -650,7 +748,7 @@ ${
 用户侧卖点参考（诊断 8 秒卖点时可对照，脚本未体现则判弱并建议）：${selling}`;
 
       const response = await ai.models.generateContent({
-        model: modelId(),
+        model: modelId(body.modelChoice),
         contents: `以下为待诊断脚本全文：\n\n${body.script}`,
         config: {
           systemInstruction,
@@ -695,6 +793,55 @@ ${
       } catch {
         return null;
       }
+    }
+
+    case 'askBuyingPageAssistant': {
+      const { systemInstruction, userText } = buildBuyingPageAssistantPrompt({
+        question: body.question,
+        context: body.context,
+        messages: body.messages,
+      });
+      const useGoogleSearch = process.env.BUYING_ASSISTANT_GOOGLE_SEARCH !== '0';
+      const contents = [{ role: 'user' as const, parts: [{ text: userText }] }];
+      const baseConfig = { systemInstruction };
+      const withSearchConfig = { ...baseConfig, tools: [{ googleSearch: {} }] };
+
+      let response;
+      let searchAttempted = false;
+      try {
+        if (useGoogleSearch) {
+          searchAttempted = true;
+          response = await ai.models.generateContent({
+            model: modelId(body.modelChoice),
+            contents,
+            config: withSearchConfig,
+          });
+        } else {
+          response = await ai.models.generateContent({
+            model: modelId(body.modelChoice),
+            contents,
+            config: baseConfig,
+          });
+        }
+      } catch (searchErr) {
+        if (!searchAttempted) throw searchErr;
+        console.warn('askBuyingPageAssistant googleSearch failed, retry without tools', searchErr);
+        response = await ai.models.generateContent({
+          model: modelId(body.modelChoice),
+          contents,
+          config: baseConfig,
+        });
+      }
+
+      const grounding = response.candidates?.[0]?.groundingMetadata;
+      const usedWebSearch = Boolean(
+        useGoogleSearch &&
+          (grounding?.webSearchQueries?.length ||
+            grounding?.groundingChunks?.length ||
+            grounding?.searchEntryPoint),
+      );
+      const reply = (response.text ?? '').trim() || '抱歉，我暂时想不出回答，请稍后再试～';
+      return { reply, usedWebSearch };
     }
 
     default:

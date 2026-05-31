@@ -47,5 +47,115 @@
   .markdown-body h1, .markdown-body h2 { @apply text-primary-blue font-bold mb-4; }
   .markdown-body ul { @apply list-disc pl-6 mb-4; }
   .markdown-body li { @apply mb-2; }
+
+  /* SA小三郎侧栏 / 个人中心对话卡片 */
+  .assistant-reply strong {
+    @apply font-black text-slate-900;
+  }
+  .assistant-reply ul,
+  .assistant-reply ol {
+    @apply my-1;
+  }
+
+  /** 买量大屏竞品 TOP 表格：顶部横向滚动条（吸顶，不随页面上滑） */
+  .buying-table-scroll-sticky {
+    position: sticky;
+    top: 5rem; /* 与 Header h-20 对齐 */
+    z-index: 40;
+  }
+  .buying-table-scroll-track {
+    scrollbar-width: thin;
+    scrollbar-color: #94a3b8 #e2e8f0;
+  }
+  .buying-table-scroll-track::-webkit-scrollbar {
+    height: 10px;
+  }
+  .buying-table-scroll-track::-webkit-scrollbar-track {
+    background: #f1f5f9;
+    border-radius: 9999px;
+  }
+  .buying-table-scroll-track::-webkit-scrollbar-thumb {
+    background: #94a3b8;
+    border-radius: 9999px;
+  }
+  .buying-table-scroll-track::-webkit-scrollbar-thumb:hover {
+    background: #64748b;
+  }
+  /** 表格主体区隐藏横向滚动条，仅使用顶部吸顶条 */
+  .buying-table-scroll-main {
+    scrollbar-width: none;
+  }
+  .buying-table-scroll-main::-webkit-scrollbar {
+    display: none;
+    height: 0;
+  }
+
+  /** 侧栏底部助手「SA小三郎」 */
+  @keyframes buying-bot-bob {
+    0%,
+    100% {
+      transform: translateY(0);
+    }
+    50% {
+      transform: translateY(-5px);
+    }
+  }
+  @keyframes buying-bot-wave-arm {
+    0%,
+    100% {
+      transform: rotate(0deg);
+    }
+    25% {
+      transform: rotate(-18deg);
+    }
+    75% {
+      transform: rotate(12deg);
+    }
+  }
+  @keyframes buying-bot-blink {
+    0%,
+    92%,
+    100% {
+      transform: scaleY(1);
+    }
+    96% {
+      transform: scaleY(0.12);
+    }
+  }
+  .buying-bot-bob {
+    animation: buying-bot-bob 2.8s ease-in-out infinite;
+  }
+  .buying-bot-wave .buying-bot-arm-r {
+    transform-origin: 73px 54px;
+    animation: buying-bot-wave-arm 0.9s ease-in-out 2;
+  }
+  .buying-bot-wave.buying-bot-pose-cheer .buying-bot-arm-l {
+    transform-origin: 13px 46px;
+    animation: buying-bot-wave-arm 0.9s ease-in-out 2;
+  }
+  .buying-bot-blink {
+    transform-origin: center;
+    animation: buying-bot-blink 4s ease-in-out infinite;
+  }
+
+  .buying-bot-shell {
+    transition: transform 0.22s cubic-bezier(0.34, 1.4, 0.64, 1);
+    will-change: transform;
+  }
+  .buying-bot-shell-fleeing .buying-bot-bob {
+    animation: buying-bot-flee-panic 0.32s ease-in-out infinite;
+  }
+  @keyframes buying-bot-flee-panic {
+    0%,
+    100% {
+      transform: translateY(0) rotate(-3deg);
+    }
+    50% {
+      transform: translateY(-7px) rotate(3deg);
+    }
+  }
+  .buying-bot-hand-r {
+    pointer-events: all;
+  }
 }
 

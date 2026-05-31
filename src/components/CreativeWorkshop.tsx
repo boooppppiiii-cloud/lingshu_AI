@@ -1,6 +1,25 @@
 import { useMemo, useRef, useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Sparkles, Zap, Send, RefreshCw, MessageSquare, ChevronDown, Bookmark, Copy, CheckCircle2, FileText, Lightbulb, Image as ImageIcon, Upload, X, Timer, Mic } from 'lucide-react';
+import {
+  Sparkles,
+  Zap,
+  Send,
+  RefreshCw,
+  MessageSquare,
+  ChevronDown,
+  Bookmark,
+  Copy,
+  CheckCircle2,
+  FileText,
+  Lightbulb,
+  Image as ImageIcon,
+  Upload,
+  X,
+  Timer,
+  Mic,
+  ThumbsUp,
+  Loader2,
+} from 'lucide-react';
 import ContentIteration from './ContentIteration';
 import InspirationExtraction from './InspirationExtraction';
 import { WorkshopTab, AssetType } from '../types';
@@ -36,6 +55,7 @@ import {
 import { useAuth } from '../lib/AuthContext';
 import { pb } from '../lib/pb';
 import { buildAssetCreateBody } from '../lib/recordMappers';
+import { publishWorkshopCardToMarket } from '../lib/marketPublish';
 import Markdown from 'react-markdown';
 import FlashScriptDiagnosisPanel from './FlashScriptDiagnosisPanel';
 
@@ -92,6 +112,9 @@ export default function CreativeWorkshop({
   const [activeInspirationIndex, setActiveInspirationIndex] = useState<number | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [saveStatus, setSaveStatus] = useState<{[key: string]: boolean}>({});
+  /** 已点赞上架至灵感市场的卡片 key */
+  const [marketLikedKeys, setMarketLikedKeys] = useState<Record<string, boolean>>({});
+  const [marketPublishingKey, setMarketPublishingKey] = useState<string | null>(null);
   const [geminiRetryLabel, setGeminiRetryLabel] = useState<string | null>(null);
   const [scriptDurationPreset, setScriptDurationPreset] = useState<FlashScriptDurationPreset>('10-15');
   const [scriptDiagnosis, setScriptDiagnosis] = useState<FlashScriptDiagnosis | null>(null);
@@ -587,6 +610,103 @@ export default function CreativeWorkshop({
 
   const handleCopy = (text: string) => {
     navigator.clipboard.writeText(text);
+  };
+
+  const workshopBaseTags = useMemo(
+    () =>
+      [
+        sellingPoint,
+        selectedStyle,
+        ...selectedMoods,
+        flashBookmark === 'voiceover' ? '混剪口播' : '',
+        flashBookmark === 'display' ? '展示类脚本' : '',
+      ].filter(Boolean),
+    [sellingPoint, selectedStyle, selectedMoods, flashBookmark],
+  );
+
+  const handleLikeToMarket = async (
+    cardKey: string,
+    type: AssetType,
+    title: string,
+    content: string,
+    extraTags?: string[],
+  ) => {
+    if (!user) {
+      alert('请先登录后点赞');
+      return;
+    }
+    if (marketLikedKeys[cardKey]) {
+      showToast('该卡片已上架至灵感市场', 'success');
+      return;
+    }
+    if (!content.trim()) {
+      showToast('内容为空，无法上架', 'error');
+      return;
+    }
+
+    setMarketPublishingKey(cardKey);
+    try {
+      await publishWorkshopCardToMarket({
+        userId: user.uid,
+        userNickname: user.displayName || '匿名用户',
+        gameProfileId,
+        type,
+        title: title || '未命名创意',
+        content,
+        baseTags: [...workshopBaseTags, ...(extraTags ?? [])],
+        usageSource: 'creative_workshop_like',
+      });
+      setMarketLikedKeys((prev) => ({ ...prev, [cardKey]: true }));
+      showToast('已点赞并上架至灵感市场', 'success');
+    } catch (e) {
+      console.error(e);
+      showToast('上架灵感市场失败，请检查 PocketBase 与 market 集合', 'error');
+    } finally {
+      setMarketPublishingKey(null);
+    }
+  };
+
+  const flashScriptSaveTitle = useMemo(() => {
+    if (flashBookmark === 'voiceover') {
+      return `口播_${(voPrompt.trim().slice(0, 15) || '脚本')}`;
+    }
+    if (activeInspirationIndex !== null && inspirations[activeInspirationIndex]) {
+      return `${inspirations[activeInspirationIndex].title}_脚本`;
+    }
+    return `${prompt.slice(0, 15)}_全文`;
+  }, [flashBookmark, voPrompt, activeInspirationIndex, inspirations, prompt]);
+
+  const renderLikeToMarketButton = (
+    cardKey: string,
+    type: AssetType,
+    title: string,
+    content: string,
+    extraTags?: string[],
+  ) => {
+    const liked = marketLikedKeys[cardKey];
+    const busy = marketPublishingKey === cardKey;
+    return (
+      <button
+        type="button"
+        title={liked ? '已上架灵感市场' : '点赞并上架至灵感市场'}
+        disabled={busy || liked}
+        onClick={(e) => {
+          e.stopPropagation();
+          void handleLikeToMarket(cardKey, type, title, content, extraTags);
+        }}
+        className={`rounded-lg p-1.5 transition-colors ${
+          liked
+            ? 'bg-accent-blue/10 text-accent-blue'
+            : 'text-slate-400 hover:bg-accent-blue/5 hover:text-accent-blue'
+        } disabled:opacity-60`}
+      >
+        {busy ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          <ThumbsUp className={`h-4 w-4 ${liked ? 'fill-current' : ''}`} />
+        )}
+      </button>
+    );
   };
 
   const handleSaveAsset = async (
@@ -1172,9 +1292,18 @@ export default function CreativeWorkshop({
                         </div>
                         <div className="relative flex min-h-[320px] flex-col rounded-[2rem] border border-slate-200 bg-slate-50 p-6 shadow-inner">
                           <div className="mb-4 flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-4">
-                            <h4 className="text-xs font-black uppercase tracking-widest text-accent-blue">
-                              右侧 · 全文制作脚本
-                            </h4>
+                            <div className="flex min-w-0 items-center gap-2">
+                              {renderLikeToMarketButton(
+                                `display-prod:${displayProductionAssetTitle}`,
+                                'full_script',
+                                displayProductionAssetTitle,
+                                displayProductionScript,
+                                ['展示制作脚本'],
+                              )}
+                              <h4 className="text-xs font-black uppercase tracking-widest text-accent-blue">
+                                右侧 · 全文制作脚本
+                              </h4>
+                            </div>
                             <div className="flex flex-wrap gap-2">
                               <ActionButton
                                 onClick={() =>
@@ -1217,7 +1346,7 @@ export default function CreativeWorkshop({
                           </div>
                           {!displayProductionScript.trim() ? (
                             <p className="flex-1 text-sm leading-relaxed text-slate-400">
-                              左侧点选一条口令卡片，填写期望成片秒数，点击「生成全文脚本」。生成内容将包含运镜、动态细节分镜、环境氛围与配音/音效建议，以自然段为主；末行单独为：【自动根据剧情匹配合适的音效】。
+                              左侧点选一条口令卡片，填写期望成片秒数，点击「生成全文脚本」。输出遵循【基本要求】→【分镜脚本】→【分镜标签】，分镜段以 [00:00-00:05] 时间戳起首，每段一至两句、只保留必要画面元素。
                             </p>
                           ) : isEditingDisplayProduction ? (
                             <textarea
@@ -1270,9 +1399,19 @@ export default function CreativeWorkshop({
                                 <p className="text-sm font-black text-primary-blue tracking-tight">脚本生成中...</p>
                               </div>
                             ) : null}
-                            <div className="flex items-center justify-between mb-3">
-                              <span className="text-[10px] font-black text-accent-blue uppercase tracking-widest">灵感 0{i + 1}</span>
-                              <div className="flex items-center gap-2">
+                            <div className="flex items-center justify-between mb-3 gap-2">
+                              <div className="flex min-w-0 items-center gap-1.5">
+                                {renderLikeToMarketButton(
+                                  `insp:${i}:${insp.title}`,
+                                  'inspiration',
+                                  insp.title,
+                                  `标题：${insp.title}\n核心梗：${insp.concept}\n爆点：${insp.hook}`,
+                                )}
+                                <span className="text-[10px] font-black text-accent-blue uppercase tracking-widest">
+                                  灵感 0{i + 1}
+                                </span>
+                              </div>
+                              <div className="flex shrink-0 items-center gap-2">
                                 <button 
                                   onClick={() => handleSaveAsset('inspiration', `标题：${insp.title}\n核心梗：${insp.concept}\n爆点：${insp.hook}`, insp.title)}
                                   className="p-1.5 text-slate-400 hover:text-accent-blue transition-colors"
@@ -1312,15 +1451,23 @@ export default function CreativeWorkshop({
                       animate={{ opacity: 1, height: 'auto' }}
                       className="mt-12 space-y-6 pt-10 border-t border-white/5"
                     >
-                      <div className="flex items-center justify-between">
-                        <h3 className="text-accent-blue font-black uppercase tracking-widest text-sm flex items-center gap-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex min-w-0 items-center gap-2">
+                          {renderLikeToMarketButton(
+                            `script:${flashBookmark}:${flashScriptSaveTitle}`,
+                            'full_script',
+                            flashScriptSaveTitle,
+                            activeFlashScript,
+                          )}
+                          <h3 className="text-accent-blue font-black uppercase tracking-widest text-sm flex items-center gap-2">
                           {flashBookmark === 'voiceover' ? (
                             <Mic className="w-4 h-4" />
                           ) : (
                             <Zap className="w-4 h-4" />
                           )}
                           {flashBookmark === 'voiceover' ? 'AI 口播台词：' : 'AI 生成脚本：'}
-                        </h3>
+                          </h3>
+                        </div>
                         <div className="flex items-center gap-2">
                           <ActionButton 
                             onClick={() => setIsEditing(!isEditing)} 

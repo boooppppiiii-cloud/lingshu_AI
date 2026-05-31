@@ -5,24 +5,25 @@
  *
  * 密钥只读 process.env.GEMINI_API_KEY，永远不要放进前端。
  *
- * 出站代理：使用 npm 包 `undici` 的 ProxyAgent + setGlobalDispatcher，并把 globalThis.fetch
- * 指向同一实现的 fetch，这样 @google/genai 使用的全局 fetch 也会走代理。
- * （部分环境无内置 `node:undici` 模块，会直接导致 dev:api 起不来、8787 ECONNREFUSED。）
- *
- * production（云服务器）未配置代理则直连 Gemini。可用 LOCAL_GEMINI_DIRECT=1 在本地跳过默认代理。
+ * Gemini 出站：新加坡直连 generativelanguage.googleapis.com，失败时有限次重试（GEMINI_OUTBOUND_RETRIES）。
+ * 不设任何 OUTBOUND_PROXY / 广州中转。
  */
 import fs from 'node:fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import express from 'express';
-import { fetch as undiciFetch, ProxyAgent, setGlobalDispatcher } from 'undici';
 import { runGeminiOp, streamAnalyzeVideoIterationDeltas, streamGenerateDisplayProductionScriptDeltas } from './geminiBackend';
 import { runGeminiThroughQueue } from './geminiConcurrencyQueue';
+import { runGeminiOpInteractive } from './geminiRetry';
 import { parseGeminiRequest } from './parseGeminiBody';
 import { adminCreateUsageRecord, getAuthenticatedUserIdFromPocketBase, logGeminiCallUsage } from './pbAdminUsage';
+import { backfillBuyingVideoTags } from './backfillBuyingVideos';
 import { ingestBuyingVideoRecord } from './buyingVideoIngest';
+import { DEFAULT_REANALYZE_PROGRESS_FILE, readReanalyzeProgress } from './reanalyzeProgress';
 import { formatUsageDayShanghai } from './usageDay';
+import { setupOutboundProxy } from './outboundProxy';
+import { createVideoStaging, deleteVideoStaging } from './videoStaging';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.join(__dirname, '..');
@@ -58,6 +59,23 @@ function mergePocketBaseAdminFromDisk(baseDir: string) {
 }
 mergePocketBaseAdminFromDisk(root);
 
+function formatStreamError(err: unknown): string {
+  const message = err instanceof Error ? err.message : String(err);
+  const cause = err instanceof Error ? (err as Error & { cause?: unknown }).cause : undefined;
+  const causeMessage = cause instanceof Error ? cause.message : '';
+  const causeCode =
+    cause && typeof cause === 'object' && 'code' in cause
+      ? String((cause as { code?: unknown }).code ?? '')
+      : '';
+  if (
+    causeCode === 'UND_ERR_CONNECT_TIMEOUT' ||
+    /connect timeout|connection timed out|fetch failed/i.test(`${message} ${causeMessage}`)
+  ) {
+    return 'Gemini API network timeout: this server cannot connect to generativelanguage.googleapis.com. Configure a working outbound proxy/VPN or run the API on a server that can reach Google Gemini.';
+  }
+  return message;
+}
+
 if (process.env.NODE_ENV !== 'production') {
   const hasPbUsageAdmin = Boolean(
     process.env.POCKETBASE_ADMIN_EMAIL?.trim() && process.env.POCKETBASE_ADMIN_PASSWORD?.trim(),
@@ -69,32 +87,53 @@ if (process.env.NODE_ENV !== 'production') {
   );
 }
 
-const proxyFromEnv =
-  process.env.OUTBOUND_PROXY?.trim() ||
-  process.env.HTTPS_PROXY?.trim() ||
-  process.env.HTTP_PROXY?.trim();
-
 const isProd = process.env.NODE_ENV === 'production';
-const skipLocalDefault =
-  process.env.LOCAL_GEMINI_DIRECT === '1' || /^true$/i.test(process.env.LOCAL_GEMINI_DIRECT ?? '');
-
-const defaultLocalProxy = '';
-const outboundProxy =
-  proxyFromEnv ||
-  (isProd || skipLocalDefault ? '' : defaultLocalProxy);
-
-if (outboundProxy) {
-  setGlobalDispatcher(new ProxyAgent(outboundProxy));
-  globalThis.fetch = undiciFetch as typeof fetch;
-  console.log('[script-ai] outbound fetch proxy:', outboundProxy);
-} else if (isProd) {
-  console.log('[script-ai] production: outbound fetch direct (no proxy)');
-} else {
-  console.log('[script-ai] dev: LOCAL_GEMINI_DIRECT — outbound fetch direct (no proxy)');
-}
+setupOutboundProxy();
 const app = express();
 
+/** 远程 dev（浏览器 :3000 直连 :8787 API）需 CORS；生产同端口无需 */
+if (!isProd) {
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (typeof origin === 'string' && origin.length > 0) {
+      res.setHeader('Access-Control-Allow-Origin', origin);
+      res.setHeader('Vary', 'Origin');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Ingest-Secret, X-Video-Mime');
+    }
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
+      return;
+    }
+    next();
+  });
+}
+
 /** Base64 约膨胀 4/3，视频类 op 需明显大于原文件体积；过小会导致「能选文件但接口 413」 */
+app.post(
+  '/api/gemini/stage-video',
+  express.raw({ limit: '200mb', type: () => true }),
+  async (req, res) => {
+    try {
+      const buf = req.body;
+      if (!Buffer.isBuffer(buf) || buf.byteLength === 0) {
+        res.status(400).json({ ok: false, error: 'Empty video body' });
+        return;
+      }
+      const mimeRaw = req.headers['x-video-mime'];
+      const mimeType =
+        typeof mimeRaw === 'string' && mimeRaw.startsWith('video/') ? mimeRaw : 'video/mp4';
+      const { stagingId, sizeBytes } = await createVideoStaging(buf, mimeType);
+      res.json({ ok: true, stagingId, sizeBytes });
+    } catch (err) {
+      console.error('[api/gemini/stage-video]', err);
+      const message = err instanceof Error ? err.message : String(err);
+      const status = message.includes('200MB') ? 413 : 500;
+      res.status(status).json({ ok: false, error: message });
+    }
+  },
+);
+
 app.use(express.json({ limit: '200mb' }));
 
 /**
@@ -126,14 +165,15 @@ app.post('/api/buying-videos/ingest', async (req, res) => {
     );
   }
 
-  const body = req.body as { recordId?: string };
+  const body = req.body as { recordId?: string; force?: boolean };
   if (typeof body.recordId !== 'string' || !body.recordId.trim()) {
     res.status(400).json({ ok: false, error: 'JSON body.recordId (string) is required' });
     return;
   }
 
+  const force = body.force === true;
   try {
-    const out = await ingestBuyingVideoRecord(body.recordId.trim());
+    const out = await ingestBuyingVideoRecord(body.recordId.trim(), { force });
     if (!out.ok) {
       res.status(502).json({ ok: false, error: out.error ?? 'ingest failed' });
       return;
@@ -141,6 +181,45 @@ app.post('/api/buying-videos/ingest', async (req, res) => {
     res.json({ ok: true, skipped: Boolean(out.skipped) });
   } catch (err) {
     console.error('[buying-videos/ingest]', err);
+    res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+/** 全库重分析任务进度（读 /tmp/reanalyze-buying-videos.progress.json） */
+app.get('/api/buying-videos/reanalyze-progress', (_req, res) => {
+  const file = process.env.REANALYZE_PROGRESS_FILE?.trim() || DEFAULT_REANALYZE_PROGRESS_FILE;
+  const state = readReanalyzeProgress(file);
+  if (!state) {
+    res.json({
+      ok: true,
+      running: false,
+      message: '暂无重分析任务（先执行 npm run reanalyze:buying-videos）',
+      progressFile: file,
+    });
+    return;
+  }
+  res.json({ ok: true, running: state.status === 'running', progressFile: file, ...state });
+});
+
+/** 批量补全或强制重跑 AI 标签（开发或带 ingest secret；每条调 Gemini，force 时较慢） */
+app.post('/api/buying-videos/backfill-empty', async (req, res) => {
+  const secret = process.env.BUYING_VIDEO_INGEST_SECRET?.trim();
+  const hdrRaw = req.headers['x-ingest-secret'];
+  const hdr = typeof hdrRaw === 'string' ? hdrRaw : '';
+  if (isProd && secret && hdr !== secret) {
+    res.status(401).json({ ok: false, error: 'Unauthorized' });
+    return;
+  }
+  const body = req.body as { limit?: number; force?: boolean; page?: number; perPage?: number };
+  try {
+    const out = await backfillBuyingVideoTags({
+      limit: typeof body?.limit === 'number' ? body.limit : undefined,
+      force: body?.force === true,
+      page: typeof body?.page === 'number' ? body.page : undefined,
+      perPage: typeof body?.perPage === 'number' ? body.perPage : undefined,
+    });
+    res.json({ ok: true, ...out });
+  } catch (err) {
     res.status(500).json({ ok: false, error: err instanceof Error ? err.message : String(err) });
   }
 });
@@ -195,12 +274,13 @@ app.post('/api/gemini', async (req, res) => {
     const { opBody, analyticsUserId: uid } = parsed;
     analyticsUserId = uid;
     op = String((opBody as { op: string }).op);
-    const data = await runGeminiThroughQueue(() => runGeminiOp(opBody));
+    // 交互路径：在出站层重试之上再加一层 op 级别短重试，平滑 Gemini 上游连续 503。
+    const data = await runGeminiOpInteractive(opBody);
     ok = true;
     res.json({ ok: true, data });
   } catch (err) {
     console.error('[api/gemini]', err);
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatStreamError(err);
     const status =
       message === 'Invalid body' || message === 'Invalid or unknown op'
         ? 400
@@ -266,12 +346,17 @@ app.post('/api/gemini/stream', async (req, res) => {
     startedNdjson = true;
 
     await runGeminiThroughQueue(async () => {
+      let stagingId: string | undefined;
       if (opBody.op === 'analyzeVideoIteration') {
+        stagingId =
+          typeof opBody.videoStagingId === 'string' ? opBody.videoStagingId : undefined;
         const streamBody = {
           videoBase64: opBody.videoBase64,
+          videoStagingId: opBody.videoStagingId,
           mimeType: opBody.mimeType,
           style: opBody.style,
           moods: opBody.moods,
+          modelChoice: opBody.modelChoice,
         };
         for await (const delta of streamAnalyzeVideoIterationDeltas(streamBody)) {
           const line = `${JSON.stringify({ type: 'delta', text: delta })}\n`;
@@ -279,6 +364,7 @@ app.post('/api/gemini/stream', async (req, res) => {
             await new Promise<void>((resolve) => res.once('drain', resolve));
           }
         }
+        await deleteVideoStaging(stagingId);
       } else {
         const { op, ...rest } = opBody;
         void op;
@@ -300,7 +386,7 @@ app.post('/api/gemini/stream', async (req, res) => {
     });
   } catch (err) {
     console.error('[api/gemini/stream]', err);
-    const message = err instanceof Error ? err.message : String(err);
+    const message = formatStreamError(err);
     if (!startedNdjson) {
       const status =
         message === 'Invalid body' || message === 'Invalid or unknown op'

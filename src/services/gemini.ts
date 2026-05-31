@@ -3,7 +3,16 @@
  * @license SPDX-License-Identifier: Apache-2.0
  */
 
+import type {
+  BuyingPageAssistantContext,
+  BuyingPageAssistantMessage,
+} from '../lib/buyingPageAssistantContext';
+import type { ThemeTagCatalogEntry } from '../lib/buyingThemeTagCatalog';
 import type { GameProfileId } from '../lib/gameProfiles';
+import {
+  type GeminiModelChoice,
+  readGeminiModelChoice,
+} from '../lib/geminiModelSelection';
 
 export type FlashInspirationIdea = { title: string; concept: string; hook: string };
 
@@ -18,17 +27,25 @@ export type ThemeCard = { title: string; description: string };
 
 /** 买量大屏 /api/gemini op `analyzeBuyingVideo` 返回结构 */
 export type BuyingVideoAiAnalysis = {
-  gameName: string;
-  videoType: string;
-  hook3sTags: string[];
-  hooksDeep: {
-    firstFiveSecondsSummary?: string;
-    firstSellingPoint?: {
-      approxTimeSec?: number;
-      method?: string;
-      visualAnalysis?: string;
+  /** [题材标签, 主题标签1, 主题标签2] */
+  scriptTags: [string, string, string];
+  hookAnalysis: {
+    first3sVisual: string;
+    first3sDialogue: string;
+    first3sHookType: string;
+    first3sHookTypeOther: string;
+    coreGameplaySellingPoints: string;
+    coreWelfareSellingPoints: string;
+    endingGuidance: string;
+    reusableViralPattern: string;
+    fullAnalysis?: {
+      totalSeconds: number;
+      emotionCurve: FlashEmotionPoint[];
+      peak3sSec: number;
+      peakFullSec: number;
+      firstSellingPointSec: number;
     };
-  } | null;
+  };
 };
 
 export type FlashEmotionPoint = { t: number; intensity: number; note?: string };
@@ -63,17 +80,27 @@ export type GeminiCallOptions = {
   analyticsUserId?: string;
   /** 与创意工坊左上角游戏切换一致；缺省为种花 flower */
   gameProfileId?: GameProfileId;
+  /** 买量分析：优先复用的历史主题标签 */
+  existingThemeTags?: ThemeTagCatalogEntry[];
+  /** 模型档位：preview / 3.1pro / 3.5flash */
+  modelChoice?: GeminiModelChoice;
 };
 
 export type GeminiStreamCallOptions = GeminiCallOptions & {
   /** 每收到一段增量文本回调（delta 为当次片段，accumulated 为当前全文） */
   onDelta?: (delta: string, accumulated: string) => void;
+  /** 视频二进制预上传进度（loaded/total 字节） */
+  onUploadProgress?: (loaded: number, total: number) => void;
+  /** 视频预上传完成、即将发起流式分析 */
+  onStagingComplete?: () => void;
 };
 
 const apiBase = (import.meta.env.VITE_API_URL as string | undefined)?.replace(/\/$/, '') ?? '';
 
 const MAX_ATTEMPTS = 5;
-const RETRY_BASE_MS = [1000, 2000, 4000, 8000] as const;
+const RETRY_BASE_MS = [3000, 8000, 15000, 30000, 60000] as const;
+const STAGE_MAX_ATTEMPTS = 4;
+const STAGE_RETRY_MS = [1500, 3000, 6000] as const;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -92,6 +119,79 @@ function isRetriable(err: unknown, status?: number): boolean {
       msg,
     ) || /503|502|504|429/.test(msg)
   );
+}
+
+function uploadVideoBlobXHR(
+  url: string,
+  blob: Blob,
+  mimeType: string,
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<{ stagingId: string }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', url);
+    xhr.setRequestHeader('Content-Type', 'application/octet-stream');
+    xhr.setRequestHeader('X-Video-Mime', mimeType);
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable) onProgress?.(ev.loaded, ev.total);
+    };
+    xhr.onload = () => {
+      const raw = xhr.responseText ?? '';
+      let json: { ok?: boolean; stagingId?: string; error?: string };
+      try {
+        json = JSON.parse(raw) as { ok?: boolean; stagingId?: string; error?: string };
+      } catch {
+        const err = new Error(`视频预上传返回异常 (${xhr.status}): ${raw.slice(0, 200)}`) as Error & {
+          status?: number;
+        };
+        err.status = xhr.status;
+        reject(err);
+        return;
+      }
+      if (xhr.status < 200 || xhr.status >= 300 || !json.ok || !json.stagingId) {
+        const err = new Error(json.error || xhr.statusText || '视频预上传失败') as Error & {
+          status?: number;
+        };
+        err.status = xhr.status;
+        reject(err);
+        return;
+      }
+      resolve({ stagingId: json.stagingId });
+    };
+    xhr.onerror = () => reject(new TypeError('Failed to fetch'));
+    xhr.onabort = () => reject(new Error('aborted'));
+    xhr.send(blob);
+  });
+}
+
+async function stageVideoBlob(
+  blob: Blob,
+  mimeType: string,
+  options?: Pick<GeminiStreamCallOptions, 'onUploadProgress' | 'onRetryAttempt'>,
+): Promise<string> {
+  const url = `${apiBase}/api/gemini/stage-video`;
+  for (let attempt = 1; attempt <= STAGE_MAX_ATTEMPTS; attempt++) {
+    options?.onRetryAttempt?.(attempt, STAGE_MAX_ATTEMPTS);
+    try {
+      const { stagingId } = await uploadVideoBlobXHR(url, blob, mimeType, options?.onUploadProgress);
+      return stagingId;
+    } catch (e) {
+      const status = (e as Error & { status?: number }).status;
+      if (!isRetriable(e, status) || attempt >= STAGE_MAX_ATTEMPTS) {
+        const hint =
+          '无法上传视频到 AI 服务。请确认 API 已启动，且网络稳定；大文件上传失败时可换更小视频或稍后重试。';
+        const msg = e instanceof Error ? e.message : String(e);
+        const looksNetwork =
+          msg === 'Failed to fetch' ||
+          /fetch|network|load failed|aborted/i.test(msg) ||
+          e instanceof TypeError;
+        throw new Error(looksNetwork ? `${hint}（原始错误：${msg}）` : `${hint} (${msg})`);
+      }
+      const base = STAGE_RETRY_MS[attempt - 1] ?? STAGE_RETRY_MS[STAGE_RETRY_MS.length - 1];
+      await sleep(base + jitterMs());
+    }
+  }
+  throw new Error('视频预上传失败，请检查网络后重试。');
 }
 
 async function singleFetch<T>(body: object): Promise<T> {
@@ -137,11 +237,13 @@ async function singleFetch<T>(body: object): Promise<T> {
 }
 
 async function callGemini<T>(body: object, options?: GeminiCallOptions): Promise<T> {
-  const { analyticsUserId, onRetryAttempt, gameProfileId } = options ?? {};
+  const { analyticsUserId, onRetryAttempt, gameProfileId, existingThemeTags, modelChoice } = options ?? {};
   const payload = {
     ...body,
     ...(analyticsUserId ? { analyticsUserId } : {}),
     ...(gameProfileId ? { gameProfileId } : {}),
+    ...(existingThemeTags?.length ? { existingThemeTags } : {}),
+    modelChoice: modelChoice ?? readGeminiModelChoice(),
   };
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     onRetryAttempt?.(attempt, MAX_ATTEMPTS);
@@ -261,17 +363,20 @@ async function callGeminiNdjsonStream(
   body: object,
   options?: GeminiStreamCallOptions,
 ): Promise<string> {
-  const { analyticsUserId, onRetryAttempt, onDelta, gameProfileId } = options ?? {};
+  const { analyticsUserId, onRetryAttempt, onDelta, gameProfileId, modelChoice } = options ?? {};
   const payload = {
     ...body,
     ...(analyticsUserId ? { analyticsUserId } : {}),
     ...(gameProfileId ? { gameProfileId } : {}),
+    modelChoice: modelChoice ?? readGeminiModelChoice(),
   };
+  let lastErr: unknown;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     onRetryAttempt?.(attempt, MAX_ATTEMPTS);
     try {
       return await consumeGeminiNdjsonStream(payload, { onDelta });
     } catch (e) {
+      lastErr = e;
       const status = (e as Error & { status?: number }).status;
       if (!isRetriable(e, status)) {
         throw e;
@@ -285,7 +390,7 @@ async function callGeminiNdjsonStream(
   }
 
   throw new Error(
-    '已重试多次仍无法完成请求，服务可能繁忙、遇到限流或网络不稳定，请稍后再试。',
+    'Gemini 当前繁忙，已尝试备用模型仍失败。请 1 分钟后重试，或换短一点的视频。',
   );
 }
 
@@ -421,19 +526,30 @@ export const geminiService = {
   },
 
   async analyzeVideoIterationStream(
-    videoBase64: string,
+    video: string | Blob,
     mimeType: string,
     style: string,
     moods: string,
     options?: GeminiStreamCallOptions,
   ) {
+    const common = { mimeType, style, moods };
+    if (typeof video !== 'string') {
+      const stagingId = await stageVideoBlob(video, mimeType, options);
+      options?.onStagingComplete?.();
+      return callGeminiNdjsonStream(
+        {
+          op: 'analyzeVideoIteration',
+          videoStagingId: stagingId,
+          ...common,
+        },
+        options,
+      );
+    }
     return callGeminiNdjsonStream(
       {
         op: 'analyzeVideoIteration',
-        videoBase64,
-        mimeType,
-        style,
-        moods,
+        videoBase64: video,
+        ...common,
       },
       options,
     );
@@ -473,7 +589,7 @@ export const geminiService = {
     videoBase64: string,
     mimeType: string,
     fileName: string,
-    includeHookDeepAnalysis: boolean,
+    _includeHookDeepAnalysis?: boolean,
     options?: GeminiCallOptions,
   ) {
     return callGemini<BuyingVideoAiAnalysis>(
@@ -482,7 +598,6 @@ export const geminiService = {
         videoBase64,
         mimeType,
         fileName,
-        includeHookDeepAnalysis,
       },
       options,
     );
@@ -554,6 +669,23 @@ export const geminiService = {
         op: 'diagnoseFlashScript',
         script,
         sellingPoints: sellingPoints?.trim() || undefined,
+      },
+      options,
+    );
+  },
+
+  async askBuyingPageAssistant(
+    question: string,
+    context: BuyingPageAssistantContext,
+    messages: BuyingPageAssistantMessage[] | undefined,
+    options?: GeminiCallOptions,
+  ) {
+    return callGemini<{ reply: string; usedWebSearch?: boolean }>(
+      {
+        op: 'askBuyingPageAssistant',
+        question: question.trim(),
+        context,
+        messages,
       },
       options,
     );

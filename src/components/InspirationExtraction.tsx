@@ -145,7 +145,14 @@ export default function InspirationExtraction() {
       }
     } catch (error) {
       console.error(error);
-      alert("提取失败，请重试");
+      // Gemini 上游高峰期会连续 503。服务端已做 3 次短退避；这里把后端真实信息透给用户。
+      const msg = error instanceof Error ? error.message : String(error);
+      const friendly = /503|UNAVAILABLE|busy|过载|繁忙/i.test(msg)
+        ? '上游模型暂时繁忙，请等待几秒后重试。如多次失败，建议先压缩视频或换个时段再试。'
+        : /timeout|timed out|超时/i.test(msg)
+          ? '请求超时，可能是视频较大或网络抖动；可重试或换更小的片段。'
+          : `提取失败：${msg.slice(0, 200) || '请重试'}`;
+      alert(friendly);
     } finally {
       setGeminiRetryLabel(null);
       setLoading(false);
@@ -324,7 +331,14 @@ export default function InspirationExtraction() {
               <p className="text-slate-500 mb-10 text-center max-w-md">上传你认为优秀的视频片段，AI 将为你提取核心亮点。</p>
               
               <div className="w-full max-w-2xl bg-slate-50 rounded-[2.5rem] p-8 border border-slate-200 shadow-inner">
-                <VideoUploader onUpload={(base64, mimeType) => setVideo({ base64, mimeType })} />
+                {/*
+                  灵感提取走 inline base64（非 staging 流式），过大的视频会显著推高 Gemini 上游 503 概率。
+                  采用 iteration 预设：>10MB 在浏览器内压到 360p / ≤4MB 再上传。
+                */}
+                <VideoUploader
+                  onUpload={(base64, mimeType) => setVideo({ base64, mimeType })}
+                  compressPreset="iteration"
+                />
               </div>
 
               <button

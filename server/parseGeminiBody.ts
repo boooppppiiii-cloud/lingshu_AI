@@ -13,6 +13,7 @@ const VALID_OPS = new Set<string>([
   'extractInspiration',
   'diagnoseFlashScript',
   'analyzeBuyingVideo',
+  'askBuyingPageAssistant',
 ]);
 
 export function parseGeminiRequest(raw: unknown): { opBody: GeminiOpBody; analyticsUserId?: string } {

@@ -8,14 +8,21 @@ import { Upload, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   compressVideoWithFfmpeg,
+  ENCODE_PRESETS_ITERATION,
   inferVideoMimeType,
   isLikelyVideoFile,
   shouldCompressVideo,
+  warmupFfmpeg,
+  type CompressVideoOptions,
 } from '../lib/videoCompressFfmpeg';
 
 interface VideoUploaderProps {
-  onUpload: (base64: string, mimeType: string, fileSize: number) => void;
+  onUpload: (base64: string, mimeType: string, fileSize: number, blob?: Blob) => void;
   label?: string;
+  /** 超过该字节数则在浏览器内压缩（默认 10MB） */
+  compressAboveBytes?: number;
+  /** 压缩档位：iteration = 360p、尽量 ≤4MB；默认 720p、≤10MB */
+  compressPreset?: 'default' | 'iteration';
 }
 
 function readBlobAsBase64Body(blob: Blob): Promise<string> {
@@ -31,12 +38,39 @@ function readBlobAsBase64Body(blob: Blob): Promise<string> {
   });
 }
 
-export default function VideoUploader({ onUpload, label = '上传参考视频' }: VideoUploaderProps) {
+const FOUR_MB = 4 * 1024 * 1024;
+
+function resolveCompressOptions(
+  compressAboveBytes: number,
+  preset: 'default' | 'iteration',
+): CompressVideoOptions {
+  if (preset === 'iteration') {
+    return {
+      thresholdBytes: compressAboveBytes,
+      targetMaxBytes: FOUR_MB,
+      encodePresets: ENCODE_PRESETS_ITERATION,
+    };
+  }
+  return { thresholdBytes: compressAboveBytes, targetMaxBytes: 10 * 1024 * 1024 };
+}
+
+export default function VideoUploader({
+  onUpload,
+  label = '上传参考视频',
+  compressAboveBytes = 10 * 1024 * 1024,
+  compressPreset = 'default',
+}: VideoUploaderProps) {
   const [dragActive, setDragActive] = useState(false);
   const [videoPreview, setVideoPreview] = useState<string | null>(null);
   const [processing, setProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    void warmupFfmpeg().catch((err) => {
+      console.warn('ffmpeg warmup failed:', err);
+    });
+  }, []);
 
   useEffect(() => {
     return () => {
@@ -55,23 +89,28 @@ export default function VideoUploader({ onUpload, label = '上传参考视频' }
     const effectiveMime = inferVideoMimeType(file);
 
     try {
-      if (shouldCompressVideo(file)) {
+      const compressOpts = resolveCompressOptions(compressAboveBytes, compressPreset);
+      if (shouldCompressVideo(file, compressOpts.thresholdBytes)) {
         setProcessing(true);
         setProgress(0);
-        const { blob, mimeType } = await compressVideoWithFfmpeg(file, ({ overall }) => {
-          setProgress(Math.round(overall * 100));
-        });
+        const { blob, mimeType } = await compressVideoWithFfmpeg(
+          file,
+          ({ overall }) => {
+            setProgress(Math.round(overall * 100));
+          },
+          compressOpts,
+        );
         const base64Body = await readBlobAsBase64Body(blob);
         if (videoPreview?.startsWith('blob:')) URL.revokeObjectURL(videoPreview);
         setVideoPreview(URL.createObjectURL(blob));
-        onUpload(base64Body, mimeType, blob.size);
+        onUpload(base64Body, mimeType, blob.size, blob);
       } else {
         const reader = new FileReader();
         reader.onload = (e) => {
           const base64 = e.target?.result as string;
           const base64Data = base64.split(',')[1];
           setVideoPreview(URL.createObjectURL(file));
-          onUpload(base64Data, effectiveMime, file.size);
+          onUpload(base64Data, effectiveMime, file.size, file);
         };
         reader.readAsDataURL(file);
       }
@@ -153,7 +192,9 @@ export default function VideoUploader({ onUpload, label = '上传参考视频' }
             <p className="text-lg font-bold text-primary-blue">{label}</p>
             <p className="text-sm text-slate-400 mt-2">拖拽视频文件或点击上传</p>
             <p className="text-xs text-slate-400 mt-1 max-w-sm text-center">
-              大于 10MB 时将在浏览器内压缩至 720p 并尽量压到 10MB 以下后再上传（首次会加载处理引擎，请稍候）
+              {compressPreset === 'iteration'
+                ? `大于 ${(compressAboveBytes / (1024 * 1024)).toFixed(0)}MB 时压缩至 360p，并尽量压到 ${(FOUR_MB / (1024 * 1024)).toFixed(0)}MB 以下再上传（首次会加载处理引擎）`
+                : `大于 ${(compressAboveBytes / (1024 * 1024)).toFixed(0)}MB 时将在浏览器内压缩至 720p 后再上传（首次会加载处理引擎，请稍候）`}
             </p>
 
             {processing && (
