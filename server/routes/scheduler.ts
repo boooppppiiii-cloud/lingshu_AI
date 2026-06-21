@@ -2,7 +2,7 @@ import { Router, type Request, type Response } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import cron from 'node-cron';
+import cron, { type ScheduledTask as CronJob } from 'node-cron';
 import { callLLMChatStream } from '../agents/llm.js';
 import { buildEnterpriseContext } from './enterprise.js';
 
@@ -37,7 +37,7 @@ function getEnterpriseCtx(): string {
 }
 
 // Active cron jobs registry
-const activeJobs = new Map<string, cron.ScheduledTask>();
+const activeJobs = new Map<string, CronJob>();
 
 async function executeTrendReport(_task: ScheduledTask): Promise<string> {
   const messages = [{ role: 'user' as const, content: '生成今日TikTok跨境电商爆款趋势简报，包括：热门品类、热门话题标签、建议借势策略，控制在300字以内' }];

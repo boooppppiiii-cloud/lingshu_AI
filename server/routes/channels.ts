@@ -6,7 +6,7 @@ import { sendWhatsAppText, verifyWhatsAppWebhook, getPhoneNumberInfo } from '../
 import { getBotInfo, sendTelegramMessage } from '../integrations/telegram.js';
 import { testDingTalk } from '../integrations/dingtalk.js';
 import { testFeishu } from '../integrations/feishu.js';
-import { getShopInfo } from '../integrations/shopify.js';
+import { getShopInfo, testShopify } from '../integrations/shopify.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA = path.join(__dirname, '../../data/channels.json');
