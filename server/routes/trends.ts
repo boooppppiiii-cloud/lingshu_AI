@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
-import { pbCreate, pbGet, pbPatch, pbList } from '../storage/pb.js';
+import { store } from '../storage/index.js';
 
 export const trendsRouter = Router();
 trendsRouter.use(requireAuth);
@@ -19,8 +19,8 @@ trendsRouter.post('/push', async (req, res) => {
   const date = todayDate();
 
   // Check if today's push already exists
-  const existing = await pbList(COL, {
-    filter: `tenantId = "${tenantId}" && date = "${date}"`,
+  const existing = await store.list(COL, {
+    where: { tenantId, date },
     perPage: 1,
   });
 
@@ -30,15 +30,15 @@ trendsRouter.post('/push', async (req, res) => {
   }
 
   // Pick latest 10 analyzed videos
-  const videos = await pbList(VIDEO_COL, {
-    filter: `tenantId = "${tenantId}" && status = "analyzed"`,
+  const videos = await store.list(VIDEO_COL, {
+    where: { tenantId, status: 'analyzed' },
     sort: '-crawledAt',
     perPage: 10,
   });
 
   const videoIds = videos.items.map((v) => (v as Record<string, unknown>).id as string);
 
-  const record = await pbCreate(COL, {
+  const record = await store.create(COL, {
     tenantId,
     date,
     videoIds: JSON.stringify(videoIds),
@@ -59,8 +59,8 @@ trendsRouter.get('/today', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
   const date = todayDate();
 
-  const result = await pbList(COL, {
-    filter: `tenantId = "${tenantId}" && date = "${date}"`,
+  const result = await store.list(COL, {
+    where: { tenantId, date },
     perPage: 1,
   });
 
@@ -74,7 +74,7 @@ trendsRouter.get('/today', async (req, res) => {
 
   // Fetch the actual video records
   const videoRecords = await Promise.all(
-    videoIds.map((id) => pbGet(VIDEO_COL, id)),
+    videoIds.map((id) => store.getById(VIDEO_COL, id)),
   );
 
   res.json({
@@ -96,7 +96,7 @@ trendsRouter.patch('/:id/select', async (req, res) => {
     return;
   }
 
-  const record = await pbGet(COL, req.params.id);
+  const record = await store.getById(COL, req.params.id);
   if (!record || record.tenantId !== tenantId) {
     res.status(404).json({ error: 'Not found' });
     return;
@@ -109,7 +109,7 @@ trendsRouter.patch('/:id/select', async (req, res) => {
     return;
   }
 
-  await pbPatch(COL, req.params.id, {
+  await store.update(COL, req.params.id, {
     selectedIds: JSON.stringify(selectedIds),
     status: 'selected',
   });

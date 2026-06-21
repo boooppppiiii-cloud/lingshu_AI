@@ -16,6 +16,7 @@ import { agentChatRouter } from './routes/agentChat.js';
 import { channelsRouter } from './routes/channels.js';
 import { schedulerRouter, initScheduler } from './routes/scheduler.js';
 import { pluginsRouter } from './routes/plugins.js';
+import { studioRouter } from './routes/studio.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
@@ -48,6 +49,7 @@ app.use('/api/overseas/agents', agentChatRouter);
 app.use('/api/overseas/channels', channelsRouter);
 app.use('/api/overseas/scheduler', schedulerRouter);
 app.use('/api/overseas/plugins', pluginsRouter);
+app.use('/api/overseas/studio', studioRouter);
 
 initScheduler();
 

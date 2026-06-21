@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
-import { pbCreate, pbGet, pbPatch, pbList } from '../storage/pb.js';
+import { store } from '../storage/index.js';
 import { r2Upload, r2Download } from '../storage/r2.js';
 import { analyzeVideo } from '../agents/gemini.js';
 import type { Platform, VideoStatus } from '../types/index.js';
@@ -45,7 +45,7 @@ videosRouter.post('/ingest', async (req, res) => {
     }
   }
 
-  const record = await pbCreate(COL, {
+  const record = await store.create(COL, {
     tenantId,
     platform: platform ?? 'tiktok',
     title: title ?? '',
@@ -76,12 +76,12 @@ videosRouter.get('/', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
   const { page = '1', perPage = '20', platform, status } = req.query as Record<string, string>;
 
-  const filterParts = [`tenantId = "${tenantId}"`];
-  if (platform) filterParts.push(`platform = "${platform}"`);
-  if (status) filterParts.push(`status = "${status}"`);
+  const where: Record<string, string> = { tenantId };
+  if (platform) where.platform = platform;
+  if (status) where.status = status;
 
-  const result = await pbList(COL, {
-    filter: filterParts.join(' && '),
+  const result = await store.list(COL, {
+    where,
     sort: '-crawledAt',
     page: Number(page),
     perPage: Math.min(100, Number(perPage)),
@@ -93,7 +93,7 @@ videosRouter.get('/', async (req, res) => {
 // ─── GET /videos/:id ──────────────────────────────────────────────────────────
 videosRouter.get('/:id', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
-  const record = await pbGet(COL, req.params.id);
+  const record = await store.getById(COL, req.params.id);
 
   if (!record || record.tenantId !== tenantId) {
     res.status(404).json({ error: 'Not found' });
@@ -106,7 +106,7 @@ videosRouter.get('/:id', async (req, res) => {
 // ─── PATCH /videos/:id/reanalyze ─────────────────────────────────────────────
 videosRouter.patch('/:id/reanalyze', async (req, res) => {
   const { tenantId, userId } = res.locals as AuthLocals;
-  const record = await pbGet(COL, req.params.id);
+  const record = await store.getById(COL, req.params.id);
 
   if (!record || record.tenantId !== tenantId) {
     res.status(404).json({ error: 'Not found' });
@@ -119,7 +119,7 @@ videosRouter.patch('/:id/reanalyze', async (req, res) => {
     return;
   }
 
-  await pbPatch(COL, req.params.id, { status: 'pending', aiAnalysis: JSON.stringify({}) });
+  await store.update(COL, req.params.id, { status: 'pending', aiAnalysis: JSON.stringify({}) });
   void triggerVideoAnalysis(req.params.id, fileId, undefined, userId);
 
   res.json({ status: 'pending' });
@@ -133,7 +133,7 @@ async function triggerVideoAnalysis(
   _userId: string,
 ): Promise<void> {
   if (!fileId) {
-    await pbPatch(COL, recordId, { status: 'failed' });
+    await store.update(COL, recordId, { status: 'failed' });
     return;
   }
 
@@ -146,13 +146,13 @@ async function triggerVideoAnalysis(
       mimeType: mimeType ?? dl.contentType,
     });
 
-    await pbPatch(COL, recordId, {
+    await store.update(COL, recordId, {
       aiAnalysis: JSON.stringify(analysis),
       status: 'analyzed',
     });
     console.log(`[videos] analyzed ${recordId}`);
   } catch (e) {
     console.error(`[videos] analysis failed for ${recordId}:`, e);
-    await pbPatch(COL, recordId, { status: 'failed' });
+    await store.update(COL, recordId, { status: 'failed' });
   }
 }

@@ -1,5 +1,5 @@
 import type { Request, Response, NextFunction } from 'express';
-import { getTenantIdFromToken } from '../storage/pb.js';
+import { auth } from '../storage/index.js';
 
 export interface AuthLocals {
   userId: string;
@@ -12,7 +12,7 @@ export async function requireAuth(
   res: Response,
   next: NextFunction,
 ): Promise<void> {
-  const result = await getTenantIdFromToken(req.headers.authorization);
+  const result = await auth.verifyToken(req.headers.authorization);
   if (!result) {
     res.status(401).json({ error: 'Unauthorized' });
     return;

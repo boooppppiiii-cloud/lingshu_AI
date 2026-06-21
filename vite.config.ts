@@ -25,7 +25,8 @@ export default defineConfig(() => ({
     hmr: resolveHmr(),
     proxy: {
       '/api/overseas': {
-        target: 'http://127.0.0.1:8788',
+        // 8788 被 Cursor 的 lingqi-ai 扩展占用，本地后端改用 8790（与 .env 的 PORT 一致）
+        target: process.env.DEV_API_TARGET ?? 'http://127.0.0.1:8790',
         changeOrigin: true,
         timeout: 0,
         proxyTimeout: 0,

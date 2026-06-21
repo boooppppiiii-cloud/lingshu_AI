@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
-import { pbCreate, pbGet, pbPatch, pbDelete, pbList } from '../storage/pb.js';
+import { store } from '../storage/index.js';
 import {
   generateVoiceoverScript,
   generateStoryboardScript,
@@ -37,7 +37,7 @@ scriptsRouter.post('/generate', async (req, res) => {
     return;
   }
 
-  const videoRecord = await pbGet(VIDEO_COL, videoId);
+  const videoRecord = await store.getById(VIDEO_COL, videoId);
   if (!videoRecord || videoRecord.tenantId !== tenantId) {
     res.status(404).json({ error: 'Video not found' });
     return;
@@ -61,7 +61,7 @@ scriptsRouter.post('/generate', async (req, res) => {
         ? await generateVoiceoverScript({ analysis, language: language as Language, productInfo })
         : await generateStoryboardScript({ analysis, language: language as Language, productInfo });
 
-    const record = await pbCreate(COL, {
+    const record = await store.create(COL, {
       tenantId,
       userId,
       sourceVideoId: videoId,
@@ -94,7 +94,7 @@ scriptsRouter.post('/generate-from-product', async (req, res) => {
   if (!sourceScriptId) { res.status(400).json({ error: 'sourceScriptId is required' }); return; }
   if (!productInfo) { res.status(400).json({ error: 'productInfo is required' }); return; }
 
-  const sourceRecord = await pbGet(COL, sourceScriptId);
+  const sourceRecord = await store.getById(COL, sourceScriptId);
   if (!sourceRecord || sourceRecord.tenantId !== tenantId) {
     res.status(404).json({ error: 'Source script not found' });
     return;
@@ -111,7 +111,7 @@ scriptsRouter.post('/generate-from-product', async (req, res) => {
       language: targetLang,
     });
 
-    const record = await pbCreate(COL, {
+    const record = await store.create(COL, {
       tenantId,
       userId,
       sourceVideoId: sourceRecord.sourceVideoId ?? '',
@@ -136,12 +136,12 @@ scriptsRouter.get('/', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
   const { page = '1', perPage = '20', type, status } = req.query as Record<string, string>;
 
-  const filterParts = [`tenantId = "${tenantId}"`];
-  if (type) filterParts.push(`type = "${type}"`);
-  if (status) filterParts.push(`status = "${status}"`);
+  const where: Record<string, string> = { tenantId };
+  if (type) where.type = type;
+  if (status) where.status = status;
 
-  const result = await pbList(COL, {
-    filter: filterParts.join(' && '),
+  const result = await store.list(COL, {
+    where,
     sort: '-createdAt',
     page: Number(page),
     perPage: Math.min(100, Number(perPage)),
@@ -153,7 +153,7 @@ scriptsRouter.get('/', async (req, res) => {
 // ─── GET /scripts/:id ─────────────────────────────────────────────────────────
 scriptsRouter.get('/:id', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
-  const record = await pbGet(COL, req.params.id);
+  const record = await store.getById(COL, req.params.id);
 
   if (!record || record.tenantId !== tenantId) {
     res.status(404).json({ error: 'Not found' });
@@ -166,7 +166,7 @@ scriptsRouter.get('/:id', async (req, res) => {
 // Body: { content?, status? }
 scriptsRouter.patch('/:id', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
-  const record = await pbGet(COL, req.params.id);
+  const record = await store.getById(COL, req.params.id);
 
   if (!record || record.tenantId !== tenantId) {
     res.status(404).json({ error: 'Not found' });
@@ -183,21 +183,21 @@ scriptsRouter.patch('/:id', async (req, res) => {
     return;
   }
 
-  await pbPatch(COL, req.params.id, update);
+  await store.update(COL, req.params.id, update);
   res.json({ ok: true });
 });
 
 // ─── DELETE /scripts/:id ──────────────────────────────────────────────────────
 scriptsRouter.delete('/:id', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
-  const record = await pbGet(COL, req.params.id);
+  const record = await store.getById(COL, req.params.id);
 
   if (!record || record.tenantId !== tenantId) {
     res.status(404).json({ error: 'Not found' });
     return;
   }
 
-  await pbDelete(COL, req.params.id);
+  await store.delete(COL, req.params.id);
   res.json({ ok: true });
 });
 
@@ -212,7 +212,7 @@ scriptsRouter.post('/:id/translate', async (req, res) => {
     return;
   }
 
-  const record = await pbGet(COL, req.params.id);
+  const record = await store.getById(COL, req.params.id);
   if (!record || record.tenantId !== tenantId) {
     res.status(404).json({ error: 'Not found' });
     return;
@@ -225,7 +225,7 @@ scriptsRouter.post('/:id/translate', async (req, res) => {
       targetLanguage,
     });
 
-    const newRecord = await pbCreate(COL, {
+    const newRecord = await store.create(COL, {
       tenantId,
       userId,
       sourceVideoId: record.sourceVideoId ?? '',

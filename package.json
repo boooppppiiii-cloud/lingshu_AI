@@ -6,14 +6,17 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "dev:server": "tsx watch server/index.ts",
+    "dev:server": "NODE_USE_ENV_PROXY=1 tsx watch server/index.ts",
     "build": "vite build",
     "preview": "vite preview",
-    "start": "NODE_ENV=production tsx server/index.ts",
+    "start": "NODE_ENV=production NODE_USE_ENV_PROXY=1 tsx server/index.ts",
+    "setup:pb": "tsx scripts/setup-pb.ts",
+    "desktop": "electron desktop/main.cjs",
     "lint": "tsc --noEmit"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1070.0",
+    "ffmpeg-static": "^5.2.0",
     "@google/genai": "^1.29.0",
     "@tailwindcss/vite": "^4.3.1",
     "@vitejs/plugin-react": "^6.0.2",
@@ -36,6 +39,7 @@
     "@types/node-cron": "^3.0.11",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
+    "electron": "^33.0.0",
     "tsx": "^4.21.0",
     "typescript": "~5.8.2"
   }

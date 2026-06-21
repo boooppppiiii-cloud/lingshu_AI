@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
-import { pbCreate, pbGet, pbPatch, pbList } from '../storage/pb.js';
+import { store } from '../storage/index.js';
 import { generateImagePrompt } from '../agents/gemini.js';
 import type { AssetType, StoryboardContent } from '../types/index.js';
 
@@ -27,7 +27,7 @@ assetsRouter.post('/generate', async (req, res) => {
     return;
   }
 
-  const scriptRecord = await pbGet(SCRIPT_COL, scriptId);
+  const scriptRecord = await store.getById(SCRIPT_COL, scriptId);
   if (!scriptRecord || scriptRecord.tenantId !== tenantId) {
     res.status(404).json({ error: 'Script not found' });
     return;
@@ -52,7 +52,7 @@ assetsRouter.post('/generate', async (req, res) => {
   }
 
   // Create asset record in "generating" state
-  const record = await pbCreate(COL, {
+  const record = await store.create(COL, {
     tenantId,
     scriptId,
     sceneIndex,
@@ -83,14 +83,14 @@ assetsRouter.post('/generate', async (req, res) => {
 assetsRouter.get('/:scriptId', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
 
-  const scriptRecord = await pbGet(SCRIPT_COL, req.params.scriptId);
+  const scriptRecord = await store.getById(SCRIPT_COL, req.params.scriptId);
   if (!scriptRecord || scriptRecord.tenantId !== tenantId) {
     res.status(404).json({ error: 'Script not found' });
     return;
   }
 
-  const result = await pbList(COL, {
-    filter: `tenantId = "${tenantId}" && scriptId = "${req.params.scriptId}"`,
+  const result = await store.list(COL, {
+    where: { tenantId, scriptId: req.params.scriptId },
     sort: 'sceneIndex',
     perPage: 100,
   });
@@ -111,7 +111,7 @@ async function generateAssetAsync(
     // Update record with prompt; actual image/video generation would call
     // an external image/video generation API here (e.g. Imagen, Runway).
     // For now we store the prompt and mark as done to signal the frontend.
-    await pbPatch(COL, recordId, {
+    await store.update(COL, recordId, {
       prompt,
       status: 'done',
     });
@@ -119,6 +119,6 @@ async function generateAssetAsync(
     console.log(`[assets] generated prompt for ${recordId} (${type})`);
   } catch (e) {
     console.error(`[assets] generation failed for ${recordId}:`, e);
-    await pbPatch(COL, recordId, { status: 'failed' });
+    await store.update(COL, recordId, { status: 'failed' });
   }
 }

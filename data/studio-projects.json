@@ -1,0 +1,35 @@
+[
+  {
+    "id": "72dbcd66-1f3c-438e-8986-eadf73daef3d",
+    "title": "未命名草稿",
+    "status": "published",
+    "spec": {
+      "mode": "product",
+      "platform": "tiktok",
+      "ratio": "9:16",
+      "duration": 20,
+      "lang": "en",
+      "selected": [
+        "c1",
+        "c2",
+        "c4"
+      ],
+      "script": "[Hook · 0-3s]\nStop scrolling — this is the one everyone keeps asking about.\n\n[Body · 3-15s]\nStraight from our factory, this product delivers premium quality at factory-direct prices, shipped worldwide in 24 hours. Thousands of buyers already made the switch.\n\n[CTA · 15-20s]\nTap the link to grab yours before they sell out again.",
+      "scriptType": "voiceover",
+      "voice": "v1",
+      "bgm": "b1",
+      "bgmVol": 35,
+      "cover": "cv1",
+      "coverTitles": [
+        "You NEED this in 2026",
+        "Factory price, 24h ship",
+        "Why everyone is obsessed"
+      ],
+      "account": "a1",
+      "caption": "Factory-direct home essentials 🏠✨ #tiktokmademebuyit #homefinds"
+    },
+    "thumbSeed": "cv1",
+    "createdAt": "2026-06-21T12:12:48.713Z",
+    "updatedAt": "2026-06-21T12:12:48.713Z"
+  }
+]

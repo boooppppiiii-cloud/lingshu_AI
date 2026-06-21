@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Zap, MessageSquare, LayoutGrid } from 'lucide-react';
+import { Zap, MessageSquare, LayoutGrid, Wand2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import InspirationDashboard from './InspirationDashboard';
+import AiCreateStudio from './AiCreateStudio';
 import type { ConversationContext } from '../App';
 
-type ViewMode = 'dashboard' | 'chat';
+type ViewMode = 'dashboard' | 'create' | 'chat';
 
 interface Props {
   onEnterConversation: (ctx: ConversationContext) => void;
@@ -41,6 +42,7 @@ export default function TrafficPage({ onEnterConversation, isInConversation }: P
           <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-surface-2 border border-border">
             {([
               { mode: 'dashboard' as ViewMode, icon: <LayoutGrid size={12} />, label: '素材库' },
+              { mode: 'create' as ViewMode,    icon: <Wand2 size={12} />, label: 'AI 生成' },
               { mode: 'chat' as ViewMode,      icon: <MessageSquare size={12} />, label: '对话' },
             ]).map(({ mode, icon, label }) => (
               <button key={mode}
@@ -59,6 +61,10 @@ export default function TrafficPage({ onEnterConversation, isInConversation }: P
           {viewMode === 'dashboard' ? (
             <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full overflow-y-auto">
               <InspirationDashboard />
+            </motion.div>
+          ) : viewMode === 'create' ? (
+            <motion.div key="create" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
+              <AiCreateStudio />
             </motion.div>
           ) : (
             <motion.div key="chat" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
