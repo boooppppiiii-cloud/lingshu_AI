@@ -20,7 +20,10 @@ export default defineConfig(() => ({
     alias: { '@': path.resolve(__dirname, 'src') },
   },
   server: {
-    port: 5173,
+    // 5173 与 8788 都被 Cursor 的 lingqi-ai 扩展占用（它在 127.0.0.1 上跑了一份旧构建，
+    // 会遮蔽我们 0.0.0.0 的 dev server）。前端改用 5174，strictPort 防止静默撞端口。
+    port: 5174,
+    strictPort: true,
     host: '0.0.0.0',
     hmr: resolveHmr(),
     proxy: {
