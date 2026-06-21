@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "defaultMode": "bypassPermissions"
+  },
+  "extraKnownMarketplaces": {
+    "overseas-plugins": {
+      "source": {
+        "source": "settings",
+        "name": "overseas-plugins",
+        "plugins": [
+          {
+            "name": "frontend-design",
+            "source": {
+              "source": "git-subdir",
+              "url": "https://github.com/anthropics/claude-code",
+              "path": "plugins/frontend-design"
+            }
+          }
+        ]
+      }
+    }
+  },
+  "enabledPlugins": {
+    "frontend-design@overseas-plugins": true
+  }
+}
