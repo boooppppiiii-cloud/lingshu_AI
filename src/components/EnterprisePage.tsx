@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { Building2, Package, Megaphone, BookOpen, Save, CheckCircle2, Loader2, Compass, Zap, MessageSquare, RefreshCw } from 'lucide-react';
+import { Building2, Package, Megaphone, BookOpen, Save, CheckCircle2, Loader2, Compass, Zap, MessageSquare, RefreshCw, RotateCcw } from 'lucide-react';
 
 interface Profile {
   company: { name: string; industry: string; mainMarkets: string; founded: string; description: string };
@@ -23,6 +23,8 @@ const AGENTS = [
   { icon: RefreshCw, label: '留存专家', color: '#16a34a' },
 ];
 
+interface DemoTemplate { id: string; name: string; description: string }
+
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
     <div>
@@ -41,6 +43,9 @@ export default function EnterprisePage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [templates, setTemplates] = useState<DemoTemplate[]>([]);
+  const [templateId, setTemplateId] = useState('');
+  const [demoBusy, setDemoBusy] = useState(false);
 
   useEffect(() => {
     fetch('/api/overseas/enterprise/profile')
@@ -55,6 +60,13 @@ export default function EnterprisePage() {
       })
       .catch(() => {})
       .finally(() => setLoading(false));
+    fetch('/api/overseas/enterprise/demo/templates')
+      .then(r => r.json())
+      .then((list: DemoTemplate[]) => {
+        setTemplates(Array.isArray(list) ? list : []);
+        if (Array.isArray(list) && list[0]) setTemplateId(list[0].id);
+      })
+      .catch(() => {});
   }, []);
 
   const set = <K extends keyof Profile>(section: K) =>
@@ -73,6 +85,33 @@ export default function EnterprisePage() {
       setTimeout(() => setSaved(false), 2500);
     } finally {
       setSaving(false);
+    }
+  };
+
+  const applyTemplate = async () => {
+    if (!templateId) return;
+    setDemoBusy(true);
+    try {
+      const r = await fetch(`/api/overseas/enterprise/demo/templates/${templateId}/apply`, { method: 'POST' });
+      const j = await r.json();
+      if (j.profile) setProfile(j.profile);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } finally {
+      setDemoBusy(false);
+    }
+  };
+
+  const resetDemo = async () => {
+    setDemoBusy(true);
+    try {
+      const r = await fetch('/api/overseas/enterprise/demo/reset', { method: 'POST' });
+      const j = await r.json();
+      if (j.profile) setProfile(j.profile);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } finally {
+      setDemoBusy(false);
     }
   };
 
@@ -125,6 +164,29 @@ export default function EnterprisePage() {
               </div>
             </div>
           </div>
+
+          <section className="card p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-text-primary">Demo 模板</p>
+                <p className="text-[11px] text-text-muted mt-0.5">当前只保留占位行业结构，等补充行业资料后可直接替换模板内容。</p>
+              </div>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <select className={inputCls} value={templateId} onChange={e => setTemplateId(e.target.value)}>
+                  {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+                <button onClick={applyTemplate} disabled={!templateId || demoBusy}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold text-white disabled:opacity-50"
+                  style={{ background: '#0f172a' }}>
+                  {demoBusy ? <Loader2 size={12} className="animate-spin" /> : <BookOpen size={12} />}加载
+                </button>
+                <button onClick={resetDemo} disabled={demoBusy}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border border-border text-text-secondary hover:text-text-primary disabled:opacity-50">
+                  <RotateCcw size={12} />重置
+                </button>
+              </div>
+            </div>
+          </section>
 
           {/* Company Info */}
           <section className="card p-5 space-y-4">

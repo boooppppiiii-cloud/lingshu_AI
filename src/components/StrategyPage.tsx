@@ -4,6 +4,7 @@ import { Compass, ArrowUp, Loader2, Sparkles, LayoutGrid, MessageSquare, X, BarC
 import AgentWorkspace from './AgentWorkspace';
 import StrategyDataBoard from './StrategyDataBoard';
 import AgentReply from './AgentReply';
+import { authHeader } from '../lib/auth';
 import type { ConversationContext, Message, RestoreSignal, KickoffSignal, AgentAction } from '../App';
 
 type ViewMode = 'chat' | 'workspace' | 'board';
@@ -49,11 +50,16 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
     try {
       const resp = await fetch('/api/overseas/strategy/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeader() },
         body: JSON.stringify({ messages: nextMessages }),
       });
 
-      if (!resp.ok || !resp.body) throw new Error('API error');
+      if (!resp.ok || !resp.body) {
+        const err = await resp.json().catch(() => ({}));
+        if (resp.status === 402 || err.error === 'demo_expired') throw new Error('Demo 试用已到期，请联系团队开通正式版或延长试用。');
+        if (resp.status === 429 || err.error === 'demo_quota_exceeded') throw new Error('今日 Demo 额度已用完，请明天再试或联系团队开通正式版。');
+        throw new Error('API error');
+      }
 
       setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
       setLoading(false);
@@ -97,8 +103,8 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
           } catch { /* malformed chunk */ }
         }
       }
-    } catch {
-      setMessages(prev => [...prev, { role: 'assistant', content: '抱歉，请求失败，请稍后重试。' }]);
+    } catch (err: any) {
+      setMessages(prev => [...prev, { role: 'assistant', content: err?.message || '抱歉，请求失败，请稍后重试。' }]);
       setLoading(false);
     }
   };

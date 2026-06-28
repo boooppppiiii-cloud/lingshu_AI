@@ -16,6 +16,7 @@ import {
   isSubscriptionEnforced,
 } from '../middleware/subscription.js';
 import { signRenderToken } from '../lib/renderToken.js';
+import { consumeDemoQuota } from '../lib/demo.js';
 
 /* ──────────────────────────────────────────────────────────────────────────
    Studio 路由 —— 服务于「社媒 / AI 生成内容」混剪工作台
@@ -98,6 +99,7 @@ studioRouter.use(entitlementGate());
 /* ── ③ 口播脚本 ────────────────────────────────────────────────────────── */
 // POST /studio/script  Body: { materials?, productInfo?, language?, platform?, duration? }
 studioRouter.post('/script', async (req, res) => {
+  if (!await consumeDemoQuota(req, res, 'generation')) return;
   const { materials = [], productInfo = '', language = 'en', platform = 'tiktok', duration = 20, scriptType = 'voiceover' } = req.body ?? {};
   const lang = langName(language);
   const clips = (materials as string[]).join(', ') || '(generic product clips)';
@@ -140,6 +142,7 @@ Requirements:
 /* ── ⑤ 封面标题候选 ────────────────────────────────────────────────────── */
 // POST /studio/covers  Body: { script?, productInfo?, language? }
 studioRouter.post('/covers', async (req, res) => {
+  if (!await consumeDemoQuota(req, res, 'generation')) return;
   const { script = '', productInfo = '', language = 'en' } = req.body ?? {};
   const lang = langName(language);
 
@@ -163,6 +166,7 @@ Return ONLY a JSON array of 3 strings. No other text.`;
 /* ── ⑦ 发布文案 + 话题标签 ─────────────────────────────────────────────── */
 // POST /studio/caption  Body: { script?, productInfo?, platform?, language? }
 studioRouter.post('/caption', async (req, res) => {
+  if (!await consumeDemoQuota(req, res, 'generation')) return;
   const { script = '', productInfo = '', platform = 'tiktok', language = 'en' } = req.body ?? {};
   const lang = langName(language);
 
@@ -186,6 +190,7 @@ Return ONLY JSON: { "caption": string (1-2 sentences, may include 1-2 emojis), "
 /* ── 文本翻译（默认译成简体中文，给用户确认外语文案） ───────────────────── */
 // POST /studio/translate  Body: { text, target?, source? }
 studioRouter.post('/translate', async (req, res) => {
+  if (!await consumeDemoQuota(req, res, 'generation')) return;
   const { text = '', target = 'zh' } = req.body ?? {};
   const src = String(text).trim();
   if (!src) { res.json({ ok: true, source: 'noop', text: '' }); return; }
@@ -205,6 +210,7 @@ Text: ${src}`;
 /* ── 数据看板 AI 结论 ──────────────────────────────────────────────────── */
 // POST /studio/insight  Body: { scope, metrics } → { summary, actions[] }
 studioRouter.post('/insight', async (req, res) => {
+  if (!await consumeDemoQuota(req, res, 'generation')) return;
   const { scope = 'traffic', metrics = {} } = req.body ?? {};
   const prompt = `你是跨境电商社媒操盘手。根据以下「${scope}」当期数据（JSON），给运营一句中文洞察 + 2-3 条可执行建议。
 数据：${JSON.stringify(metrics)}
@@ -225,6 +231,7 @@ studioRouter.post('/insight', async (req, res) => {
 /* ── ② AI 智能选材 ─────────────────────────────────────────────────────── */
 // POST /studio/select  Body: { materials: {id,name,type,duration}[], duration? }
 studioRouter.post('/select', async (req, res) => {
+  if (!await consumeDemoQuota(req, res, 'generation')) return;
   const { materials = [], duration = 20 } = req.body ?? {};
   const list = materials as { id: string; name: string; type: string; duration: number }[];
 
@@ -314,7 +321,8 @@ function buildManifest(jobId: string, spec: RenderSpec, base: string): RenderMan
 }
 
 // POST /studio/render  Body: RenderSpec → { ok, token, expiresAt, manifest }
-studioRouter.post('/render', (req, res) => {
+studioRouter.post('/render', async (req, res) => {
+  if (!await consumeDemoQuota(req, res, 'render')) return;
   const spec = (req.body ?? {}) as RenderSpec;
   const jobId = randomUUID();
   const base = `${req.protocol}://${req.get('host')}`;
@@ -600,7 +608,8 @@ function inlineFrame(bgImageUrl?: string): string | undefined {
 }
 
 // POST /studio/cover  Body: { title, ratio?, accent?, bgImageUrl?, color?, size?, position?, align? } → { ok, url }
-studioRouter.post('/cover', (req, res) => {
+studioRouter.post('/cover', async (req, res) => {
+  if (!await consumeDemoQuota(req, res, 'generation')) return;
   const { title = '', ratio = '9:16', accent = '#d97706', bgImageUrl, color, size, position, align, font } = req.body ?? {};
   try {
     fs.mkdirSync(COVERS_DIR, { recursive: true });
@@ -664,6 +673,7 @@ function wavFromPcm(pcm: Buffer, sampleRate: number, channels = 1, bits = 16): B
 
 // POST /studio/tts  Body: { script?, text?, voice?, language? } → { ok, url, duration }
 studioRouter.post('/tts', async (req, res) => {
+  if (!await consumeDemoQuota(req, res, 'generation')) return;
   const { script = '', text = '', voice = 'v1' } = req.body ?? {};
   const spoken = (text || spokenText(script)).trim();
   if (!spoken) { res.status(400).json({ ok: false, error: 'no spoken text' }); return; }

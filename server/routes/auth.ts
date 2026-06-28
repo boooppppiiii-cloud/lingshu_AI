@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { getPbUrl, pbCreate, pbGet } from '../storage/pb.js';
 import { auth } from '../storage/index.js';
 import { getTenantSubscription } from '../middleware/subscription.js';
+import { buildDemoStatus, demoTrialExpiresAt } from '../lib/demo.js';
 
 /* ──────────────────────────────────────────────────────────────────────────
    账号 / 登录（基于 PocketBase）
@@ -50,7 +51,7 @@ authRouter.post('/register', async (req, res) => {
   if (String(password).length < 8) { res.status(400).json({ error: '密码至少 8 位' }); return; }
 
   const now = new Date();
-  const expiresAt = new Date(now.getTime() + 14 * 24 * 3600 * 1000).toISOString(); // 14 天试用
+  const expiresAt = demoTrialExpiresAt(now);
   const tenant = await pbCreate('tenants', {
     name: companyName || String(email).split('@')[0],
     subscriptionStatus: 'trialing',
@@ -87,9 +88,11 @@ authRouter.get('/me', async (req, res) => {
   if (!id) { res.status(401).json({ error: 'Unauthorized' }); return; }
   const [user, tenant] = await Promise.all([pbGet('users', id.userId), pbGet('tenants', id.tenantId)]);
   const subscription = await getTenantSubscription(id.tenantId);
+  const demo = await buildDemoStatus(req, id.tenantId, subscription.expiresAt);
   res.json({
     user: user ? publicUser(user as unknown as PbUser) : { id: id.userId, email: '', name: '', tenantId: id.tenantId },
     tenant: publicTenant(tenant),
     subscription,
+    demo,
   });
 });

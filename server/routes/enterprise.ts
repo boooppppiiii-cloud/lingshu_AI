@@ -2,9 +2,12 @@ import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { resetDemoUsage } from '../lib/demo.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_FILE = path.join(__dirname, '../../data/enterprise.json');
+const TEMPLATES_FILE = path.join(__dirname, '../../data/demo-templates.json');
+const DATA_DIR = path.join(__dirname, '../../data');
 
 export interface EnterpriseProfile {
   company: {
@@ -44,6 +47,25 @@ function readProfile(): EnterpriseProfile {
   }
 }
 
+interface DemoTemplate {
+  id: string;
+  name: string;
+  description: string;
+  profile: EnterpriseProfile;
+}
+
+function readTemplates(): DemoTemplate[] {
+  try {
+    return JSON.parse(fs.readFileSync(TEMPLATES_FILE, 'utf8')) as DemoTemplate[];
+  } catch {
+    return [];
+  }
+}
+
+function writeJson(file: string, value: unknown): void {
+  fs.writeFileSync(path.join(DATA_DIR, file), JSON.stringify(value, null, 2), 'utf8');
+}
+
 export function buildEnterpriseContext(profile: EnterpriseProfile): string {
   const parts: string[] = [];
   if (profile.company.name) parts.push(`公司名称：${profile.company.name}`);
@@ -76,4 +98,26 @@ enterpriseRouter.post('/profile', (req, res) => {
 enterpriseRouter.get('/context', (_req, res) => {
   const profile = readProfile();
   res.json({ context: buildEnterpriseContext(profile) });
+});
+
+enterpriseRouter.get('/demo/templates', (_req, res) => {
+  res.json(readTemplates().map(({ id, name, description }) => ({ id, name, description })));
+});
+
+enterpriseRouter.post('/demo/templates/:id/apply', (req, res) => {
+  const template = readTemplates().find(t => t.id === req.params.id);
+  if (!template) { res.status(404).json({ error: 'template not found' }); return; }
+  fs.writeFileSync(DATA_FILE, JSON.stringify(template.profile, null, 2), 'utf8');
+  res.json({ ok: true, profile: template.profile });
+});
+
+enterpriseRouter.post('/demo/reset', (_req, res) => {
+  const template = readTemplates()[0];
+  if (template) fs.writeFileSync(DATA_FILE, JSON.stringify(template.profile, null, 2), 'utf8');
+  writeJson('channels.json', []);
+  writeJson('plugins.json', []);
+  writeJson('tasks.json', []);
+  writeJson('studio-projects.json', []);
+  resetDemoUsage();
+  res.json({ ok: true, profile: template?.profile ?? readProfile() });
 });

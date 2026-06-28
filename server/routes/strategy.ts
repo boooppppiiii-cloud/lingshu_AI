@@ -5,6 +5,7 @@ import { enterpriseRouter as _er, buildEnterpriseContext } from './enterprise.js
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { consumeDemoQuota } from '../lib/demo.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENTERPRISE_FILE = path.join(__dirname, '../../data/enterprise.json');
@@ -66,6 +67,7 @@ strategyRouter.post('/chat', async (req, res) => {
     res.status(400).json({ error: 'messages required' });
     return;
   }
+  if (!await consumeDemoQuota(req, res, 'aiChat')) return;
 
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
@@ -96,6 +98,7 @@ strategyRouter.post('/plan', async (req, res) => {
     res.status(400).json({ error: 'productName, category, targetMarket are required' });
     return;
   }
+  if (!await consumeDemoQuota(req, res, 'generation')) return;
 
   try {
     const prompt = buildStrategyPrompt({ productName, category, targetMarket, budget, competitors, advantages });

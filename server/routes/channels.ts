@@ -7,6 +7,7 @@ import { getBotInfo, sendTelegramMessage } from '../integrations/telegram.js';
 import { testDingTalk } from '../integrations/dingtalk.js';
 import { testFeishu } from '../integrations/feishu.js';
 import { getShopInfo, testShopify } from '../integrations/shopify.js';
+import { isDemoMode } from '../lib/demo.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA = path.join(__dirname, '../../data/channels.json');
@@ -71,6 +72,19 @@ channelsRouter.post('/:id/test', async (req: Request, res: Response) => {
   if (!channel) { res.status(404).json({ error: 'not found' }); return; }
   const cfg = channel.config;
 
+  if (isDemoMode()) {
+    const channels = load();
+    const idx = channels.findIndex(c => c.id === req.params.id);
+    if (idx !== -1) {
+      channels[idx].status = 'connected';
+      channels[idx].connectedAt = new Date().toISOString();
+      channels[idx].enabled = true;
+      save(channels);
+    }
+    res.json({ ok: true, source: 'demo', info: { message: 'Demo 模式：已模拟连接成功，真实授权由平台集成模块接入。' } });
+    return;
+  }
+
   try {
     switch (channel.type) {
       case 'whatsapp': {
@@ -125,6 +139,18 @@ channelsRouter.post('/:id/send', async (req: Request, res: Response) => {
   if (!channel) { res.status(404).json({ error: 'not found' }); return; }
   const { to, text } = req.body;
   const cfg = channel.config;
+
+  if (isDemoMode()) {
+    const channels = load();
+    const idx = channels.findIndex(c => c.id === req.params.id);
+    if (idx !== -1) {
+      channels[idx].stats.sent++;
+      channels[idx].lastActivity = new Date().toISOString();
+      save(channels);
+    }
+    res.json({ ok: true, source: 'demo', messageId: `demo_msg_${Date.now()}`, to, text });
+    return;
+  }
 
   try {
     switch (channel.type) {

@@ -18,6 +18,8 @@ import { schedulerRouter, initScheduler } from './routes/scheduler.js';
 import { pluginsRouter } from './routes/plugins.js';
 import { studioRouter } from './routes/studio.js';
 import { authRouter } from './routes/auth.js';
+import { platformIntegrationsRouter } from './routes/platformIntegrations.js';
+import { isDemoMode, demoLimits } from './lib/demo.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
@@ -34,7 +36,7 @@ app.use(compression({
 app.use(express.json({ limit: '50mb' }));
 
 app.get('/api/overseas/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'overseas-marketing-agent', port: PORT });
+  res.json({ status: 'ok', service: 'overseas-marketing-agent', port: PORT, demoMode: isDemoMode(), demoLimits: demoLimits() });
 });
 
 // Legacy routes (stub → to be implemented separately)
@@ -55,6 +57,7 @@ app.use('/api/overseas/scheduler', schedulerRouter);
 app.use('/api/overseas/plugins', pluginsRouter);
 app.use('/api/overseas/auth', authRouter);
 app.use('/api/overseas/studio', studioRouter);
+app.use('/api/overseas/platform-integrations', platformIntegrationsRouter);
 
 initScheduler();
 

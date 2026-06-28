@@ -8,9 +8,14 @@ async function post<T>(path: string, body: unknown, fallback: T): Promise<T & { 
       headers: { 'Content-Type': 'application/json', ...authHeader() },
       body: JSON.stringify(body),
     });
+    if (r.status === 402 || r.status === 429) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error === 'demo_expired' ? 'Demo 试用已到期，请联系团队开通正式版或延长试用。' : '今日 Demo 额度已用完，请明天再试或联系团队开通正式版。');
+    }
     if (!r.ok) throw new Error(String(r.status));
     return (await r.json()) as T & { source?: string };
-  } catch {
+  } catch (err: any) {
+    if (String(err?.message || '').includes('Demo')) throw err;
     return { ...fallback, source: 'local' };
   }
 }
@@ -161,9 +166,14 @@ export const studioApi = {
         headers: { 'Content-Type': 'application/json', ...authHeader() },
         body: JSON.stringify(spec),
       });
+      if (r.status === 402 || r.status === 429) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error === 'demo_expired' ? 'Demo 试用已到期，请联系团队开通正式版或延长试用。' : '今日 Demo 视频预览额度已用完，请明天再试或联系团队开通正式版。');
+      }
       if (!r.ok) throw new Error(String(r.status));
       return (await r.json()) as RenderAuthorization;
-    } catch {
+    } catch (err: any) {
+      if (String(err?.message || '').includes('Demo')) throw err;
       return { source: 'local', token: null, expiresAt: null, manifest: localManifest(spec) };
     }
   },

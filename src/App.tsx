@@ -138,6 +138,22 @@ export default function App() {
     );
   }
   if (!session) return <AuthScreen onAuthed={setSession} />;
+  if (session.demo?.enabled && session.demo.expired) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-surface-2 px-6">
+        <div className="w-full max-w-md rounded-2xl bg-white border border-border p-6 text-center shadow-sm">
+          <p className="text-sm font-bold text-text-primary">Demo 试用已到期</p>
+          <p className="text-sm text-text-muted mt-2 leading-relaxed">
+            当前试用账号已超过 {session.demo.trialDays} 天有效期。请联系团队开通正式版或延长试用。
+          </p>
+          <button onClick={handleLogout}
+            className="mt-5 px-4 py-2 rounded-lg bg-text-primary text-white text-sm font-semibold">
+            退出登录
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <Layout page={page} onNavigate={handleNavigate} conversation={conversation} session={session} onLogout={handleLogout}

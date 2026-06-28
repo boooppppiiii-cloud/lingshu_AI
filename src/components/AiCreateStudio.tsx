@@ -447,6 +447,7 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
     setRenderPct(0);
     setRenderOutputPath(null);
     const token = ++renderToken.current;
+    try {
 
     // 生成发布封面 SVG（缩略图）：选中帧作底图，否则品牌渐变；带标题样式
     const cv = await studioApi.cover({ title: coverTitle, ratio, accent: '#d97706', bgImageUrl: coverFrameUrl, ...coverStyle });
@@ -511,6 +512,13 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
     setRendering(false);
     setRendered(true);
     setRenderPct(100);
+    } catch (err: any) {
+      if (renderToken.current === token) {
+        setRendering(false);
+        setRendered(false);
+        alert(err?.message || '成片预览失败，请稍后重试。');
+      }
+    }
   };
 
   const next = () => {
@@ -521,11 +529,16 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
 
   const regenScript = async (type: 'voiceover' | 'storyboard' = scriptType) => {
     setScriptLoading(true);
-    const { script: s } = await studioApi.script(
-      { materials: matNames, language: lang, platform, duration, scriptType: type }, script,
-    );
-    setScript(s);
-    setScriptLoading(false);
+    try {
+      const { script: s } = await studioApi.script(
+        { materials: matNames, language: lang, platform, duration, scriptType: type }, script,
+      );
+      setScript(s);
+    } catch (err: any) {
+      alert(err?.message || '脚本生成失败，请稍后重试。');
+    } finally {
+      setScriptLoading(false);
+    }
   };
 
   // 首次进入「口播脚本」步时自动生成一次
@@ -631,13 +644,18 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
 
   const aiCaption = async () => {
     setCaptionLoading(true);
-    const { caption: cap, hashtags } = await studioApi.caption(
-      { script, platform, language: lang },
-      { caption, hashtags: [] },
-    );
-    const tags = (hashtags ?? []).map(t => `#${t.replace(/^#/, '')}`).join(' ');
-    setCaption(tags ? `${cap} ${tags}` : cap);
-    setCaptionLoading(false);
+    try {
+      const { caption: cap, hashtags } = await studioApi.caption(
+        { script, platform, language: lang },
+        { caption, hashtags: [] },
+      );
+      const tags = (hashtags ?? []).map(t => `#${t.replace(/^#/, '')}`).join(' ');
+      setCaption(tags ? `${cap} ${tags}` : cap);
+    } catch (err: any) {
+      alert(err?.message || '发布文案生成失败，请稍后重试。');
+    } finally {
+      setCaptionLoading(false);
+    }
   };
 
   /* ── 素材库：拉取真实素材，真实的排在 mock 前面 ──────────────────────── */
@@ -714,9 +732,14 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
   const genTts = async () => {
     setTtsLoading(true);
     setVoiceoverUrl(null);
-    const r = await studioApi.tts({ script, voice, language: lang });
-    if (r.ok && r.url) { setVoiceoverUrl(r.url); setVoiceoverDur(r.duration ?? 0); }
-    setTtsLoading(false);
+    try {
+      const r = await studioApi.tts({ script, voice, language: lang });
+      if (r.ok && r.url) { setVoiceoverUrl(r.url); setVoiceoverDur(r.duration ?? 0); }
+    } catch (err: any) {
+      alert(err?.message || '配音生成失败，请稍后重试。');
+    } finally {
+      setTtsLoading(false);
+    }
   };
   const toggleTts = () => {
     const el = ttsAudioRef.current;
@@ -1277,6 +1300,9 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
                     )}
                   </div>
                 )}
+                <div className="absolute top-2 left-2 z-10 rounded-md bg-black/55 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-white pointer-events-none">
+                  Demo Preview
+                </div>
                 {previewIdx !== null && (
                   <button onClick={stopPreview} className="absolute top-2 right-2 z-10 w-7 h-7 rounded-full bg-black/55 flex items-center justify-center text-white">
                     <X size={14} />

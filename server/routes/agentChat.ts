@@ -4,6 +4,7 @@ import { buildEnterpriseContext } from './enterprise.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { consumeDemoQuota } from '../lib/demo.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENTERPRISE_FILE = path.join(__dirname, '../../data/enterprise.json');
@@ -84,6 +85,7 @@ agentChatRouter.post('/:agentType/chat', async (req, res) => {
 
   const basePrompt = SYSTEM_PROMPTS[agentType];
   if (!basePrompt) { res.status(404).json({ error: `Unknown agent: ${agentType}` }); return; }
+  if (!await consumeDemoQuota(req, res, 'aiChat')) return;
 
   const enterpriseCtx = getEnterpriseContext();
   const systemPrompt = enterpriseCtx

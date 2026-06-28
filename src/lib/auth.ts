@@ -22,6 +22,16 @@ export interface AuthSession {
   user: AuthUser;
   tenant: AuthTenant | null;
   subscription?: { status: string; plan: string | null; expiresAt: string | null };
+  demo?: {
+    enabled: boolean;
+    trialDays: number;
+    expiresAt: string | null;
+    daysRemaining: number | null;
+    expired: boolean;
+    limits: { trialDays: number; aiChatDaily: number; generationDaily: number; renderDaily: number };
+    usage: { aiChat: number; generation: number; render: number };
+    remaining: { aiChat: number; generation: number; render: number };
+  };
 }
 
 async function call(path: string, body: unknown): Promise<{ token: string; user: AuthUser; tenant: AuthTenant | null }> {

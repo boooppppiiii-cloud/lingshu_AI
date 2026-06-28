@@ -1,0 +1,86 @@
+[
+  {
+    "id": "template-a",
+    "name": "行业模板 A（待补充）",
+    "description": "占位模板：等待填写目标行业、产品和市场。",
+    "profile": {
+      "company": {
+        "name": "Demo Company A",
+        "industry": "待补充行业",
+        "mainMarkets": "待补充目标市场",
+        "founded": "2020",
+        "description": "这是演示用企业资料占位。请替换为真实行业、产品、市场和公司优势。"
+      },
+      "products": {
+        "categories": "待补充主营品类",
+        "priceRange": "待补充价格区间",
+        "moq": "待补充 MOQ",
+        "certifications": "待补充认证资质",
+        "highlights": "待补充产品优势，例如交期、定制能力、工厂直供、热销规格。"
+      },
+      "brand": {
+        "tone": "专业、可靠、高效",
+        "style": "专业",
+        "taboos": "不承诺无法保证的物流时效；不虚构认证或合作品牌。",
+        "usp": "待补充一句核心卖点"
+      },
+      "knowledge": "待补充：目标客户画像、常见询盘问题、历史爆款、价格策略、重点市场文化禁忌。"
+    }
+  },
+  {
+    "id": "template-b",
+    "name": "行业模板 B（待补充）",
+    "description": "占位模板：可用于第二个 demo 行业。",
+    "profile": {
+      "company": {
+        "name": "Demo Company B",
+        "industry": "待补充行业",
+        "mainMarkets": "待补充目标市场",
+        "founded": "2021",
+        "description": "这是第二套演示行业占位资料。"
+      },
+      "products": {
+        "categories": "待补充主营品类",
+        "priceRange": "待补充价格区间",
+        "moq": "待补充 MOQ",
+        "certifications": "待补充认证资质",
+        "highlights": "待补充产品优势。"
+      },
+      "brand": {
+        "tone": "轻松、可信、转化导向",
+        "style": "亲切",
+        "taboos": "不夸大效果；不使用敏感或侵权素材。",
+        "usp": "待补充一句核心卖点"
+      },
+      "knowledge": "待补充业务知识。"
+    }
+  },
+  {
+    "id": "template-c",
+    "name": "行业模板 C（待补充）",
+    "description": "占位模板：可用于第三个 demo 行业。",
+    "profile": {
+      "company": {
+        "name": "Demo Company C",
+        "industry": "待补充行业",
+        "mainMarkets": "待补充目标市场",
+        "founded": "2019",
+        "description": "这是第三套演示行业占位资料。"
+      },
+      "products": {
+        "categories": "待补充主营品类",
+        "priceRange": "待补充价格区间",
+        "moq": "待补充 MOQ",
+        "certifications": "待补充认证资质",
+        "highlights": "待补充产品优势。"
+      },
+      "brand": {
+        "tone": "成熟、稳定、服务导向",
+        "style": "正式",
+        "taboos": "不承诺未经确认的库存、交期和平台政策。",
+        "usp": "待补充一句核心卖点"
+      },
+      "knowledge": "待补充业务知识。"
+    }
+  }
+]

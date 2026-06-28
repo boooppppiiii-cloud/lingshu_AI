@@ -110,6 +110,7 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
   const tenantName = session?.tenant?.name || session?.user?.name || session?.user?.email?.split('@')[0] || '未命名';
   const subStatus = session?.tenant?.subscriptionStatus || session?.subscription?.status || 'none';
   const initial = (tenantName[0] || '灵').toUpperCase();
+  const demo = session?.demo;
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -202,23 +203,49 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
         </div>
 
         {/* Bottom user */}
-        <div className="px-3 py-3 border-t border-border flex items-center gap-2.5 flex-shrink-0">
-          <div
-            className="w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
-            style={{ background: 'linear-gradient(135deg, #4ade80, #16a34a)' }}
-          >
-            {initial}
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-xs font-semibold text-text-primary truncate">{tenantName}</p>
-            <p className="text-[10px] text-text-muted truncate">{SUB_LABEL[subStatus] ?? subStatus}</p>
-          </div>
-          {onLogout && (
-            <button onClick={onLogout} title="退出登录"
-              className="relative p-1 rounded-md hover:bg-black/5 text-text-muted hover:text-text-primary transition-colors flex-shrink-0">
-              <LogOut size={13} />
-            </button>
+        <div className="px-3 py-3 border-t border-border flex-shrink-0">
+          {demo?.enabled && (
+            <div className="mb-2 rounded-lg bg-white/70 border border-border px-2.5 py-2">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] font-semibold text-text-secondary">Demo 试用</span>
+                <span className={`text-[10px] font-bold ${demo.expired ? 'text-red-600' : 'text-accent'}`}>
+                  {demo.expired ? '已到期' : `剩余 ${demo.daysRemaining ?? '-'} 天`}
+                </span>
+              </div>
+              <div className="grid grid-cols-3 gap-1 text-center">
+                <div className="rounded-md bg-surface-2 px-1 py-1">
+                  <p className="text-[10px] font-bold text-text-primary">{demo.remaining.aiChat}</p>
+                  <p className="text-[9px] text-text-muted">对话</p>
+                </div>
+                <div className="rounded-md bg-surface-2 px-1 py-1">
+                  <p className="text-[10px] font-bold text-text-primary">{demo.remaining.generation}</p>
+                  <p className="text-[9px] text-text-muted">生成</p>
+                </div>
+                <div className="rounded-md bg-surface-2 px-1 py-1">
+                  <p className="text-[10px] font-bold text-text-primary">{demo.remaining.render}</p>
+                  <p className="text-[9px] text-text-muted">预览</p>
+                </div>
+              </div>
+            </div>
           )}
+          <div className="flex items-center gap-2.5">
+            <div
+              className="w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
+              style={{ background: 'linear-gradient(135deg, #4ade80, #16a34a)' }}
+            >
+              {initial}
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-xs font-semibold text-text-primary truncate">{tenantName}</p>
+              <p className="text-[10px] text-text-muted truncate">{SUB_LABEL[subStatus] ?? subStatus}</p>
+            </div>
+            {onLogout && (
+              <button onClick={onLogout} title="退出登录"
+                className="relative p-1 rounded-md hover:bg-black/5 text-text-muted hover:text-text-primary transition-colors flex-shrink-0">
+                <LogOut size={13} />
+              </button>
+            )}
+          </div>
         </div>
       </aside>
 
