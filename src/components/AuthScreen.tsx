@@ -45,7 +45,7 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (s: AuthSession) =>
 
         <div className="card !rounded-2xl p-6">
           <h1 className="text-base font-bold text-text-primary mb-1">{mode === 'login' ? '登录' : '注册'}</h1>
-          <p className="text-xs text-text-muted mb-5">{mode === 'login' ? '欢迎回来，继续你的出海营销' : '创建账号，享 14 天免费试用'}</p>
+          <p className="text-xs text-text-muted mb-5">{mode === 'login' ? '欢迎回来，继续你的出海营销' : '创建账号，开始 Demo 试用'}</p>
 
           <div className="space-y-3">
             {mode === 'register' && (
