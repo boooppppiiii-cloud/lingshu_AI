@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { RefreshCw, LayoutGrid, MessageSquare, Users, TrendingUp, Sparkles, Bell } from 'lucide-react';
+import { RefreshCw, LayoutGrid, MessageSquare, Users, TrendingUp, Sparkles, Bell, Send, CheckCircle2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import AgentChatPage from './AgentChatPage';
 import type { ConversationContext, RestoreSignal, KickoffSignal, AgentAction } from '../App';
@@ -35,6 +35,7 @@ const EVENTS = [
 ];
 
 function Dashboard({ onChatClick }: { onChatClick: () => void }) {
+  const [created, setCreated] = useState<Record<string, boolean>>({});
   return (
     <div className="h-full overflow-y-auto">
       <div className="max-w-3xl mx-auto px-6 py-5 space-y-5">
@@ -101,6 +102,12 @@ function Dashboard({ onChatClick }: { onChatClick: () => void }) {
                   <p className="text-[11px] text-text-muted">推荐推品</p>
                   <p className="text-xs font-medium text-text-secondary">{r.suggest}</p>
                 </div>
+                <button onClick={() => setCreated(prev => ({ ...prev, [r.buyer]: true }))}
+                  className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-white flex-shrink-0"
+                  style={{ background: created[r.buyer] ? '#16a34a' : '#0f172a' }}>
+                  {created[r.buyer] ? <CheckCircle2 size={11} /> : <Send size={11} />}
+                  {created[r.buyer] ? '已创建' : 'Demo 触达'}
+                </button>
               </div>
             ))}
           </div>

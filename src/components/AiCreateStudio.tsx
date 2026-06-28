@@ -398,6 +398,7 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
   const [caption, setCaption] = useState('Factory-direct home essentials 🏠✨ #tiktokmademebuyit #homefinds');
   const [captionLoading, setCaptionLoading] = useState(false);
   const [published, setPublished] = useState(false);
+  const [demoAutoLoading, setDemoAutoLoading] = useState(false);
   const [savedToWorks, setSavedToWorks] = useState(false); // 「存入我的作品」反馈
 
   // 成片预览：网页端顺序播放选中的真实视频片段（mock 占位素材无 url，不可播放）
@@ -440,7 +441,7 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
   const canNext = step === 'material' ? selected.length > 0 : true;
   const isLast = stepIdx === STEPS.length - 1;
 
-  const goPreview = async () => {
+  const goPreview = async (scriptOverride?: string) => {
     setStepIdx(STEPS.findIndex(s => s.id === 'preview'));
     setRendered(false);
     setRendering(true);
@@ -457,7 +458,7 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
 
     const spec = {
       materials: matNames,
-      script,
+      script: scriptOverride ?? script,
       voice,
       bgm,
       bgmVol,
@@ -559,9 +560,14 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
 
   const regenCovers = async () => {
     setCoverLoading(true);
-    const { covers } = await studioApi.covers({ script, language: lang }, [coverTitle]);
-    if (covers[0]) setCoverTitle(covers[0]);
-    setCoverLoading(false);
+    try {
+      const { covers } = await studioApi.covers({ script, language: lang }, [coverTitle]);
+      if (covers[0]) setCoverTitle(covers[0]);
+    } catch (err: any) {
+      alert(err?.message || '封面标题生成失败，请稍后重试。');
+    } finally {
+      setCoverLoading(false);
+    }
   };
 
   // 封面标题中文翻译（非中文目标语言时，进入封面步后自动翻译，给用户确认）
@@ -655,6 +661,34 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
       alert(err?.message || '发布文案生成失败，请稍后重试。');
     } finally {
       setCaptionLoading(false);
+    }
+  };
+
+  const demoAutoCreate = async () => {
+    setDemoAutoLoading(true);
+    try {
+      if (selected.length === 0) setSelected(materials.slice(0, 3).map(m => m.id));
+      const matNamesForDemo = selected.length > 0
+        ? materials.filter(m => selected.includes(m.id)).map(m => m.name)
+        : materials.slice(0, 3).map(m => m.name);
+      const scriptResp = await studioApi.script(
+        { materials: matNamesForDemo, language: lang, platform, duration, scriptType },
+        script,
+      );
+      setScript(scriptResp.script);
+      const coversResp = await studioApi.covers({ script: scriptResp.script, language: lang }, [coverTitle]);
+      if (coversResp.covers[0]) setCoverTitle(coversResp.covers[0]);
+      const cap = await studioApi.caption(
+        { script: scriptResp.script, platform, language: lang },
+        { caption, hashtags: [] },
+      );
+      const tags = (cap.hashtags ?? []).map(t => `#${t.replace(/^#/, '')}`).join(' ');
+      setCaption(tags ? `${cap.caption} ${tags}` : cap.caption);
+      await goPreview(scriptResp.script);
+    } catch (err: any) {
+      alert(err?.message || 'Demo 自动生成失败，请稍后重试。');
+    } finally {
+      setDemoAutoLoading(false);
     }
   };
 
@@ -1391,7 +1425,7 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
               </div>
 
               <div className="flex items-center gap-2">
-                <button onClick={goPreview} disabled={rendering}
+                <button onClick={() => void goPreview()} disabled={rendering}
                   className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border border-border hover:border-border-bright disabled:opacity-50">
                   <RefreshCw size={12} className={rendering ? 'animate-spin' : ''} /> 重新合成成片
                 </button>
@@ -1506,6 +1540,12 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
         />
         {projectId && <span className="text-[10px] text-text-muted">已保存</span>}
         <div className="ml-auto flex items-center gap-2">
+          <button onClick={() => void demoAutoCreate()} disabled={demoAutoLoading}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white transition-all disabled:opacity-50"
+            style={{ background: '#16a34a' }}>
+            {demoAutoLoading ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+            Demo 自动生成
+          </button>
           <button onClick={newProject}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-text-secondary hover:bg-surface-2 transition-colors">
             <Plus size={13} /> 新建

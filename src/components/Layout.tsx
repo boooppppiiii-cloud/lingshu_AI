@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import type { Page, ConversationContext, Conversation, AgentAction } from '../App';
 import RightPanel from './RightPanel';
+import DemoGuide from './DemoGuide';
 
 interface NavSection {
   items: { id: Page; label: string; icon: ReactNode }[];
@@ -130,6 +131,10 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
           </div>
           <span className="text-sm font-bold text-text-primary font-display">灵枢 AI</span>
         </div>
+
+        {session?.demo?.enabled && (
+          <DemoGuide onNavigate={onNavigate} onAction={onAction} />
+        )}
 
         {/* Primary nav */}
         <nav className="px-3 space-y-0.5">
