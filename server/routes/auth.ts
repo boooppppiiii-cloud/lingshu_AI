@@ -46,9 +46,14 @@ function publicTenant(t: Record<string, unknown> | null) {
 
 // POST /auth/register  { email, password, companyName? }
 authRouter.post('/register', async (req, res) => {
-  const { email, password, companyName } = req.body ?? {};
+  const { email, password, companyName, inviteCode } = req.body ?? {};
   if (!email || !password) { res.status(400).json({ error: '邮箱和密码必填' }); return; }
   if (String(password).length < 8) { res.status(400).json({ error: '密码至少 8 位' }); return; }
+  const expectedInvite = process.env.DEMO_INVITE_CODE?.trim();
+  if (expectedInvite && inviteCode !== expectedInvite) {
+    res.status(403).json({ error: '邀请码无效，请联系团队获取 Demo 访问码' });
+    return;
+  }
 
   const now = new Date();
   const expiresAt = demoTrialExpiresAt(now);
@@ -69,7 +74,7 @@ authRouter.post('/register', async (req, res) => {
 
   const login = await pbLogin(email, password);
   if (!login) { res.status(500).json({ error: '注册后自动登录失败' }); return; }
-  res.json({ token: login.token, user: publicUser(login.record), tenant: publicTenant(tenant) });
+  res.json({ token: login.token, user: publicUser(login.record), tenant: publicTenant(tenant), demo: await buildDemoStatus(req, String(tenant.id), String(tenant.subscriptionExpiresAt ?? expiresAt)) });
 });
 
 // POST /auth/login  { email, password }
@@ -79,7 +84,8 @@ authRouter.post('/login', async (req, res) => {
   const login = await pbLogin(email, password);
   if (!login) { res.status(401).json({ error: '邮箱或密码错误' }); return; }
   const tenant = login.record.tenantId ? await pbGet('tenants', login.record.tenantId) : null;
-  res.json({ token: login.token, user: publicUser(login.record), tenant: publicTenant(tenant) });
+  const subscription = login.record.tenantId ? await getTenantSubscription(login.record.tenantId) : null;
+  res.json({ token: login.token, user: publicUser(login.record), tenant: publicTenant(tenant), demo: await buildDemoStatus(req, login.record.tenantId, subscription?.expiresAt) });
 });
 
 // GET /auth/me  (Authorization: Bearer <token>)
