@@ -1,12 +1,48 @@
 [
   {
-    "id": "72dbcd66-1f3c-438e-8986-eadf73daef3d",
+    "id": "18ccc9b9-87da-4fc8-b5c4-c8ca1b3295b8",
     "title": "未命名草稿",
     "status": "published",
     "spec": {
-      "mode": "product",
+      "mode": "material",
       "platform": "tiktok",
       "ratio": "9:16",
+      "duration": 12,
+      "lang": "en",
+      "selected": [
+        "h4",
+        "8fe04968-6d1a-4706-85cd-cc051896d4aa"
+      ],
+      "script": "[Hook · 0-3s]\nTired of boring finds? Discover something truly unique!\n\n[Body · 3-7s]\nWe source high-quality, trending products directly, cutting out the middleman.\n\n[CTA · 7-12s]\nGet amazing deals and elevate your everyday. Shop now, link in bio!",
+      "scriptType": "voiceover",
+      "voice": "v1",
+      "bgm": "",
+      "bgmVol": 35,
+      "cover": "8fe04968-6d1a-4706-85cd-cc051896d4aa",
+      "coverTitle": "Discover Unique Daily Must-Haves!!",
+      "coverStyle": {
+        "color": "#ffffff",
+        "size": "L",
+        "position": "center",
+        "align": "center",
+        "font": "sans",
+        "weight": "bold"
+      },
+      "account": "a1",
+      "caption": "Factory-direct home essentials 🏠✨ #tiktokmademebuyit #homefinds"
+    },
+    "thumbSeed": "8fe04968-6d1a-4706-85cd-cc051896d4aa",
+    "createdAt": "2026-06-23T02:34:21.987Z",
+    "updatedAt": "2026-06-23T02:34:21.987Z"
+  },
+  {
+    "id": "c0a2a954-24e6-450f-817e-12f9cd4e12bd",
+    "title": "未命名草稿",
+    "status": "draft",
+    "spec": {
+      "mode": "material",
+      "platform": "youtube",
+      "ratio": "16:9",
       "duration": 20,
       "lang": "en",
       "selected": [
@@ -14,22 +50,71 @@
         "c2",
         "c4"
       ],
+      "script": "[Hook · 0-3s]\nReady to upgrade your everyday? This changes everything.\n\n[Body · 3-15s]\nDiscover unparalleled craftsmanship the moment you unbox it. Every detail engineered for your ultimate convenience and style. See how effortlessly it elevates your daily routine, blending seamlessly into your active life. It's innovative, reliable, and simply essential.\n\n[CTA · 15-20s]\nReady to transform your everyday? Don't wait! Click the link in our bio to shop now. Limited stock available!",
+      "scriptType": "voiceover",
+      "voice": "v2",
+      "bgm": "",
+      "bgmVol": 35,
+      "cover": "gradient",
+      "coverTitle": "You NEED this in 2026",
+      "coverStyle": {
+        "color": "#ffffff",
+        "size": "M",
+        "position": "bottom",
+        "align": "center",
+        "font": "sans",
+        "weight": "bold"
+      },
+      "account": "a1",
+      "caption": "Factory-direct home essentials 🏠✨ #tiktokmademebuyit #homefinds",
+      "subtitlesOn": true,
+      "subMode": "target"
+    },
+    "thumbSeed": "gradient",
+    "createdAt": "2026-06-25T04:35:08.171Z",
+    "updatedAt": "2026-06-25T04:35:09.907Z"
+  },
+  {
+    "id": "64cf4799-3f5c-41d9-ba85-4c7dbcfe1076",
+    "title": "未命名草稿",
+    "status": "published",
+    "spec": {
+      "mode": "material",
+      "platform": "youtube",
+      "ratio": "16:9",
+      "duration": 20,
+      "lang": "en",
+      "selected": [
+        "c10",
+        "c12",
+        "c7",
+        "c5",
+        "c2",
+        "c3",
+        "c9"
+      ],
       "script": "[Hook · 0-3s]\nStop scrolling — this is the one everyone keeps asking about.\n\n[Body · 3-15s]\nStraight from our factory, this product delivers premium quality at factory-direct prices, shipped worldwide in 24 hours. Thousands of buyers already made the switch.\n\n[CTA · 15-20s]\nTap the link to grab yours before they sell out again.",
       "scriptType": "voiceover",
       "voice": "v1",
-      "bgm": "b1",
+      "bgm": "",
       "bgmVol": 35,
-      "cover": "cv1",
-      "coverTitles": [
-        "You NEED this in 2026",
-        "Factory price, 24h ship",
-        "Why everyone is obsessed"
-      ],
+      "cover": "gradient",
+      "coverTitle": "You NEED this in 2026",
+      "coverStyle": {
+        "color": "#ffffff",
+        "size": "L",
+        "position": "bottom",
+        "align": "center",
+        "font": "serif",
+        "weight": "regular"
+      },
       "account": "a1",
-      "caption": "Factory-direct home essentials 🏠✨ #tiktokmademebuyit #homefinds"
+      "caption": "Factory-direct home essentials 🏠✨ #tiktokmademebuyit #homefinds",
+      "subtitlesOn": true,
+      "subMode": "target"
     },
-    "thumbSeed": "cv1",
-    "createdAt": "2026-06-21T12:12:48.713Z",
-    "updatedAt": "2026-06-21T12:12:48.713Z"
+    "thumbSeed": "gradient",
+    "createdAt": "2026-06-26T23:47:43.419Z",
+    "updatedAt": "2026-06-26T23:47:43.419Z"
   }
 ]

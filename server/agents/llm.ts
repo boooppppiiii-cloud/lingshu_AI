@@ -60,7 +60,11 @@ export async function callLLM(prompt: string, opts: LLMCallOptions = {}): Promis
 
 export type ChatMessage = { role: 'user' | 'assistant'; content: string };
 
-async function* streamGeminiChat(messages: ChatMessage[], opts: LLMCallOptions): AsyncGenerator<string> {
+// 流式事件：文本块 或 联网引用来源
+export interface GroundingSource { title: string; uri: string }
+export type StreamEvent = { text: string } | { sources: GroundingSource[] };
+
+async function* streamGeminiChat(messages: ChatMessage[], opts: LLMCallOptions): AsyncGenerator<StreamEvent> {
   const apiKey = process.env.GEMINI_API_KEY;
   if (!apiKey) throw new Error('GEMINI_API_KEY not set');
 
@@ -72,19 +76,48 @@ async function* streamGeminiChat(messages: ChatMessage[], opts: LLMCallOptions):
     parts: [{ text: m.content }],
   }));
 
-  const stream = await ai.models.generateContentStream({
-    model: modelId,
-    contents,
+  const baseConfig: Record<string, unknown> = {
+    // 关闭 2.5 Flash 的思考预算，显著降低首字延迟（对话场景无需长思考）
+    thinkingConfig: { thinkingBudget: 0 },
     ...(opts.systemPrompt ? { systemInstruction: { parts: [{ text: opts.systemPrompt }] } } : {}),
-  });
+  };
 
-  for await (const chunk of stream) {
-    const text = chunk.text;
-    if (text) yield text;
+  // 单次尝试：withSearch 时挂联网检索（可引用真实来源），否则纯生成（更稳）
+  async function* attempt(withSearch: boolean): AsyncGenerator<StreamEvent> {
+    const stream = await ai.models.generateContentStream({
+      model: modelId,
+      contents,
+      config: withSearch ? { ...baseConfig, tools: [{ googleSearch: {} }] } : baseConfig,
+    });
+    const sources: GroundingSource[] = [];
+    const seen = new Set<string>();
+    for await (const chunk of stream) {
+      const text = chunk.text;
+      if (text) yield { text };
+      const gm = (chunk as any).candidates?.[0]?.groundingMetadata;
+      for (const g of gm?.groundingChunks ?? []) {
+        const uri = g?.web?.uri;
+        if (uri && !seen.has(uri)) { seen.add(uri); sources.push({ title: g.web.title ?? uri, uri }); }
+      }
+    }
+    if (sources.length) yield { sources: sources.slice(0, 6) };
+  }
+
+  // 联网流偶发中途断流（terminated）。已吐内容就保留；几乎没吐就无联网重试一次（很稳）。
+  let emitted = 0;
+  try {
+    for await (const ev of attempt(true)) {
+      if ('text' in ev) emitted += ev.text.length;
+      yield ev;
+    }
+  } catch {
+    if (emitted < 20) {
+      for await (const ev of attempt(false)) yield ev;
+    }
   }
 }
 
-async function* streamQwenChat(messages: ChatMessage[], opts: LLMCallOptions): AsyncGenerator<string> {
+async function* streamQwenChat(messages: ChatMessage[], opts: LLMCallOptions): AsyncGenerator<StreamEvent> {
   const apiKey = process.env.DASHSCOPE_API_KEY;
   if (!apiKey) throw new Error('DASHSCOPE_API_KEY not set');
 
@@ -100,11 +133,11 @@ async function* streamQwenChat(messages: ChatMessage[], opts: LLMCallOptions): A
   const stream = await client.chat.completions.create({ model: opts.model ?? 'qwen-plus', messages: msgs, stream: true });
   for await (const chunk of stream) {
     const text = chunk.choices[0]?.delta?.content;
-    if (text) yield text;
+    if (text) yield { text };
   }
 }
 
-export async function* callLLMChatStream(messages: ChatMessage[], opts: LLMCallOptions = {}): AsyncGenerator<string> {
+export async function* callLLMChatStream(messages: ChatMessage[], opts: LLMCallOptions = {}): AsyncGenerator<StreamEvent> {
   const backend = resolveBackend(opts);
   switch (backend) {
     case 'gemini': yield* streamGeminiChat(messages, opts); break;

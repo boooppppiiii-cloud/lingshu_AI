@@ -4,9 +4,10 @@ import {
   LayoutGrid, Film, FileText, Music, Image as ImageIcon, Play, Send,
   Check, ChevronLeft, ChevronRight, Folder, Search, Volume2, Globe,
   Mic, Download, Loader2, Sparkles, Wand2, Copy, RefreshCw, Clock,
-  Upload, X, Plus, Smartphone, List, Save, FolderOpen, Trash2,
+  Upload, X, Plus, Smartphone, List, Save, FolderOpen, Trash2, Pause, ChevronDown,
 } from 'lucide-react';
-import { studioApi, getDesktopRender, type StudioProject } from '../lib/studioApi';
+import { studioApi, getDesktopRender, type StudioProject, type Material, type BgmTrack, type CoverStyle, type SubCue } from '../lib/studioApi';
+import type { Page } from '../App';
 
 /* ──────────────────────────────────────────────────────────────────────────
    AI 生成内容工作台 — 社媒（流量）页子模块
@@ -14,9 +15,39 @@ import { studioApi, getDesktopRender, type StudioProject } from '../lib/studioAp
    三栏布局：① 步骤导航  ② 操作区  ③ 实时预览 / 制作摘要
 ─────────────────────────────────────────────────────────────────────────── */
 
+// 素材缩略图复用灵感大屏的 mock 封面图（避免纯色占位）
+const _coverMods = import.meta.glob('../assets/covers/mock-*.png', { eager: true }) as Record<string, { default: string }>;
+const COVER_IMGS: string[] = Object.keys(_coverMods)
+  .sort((a, b) => (+(a.match(/mock-(\d+)/)?.[1] ?? 0)) - (+(b.match(/mock-(\d+)/)?.[1] ?? 0)))
+  .map(k => _coverMods[k].default);
+
 const AMBER = '#d97706';
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+const mediaType = (f: File): 'video' | 'image' | 'audio' =>
+  f.type.startsWith('video') ? 'video' : f.type.startsWith('audio') ? 'audio' : 'image';
+
+const fileToDataUrl = (f: File) => new Promise<string>((res, rej) => {
+  const r = new FileReader();
+  r.onload = () => res(String(r.result));
+  r.onerror = rej;
+  r.readAsDataURL(f);
+});
+
+// 客户端读取视频时长，避免服务端依赖 ffprobe
+const probeDuration = (f: File) => new Promise<number>(res => {
+  if (!f.type.startsWith('video')) { res(0); return; }
+  const v = document.createElement('video');
+  v.preload = 'metadata';
+  v.onloadedmetadata = () => { URL.revokeObjectURL(v.src); res(Math.round(v.duration) || 0); };
+  v.onerror = () => res(0);
+  v.src = URL.createObjectURL(f);
+});
+
+const materialToClip = (m: Material): Clip => ({
+  id: m.id, name: m.name, folder: m.folder, type: m.type, duration: m.duration, size: m.size, url: m.url, poster: m.poster, scope: m.scope ?? 'own',
+});
 
 type StepId = 'mode' | 'material' | 'script' | 'bgm' | 'cover' | 'preview' | 'publish';
 
@@ -35,6 +66,9 @@ const STEPS: { id: StepId; label: string; icon: typeof LayoutGrid; hint: string 
 interface MaterialFolder { id: string; name: string; count: number }
 const FOLDERS: MaterialFolder[] = [
   { id: 'all',     name: '全部素材',   count: 48 },
+  { id: 'hot',     name: '爆款素材',   count: 0 },  // 官方实时更新上传的素材库
+  { id: 'upload',  name: '我的上传',   count: 0 },
+  // 以下分类来自「企业中心」信息上传
   { id: 'product', name: '产品主图',   count: 16 },
   { id: 'factory', name: '工厂实拍',   count: 9 },
   { id: 'scene',   name: '使用场景',   count: 12 },
@@ -49,6 +83,9 @@ interface Clip {
   type: 'video' | 'image' | 'audio';
   duration: number; // seconds
   size: string;
+  url?: string;     // 真实素材的可访问地址（mock 占位素材无此字段）
+  poster?: string;  // 封面帧画面（视频抽帧 / 图片自身）
+  scope?: 'shared' | 'own'; // 公共库 / 我的（缺省按 own）
 }
 const CLIPS: Clip[] = [
   { id: 'c1',  name: '产品正面展示.mp4',    folder: 'product', type: 'video', duration: 8,  size: '12.4 MB' },
@@ -63,21 +100,80 @@ const CLIPS: Clip[] = [
   { id: 'c10', name: '包装展示.mp4',        folder: 'product', type: 'video', duration: 7,  size: '11.2 MB' },
   { id: 'c11', name: '细节质感.jpg',        folder: 'detail',  type: 'image', duration: 0,  size: '540 KB' },
   { id: 'c12', name: '海外仓发货.mp4',      folder: 'factory', type: 'video', duration: 9,  size: '15.8 MB' },
+  // 爆款素材 —— 官方实时更新的高转化片段库
+  { id: 'h1',  name: '爆款·痛点开场.mp4',    folder: 'hot',     type: 'video', duration: 6,  size: '8.2 MB',  scope: 'shared' },
+  { id: 'h2',  name: '爆款·对比演示.mp4',    folder: 'hot',     type: 'video', duration: 9,  size: '13.6 MB', scope: 'shared' },
+  { id: 'h3',  name: '爆款·结尾 CTA.mp4',     folder: 'hot',     type: 'video', duration: 5,  size: '6.9 MB',  scope: 'shared' },
+  { id: 'h4',  name: '爆款·种草口播.mp4',    folder: 'hot',     type: 'video', duration: 11, size: '17.3 MB', scope: 'shared' },
 ];
+// 给没有真实文件的 mock 素材分配一张内容封面，作为缩略图 + 封面候选帧
+CLIPS.forEach((c, i) => { if (!c.url && !c.poster && COVER_IMGS.length) c.poster = COVER_IMGS[i % COVER_IMGS.length]; });
 
-interface Bgm { id: string; name: string; mood: string; duration: string; recommended?: boolean }
-const BGMS: Bgm[] = [
-  { id: 'b1', name: 'Upbeat Pop Energy',    mood: '活力 · 快节奏', duration: '0:30', recommended: true },
-  { id: 'b2', name: 'Chill Lo-Fi Vibes',    mood: '舒缓 · 治愈',   duration: '0:45' },
-  { id: 'b3', name: 'Cinematic Inspire',    mood: '大气 · 高级感', duration: '0:38' },
-  { id: 'b4', name: 'Trendy TikTok Beat',   mood: '潮流 · 卡点',   duration: '0:28' },
+interface Bgm { id: string; name: string; mood: string; duration: number; url?: string; recommended?: boolean }
+// 已移除内置曲库（生成质量不达标）；仅展示用户自行上传的音乐
+const BGMS: Bgm[] = [];
+const fmtDur = (s: number) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`;
+const fmtTime = (s: number) => `0:${String(Math.round(s)).padStart(2, '0')}`;
+
+// 句子切分（中英日通用：按句末标点 / 换行）
+const splitSentences = (text: string): string[] =>
+  text.replace(/\s+/g, ' ').split(/(?<=[.!?。！？…])\s+/).map(s => s.trim()).filter(Boolean);
+
+// 把一段文本在 [start,end] 区间内按字数比例分配成多条 cue
+function distribute(text: string, start: number, end: number): SubCue[] {
+  const sents = splitSentences(text);
+  const total = sents.reduce((n, s) => n + s.length, 0) || 1;
+  let t = start;
+  return sents.map(s => {
+    const dur = (end - start) * (s.length / total);
+    const cue = { start: +t.toFixed(2), end: +(t + dur).toFixed(2), text: s };
+    t += dur;
+    return cue;
+  });
+}
+
+/* 由口播脚本生成字幕 cue（A 层兜底对齐：优先脚本时间标记，否则按 TTS 时长字数比例；
+   桌面端 ASR 回传逐词时间戳后会替换为精确对齐——共用同一 SubCue 结构）。 */
+function buildCues(script: string, totalDur: number): SubCue[] {
+  const lines = script.split('\n');
+  // 形如 [Hook · 0-3s] / [Body · 3-15s] 的时间段标记
+  const headerRe = /\[[^\]]*?(\d+)\s*[-–]\s*(\d+)\s*s[^\]]*\]/i;
+  const sections: { start: number; end: number; text: string }[] = [];
+  let cur: { start: number; end: number; text: string } | null = null;
+  for (const raw of lines) {
+    const line = raw.trim();
+    const m = line.match(headerRe);
+    if (m) {
+      cur = { start: +m[1], end: +m[2], text: '' };
+      sections.push(cur);
+    } else if (line && cur) {
+      cur.text += (cur.text ? ' ' : '') + line.replace(/^\[.*?\]\s*/, '');
+    }
+  }
+  if (sections.length && sections.some(s => s.text)) {
+    return sections.filter(s => s.text).flatMap(s => distribute(s.text, s.start, s.end));
+  }
+  // 无时间标记：清掉所有方括号标记后整体按时长分配
+  const clean = script.replace(/\[[^\]]*\]/g, ' ').trim();
+  return clean ? distribute(clean, 0, totalDur || 20) : [];
+}
+
+// 封面字体（系统字体栈，预览与 SVG 一致）
+const COVER_FONTS: { id: CoverStyle['font']; label: string; css: string }[] = [
+  { id: 'sans',    label: '黑体', css: `'PingFang SC','Microsoft YaHei',ui-sans-serif,sans-serif` },
+  { id: 'impact',  label: '粗黑', css: `'Arial Black',Impact,'Heiti SC','Microsoft YaHei',sans-serif` },
+  { id: 'serif',   label: '衬线', css: `Georgia,'Songti SC','SimSun',serif` },
+  { id: 'rounded', label: '圆润', css: `'Arial Rounded MT Bold','PingFang SC','Microsoft YaHei',sans-serif` },
+  { id: 'mono',    label: '等宽', css: `ui-monospace,Menlo,Consolas,monospace` },
 ];
+const fontCss = (id: CoverStyle['font']) => COVER_FONTS.find(f => f.id === id)?.css ?? COVER_FONTS[0].css;
 
 interface Voice { id: string; name: string; tag: string }
+// 音色与语言解耦：名称只描述性别 + 音色，实际发音语言跟随所选目标语言
 const VOICES: Voice[] = [
-  { id: 'v1', name: 'Emma（女声 · 英美）', tag: '亲和' },
-  { id: 'v2', name: 'James（男声 · 英美）', tag: '沉稳' },
-  { id: 'v3', name: 'Layla（女声 · 阿语）', tag: '温暖' },
+  { id: 'v1', name: 'Emma（女声 · 柔美）', tag: '亲和' },
+  { id: 'v2', name: 'James（男声 · 沉稳）', tag: '浑厚' },
+  { id: 'v3', name: 'Sara（女声 · 温暖）',  tag: '治愈' },
   { id: 'v4', name: '上传真人口播',          tag: '自定义' },
 ];
 
@@ -104,12 +200,43 @@ const PLATFORMS = [
   { id: 'tiktok',    label: 'TikTok',    ratio: '9:16' },
   { id: 'instagram', label: 'Instagram', ratio: '9:16' },
   { id: 'youtube',   label: 'YouTube',   ratio: '16:9' },
+  { id: 'facebook',  label: 'Facebook',  ratio: '9:16' },
+  { id: 'pinterest', label: 'Pinterest', ratio: '9:16' },
 ];
 const RATIOS = ['9:16', '1:1', '16:9'];
 const LANGS = [
-  { code: 'en', label: 'English' }, { code: 'es', label: 'Español' },
-  { code: 'ar', label: 'العربية' }, { code: 'zh', label: '中文' },
+  { code: 'en',    label: 'English - 英语' },
+  { code: 'zh',    label: '简体中文 - 中文' },
+  { code: 'es',    label: 'Español - 西班牙语' },
+  { code: 'fr',    label: 'Français - 法语' },
+  { code: 'de',    label: 'Deutsch - 德语' },
+  { code: 'pt',    label: 'Português - 葡萄牙语' },
+  { code: 'it',    label: 'Italiano - 意大利语' },
+  { code: 'ru',    label: 'Русский - 俄语' },
+  { code: 'ja',    label: '日本語 - 日语' },
+  { code: 'ko',    label: '한국어 - 韩语' },
+  { code: 'ar',    label: 'العربية - 阿拉伯语' },
+  { code: 'hi',    label: 'हिन्दी - 印地语' },
+  { code: 'id',    label: 'Bahasa Indonesia - 印尼语' },
+  { code: 'th',    label: 'ภาษาไทย - 泰语' },
+  { code: 'vi',    label: 'Tiếng Việt - 越南语' },
+  { code: 'tr',    label: 'Türkçe - 土耳其语' },
+  { code: 'nl',    label: 'Nederlands - 荷兰语' },
+  { code: 'pl',    label: 'Polski - 波兰语' },
+  { code: 'sv',    label: 'Svenska - 瑞典语' },
+  { code: 'fil',   label: 'Filipino - 菲律宾语' },
+  { code: 'ms',    label: 'Bahasa Melayu - 马来语' },
+  { code: 'uk',    label: 'Українська - 乌克兰语' },
+  { code: 'el',    label: 'Ελληνικά - 希腊语' },
+  { code: 'cs',    label: 'Čeština - 捷克语' },
+  { code: 'ro',    label: 'Română - 罗马尼亚语' },
+  { code: 'hu',    label: 'Magyar - 匈牙利语' },
 ];
+// 取语言的中文名（label 形如 "Deutsch - 德语" → "德语"）
+const langZh = (code: string) => {
+  const label = LANGS.find(l => l.code === code)?.label ?? '';
+  return label.split(' - ')[1] ?? label;
+};
 
 const SAMPLE_SCRIPT = `[Hook · 0-3s]
 Stop scrolling — this is the one product everyone's been asking about.
@@ -121,7 +248,19 @@ Sourced straight from our factory, this changed how thousands of buyers shop. Pr
 Tap the link to grab yours before they sell out again.`;
 
 /* ── 缩略图占位 ────────────────────────────────────────────────────────── */
-function Thumb({ seed, label, ratio = 'aspect-video' }: { seed: string; label?: string; ratio?: string }) {
+function Thumb({ seed, label, ratio = 'aspect-video', src }: { seed: string; label?: string; ratio?: string; src?: string }) {
+  // 有内容缩略图（复用灵感大屏的 mock 封面图）就显示图片，否则退化为渐变占位
+  const fallbackSrc = src ?? COVER_IMGS[Math.abs(seed.charCodeAt(0) * 7 + (seed.charCodeAt(1) ?? 0)) % (COVER_IMGS.length || 1)];
+  if (fallbackSrc) {
+    return (
+      <div className={`relative w-full ${ratio} overflow-hidden rounded-lg bg-surface-2`}>
+        <img src={fallbackSrc} alt="" className="absolute inset-0 w-full h-full object-cover" draggable={false} />
+        {label && (
+          <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-bold text-white bg-black/45">{label}</span>
+        )}
+      </div>
+    );
+  }
   const hue = (seed.charCodeAt(0) * 47 + (seed.charCodeAt(1) ?? 0) * 13) % 360;
   return (
     <div className={`relative w-full ${ratio} overflow-hidden rounded-lg`}
@@ -137,9 +276,68 @@ function Thumb({ seed, label, ratio = 'aspect-video' }: { seed: string; label?: 
   );
 }
 
+/* 真实素材的缩略图：图片直接显示，视频取首帧，音频用占位 */
+function RealThumb({ clip }: { clip: Clip }) {
+  const label = clip.type === 'image' ? 'IMG' : `0:${String(clip.duration).padStart(2, '0')}`;
+  return (
+    <div className="relative w-full aspect-video overflow-hidden rounded-lg bg-surface-2">
+      {clip.type === 'image' && (
+        <img src={clip.url} alt={clip.name} className="w-full h-full object-cover" loading="lazy" />
+      )}
+      {clip.type === 'video' && (
+        <video src={`${clip.url}#t=0.1`} muted playsInline preload="metadata" className="w-full h-full object-cover" />
+      )}
+      {clip.type === 'audio' && (
+        <div className="w-full h-full flex items-center justify-center"><Music size={20} className="text-text-muted" /></div>
+      )}
+      <span className="absolute bottom-1 right-1 px-1.5 py-0.5 rounded text-[10px] font-mono font-bold text-white bg-black/45">{label}</span>
+    </div>
+  );
+}
+
+/* 封面预览：优先用已生成的封面 SVG；否则用所选帧（或渐变）+ 标题叠层。
+   字号用 cqw（容器宽度百分比）与 SVG 的 fontSize 比例一致，预览即所见。 */
+const WEIGHT_MAP = { regular: 600, bold: 800, heavy: 900 } as const;
+function CoverFace({ coverUrl, frameUrl, title, style, editable, onTitleChange }: { coverUrl?: string | null; frameUrl?: string; title: string; style: CoverStyle; editable?: boolean; onTitleChange?: (t: string) => void }) {
+  if (coverUrl) return <img src={coverUrl} alt="封面" className="absolute inset-0 w-full h-full object-cover" />;
+  const posClass = style.position === 'top' ? 'items-start' : style.position === 'center' ? 'items-center' : 'items-end';
+  const cqw = style.size === 'S' ? 6.2 : style.size === 'L' ? 9.8 : 7.8;
+  const scrim = style.position === 'top'
+    ? 'linear-gradient(to bottom, rgba(0,0,0,0.6), transparent 52%)'
+    : style.position === 'center'
+      ? 'rgba(0,0,0,0.3)'
+      : 'linear-gradient(to top, rgba(0,0,0,0.6), transparent 52%)';
+  const titleStyle = {
+    width: '100%', color: style.color, fontSize: `${cqw}cqw`,
+    fontWeight: WEIGHT_MAP[style.weight ?? 'bold'],
+    textAlign: style.align, fontFamily: style.fontFamily ?? fontCss(style.font),
+  } as const;
+  return (
+    <div className="absolute inset-0" style={{ containerType: 'inline-size' }}>
+      {frameUrl
+        ? <img src={frameUrl} alt="" className="absolute inset-0 w-full h-full object-cover" />
+        : <div className="absolute inset-0" style={{ background: 'linear-gradient(135deg,#fbbf24,#b45309)' }} />}
+      <div className={`absolute inset-0 flex ${posClass}`} style={{ padding: '5cqw', background: scrim }}>
+        {editable ? (
+          // 直接在封面上唤起文本框编辑标题（失焦提交）
+          <p contentEditable suppressContentEditableWarning spellCheck={false}
+            onClick={e => e.stopPropagation()}
+            onBlur={e => onTitleChange?.(e.currentTarget.textContent ?? '')}
+            className="leading-tight outline-none cursor-text rounded-[1cqw]"
+            style={{ ...titleStyle, boxShadow: '0 0 0 0.4cqw rgba(255,255,255,0.55)' }}>
+            {title}
+          </p>
+        ) : (
+          <p className="leading-tight" style={titleStyle}>{title}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
 /* ════════════════════════════════════════════════════════════════════════ */
 
-export default function AiCreateStudio() {
+export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) => void } = {}) {
   const [stepIdx, setStepIdx] = useState(0);
   const step = STEPS[stepIdx].id;
 
@@ -154,20 +352,41 @@ export default function AiCreateStudio() {
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<string[]>(['c1', 'c2', 'c4']);
 
+  // 素材库：mock 占位 + 真实上传（真实的排在前面）
+  const [materials, setMaterials] = useState<Clip[]>(CLIPS);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   const [script, setScript] = useState(SAMPLE_SCRIPT);
   const [scriptType, setScriptType] = useState<'voiceover' | 'storyboard'>('voiceover');
   const [voice, setVoice] = useState('v1');
   const [scriptLoading, setScriptLoading] = useState(false);
   const autoGen = useRef(false); // 仅首次进入脚本步时自动生成一次
 
-  const [bgm, setBgm] = useState('b1');
+  // 配音 TTS
+  const [voiceoverUrl, setVoiceoverUrl] = useState<string | null>(null);
+  const [voiceoverDur, setVoiceoverDur] = useState(0);
+  const [ttsLoading, setTtsLoading] = useState(false);
+  const [ttsPlaying, setTtsPlaying] = useState(false);
+  const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  const [bgm, setBgm] = useState('');   // 无内置曲库，默认不选
   const [bgmVol, setBgmVol] = useState(35);
+  const [bgms, setBgms] = useState<Bgm[]>(BGMS);
+  const [playingBgm, setPlayingBgm] = useState<string | null>(null);
+  const [bgmUploading, setBgmUploading] = useState(false);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const bgmInputRef = useRef<HTMLInputElement>(null);
 
-  const [cover, setCover] = useState('cv1');
-  const [coverTitles, setCoverTitles] = useState<string[]>(COVERS.map(c => c.title));
+  const [cover, setCover] = useState('gradient'); // 'gradient' 或某素材 id（用其帧画面作封面底图）
+  const [coverTitle, setCoverTitle] = useState(COVERS[0].title);
+  const [coverTitleZh, setCoverTitleZh] = useState('');   // 标题中文翻译（供确认）
+  const [coverStyle, setCoverStyle] = useState<CoverStyle>({ color: '#ffffff', size: 'M', position: 'bottom', align: 'left', font: 'sans', weight: 'bold' });
   const [coverLoading, setCoverLoading] = useState(false);
+  const [coverUrl, setCoverUrl] = useState<string | null>(null); // 生成的封面 SVG 文件地址（发布缩略图）
+  const [customFonts, setCustomFonts] = useState<{ family: string; label: string }[]>([]); // 官方导入的字体模版
+  const fontInputRef = useRef<HTMLInputElement>(null);
 
-  const [selecting, setSelecting] = useState(false);
 
   const [rendering, setRendering] = useState(false);
   const [rendered, setRendered] = useState(false);
@@ -179,6 +398,18 @@ export default function AiCreateStudio() {
   const [caption, setCaption] = useState('Factory-direct home essentials 🏠✨ #tiktokmademebuyit #homefinds');
   const [captionLoading, setCaptionLoading] = useState(false);
   const [published, setPublished] = useState(false);
+  const [savedToWorks, setSavedToWorks] = useState(false); // 「存入我的作品」反馈
+
+  // 成片预览：网页端顺序播放选中的真实视频片段（mock 占位素材无 url，不可播放）
+  const [previewIdx, setPreviewIdx] = useState<number | null>(null);
+  const [previewNote, setPreviewNote] = useState(false);
+  const previewVideoRef = useRef<HTMLVideoElement | null>(null);
+
+  // 字幕（A 层：脚本兜底对齐 + 沿用封面样式；桌面端 ffmpeg 烧录）
+  const [subtitlesOn, setSubtitlesOn] = useState(true);
+  const [subMode, setSubMode] = useState<'target' | 'bilingual'>('target');
+  const [subPreviewIdx, setSubPreviewIdx] = useState(0); // 预览叠层当前展示的 cue
+  const [cueZh, setCueZh] = useState<string[]>([]);       // 双语字幕的中文译文（与 cues 对齐）
 
   // 草稿 / 作品
   const [projectId, setProjectId] = useState<string | null>(null);
@@ -188,10 +419,23 @@ export default function AiCreateStudio() {
   const [savingProj, setSavingProj] = useState(false);
   const [savedTick, setSavedTick] = useState(false);
 
-  const selectedClips = useMemo(() => CLIPS.filter(c => selected.includes(c.id)), [selected]);
+  const selectedClips = useMemo(() => materials.filter(c => selected.includes(c.id)), [selected, materials]);
   const totalDur = selectedClips.reduce((s, c) => s + (c.type === 'image' ? 3 : c.duration), 0);
   const matNames = selectedClips.map(c => c.name);
-  const curCoverTitle = coverTitles[Math.max(0, COVERS.findIndex(c => c.id === cover))];
+  // 选中的封面底图帧：'gradient' → 无（渐变）；否则取该素材的帧画面（视频抽帧 / 图片自身）
+  const coverFrameUrl = useMemo(() => {
+    if (cover === 'gradient') return undefined;
+    const c = materials.find(m => m.id === cover);
+    return c?.poster ?? (c?.type === 'image' ? c.url : undefined);
+  }, [cover, materials]);
+  // 可作封面的候选：选中素材里有帧画面的（视频有抽帧 / 图片）
+  const frameCandidates = useMemo(() => selectedClips.filter(c => c.poster || c.type === 'image'), [selectedClips]);
+  // 成片预览可播放的真实视频片段（mock 占位素材没有 url）
+  const previewable = useMemo(() => selectedClips.filter(c => c.url && c.type === 'video'), [selectedClips]);
+  // 字幕 cue：脚本 + TTS 时长（无配音则用素材总时长）
+  const cues = useMemo(() => buildCues(script, voiceoverDur || totalDur), [script, voiceoverDur, totalDur]);
+  // 字幕样式沿用封面体系，但默认底部居中 + 适配字号
+  const subStyle: CoverStyle = useMemo(() => ({ ...coverStyle, position: 'bottom', align: 'center', size: coverStyle.size === 'L' ? 'M' : 'S' }), [coverStyle]);
 
   const canNext = step === 'material' ? selected.length > 0 : true;
   const isLast = stepIdx === STEPS.length - 1;
@@ -204,6 +448,12 @@ export default function AiCreateStudio() {
     setRenderOutputPath(null);
     const token = ++renderToken.current;
 
+    // 生成发布封面 SVG（缩略图）：选中帧作底图，否则品牌渐变；带标题样式
+    const cv = await studioApi.cover({ title: coverTitle, ratio, accent: '#d97706', bgImageUrl: coverFrameUrl, ...coverStyle });
+    if (renderToken.current !== token) return;
+    const cUrl = cv.ok ? (cv.url ?? null) : null;
+    setCoverUrl(cUrl);
+
     const spec = {
       materials: matNames,
       script,
@@ -211,11 +461,18 @@ export default function AiCreateStudio() {
       bgm,
       bgmVol,
       coverId: cover,
-      coverTitle: curCoverTitle,
+      coverTitle,
+      coverUrl: cUrl ?? undefined,
       ratio,
       duration,
       platform,
       language: lang,
+      voiceoverUrl: voiceoverUrl ?? undefined,
+      subtitles: subtitlesOn ? {
+        mode: subMode,
+        style: { font: coverStyle.font, color: coverStyle.color, weight: coverStyle.weight, fontFamily: coverStyle.fontFamily },
+        cues: subMode === 'bilingual' ? cues.map((c, i) => ({ ...c, zh: cueZh[i] })) : cues,
+      } : { mode: 'off' as const, style: {}, cues: [] },
     };
 
     // 1) 向服务器申请渲染授权（原料 manifest + 短期令牌）
@@ -286,21 +543,90 @@ export default function AiCreateStudio() {
     void regenScript(type);
   };
 
-  const aiSelect = async () => {
-    setSelecting(true);
-    const { selectedIds } = await studioApi.select(
-      { materials: CLIPS.map(c => ({ id: c.id, name: c.name, type: c.type, duration: c.duration })), duration },
-      selected,
-    );
-    setSelected(selectedIds);
-    setSelecting(false);
-  };
 
   const regenCovers = async () => {
     setCoverLoading(true);
-    const { covers } = await studioApi.covers({ script, language: lang }, coverTitles);
-    setCoverTitles(covers);
+    const { covers } = await studioApi.covers({ script, language: lang }, [coverTitle]);
+    if (covers[0]) setCoverTitle(covers[0]);
     setCoverLoading(false);
+  };
+
+  // 封面标题中文翻译（非中文目标语言时，进入封面步后自动翻译，给用户确认）
+  useEffect(() => {
+    if (step !== 'cover' || lang === 'zh' || !coverTitle.trim()) { setCoverTitleZh(''); return; }
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      const r = await studioApi.translate({ text: coverTitle, target: 'zh' });
+      if (!cancelled && r.ok && r.text) setCoverTitleZh(r.text);
+    }, 450);
+    return () => { cancelled = true; clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coverTitle, lang, step]);
+
+  // 官方导入字体模版（.ttf/.otf/.woff/.woff2）：注册为可用字体
+  const importFont = async (files: FileList | null) => {
+    const f = files?.[0];
+    if (!f) return;
+    try {
+      const buf = await f.arrayBuffer();
+      const family = `custom-${f.name.replace(/\.[^.]+$/, '').replace(/\W+/g, '-')}-${Date.now()}`;
+      const face = new FontFace(family, buf);
+      await face.load();
+      (document.fonts as FontFaceSet).add(face);
+      setCustomFonts(list => [...list, { family, label: f.name.replace(/\.[^.]+$/, '') }]);
+      setCoverStyle(s => ({ ...s, fontFamily: family }));
+    } catch { /* 字体加载失败忽略 */ }
+  };
+
+  // 双语字幕：进入预览且开启双语时，翻译各 cue（目标语言为中文则无需翻译）
+  useEffect(() => {
+    if (step !== 'preview' || !subtitlesOn || subMode !== 'bilingual' || lang === 'zh' || cues.length === 0) {
+      setCueZh([]); return;
+    }
+    let cancelled = false;
+    (async () => {
+      const zh = await Promise.all(cues.map(c => studioApi.translate({ text: c.text, target: 'zh' }).then(r => (r.ok ? r.text : ''))));
+      if (!cancelled) setCueZh(zh);
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step, subtitlesOn, subMode, lang, cues]);
+
+  // cue 数量变化时，把预览高亮夹回有效范围
+  useEffect(() => { if (subPreviewIdx >= cues.length) setSubPreviewIdx(0); }, [cues.length, subPreviewIdx]);
+
+  // 成片预览：开始 / 结束顺序播放
+  const startPreview = () => {
+    if (rendering) return;
+    if (previewable.length === 0) { setPreviewNote(true); return; }
+    setPreviewNote(false);
+    setPreviewIdx(0);
+  };
+  const stopPreview = () => setPreviewIdx(null);
+  // 离开预览步时停止播放
+  useEffect(() => {
+    if (step !== 'preview') { setPreviewIdx(null); setPreviewNote(false); }
+  }, [step]);
+
+  // 导出 / 我的作品
+  const downloadMp4 = () => {
+    if (renderOutputPath) { window.open(`file://${renderOutputPath}`, '_blank'); return; }
+    setPreviewNote(true); // 网页端无法直出 MP4，提示去桌面端合成
+  };
+  const saveToWorks = async () => {
+    await saveProject('published'); // status=published → 进入「我的作品」
+    setSavedToWorks(true);
+    setTimeout(() => setSavedToWorks(false), 2200);
+  };
+
+  // 用剪映精修：桌面端把素材+字幕轨导出为剪映草稿并唤起 App；网页端给出提示
+  const openInCapcut = () => {
+    const bridge = getDesktopRender() as unknown as { openInCapcut?: (m: unknown) => void } | undefined;
+    if (bridge?.openInCapcut) {
+      bridge.openInCapcut({ materials: matNames, cues, subMode, coverTitle, ratio, language: lang });
+    } else {
+      setPreviewNote(true); // 网页端无法访问剪映本地草稿目录，需在桌面客户端操作
+    }
   };
 
   const aiCaption = async () => {
@@ -314,11 +640,104 @@ export default function AiCreateStudio() {
     setCaptionLoading(false);
   };
 
+  /* ── 素材库：拉取真实素材，真实的排在 mock 前面 ──────────────────────── */
+  const refreshMaterials = async () => {
+    const real = await studioApi.listMaterials();
+    setMaterials(real.length ? [...real.map(materialToClip), ...CLIPS] : CLIPS);
+  };
+  useEffect(() => { void refreshMaterials(); }, []);
+
+  const handleUpload = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setUploading(true);
+    const uploadedIds: string[] = [];
+    for (const f of Array.from(files)) {
+      try {
+        const [dataBase64, duration] = await Promise.all([fileToDataUrl(f), probeDuration(f)]);
+        const { material } = await studioApi.uploadMaterial({
+          name: f.name, folder: 'upload', type: mediaType(f), duration, dataBase64, mimeType: f.type,
+        });
+        if (material?.id) uploadedIds.push(material.id);
+      } catch { /* 单个失败不影响其它 */ }
+    }
+    await refreshMaterials();
+    if (uploadedIds.length) {
+      setSelected(s => [...s, ...uploadedIds]);  // 上传完自动选中
+      setActiveFolder('upload');
+    }
+    setUploading(false);
+  };
+
+  /* ── BGM 曲库 ────────────────────────────────────────────────────────── */
+  const refreshBgm = async () => {
+    const list = await studioApi.listBgm();
+    // 内置种子曲已弃用（质量不达标），只保留用户自行上传的音乐
+    setBgms(list.filter(t => !t.builtin) as Bgm[]);
+  };
+  useEffect(() => { void refreshBgm(); }, []);
+
+  // 离开配乐步骤时停止试听
+  useEffect(() => {
+    if (step !== 'bgm' && audioRef.current) {
+      audioRef.current.pause();
+      setPlayingBgm(null);
+    }
+  }, [step]);
+
+  const togglePlay = (track: Bgm) => {
+    if (!track.url) return;
+    const el = audioRef.current;
+    if (!el) return;
+    if (playingBgm === track.id) {
+      el.pause();
+      setPlayingBgm(null);
+      return;
+    }
+    el.src = track.url;
+    void el.play().then(() => setPlayingBgm(track.id)).catch(() => setPlayingBgm(null));
+  };
+
+  const handleBgmUpload = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setBgmUploading(true);
+    const f = files[0];
+    try {
+      const dataBase64 = await fileToDataUrl(f);
+      const { track } = await studioApi.uploadBgm({ name: f.name, dataBase64, mimeType: f.type });
+      await refreshBgm();
+      if (track?.id) setBgm(track.id);
+    } catch { /* ignore */ }
+    setBgmUploading(false);
+  };
+
+  /* ── 配音 TTS ────────────────────────────────────────────────────────── */
+  const genTts = async () => {
+    setTtsLoading(true);
+    setVoiceoverUrl(null);
+    const r = await studioApi.tts({ script, voice, language: lang });
+    if (r.ok && r.url) { setVoiceoverUrl(r.url); setVoiceoverDur(r.duration ?? 0); }
+    setTtsLoading(false);
+  };
+  const toggleTts = () => {
+    const el = ttsAudioRef.current;
+    if (!el || !voiceoverUrl) return;
+    if (ttsPlaying) { el.pause(); setTtsPlaying(false); return; }
+    el.src = voiceoverUrl;
+    void el.play().then(() => setTtsPlaying(true)).catch(() => setTtsPlaying(false));
+  };
+  // 换音色 / 改脚本类型后，旧配音失效
+  const pickVoice = (id: string) => { setVoice(id); setVoiceoverUrl(null); setTtsPlaying(false); };
+  // 离开脚本步时停止试听
+  useEffect(() => {
+    if (step !== 'script' && ttsAudioRef.current) { ttsAudioRef.current.pause(); setTtsPlaying(false); }
+  }, [step]);
+
   /* ── 草稿 / 作品 ─────────────────────────────────────────────────────── */
   const collectSpec = () => ({
     mode, platform, ratio, duration, lang,
     selected, script, scriptType, voice,
-    bgm, bgmVol, cover, coverTitles, account, caption,
+    bgm, bgmVol, cover, coverTitle, coverStyle, account, caption,
+    subtitlesOn, subMode,
   });
 
   const applySpec = (s: Record<string, unknown>) => {
@@ -334,9 +753,12 @@ export default function AiCreateStudio() {
     if (s.bgm) setBgm(s.bgm as string);
     if (typeof s.bgmVol === 'number') setBgmVol(s.bgmVol);
     if (s.cover) setCover(s.cover as string);
-    if (Array.isArray(s.coverTitles)) setCoverTitles(s.coverTitles as string[]);
+    if (typeof s.coverTitle === 'string') setCoverTitle(s.coverTitle);
+    if (s.coverStyle) setCoverStyle(s.coverStyle as CoverStyle);
     if (s.account !== undefined) setAccount(s.account as string | null);
     if (typeof s.caption === 'string') setCaption(s.caption);
+    if (typeof s.subtitlesOn === 'boolean') setSubtitlesOn(s.subtitlesOn);
+    if (s.subMode === 'target' || s.subMode === 'bilingual') setSubMode(s.subMode);
   };
 
   const saveProject = async (status: 'draft' | 'published' = 'draft') => {
@@ -412,11 +834,11 @@ export default function AiCreateStudio() {
             <SectionTitle title="全局参数" desc="贯穿后续所有步骤" />
             <div className="space-y-4">
               <Field label="目标平台">
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   {PLATFORMS.map(p => (
                     <Pill key={p.id} active={platform === p.id}
                       onClick={() => { setPlatform(p.id); setRatio(p.ratio); }}>
-                      {p.label} <span className="opacity-50 ml-1">{p.ratio}</span>
+                      {p.label}
                     </Pill>
                   ))}
                 </div>
@@ -426,14 +848,13 @@ export default function AiCreateStudio() {
                   {RATIOS.map(r => <Pill key={r} active={ratio === r} onClick={() => setRatio(r)}>{r}</Pill>)}
                 </div>
               </Field>
-              <Field label={`成片时长 · ${duration}s`}>
-                <input type="range" min={10} max={60} value={duration}
-                  onChange={e => setDuration(+e.target.value)}
-                  className="w-full max-w-md accent-[#d97706]" />
-              </Field>
               <Field label="目标市场语言">
-                <div className="flex gap-2">
-                  {LANGS.map(l => <Pill key={l.code} active={lang === l.code} onClick={() => setLang(l.code)}>{l.label}</Pill>)}
+                <div className="relative inline-block w-full max-w-xs">
+                  <select value={lang} onChange={e => setLang(e.target.value)}
+                    className="w-full appearance-none rounded-lg border border-border bg-surface px-3 py-2 pr-9 text-sm font-medium text-text-primary outline-none cursor-pointer transition-colors hover:border-border-bright focus:border-amber">
+                    {LANGS.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
+                  </select>
+                  <ChevronDown size={15} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-text-muted" />
                 </div>
               </Field>
             </div>
@@ -441,51 +862,58 @@ export default function AiCreateStudio() {
         );
 
       /* ② 选素材 —— 文件夹 + 网格 两栏 */
-      case 'material':
+      case 'material': {
+        const folderName = (id: string) => FOLDERS.find(f => f.id === id)?.name ?? '';
+        // 按内容相关性搜索：匹配素材名 + 所属文件夹（分类）名
+        const q = search.trim().toLowerCase();
+        const matchSearch = (c: Clip) => q === '' || c.name.toLowerCase().includes(q) || folderName(c.folder).toLowerCase().includes(q);
+        const visible = materials.filter(c => (activeFolder === 'all' || c.folder === activeFolder) && matchSearch(c));
         return (
           <div className="flex h-full -m-6">
-            {/* 文件夹栏 */}
-            <div className="w-48 flex-shrink-0 border-r border-border p-3 overflow-y-auto">
-              <div className="flex items-center justify-between px-2 mb-2">
-                <span className="text-xs font-semibold text-text-secondary">文件夹</span>
+            {/* 文件夹栏（含内容搜索） */}
+            <div className="w-36 flex-shrink-0 border-r border-border p-2.5 overflow-y-auto">
+              {/* 内容相关性搜索 */}
+              <div className="relative mb-3">
+                <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
+                <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索素材内容…"
+                  className="w-full pl-8 pr-2 py-1.5 rounded-lg border border-border bg-surface text-xs outline-none focus:border-accent" />
+              </div>
+              <div className="flex items-center justify-between px-1.5 mb-1.5">
+                <span className="text-[11px] font-semibold text-text-secondary">文件夹</span>
                 <Plus size={13} className="text-text-muted cursor-pointer hover:text-text-primary" />
               </div>
-              {FOLDERS.map(f => (
-                <button key={f.id} onClick={() => setActiveFolder(f.id)}
-                  className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs transition-colors ${
-                    activeFolder === f.id ? 'bg-amber-dim text-amber font-semibold' : 'text-text-secondary hover:bg-surface-2'}`}>
-                  <Folder size={13} className="flex-shrink-0" />
-                  <span className="flex-1 text-left truncate">{f.name}</span>
-                  <span className="text-[10px] text-text-muted">{f.count}</span>
-                </button>
-              ))}
+              {FOLDERS.map(f => {
+                const count = f.id === 'all' ? materials.length : materials.filter(c => c.folder === f.id).length;
+                return (
+                  <button key={f.id} onClick={() => setActiveFolder(f.id)}
+                    className={`w-full flex items-center gap-1.5 px-2 py-2 rounded-lg text-xs transition-colors ${
+                      activeFolder === f.id ? 'bg-amber-dim text-amber font-semibold' : 'text-text-secondary hover:bg-surface-2'}`}>
+                    <Folder size={12} className="flex-shrink-0" />
+                    <span className="flex-1 text-left truncate">{f.name}</span>
+                    {f.id === 'hot' && <span className="text-[7px] font-bold px-1 py-0.5 rounded text-white flex-shrink-0" style={{ background: '#0891b2' }}>实时</span>}
+                    <span className="text-[10px] text-text-muted">{count}</span>
+                  </button>
+                );
+              })}
             </div>
 
             {/* 素材网格 */}
             <div className="flex-1 min-w-0 flex flex-col">
               <div className="flex items-center gap-3 px-5 py-3 border-b border-border flex-shrink-0">
-                <div className="relative flex-1 max-w-xs">
-                  <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
-                  <input value={search} onChange={e => setSearch(e.target.value)} placeholder="按名称搜索…"
-                    className="w-full pl-9 pr-3 py-1.5 rounded-lg border border-border bg-surface text-xs outline-none focus:border-accent" />
-                </div>
-                <button className="btn-ghost !px-3 !py-1.5 !text-xs flex items-center gap-1.5">
-                  <Upload size={12} /> 上传
+                <span className="text-sm font-semibold text-text-primary">{folderName(activeFolder)}</span>
+                {activeFolder === 'hot' && <span className="text-[11px] text-text-muted">官方实时更新</span>}
+                <input ref={fileInputRef} type="file" multiple accept="video/*,image/*,audio/*" className="hidden"
+                  onChange={e => { void handleUpload(e.target.files); e.target.value = ''; }} />
+                <button onClick={() => fileInputRef.current?.click()} disabled={uploading}
+                  className="btn-ghost !px-3 !py-1.5 !text-xs flex items-center gap-1.5 disabled:opacity-60 ml-auto">
+                  {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />} {uploading ? '上传中…' : '上传'}
                 </button>
-                <button onClick={aiSelect} disabled={selecting}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors disabled:opacity-60"
-                  style={{ background: 'var(--color-accent-glow)', color: 'var(--color-accent)' }}>
-                  {selecting ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />} AI 智能选材
-                </button>
-                <span className="text-xs text-text-muted ml-auto">已选 {selected.length} · 共 {CLIPS.length}</span>
+                <span className="text-xs text-text-muted">已选 {selected.length}</span>
               </div>
 
               <div className="flex-1 overflow-y-auto p-5">
                 <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-                  {CLIPS.filter(c =>
-                    (activeFolder === 'all' || c.folder === activeFolder) &&
-                    (search === '' || c.name.includes(search))
-                  ).map(c => {
+                  {visible.map(c => {
                     const on = selected.includes(c.id);
                     const idx = selected.indexOf(c.id);
                     return (
@@ -493,12 +921,18 @@ export default function AiCreateStudio() {
                         className="card !rounded-xl overflow-hidden text-left relative group"
                         style={on ? { borderColor: AMBER, boxShadow: `0 0 0 1px ${AMBER}` } : undefined}>
                         <div className="relative">
-                          <Thumb seed={c.id} label={c.type === 'image' ? 'IMG' : `0:${String(c.duration).padStart(2, '0')}`} />
+                          {/* 真实素材显示实际预览，mock 用渐变占位 */}
+                          {c.url
+                            ? <RealThumb clip={c} />
+                            : <Thumb seed={c.id} src={c.poster} label={c.type === 'image' ? 'IMG' : `0:${String(c.duration).padStart(2, '0')}`} />}
                           {on && (
-                            <span className="absolute top-1.5 left-1.5 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white"
+                            <span className="absolute top-1.5 left-1.5 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white z-10"
                               style={{ background: AMBER }}>{idx + 1}</span>
                           )}
-                          <span className="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold text-white bg-black/45 uppercase">
+                          {c.scope === 'shared' && !on && (
+                            <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded text-[8px] font-bold text-white z-10" style={{ background: '#0891b2' }}>公共</span>
+                          )}
+                          <span className="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold text-white bg-black/45 uppercase z-10">
                             {c.type}
                           </span>
                         </div>
@@ -510,10 +944,22 @@ export default function AiCreateStudio() {
                     );
                   })}
                 </div>
+                {visible.length === 0 && (
+                  <div className="text-center py-16">
+                    <Upload size={26} className="mx-auto text-text-muted mb-3 opacity-30" />
+                    <p className="text-sm text-text-muted">
+                      {search.trim() ? '没有匹配的素材' : activeFolder === 'hot' ? '爆款素材库更新中，敬请期待' : '这个文件夹还没有素材'}
+                    </p>
+                    {activeFolder !== 'hot' && !search.trim() && (
+                      <button onClick={() => fileInputRef.current?.click()} className="text-xs font-semibold mt-2" style={{ color: AMBER }}>点此上传</button>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </div>
         );
+      }
 
       /* ③ 口播脚本 */
       case 'script':
@@ -557,7 +1003,7 @@ export default function AiCreateStudio() {
             <Field label="配音音色">
               <div className="grid grid-cols-2 gap-2 max-w-xl">
                 {VOICES.map(v => (
-                  <button key={v.id} onClick={() => setVoice(v.id)}
+                  <button key={v.id} onClick={() => pickVoice(v.id)}
                     className="card !rounded-xl p-3 flex items-center gap-2.5 text-left"
                     style={voice === v.id ? { borderColor: AMBER, boxShadow: `0 0 0 1px ${AMBER}` } : undefined}>
                     <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
@@ -566,11 +1012,39 @@ export default function AiCreateStudio() {
                     </div>
                     <div className="min-w-0">
                       <p className="text-xs font-semibold text-text-primary truncate">{v.name}</p>
-                      <p className="text-[10px] text-text-muted">{v.tag}</p>
+                      <p className="text-[10px] text-text-muted">{v.id === 'v4' ? v.tag : `${v.tag} · ${langZh(lang)}配音`}</p>
                     </div>
                   </button>
                 ))}
               </div>
+
+              {/* 生成 / 试听配音 */}
+              <div className="flex items-center gap-3 mt-3 max-w-xl">
+                {voice === 'v4' ? (
+                  <span className="text-xs text-text-muted">真人口播：上传音频后直接使用，无需 AI 配音</span>
+                ) : (
+                  <>
+                    <button onClick={() => void genTts()} disabled={ttsLoading}
+                      className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold text-white transition-all active:scale-95 disabled:opacity-50"
+                      style={{ background: AMBER }}>
+                      {ttsLoading ? <Loader2 size={14} className="animate-spin" /> : <Mic size={14} />}
+                      {ttsLoading ? 'AI 配音生成中…' : voiceoverUrl ? '重新生成配音' : '生成 AI 配音'}
+                    </button>
+                    {voiceoverUrl && (
+                      <button onClick={toggleTts}
+                        className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold border border-border hover:border-border-bright">
+                        {ttsPlaying ? <Pause size={14} /> : <Play size={14} />} 试听 {fmtDur(voiceoverDur)}
+                      </button>
+                    )}
+                    {voiceoverUrl && (
+                      <span className="flex items-center gap-1 text-xs font-medium" style={{ color: 'var(--color-accent)' }}>
+                        <Check size={13} /> 已生成
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
+              <audio ref={ttsAudioRef} onEnded={() => setTtsPlaying(false)} className="hidden" />
             </Field>
           </div>
         );
@@ -579,29 +1053,48 @@ export default function AiCreateStudio() {
       case 'bgm':
         return (
           <div className="max-w-2xl">
-            <SectionTitle title="背景配乐" desc="AI 已按视频情绪推荐，可手动更换" />
+            <div className="flex items-center justify-between mb-4">
+              <SectionTitle title="背景配乐" desc="内置曲库已下线，请上传自有音乐（可不配乐）" noMargin />
+              <input ref={bgmInputRef} type="file" accept="audio/*" className="hidden"
+                onChange={e => { void handleBgmUpload(e.target.files); e.target.value = ''; }} />
+              <button onClick={() => bgmInputRef.current?.click()} disabled={bgmUploading}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-border hover:border-border-bright disabled:opacity-60">
+                {bgmUploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />} 上传音乐
+              </button>
+            </div>
+            {bgms.length === 0 && (
+              <div className="card !rounded-xl border-dashed text-center py-10 mb-7">
+                <Music size={24} className="mx-auto text-text-muted opacity-40 mb-2" />
+                <p className="text-sm text-text-muted">暂无背景音乐</p>
+                <button onClick={() => bgmInputRef.current?.click()} className="text-xs font-semibold mt-2" style={{ color: AMBER }}>上传一首</button>
+              </div>
+            )}
             <div className="space-y-2 mb-7">
-              {BGMS.map(b => {
+              {bgms.map(b => {
                 const on = bgm === b.id;
+                const playing = playingBgm === b.id;
                 return (
                   <button key={b.id} onClick={() => setBgm(b.id)}
                     className="card !rounded-xl w-full p-3 flex items-center gap-3 text-left"
                     style={on ? { borderColor: AMBER, boxShadow: `0 0 0 1px ${AMBER}` } : undefined}>
-                    <div className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0"
-                      style={{ background: on ? AMBER : 'var(--color-surface-2)', color: on ? '#fff' : 'var(--color-text-muted)' }}>
-                      {on ? <Volume2 size={15} /> : <Play size={15} />}
-                    </div>
+                    {/* 试听播放/暂停 */}
+                    <span onClick={e => { e.stopPropagation(); togglePlay(b); }}
+                      className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 transition-colors"
+                      style={{ background: playing ? AMBER : on ? 'var(--color-amber-dim)' : 'var(--color-surface-2)', color: playing ? '#fff' : on ? AMBER : 'var(--color-text-muted)' }}>
+                      {playing ? <Pause size={15} /> : <Play size={15} />}
+                    </span>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
                         <p className="text-sm font-semibold text-text-primary truncate">{b.name}</p>
                         {b.recommended && (
                           <span className="text-[9px] font-bold px-1.5 py-0.5 rounded" style={{ background: AMBER, color: '#fff' }}>AI 推荐</span>
                         )}
+                        {playing && <span className="text-[10px] font-medium" style={{ color: AMBER }}>♪ 试听中</span>}
                       </div>
                       <p className="text-xs text-text-muted mt-0.5">{b.mood}</p>
                     </div>
-                    <span className="text-xs font-mono text-text-muted">{b.duration}</span>
-                    {on && <Check size={16} style={{ color: AMBER }} />}
+                    <span className="text-xs font-mono text-text-muted">{fmtDur(b.duration)}</span>
+                    {on ? <Check size={16} style={{ color: AMBER }} /> : <Volume2 size={15} className="text-text-muted opacity-0" />}
                   </button>
                 );
               })}
@@ -614,42 +1107,126 @@ export default function AiCreateStudio() {
           </div>
         );
 
-      /* ⑤ 封面 */
-      case 'cover':
+      /* ⑤ 封面 —— 用所选视频的真实帧画面，便于辨认内容 */
+      case 'cover': {
+        const renderCard = (key: string, frameUrl: string | undefined, label: string) => {
+          const on = cover === key;
+          return (
+            <div key={key} role="button" tabIndex={0} onClick={() => setCover(key)}
+              className="card !rounded-2xl overflow-hidden text-left cursor-pointer"
+              style={on ? { borderColor: AMBER, boxShadow: `0 0 0 2px ${AMBER}` } : undefined}>
+              <div className="relative aspect-[9/16]">
+                {/* 选中的封面标题可直接在画面上点选编辑 */}
+                <CoverFace frameUrl={frameUrl} title={coverTitle} style={coverStyle}
+                  editable={on} onTitleChange={setCoverTitle} />
+                <span className="absolute top-2 left-2 px-1.5 py-0.5 rounded text-[9px] font-semibold text-white bg-black/45 max-w-[80%] truncate z-10">{label}</span>
+                {on && (
+                  <span className="absolute top-2 right-2 w-6 h-6 rounded-full flex items-center justify-center text-white z-10" style={{ background: AMBER }}>
+                    <Check size={14} />
+                  </span>
+                )}
+              </div>
+            </div>
+          );
+        };
+        const SEG = (active: boolean) => `px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${active ? 'bg-surface text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'}`;
+        const SWATCHES = ['#ffffff', '#111827', '#d97706', '#16a34a', '#ef4444', '#3b82f6'];
         return (
           <div className="max-w-3xl">
-            <SectionTitle title="选择封面" desc="AI 提取高光帧并自动配标题，可点选切换" />
-            <div className="grid grid-cols-3 gap-4">
-              {COVERS.map((cv, i) => {
-                const on = cover === cv.id;
-                return (
-                  <button key={cv.id} onClick={() => setCover(cv.id)}
-                    className="card !rounded-2xl overflow-hidden text-left"
-                    style={on ? { borderColor: AMBER, boxShadow: `0 0 0 2px ${AMBER}` } : undefined}>
-                    <div className="relative aspect-[9/16]">
-                      <Thumb seed={cv.id} ratio="aspect-[9/16]" />
-                      <div className="absolute inset-0 flex items-end p-3"
-                        style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.55), transparent 55%)' }}>
-                        <p className="text-white text-sm font-black leading-tight font-display" style={{ textShadow: '0 1px 4px rgba(0,0,0,0.5)' }}>
-                          {coverTitles[i]}
-                        </p>
-                      </div>
-                      {on && (
-                        <span className="absolute top-2 right-2 w-6 h-6 rounded-full flex items-center justify-center text-white" style={{ background: AMBER }}>
-                          <Check size={14} />
-                        </span>
-                      )}
-                    </div>
-                  </button>
-                );
-              })}
+            <SectionTitle title="选择封面" desc="用所选视频的真实帧作封面，一眼辨认是哪条素材；也可用纯色底" />
+
+            {/* 标题（叠加在封面上，可编辑 / AI 重写） */}
+            <div className="mb-4 max-w-xl">
+              <p className="text-xs font-semibold text-text-secondary mb-1.5">封面标题</p>
+              <div className="flex items-center gap-2">
+                <input value={coverTitle} onChange={e => setCoverTitle(e.target.value)}
+                  className="flex-1 px-3 py-2 rounded-lg border border-border bg-surface text-sm outline-none focus:border-accent" />
+                <button onClick={regenCovers} disabled={coverLoading}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border border-border hover:border-border-bright disabled:opacity-60 flex-shrink-0">
+                  {coverLoading ? <Loader2 size={13} className="animate-spin" /> : <Wand2 size={13} />} AI 重写
+                </button>
+              </div>
+              {/* 外语标题的中文翻译，供用户确认 */}
+              {lang !== 'zh' && coverTitleZh && (
+                <p className="text-[11px] text-text-muted mt-1.5">译：{coverTitleZh}</p>
+              )}
+              <p className="text-[11px] text-text-muted mt-1">提示：可直接点选下方选中封面上的标题就地编辑。</p>
             </div>
-            <button onClick={regenCovers} disabled={coverLoading}
-              className="mt-4 flex items-center gap-1.5 text-xs font-semibold disabled:opacity-60" style={{ color: AMBER }}>
-              {coverLoading ? <Loader2 size={13} className="animate-spin" /> : <Wand2 size={13} />} 重新生成封面候选
-            </button>
+
+            {/* 标题样式：颜色 / 字号 / 位置 / 对齐 —— 同时驱动预览与生成的 SVG */}
+            <div className="mb-4 flex flex-wrap items-center gap-x-6 gap-y-3 max-w-xl">
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-text-secondary">颜色</span>
+                {SWATCHES.map(c => (
+                  <button key={c} onClick={() => setCoverStyle(s => ({ ...s, color: c }))}
+                    className="w-5 h-5 rounded-full border transition-all"
+                    style={{ background: c, borderColor: coverStyle.color === c ? AMBER : 'var(--color-border)', boxShadow: coverStyle.color === c ? `0 0 0 2px ${AMBER}` : undefined }} />
+                ))}
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-text-secondary">字号</span>
+                <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-surface-2 border border-border">
+                  {(['S', 'M', 'L'] as const).map(z => (
+                    <button key={z} className={SEG(coverStyle.size === z)} onClick={() => setCoverStyle(s => ({ ...s, size: z }))}>{z}</button>
+                  ))}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-text-secondary">位置</span>
+                <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-surface-2 border border-border">
+                  {([['top', '上'], ['center', '中'], ['bottom', '下']] as const).map(([p, l]) => (
+                    <button key={p} className={SEG(coverStyle.position === p)} onClick={() => setCoverStyle(s => ({ ...s, position: p }))}>{l}</button>
+                  ))}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-text-secondary">对齐</span>
+                <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-surface-2 border border-border">
+                  {([['left', '左'], ['center', '居中']] as const).map(([a, l]) => (
+                    <button key={a} className={SEG(coverStyle.align === a)} onClick={() => setCoverStyle(s => ({ ...s, align: a }))}>{l}</button>
+                  ))}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-text-secondary">粗细</span>
+                <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-surface-2 border border-border">
+                  {([['regular', '常规'], ['bold', '加粗'], ['heavy', '特粗']] as const).map(([w, l]) => (
+                    <button key={w} className={SEG((coverStyle.weight ?? 'bold') === w)} onClick={() => setCoverStyle(s => ({ ...s, weight: w }))}>{l}</button>
+                  ))}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-semibold text-text-secondary">字体</span>
+                <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-surface-2 border border-border flex-wrap">
+                  {COVER_FONTS.map(f => (
+                    <button key={f.id} className={SEG(coverStyle.font === f.id && !coverStyle.fontFamily)} style={{ fontFamily: f.css }}
+                      onClick={() => setCoverStyle(s => ({ ...s, font: f.id, fontFamily: undefined }))}>{f.label}</button>
+                  ))}
+                  {customFonts.map(cf => (
+                    <button key={cf.family} className={SEG(coverStyle.fontFamily === cf.family)} style={{ fontFamily: cf.family }}
+                      onClick={() => setCoverStyle(s => ({ ...s, fontFamily: cf.family }))}>{cf.label}</button>
+                  ))}
+                </div>
+                {/* 官方导入字体模版 */}
+                <input ref={fontInputRef} type="file" accept=".ttf,.otf,.woff,.woff2,font/*" className="hidden"
+                  onChange={e => { void importFont(e.target.files); e.target.value = ''; }} />
+                <button onClick={() => fontInputRef.current?.click()}
+                  className="flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold text-text-muted hover:text-text-primary">
+                  <Upload size={12} /> 导入字体模版
+                </button>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-4 gap-3">
+              {renderCard('gradient', undefined, '纯色底')}
+              {frameCandidates.map(c => renderCard(c.id, c.poster ?? c.url, c.name))}
+            </div>
+            {frameCandidates.length === 0 && (
+              <p className="text-xs text-text-muted mt-3">还没有可用帧画面——回到「选素材」选入视频或图片，这里就能用它们的画面当封面。</p>
+            )}
           </div>
         );
+      }
 
       /* ⑥ 成片预览 */
       case 'preview':
@@ -657,30 +1234,67 @@ export default function AiCreateStudio() {
           <div className="flex items-start gap-8">
             {/* 播放器 */}
             <div className="flex-shrink-0">
-              <div className="relative rounded-2xl overflow-hidden border border-border" style={{ width: 260 }}>
-                <Thumb seed={cover} ratio="aspect-[9/16]" />
-                <div className="absolute inset-0 flex items-center justify-center">
-                  {rendering ? (
-                    <div className="text-center">
-                      <Loader2 size={30} className="text-white animate-spin mx-auto mb-2" />
-                      <p className="text-white text-xs font-medium">AI 合成中… {renderPct}%</p>
-                      <div className="mx-auto mt-2 h-1 w-32 rounded-full bg-white/25 overflow-hidden">
-                        <div className="h-full rounded-full transition-all" style={{ width: `${renderPct}%`, background: '#fff' }} />
-                      </div>
-                    </div>
+              <div className="relative rounded-2xl overflow-hidden border border-border bg-black" style={{ width: 260 }}>
+                <div className="relative aspect-[9/16]">
+                  {previewIdx !== null && previewable[previewIdx] ? (
+                    // 顺序播放选中的真实视频片段（网页端示意预览）
+                    <video ref={previewVideoRef} src={previewable[previewIdx].url} autoPlay controls playsInline
+                      className="absolute inset-0 w-full h-full object-cover bg-black"
+                      onEnded={() => setPreviewIdx(i => (i !== null && i + 1 < previewable.length ? i + 1 : null))} />
                   ) : (
-                    <button className="w-14 h-14 rounded-full bg-white/90 flex items-center justify-center shadow-lg">
-                      <Play size={22} className="text-text-primary ml-0.5" fill="currentColor" />
-                    </button>
+                    <CoverFace coverUrl={coverUrl} frameUrl={coverFrameUrl} title={coverTitle} style={coverStyle} />
                   )}
                 </div>
-                {!rendering && (
+                {previewIdx === null && (
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    {rendering ? (
+                      <div className="text-center">
+                        <Loader2 size={30} className="text-white animate-spin mx-auto mb-2" />
+                        <p className="text-white text-xs font-medium">AI 合成中… {renderPct}%</p>
+                        <div className="mx-auto mt-2 h-1 w-32 rounded-full bg-white/25 overflow-hidden">
+                          <div className="h-full rounded-full transition-all" style={{ width: `${renderPct}%`, background: '#fff' }} />
+                        </div>
+                      </div>
+                    ) : (
+                      <button onClick={startPreview}
+                        className="w-14 h-14 rounded-full bg-white/90 flex items-center justify-center shadow-lg active:scale-95 transition-transform">
+                        <Play size={22} className="text-text-primary ml-0.5" fill="currentColor" />
+                      </button>
+                    )}
+                  </div>
+                )}
+                {/* 字幕叠层（沿用封面样式 · 底部居中；预览展示当前选中 cue） */}
+                {subtitlesOn && !rendering && cues[subPreviewIdx] && (
+                  <div className="absolute inset-x-0 bottom-8 px-4 z-10 text-center pointer-events-none"
+                    style={{ fontFamily: subStyle.fontFamily ?? fontCss(subStyle.font) }}>
+                    <p className="leading-snug" style={{ color: subStyle.color, fontWeight: WEIGHT_MAP[subStyle.weight ?? 'bold'], fontSize: 13, textShadow: '0 1px 3px rgba(0,0,0,0.9), 0 0 1px rgba(0,0,0,0.9)' }}>
+                      {cues[subPreviewIdx].text}
+                    </p>
+                    {subMode === 'bilingual' && lang !== 'zh' && cueZh[subPreviewIdx] && (
+                      <p className="leading-snug mt-0.5" style={{ color: '#fff', fontWeight: 600, fontSize: 11, textShadow: '0 1px 3px rgba(0,0,0,0.9)' }}>
+                        {cueZh[subPreviewIdx]}
+                      </p>
+                    )}
+                  </div>
+                )}
+                {previewIdx !== null && (
+                  <button onClick={stopPreview} className="absolute top-2 right-2 z-10 w-7 h-7 rounded-full bg-black/55 flex items-center justify-center text-white">
+                    <X size={14} />
+                  </button>
+                )}
+                {previewIdx === null && !rendering && (
                   <div className="absolute bottom-0 inset-x-0 px-3 py-2 flex items-center justify-between bg-black/40">
                     <span className="text-[10px] font-mono text-white">0:00 / 0:{totalDur}</span>
                     <span className="text-[10px] font-mono text-white">{ratio}</span>
                   </div>
                 )}
               </div>
+              {/* 无真实可播放素材时的说明 */}
+              {previewNote && (
+                <p className="text-[11px] text-text-muted mt-2 w-[260px] leading-relaxed">
+                  该片段暂无可播放源文件，请上传真实视频素材，或在桌面客户端合成后下载完整成片。
+                </p>
+              )}
             </div>
 
             {/* 时间轴 + 局部重渲染 */}
@@ -690,8 +1304,8 @@ export default function AiCreateStudio() {
                 {[
                   { icon: Film,     label: '素材片段', val: `${selectedClips.length} 段 · ${totalDur}s` },
                   { icon: Mic,      label: '口播配音', val: VOICES.find(v => v.id === voice)?.name ?? '' },
-                  { icon: Music,    label: '背景配乐', val: BGMS.find(b => b.id === bgm)?.name ?? '' },
-                  { icon: ImageIcon,label: '封面',     val: curCoverTitle },
+                  { icon: Music,    label: '背景配乐', val: bgms.find(b => b.id === bgm)?.name ?? '' },
+                  { icon: ImageIcon,label: '封面',     val: cover === 'gradient' ? `纯色 · ${coverTitle}` : `素材帧 · ${coverTitle}` },
                 ].map(row => (
                   <div key={row.label} className="card !rounded-xl p-3 flex items-center gap-3">
                     <row.icon size={15} className="text-text-muted flex-shrink-0" />
@@ -703,10 +1317,64 @@ export default function AiCreateStudio() {
                   </div>
                 ))}
               </div>
-              <button onClick={goPreview} disabled={rendering}
-                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border border-border hover:border-border-bright disabled:opacity-50">
-                <RefreshCw size={12} className={rendering ? 'animate-spin' : ''} /> 重新合成成片
-              </button>
+              {/* 字幕：按口播内容自动生成（沿用封面样式），可开关 / 切双语 / 逐句核对 */}
+              <div className="card !rounded-xl p-3.5 mb-4">
+                <div className="flex items-center gap-2 mb-2.5">
+                  <FileText size={15} className="text-text-muted" />
+                  <span className="text-xs font-semibold text-text-secondary">字幕</span>
+                  <span className="text-[10px] text-text-muted">按口播内容自动生成</span>
+                  <div className="ml-auto flex items-center gap-2">
+                    {subtitlesOn && (
+                      <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-surface-2 border border-border">
+                        {([['target', '目标语言'], ['bilingual', '双语']] as const).map(([m, l]) => (
+                          <button key={m} onClick={() => setSubMode(m)}
+                            className={`px-2 py-1 rounded-md text-[11px] font-semibold transition-all ${subMode === m ? 'bg-surface text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'}`}>{l}</button>
+                        ))}
+                      </div>
+                    )}
+                    {/* 开关 */}
+                    <button onClick={() => setSubtitlesOn(v => !v)} role="switch" aria-checked={subtitlesOn}
+                      className="relative w-9 h-5 rounded-full transition-colors flex-shrink-0"
+                      style={{ background: subtitlesOn ? AMBER : 'var(--color-surface-2)' }}>
+                      <span className="absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform" style={{ transform: subtitlesOn ? 'translateX(16px)' : 'none' }} />
+                    </button>
+                  </div>
+                </div>
+                {subtitlesOn ? (
+                  cues.length > 0 ? (
+                    <div className="max-h-44 overflow-y-auto -mx-1 px-1 space-y-1">
+                      {cues.map((c, i) => (
+                        <button key={i} onClick={() => setSubPreviewIdx(i)}
+                          className={`w-full text-left flex gap-2 px-2 py-1.5 rounded-lg transition-colors ${i === subPreviewIdx ? 'bg-amber-dim' : 'hover:bg-surface-2'}`}>
+                          <span className="text-[10px] font-mono text-text-muted pt-0.5 flex-shrink-0 w-14">{fmtTime(c.start)}-{fmtTime(c.end)}</span>
+                          <span className="min-w-0">
+                            <span className="block text-xs text-text-primary leading-snug">{c.text}</span>
+                            {subMode === 'bilingual' && lang !== 'zh' && (
+                              <span className="block text-[10px] text-text-muted leading-snug mt-0.5">{cueZh[i] ?? '翻译中…'}</span>
+                            )}
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-text-muted px-1">还没有口播脚本，回到「口播脚本」生成后这里会自动出字幕。</p>
+                  )
+                ) : (
+                  <p className="text-[11px] text-text-muted px-1">字幕已关闭，成片将不烧录字幕。</p>
+                )}
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button onClick={goPreview} disabled={rendering}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border border-border hover:border-border-bright disabled:opacity-50">
+                  <RefreshCw size={12} className={rendering ? 'animate-spin' : ''} /> 重新合成成片
+                </button>
+                {/* 字幕/卡点精修交给本地剪映 */}
+                <button onClick={openInCapcut}
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border border-border hover:border-border-bright">
+                  <Wand2 size={12} /> 用剪映精修
+                </button>
+              </div>
             </div>
           </div>
         );
@@ -732,11 +1400,13 @@ export default function AiCreateStudio() {
                   <p className="text-sm font-bold text-text-primary mb-1">导出成片</p>
                   <p className="text-xs text-text-muted mb-4 leading-relaxed">下载到本地或保存至「我的作品」素材库</p>
                   <div className="space-y-2">
-                    <button className="btn-primary w-full !py-2.5 flex items-center justify-center gap-2">
+                    <button onClick={downloadMp4} className="btn-primary w-full !py-2.5 flex items-center justify-center gap-2">
                       <Download size={14} /> 下载 MP4（{ratio} · {totalDur}s）
                     </button>
-                    <button className="btn-ghost w-full !py-2.5 flex items-center justify-center gap-2">
-                      <Plus size={14} /> 存入「我的作品」
+                    <button onClick={() => void saveToWorks()} disabled={savingProj}
+                      className="btn-ghost w-full !py-2.5 flex items-center justify-center gap-2 disabled:opacity-60">
+                      {savingProj ? <Loader2 size={14} className="animate-spin" /> : savedToWorks ? <Check size={14} className="text-accent" /> : <Plus size={14} />}
+                      {savedToWorks ? '已存入「我的作品」' : '存入「我的作品」'}
                     </button>
                   </div>
                 </div>
@@ -777,7 +1447,8 @@ export default function AiCreateStudio() {
 
                   <div className="flex items-center gap-2 mb-3 text-[11px] text-text-muted">
                     <Clock size={12} /> 立即发布
-                    <button className="ml-auto font-semibold hover:text-text-primary">定时…</button>
+                    <button onClick={() => { void saveProject('draft'); onNavigate?.('scheduled'); }}
+                      className="ml-auto font-semibold hover:text-text-primary">定时…</button>
                   </div>
 
                   <button onClick={() => { setPublished(true); void saveProject('published'); }} disabled={!account}
@@ -795,6 +1466,9 @@ export default function AiCreateStudio() {
 
   return (
     <div className="flex flex-col h-full relative">
+      {/* BGM 试听用的隐藏音频元素 */}
+      <audio ref={audioRef} onEnded={() => setPlayingBgm(null)} className="hidden" />
+
       {/* ── 顶部工作条：标题 + 保存草稿 + 我的作品 ─────────── */}
       <div className="h-11 flex items-center gap-3 px-4 border-b border-border flex-shrink-0">
         <FileText size={13} className="text-text-muted flex-shrink-0" />
@@ -825,31 +1499,31 @@ export default function AiCreateStudio() {
 
       <div className="flex flex-1 min-h-0">
       {/* ── ① 步骤导航 ─────────────────────────────── */}
-      <aside className="w-56 flex-shrink-0 border-r border-border flex flex-col bg-surface-2/40">
-        <div className="px-4 pt-4 pb-3">
-          <p className="text-[10px] font-mono text-text-muted uppercase tracking-widest mb-1">AI 生成内容</p>
-          <p className="text-sm font-bold text-text-primary font-display">混剪工作台</p>
+      <aside className="w-32 flex-shrink-0 border-r border-border flex flex-col bg-surface-2/40">
+        <div className="px-3 pt-4 pb-3">
+          <p className="text-[9px] font-mono text-text-muted uppercase tracking-wider mb-1">AI 生成</p>
+          <p className="text-xs font-bold text-text-primary font-display">混剪工作台</p>
         </div>
-        <div className="flex-1 px-3 space-y-0.5 overflow-y-auto">
+        <div className="flex-1 px-2 space-y-0.5 overflow-y-auto">
           {STEPS.map((s, i) => {
             const done = i < stepIdx;
             const active = i === stepIdx;
             return (
               <button key={s.id} onClick={() => i <= stepIdx && setStepIdx(i)}
                 disabled={i > stepIdx}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-left transition-colors ${
+                className={`w-full flex items-center gap-2 px-2 py-2 rounded-lg text-left transition-colors ${
                   active ? 'bg-surface shadow-sm' : i > stepIdx ? 'opacity-40 cursor-not-allowed' : 'hover:bg-surface'}`}>
-                <span className="w-6 h-6 rounded-lg flex items-center justify-center flex-shrink-0 text-[11px] font-bold"
+                <span className="w-5 h-5 rounded-md flex items-center justify-center flex-shrink-0 text-[10px] font-bold"
                   style={
                     active ? { background: AMBER, color: '#fff' }
                     : done ? { background: 'var(--color-accent-glow)', color: 'var(--color-accent)' }
                     : { background: 'var(--color-surface-2)', color: 'var(--color-text-muted)' }
                   }>
-                  {done ? <Check size={13} /> : i + 1}
+                  {done ? <Check size={11} /> : i + 1}
                 </span>
                 <div className="min-w-0">
-                  <p className={`text-xs font-semibold leading-tight ${active ? 'text-text-primary' : 'text-text-secondary'}`}>{s.label}</p>
-                  <p className="text-[10px] text-text-muted truncate mt-0.5">{s.hint}</p>
+                  <p className={`text-[11px] font-semibold leading-tight whitespace-nowrap ${active ? 'text-text-primary' : 'text-text-secondary'}`}>{s.label}</p>
+                  <p className="text-[8px] text-text-muted truncate whitespace-nowrap mt-0.5">{s.hint}</p>
                 </div>
               </button>
             );
@@ -892,7 +1566,8 @@ export default function AiCreateStudio() {
         </div>
       </div>
 
-      {/* ── ③ 实时预览 / 制作摘要 ───────────────────── */}
+      {/* ── ③ 实时预览 / 制作摘要（选模式步骤不展示） ───────────────────── */}
+      {step !== 'mode' && (
       <aside className="w-72 flex-shrink-0 border-l border-border flex flex-col bg-surface-2/40">
         <div className="px-4 py-3 border-b border-border flex items-center gap-2">
           <Smartphone size={13} className="text-text-muted" />
@@ -903,13 +1578,7 @@ export default function AiCreateStudio() {
           {/* 手机框预览 */}
           <div className="mx-auto rounded-2xl overflow-hidden border-2 border-border-bright shadow-sm" style={{ width: 150 }}>
             <div className="relative aspect-[9/16]">
-              <Thumb seed={cover} ratio="aspect-[9/16]" />
-              <div className="absolute inset-0 flex items-end p-2.5"
-                style={{ background: 'linear-gradient(to top, rgba(0,0,0,0.5), transparent 55%)' }}>
-                <p className="text-white text-[11px] font-black leading-tight font-display">
-                  {curCoverTitle}
-                </p>
-              </div>
+              <CoverFace coverUrl={coverUrl} frameUrl={coverFrameUrl} title={coverTitle} style={coverStyle} />
               <span className="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded text-[9px] font-mono font-bold text-white bg-black/45">
                 {ratio}
               </span>
@@ -923,7 +1592,7 @@ export default function AiCreateStudio() {
             <SummaryRow icon={Clock} label="时长" value={`${totalDur || duration}s`} />
             <SummaryRow icon={Film} label="素材" value={`${selected.length} 段`} />
             <SummaryRow icon={Mic} label="配音" value={VOICES.find(v => v.id === voice)?.name.split('（')[0] ?? ''} />
-            <SummaryRow icon={Music} label="配乐" value={BGMS.find(b => b.id === bgm)?.name ?? ''} />
+            <SummaryRow icon={Music} label="配乐" value={bgms.find(b => b.id === bgm)?.name ?? ''} />
             <SummaryRow icon={Globe} label="语言" value={LANGS.find(l => l.code === lang)?.label ?? ''} />
           </div>
 
@@ -935,6 +1604,7 @@ export default function AiCreateStudio() {
           )}
         </div>
       </aside>
+      )}
       </div>
 
       {/* ── 我的作品 / 草稿 列表浮层 ─────────────────────── */}

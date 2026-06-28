@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 import { store } from '../storage/index.js';
-import { r2Upload, r2Download } from '../storage/r2.js';
+import { attachFile, fetchFile } from '../storage/files.js';
 import { analyzeVideo } from '../agents/gemini.js';
 import type { Platform, VideoStatus } from '../types/index.js';
 
@@ -11,17 +11,16 @@ videosRouter.use(requireAuth);
 const COL = 'trend_videos';
 
 // ─── POST /videos/ingest ──────────────────────────────────────────────────────
-// Body: { platform, title?, tags?, sourceUrl?, videoBase64?, mimeType?, r2Key? }
+// Body: { platform, title?, tags?, sourceUrl?, videoBase64?, mimeType? }
 videosRouter.post('/ingest', async (req, res) => {
   const { userId, tenantId } = res.locals as AuthLocals;
-  const { platform, title, tags, sourceUrl, videoBase64, mimeType, r2Key } = req.body as {
+  const { platform, title, tags, sourceUrl, videoBase64, mimeType } = req.body as {
     platform?: Platform;
     title?: string;
     tags?: string[];
     sourceUrl?: string;
     videoBase64?: string;
     mimeType?: string;
-    r2Key?: string;
   };
 
   if (!platform) {
@@ -29,28 +28,13 @@ videosRouter.post('/ingest', async (req, res) => {
     return;
   }
 
-  let fileId: string | undefined = r2Key;
-  let thumbnailUrl = '';
-
-  // If base64 video provided, upload to R2
-  if (videoBase64 && !r2Key) {
-    const buf = Buffer.from(videoBase64.replace(/^data:[^,]+,/, ''), 'base64');
-    const ext = (mimeType ?? 'video/mp4').split('/')[1] ?? 'mp4';
-    fileId = `${tenantId}/${Date.now()}.${ext}`;
-    try {
-      await r2Upload({ key: fileId, body: buf, contentType: mimeType ?? 'video/mp4' });
-    } catch (e) {
-      res.status(500).json({ error: 'R2 upload failed', detail: String(e) });
-      return;
-    }
-  }
-
+  // Create the record first; the video blob (if any) attaches to it.
   const record = await store.create(COL, {
     tenantId,
     platform: platform ?? 'tiktok',
     title: title ?? '',
-    thumbnailUrl,
-    videoFileId: fileId ?? '',
+    thumbnailUrl: '',
+    videoFileId: '',
     duration: 0,
     sourceUrl: sourceUrl ?? '',
     tags: JSON.stringify(tags ?? []),
@@ -64,8 +48,26 @@ videosRouter.post('/ingest', async (req, res) => {
     return;
   }
 
+  // Attach the video to the PB record's file field (PB disk storage, no S3).
+  let filename = '';
+  if (videoBase64) {
+    const buf = Buffer.from(videoBase64.replace(/^data:[^,]+,/, ''), 'base64');
+    const ext = (mimeType ?? 'video/mp4').split('/')[1] ?? 'mp4';
+    filename = (await attachFile(COL, record.id, 'videoFile', {
+      name: `video.${ext}`,
+      buf,
+      contentType: mimeType ?? 'video/mp4',
+    })) ?? '';
+    if (!filename) {
+      await store.update(COL, record.id, { status: 'failed' });
+      res.status(500).json({ error: 'Video upload failed' });
+      return;
+    }
+    await store.update(COL, record.id, { videoFileId: filename });
+  }
+
   // Trigger analysis async (fire and forget)
-  void triggerVideoAnalysis(record.id as string, fileId, mimeType, userId);
+  void triggerVideoAnalysis(record.id, filename || undefined, mimeType, userId);
 
   res.status(201).json({ id: record.id, status: 'pending' });
 });
@@ -128,18 +130,18 @@ videosRouter.patch('/:id/reanalyze', async (req, res) => {
 // ─── Internal: async AI analysis ─────────────────────────────────────────────
 async function triggerVideoAnalysis(
   recordId: string,
-  fileId: string | undefined,
+  filename: string | undefined,
   mimeType: string | undefined,
   _userId: string,
 ): Promise<void> {
-  if (!fileId) {
+  if (!filename) {
     await store.update(COL, recordId, { status: 'failed' });
     return;
   }
 
   try {
-    const dl = await r2Download(fileId);
-    if (!dl) throw new Error('R2 download failed');
+    const dl = await fetchFile(COL, recordId, filename);
+    if (!dl) throw new Error('video file fetch failed');
 
     const analysis = await analyzeVideo({
       videoBase64: dl.buf.toString('base64'),

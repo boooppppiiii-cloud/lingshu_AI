@@ -29,6 +29,8 @@ const PLUGIN_CATALOG: Omit<Plugin, 'status' | 'config' | 'installedAt'>[] = [
   { id: 'google_translate', pluginKey: 'google_translate', name: 'Google Translate', nameZh: 'Google 翻译', category: 'tool', description: '调用 Google Cloud Translation API 实现高质量多语言翻译', icon: '🔤' },
   { id: 'amazon', pluginKey: 'amazon', name: 'Amazon SP-API', nameZh: 'Amazon 卖家', category: 'ecommerce', description: '同步 Amazon 订单和库存数据（需要卖家账号授权）', icon: '📦' },
   { id: 'instagram', pluginKey: 'instagram', name: 'Instagram', nameZh: 'Instagram 主页', category: 'social', description: '管理 Instagram 企业主页，发布内容并分析互动数据', icon: '📷' },
+  { id: 'facebook', pluginKey: 'facebook', name: 'Facebook Page', nameZh: 'Facebook 主页', category: 'social', description: '管理 Facebook 企业主页，发布 Reels / 帖子并分析互动数据', icon: '👍' },
+  { id: 'pinterest', pluginKey: 'pinterest', name: 'Pinterest', nameZh: 'Pinterest 商家', category: 'social', description: '发布 Pinterest Idea Pin，追踪曝光、保存与点击数据', icon: '📌' },
 ];
 
 function load(): Plugin[] {

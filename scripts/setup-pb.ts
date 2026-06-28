@@ -22,10 +22,21 @@ const PB_URL = (process.env.PB_URL ?? 'http://127.0.0.1:8090').replace(/\/$/, ''
 const EMAIL = process.env.PB_ADMIN_EMAIL ?? '';
 const PASSWORD = process.env.PB_ADMIN_PASSWORD ?? '';
 
-type Field = { name: string; type: 'text' | 'number'; required?: boolean };
+type Field = { name: string; type: string; required?: boolean; [k: string]: unknown };
 
 /** Collection definitions, derived from what the route handlers write/read. */
 const COLLECTIONS: { name: string; fields: Field[] }[] = [
+  {
+    // 租户（按公司订阅）；subscription.ts 读这几个字段
+    name: 'tenants',
+    fields: [
+      { name: 'name', type: 'text' },
+      { name: 'subscriptionStatus', type: 'text' },     // active/trialing/past_due/canceled/expired/none
+      { name: 'subscriptionPlan', type: 'text' },
+      { name: 'subscriptionExpiresAt', type: 'text' },  // ISO；空=不过期
+      { name: 'createdAt', type: 'text' },
+    ],
+  },
   {
     name: 'trend_videos',
     fields: [
@@ -40,6 +51,8 @@ const COLLECTIONS: { name: string; fields: Field[] }[] = [
       { name: 'aiAnalysis', type: 'text' },
       { name: 'status', type: 'text' },
       { name: 'crawledAt', type: 'text' },
+      // The raw video blob — stored on PB disk, not in the SQLite row.
+      { name: 'videoFile', type: 'file', maxSelect: 1, maxSize: 104857600 },
     ],
   },
   {
@@ -128,6 +141,32 @@ async function createCollection(token: string, name: string, fields: Field[]): P
   console.log(`  ✓ created ${name}`);
 }
 
+/** Add any missing fields to an existing collection (idempotent schema sync). */
+async function ensureFields(token: string, name: string, want: Field[]): Promise<void> {
+  const res = await fetch(`${PB_URL}/api/collections/${name}`, {
+    headers: { Authorization: token },
+  });
+  if (!res.ok) return;
+  const col = (await res.json()) as { fields?: { name: string }[] };
+  const have = new Set((col.fields ?? []).map((f) => f.name));
+  const missing = want.filter((f) => !have.has(f.name));
+  if (!missing.length) {
+    console.log(`  = ${name} up to date`);
+    return;
+  }
+  const merged = [
+    ...(col.fields ?? []),
+    ...missing.map((f) => ({ ...f, required: f.required ?? false })),
+  ];
+  const up = await fetch(`${PB_URL}/api/collections/${name}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: token },
+    body: JSON.stringify({ fields: merged }),
+  });
+  if (!up.ok) throw new Error(`patch ${name} fields failed: ${up.status} ${await up.text()}`);
+  console.log(`  ✓ ${name}: added ${missing.map((f) => f.name).join(', ')}`);
+}
+
 /** Ensure the users auth collection has a tenantId field. */
 async function ensureUsersTenantId(token: string): Promise<void> {
   const res = await fetch(`${PB_URL}/api/collections/users`, {
@@ -165,7 +204,7 @@ async function main(): Promise<void> {
 
   for (const { name, fields } of COLLECTIONS) {
     if (existing.has(name)) {
-      console.log(`  = ${name} already exists`);
+      await ensureFields(token, name, fields);
       continue;
     }
     await createCollection(token, name, fields);

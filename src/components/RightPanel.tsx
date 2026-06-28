@@ -3,27 +3,28 @@ import {
   Compass, Zap, MessageSquare, RefreshCw,
   Sparkles, ArrowRight, AlertTriangle, Users, TrendingUp, RotateCcw,
 } from 'lucide-react';
-import type { ConversationContext } from '../App';
+import type { ConversationContext, AgentType, AgentAction as AgentActionFn } from '../App';
 
 interface Props {
   conversation: ConversationContext | null;
+  onAction?: AgentActionFn;
 }
 
 const AGENT_META = {
-  strategy:   { label: '顾问 Agent',  Icon: Compass,       color: '#4f46e5', bg: 'rgba(79,70,229,0.08)' },
-  traffic:    { label: '社媒 Agent',  Icon: Zap,           color: '#d97706', bg: 'rgba(217,119,6,0.08)' },
-  conversion: { label: '客服 Agent',  Icon: MessageSquare, color: '#0891b2', bg: 'rgba(8,145,178,0.08)' },
-  retention:  { label: 'CRM Agent',  Icon: RefreshCw,     color: '#16a34a', bg: 'rgba(22,163,74,0.08)' },
+  strategy:   { label: '策略专家', Icon: Compass,       color: '#4f46e5', bg: 'rgba(79,70,229,0.08)' },
+  traffic:    { label: '流量专家', Icon: Zap,           color: '#d97706', bg: 'rgba(217,119,6,0.08)' },
+  conversion: { label: '转化专家', Icon: MessageSquare, color: '#0891b2', bg: 'rgba(8,145,178,0.08)' },
+  retention:  { label: '留存专家', Icon: RefreshCw,     color: '#16a34a', bg: 'rgba(22,163,74,0.08)' },
 };
 
 function SectionHeader({ label }: { label: string }) {
   return <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wider mb-2">{label}</p>;
 }
 
-function AgentAction({ agent, action, desc }: { agent: keyof typeof AGENT_META; action: string; desc: string }) {
+function AgentAction({ agent, action, desc, onClick }: { agent: keyof typeof AGENT_META; action: string; desc: string; onClick?: () => void }) {
   const { Icon, color, bg, label } = AGENT_META[agent];
   return (
-    <button className="w-full flex items-start gap-2.5 p-2.5 rounded-lg border border-border hover:border-border-bright bg-surface hover:shadow-sm transition-all text-left group">
+    <button onClick={onClick} className="w-full flex items-start gap-2.5 p-2.5 rounded-lg border border-border hover:border-border-bright bg-surface hover:shadow-sm transition-all text-left group">
       <div className="w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0 mt-0.5" style={{ background: bg, color }}>
         <Icon size={12} />
       </div>
@@ -48,15 +49,15 @@ function extractSuggestedAgents(messages: ConversationContext['messages']): stri
   return hints;
 }
 
-function StrategyPanel({ conversation }: { conversation: ConversationContext }) {
+function StrategyPanel({ conversation, onAction }: { conversation: ConversationContext; onAction?: AgentActionFn }) {
   const msgCount = conversation.messages?.length ?? 0;
   const userMsgs = conversation.messages?.filter(m => m.role === 'user') ?? [];
   const suggested = useMemo(() => extractSuggestedAgents(conversation.messages), [conversation.messages]);
 
-  const ACTIONS: Record<string, { action: string; desc: string }> = {
-    traffic:    { action: '生成社媒内容矩阵', desc: '基于本次策略生成 TikTok/Instagram 脚本' },
-    conversion: { action: '更新客服话术库',   desc: '将推广重点同步到客服 Agent 应答策略' },
-    retention:  { action: '触发老客唤醒任务', desc: '通知 CRM Agent 筛选并联系相关老客' },
+  const ACTIONS: Record<string, { action: string; desc: string; task: string }> = {
+    traffic:    { action: '生成社媒内容矩阵', desc: '基于本次策略生成 TikTok/Instagram 脚本', task: '根据本次策略，直接产出一套内容矩阵：5 个「选题 × 钩子 × 形式」的 TikTok/Instagram 脚本要点，不要讲方法论。' },
+    conversion: { action: '更新转化话术库',   desc: '将推广重点同步到转化专家应答策略',       task: '把本次策略的推广重点，直接落成 5 条可用的询盘应答话术（中英双语），不要讲原理。' },
+    retention:  { action: '触发老客唤醒任务', desc: '通知留存专家筛选并联系相关老客',         task: '根据本次策略，直接给老客唤醒方案：目标人群 + 触达节奏 + 3 条文案，不要讲方法论。' },
   };
 
   return (
@@ -68,8 +69,8 @@ function StrategyPanel({ conversation }: { conversation: ConversationContext }) 
             <Compass size={16} />
           </div>
           <div>
-            <p className="text-xs font-semibold text-text-primary">顾问 Agent</p>
-            <p className="text-[10px] text-text-muted">策略编排 · 多 Agent 协调</p>
+            <p className="text-xs font-semibold text-text-primary">策略专家</p>
+            <p className="text-[10px] text-text-muted">策略编排 · 多专家协调</p>
           </div>
           <span className="ml-auto flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full" style={{ background: 'rgba(22,163,74,0.1)', color: '#16a34a' }}>
             <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
@@ -99,7 +100,8 @@ function StrategyPanel({ conversation }: { conversation: ConversationContext }) 
             </div>
             <div className="space-y-2">
               {suggested.map(a => (
-                <AgentAction key={a} agent={a as keyof typeof AGENT_META} action={ACTIONS[a].action} desc={ACTIONS[a].desc} />
+                <AgentAction key={a} agent={a as keyof typeof AGENT_META} action={ACTIONS[a].action} desc={ACTIONS[a].desc}
+                  onClick={() => onAction?.(a as AgentType, ACTIONS[a].task)} />
               ))}
             </div>
           </div>
@@ -177,15 +179,15 @@ function AgentHeader({ conversation, subtitle }: { conversation: ConversationCon
   );
 }
 
-function ConversionPanel({ conversation }: { conversation: ConversationContext }) {
+function ConversionPanel({ conversation, onAction }: { conversation: ConversationContext; onAction?: AgentActionFn }) {
   const lastMsg = [...(conversation.messages ?? [])].reverse().find(m => m.role === 'assistant');
   const hasBigOrderAlert = lastMsg?.content.includes('大单') || lastMsg?.content.includes('⚠️');
   const langs = useMemo(() => {
     const content = conversation.messages?.map(m => m.content).join(' ') ?? '';
     const found: string[] = [];
-    if (content.match(/[؀-ۿ]/)) found.push('阿拉伯语');
-    if (content.match(/[a-zA-Z]{10,}/)) found.push('英语');
-    if (content.includes('[ES]') || content.includes('español')) found.push('西班牙语');
+    if (/[؀-ۿ؀-ۿ]/.test(content)) found.push('阿拉伯语');
+    if (/\b(me interesa|precio|piezas|hola|gracias|muestra|por favor|estimado|enviar|unitario)\b/i.test(content)) found.push('西班牙语');
+    if (/[a-zA-Z]{4,}/.test(content)) found.push('英语');
     return found.length ? found : ['英语'];
   }, [conversation.messages]);
 
@@ -203,10 +205,16 @@ function ConversionPanel({ conversation }: { conversation: ConversationContext }
           </div>
         )}
         <div>
-          <SectionHeader label="本次涉及语种" />
+          <div className="flex items-center justify-between mb-2">
+            <SectionHeader label="本次涉及语种" />
+            <span className="text-[9px] text-text-muted">已自动识别</span>
+          </div>
           <div className="flex flex-wrap gap-1.5">
             {langs.map(l => (
-              <span key={l} className="px-2 py-0.5 rounded-md text-[11px] font-medium bg-surface-2 border border-border text-text-secondary">{l}</span>
+              <span key={l} className="px-2 py-0.5 rounded-md text-[11px] font-medium border text-text-secondary"
+                style={{ background: 'rgba(8,145,178,0.06)', borderColor: 'rgba(8,145,178,0.25)', color: '#0891b2' }}>
+                {l}
+              </span>
             ))}
           </div>
         </div>
@@ -214,11 +222,11 @@ function ConversionPanel({ conversation }: { conversation: ConversationContext }
           <SectionHeader label="快捷工具" />
           <div className="space-y-1.5">
             {[
-              { icon: <MessageSquare size={11} />, label: '生成WhatsApp跟单模板', color: '#0891b2' },
-              { icon: <Users size={11} />, label: '转人工 · 标记大单', color: '#d97706' },
-              { icon: <TrendingUp size={11} />, label: '查看询盘转化漏斗', color: '#16a34a' },
-            ].map(({ icon, label, color }) => (
-              <button key={label} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg border border-border bg-surface hover:border-border-bright text-left transition-all group">
+              { icon: <MessageSquare size={11} />, label: '生成WhatsApp跟单模板', color: '#0891b2', task: '针对"已报价、3 天未回复"的大单询盘（客户 Ahmed，定制类 500 件，已报价：起订 200 件、500 件 95 折、标准 25 天/加急 18 天 +8%），直接写一条可立即发送的 WhatsApp 跟单话术，中英双语，含一个轻促单的优惠钩子。不要解释原理、不要反问要信息。' },
+              { icon: <Users size={11} />, label: '转人工 · 标记大单', color: '#d97706', task: '把当前大单询盘直接生成转人工交接摘要，按此格式给结果，不要反问：客户：Ahmed（沙特，定制类 500 件，$2,400）｜已报价：起订 200、500 件 95 折、标准 25 天/加急 18 天(+8%)｜风险点：价格敏感、已 3 天未回复｜建议人工首句话术：（给一句中英）' },
+              { icon: <TrendingUp size={11} />, label: '查看询盘转化漏斗', color: '#16a34a', task: '基于这份近 30 天询盘漏斗数据，直接指出主要卡点 + 给 3 条可执行优化建议，不要再问我要数据、也不要讲通用原理：询盘 642 → 响应 603(94%) → 报价 271(45%) → 成交 198(73%)，整体转化 31%；来源 WhatsApp 71%/站内 DM 18%/邮件 8%/表单 3%；首响 8 分钟、未响应 23 条；首响越快成交越高（<5分 39%、5-15分 32%、15-60分 23%、>1时 13%）；流失原因 价格 38%/物流时效 24%/MOQ 19%/缺货 11%。' },
+            ].map(({ icon, label, color, task }) => (
+              <button key={label} onClick={() => onAction?.('conversion', task)} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg border border-border bg-surface hover:border-border-bright text-left transition-all group">
                 <span style={{ color }}>{icon}</span>
                 <span className="text-[11px] text-text-secondary group-hover:text-text-primary flex-1">{label}</span>
                 <ArrowRight size={10} className="text-text-muted group-hover:text-text-secondary" />
@@ -231,13 +239,13 @@ function ConversionPanel({ conversation }: { conversation: ConversationContext }
   );
 }
 
-function RetentionPanel({ conversation }: { conversation: ConversationContext }) {
+function RetentionPanel({ conversation, onAction }: { conversation: ConversationContext; onAction?: AgentActionFn }) {
   const lastMsg = [...(conversation.messages ?? [])].reverse().find(m => m.role === 'assistant');
   const hasDormant = lastMsg?.content.includes('沉默') || lastMsg?.content.includes('未复购') || lastMsg?.content.includes('天没有');
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
-      <AgentHeader conversation={conversation} subtitle="老客唤醒 · 反向推品" />
+      <AgentHeader conversation={conversation} subtitle="老客唤醒 · 行动建议" />
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
         <div>
           <SectionHeader label="CRM 快览" />
@@ -258,11 +266,11 @@ function RetentionPanel({ conversation }: { conversation: ConversationContext })
           <SectionHeader label="快捷操作" />
           <div className="space-y-1.5">
             {[
-              { icon: <RotateCcw size={11} />, label: '筛选60天未复购老客', color: '#16a34a' },
-              { icon: <Sparkles size={11} />, label: '生成个性化推品方案', color: '#4f46e5' },
-              { icon: <MessageSquare size={11} />, label: '批量发送唤醒消息', color: '#0891b2' },
-            ].map(({ icon, label, color }) => (
-              <button key={label} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg border border-border bg-surface hover:border-border-bright text-left transition-all group">
+              { icon: <RotateCcw size={11} />, label: '筛选60天未复购老客', color: '#16a34a', task: '直接给出"60 天未复购"老客筛选结果（不要反问要数据）：本月共 412 人、平均 LTV $94。按价值列 TOP5（姓名/市场/上次购买/历史品类/LTV/建议推品/触达优先级），用表格或清单。' },
+              { icon: <Sparkles size={11} />, label: '生成个性化推品方案', color: '#4f46e5', task: '直接给 3 个老客的个性化推品方案示例（客户/市场/历史购买/推荐新品/推荐理由/一句话术），不要讲原理。示例客户：Ahmed(沙特,美妆个护)、Linh(越南,家居)、Carlos(墨西哥,消费电子)。' },
+              { icon: <MessageSquare size={11} />, label: '批量发送唤醒消息', color: '#0891b2', task: '直接给 3 条可发送的老客唤醒文案：中文、英文、阿拉伯语各一条，针对 60 天未复购老客，含一个限时优惠钩子。不要解释原理。' },
+            ].map(({ icon, label, color, task }) => (
+              <button key={label} onClick={() => onAction?.('retention', task)} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg border border-border bg-surface hover:border-border-bright text-left transition-all group">
                 <span style={{ color }}>{icon}</span>
                 <span className="text-[11px] text-text-secondary group-hover:text-text-primary flex-1">{label}</span>
                 <ArrowRight size={10} className="text-text-muted group-hover:text-text-secondary" />
@@ -275,10 +283,10 @@ function RetentionPanel({ conversation }: { conversation: ConversationContext })
   );
 }
 
-export default function RightPanel({ conversation }: Props) {
+export default function RightPanel({ conversation, onAction }: Props) {
   if (!conversation) return null;
-  if (conversation.agent === 'strategy')   return <StrategyPanel conversation={conversation} />;
-  if (conversation.agent === 'conversion') return <ConversionPanel conversation={conversation} />;
-  if (conversation.agent === 'retention')  return <RetentionPanel conversation={conversation} />;
+  if (conversation.agent === 'strategy')   return <StrategyPanel conversation={conversation} onAction={onAction} />;
+  if (conversation.agent === 'conversion') return <ConversionPanel conversation={conversation} onAction={onAction} />;
+  if (conversation.agent === 'retention')  return <RetentionPanel conversation={conversation} onAction={onAction} />;
   return null;
 }

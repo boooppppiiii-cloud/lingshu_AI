@@ -16,11 +16,16 @@ function getEnterpriseContext(): string {
 
 const FORMAT_RULE = `
 
-【输出格式要求】
-- 禁止使用 Markdown 符号：不用 #、##、**、*、---、\`\`\` 等
-- 用数字序号（1. 2. 3.）或中文顿号（·）替代列表符号
-- 段落之间空一行，重点内容用【】或⚠️等符号标注
-- 保持简洁清晰，不要废话`;
+【输出格式要求 · 必须遵守】
+- 用 Markdown 排版（前端会渲染成漂亮样式）：
+  · 小标题用 "## 标题"，子标题用 "### 标题"
+  · 关键结论、重点数字用 **加粗**
+  · 列表用 "- " 或 "1. "，不要多层数字嵌套（如 1. 里再套 1. 2.）
+  · 引用网址 / 案例链接用 [说明文字](https://网址)
+- 结构清晰：先给结论，再展开；每节之间空一行
+- 控制在 2-3 条核心建议，不要长篇大论
+- 【重要】用户系统里通常已有经营数据。**不要反问索取数据，也不要只讲通用原理/方法论**；若消息中已给数据就直接用它分析，若没给就用合理的示例数据，**直接给出可落地的具体结果**（具体数字、具体话术、具体名单）
+- 结尾用一句温暖、鼓励的话给用户情绪价值（例如"放心，这一步我帮你盯着，咱们稳稳推进 💪"）`;
 
 const SYSTEM_PROMPTS: Record<string, string> = {
   conversion: `你是灵枢AI的客服Agent，服务于义乌跨境电商卖家，处理买家询盘和客户服务。
@@ -43,7 +48,7 @@ const SYSTEM_PROMPTS: Record<string, string> = {
 核心能力：
 - 老客画像分析：采购品类、频次、客单价、偏好市场
 - 生命周期唤醒：识别沉默期（30/60/90天）并制定触达策略
-- 反向推品：根据老客历史偏好，主动推荐新品或补货提醒
+- 行动建议：根据老客历史偏好，主动推荐新品或补货提醒
 - 复购率分析与提升建议
 - 关键节假日营销节点提醒（斋月、圣诞、黑五等）
 
@@ -91,8 +96,8 @@ agentChatRouter.post('/:agentType/chat', async (req, res) => {
   res.flushHeaders();
 
   try {
-    for await (const chunk of callLLMChatStream(messages, { systemPrompt })) {
-      res.write(`data: ${JSON.stringify({ text: chunk })}\n\n`);
+    for await (const ev of callLLMChatStream(messages, { systemPrompt })) {
+      res.write(`data: ${JSON.stringify(ev)}\n\n`);
     }
     res.write('data: [DONE]\n\n');
   } catch (err: any) {

@@ -1,1 +1,14 @@
-[]
+[
+  {
+    "id": "tiktok_ads",
+    "pluginKey": "tiktok_ads",
+    "name": "TikTok for Business",
+    "nameZh": "TikTok 广告",
+    "category": "social",
+    "description": "连接 TikTok Ads Manager，AI 分析广告效果并自动生成优化建议",
+    "icon": "🎵",
+    "status": "not_installed",
+    "config": {},
+    "installedAt": "2026-06-23T02:35:03.210Z"
+  }
+]

@@ -1,8 +1,8 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { RefreshCw, LayoutGrid, MessageSquare, Users, TrendingUp, Sparkles, Bell } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import AgentChatPage from './AgentChatPage';
-import type { ConversationContext } from '../App';
+import type { ConversationContext, RestoreSignal, KickoffSignal, AgentAction } from '../App';
 
 type ViewMode = 'dashboard' | 'chat';
 
@@ -10,6 +10,9 @@ interface Props {
   onEnterConversation: (ctx: ConversationContext) => void;
   onLeaveConversation: () => void;
   isInConversation: boolean;
+  restore?: RestoreSignal;
+  kickoff?: KickoffSignal;
+  onAction?: AgentAction;
 }
 
 const SEGMENTS = [
@@ -58,7 +61,7 @@ function Dashboard({ onChatClick }: { onChatClick: () => void }) {
             <button onClick={onChatClick}
               className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg text-white transition-all"
               style={{ background: '#16a34a' }}>
-              <RefreshCw size={12} />让 CRM Agent 制定策略
+              <RefreshCw size={12} />让 留存专家 制定策略
             </button>
           </div>
           <div className="grid grid-cols-2 gap-3">
@@ -125,8 +128,10 @@ function Dashboard({ onChatClick }: { onChatClick: () => void }) {
   );
 }
 
-export default function RetentionPage({ onEnterConversation, onLeaveConversation, isInConversation }: Props) {
+export default function RetentionPage({ onEnterConversation, onLeaveConversation, isInConversation, restore, kickoff, onAction }: Props) {
   const [viewMode, setViewMode] = useState<ViewMode>('dashboard');
+  useEffect(() => { if (restore) setViewMode('chat'); }, [restore?.key]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (kickoff) setViewMode('chat'); }, [kickoff?.key]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleEnterChat = (ctx: ConversationContext) => {
     setViewMode('chat');
@@ -148,7 +153,7 @@ export default function RetentionPage({ onEnterConversation, onLeaveConversation
           <span className="text-sm font-semibold text-text-primary">留存</span>
           {isInConversation && viewMode === 'chat' && (
             <span className="flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full ml-1" style={{ background: 'rgba(22,163,74,0.1)', color: '#16a34a' }}>
-              <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />CRM Agent
+              <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />留存专家
             </span>
           )}
         </div>
@@ -180,8 +185,8 @@ export default function RetentionPage({ onEnterConversation, onLeaveConversation
                   color: '#16a34a',
                   bg: 'rgba(22,163,74,0.1)',
                   icon: <RefreshCw size={13} />,
-                  name: 'CRM Agent',
-                  tagline: '老客画像 · 生命周期唤醒 · 反向推品',
+                  name: '留存专家',
+                  tagline: '老客画像 · 生命周期唤醒 · 行动建议',
                   suggestions: [
                     '找出过去60天没有复购的中东老客',
                     '斋月前我应该怎么唤醒沉默客户？',
@@ -192,6 +197,10 @@ export default function RetentionPage({ onEnterConversation, onLeaveConversation
                 onEnterConversation={handleEnterChat}
                 onLeaveConversation={handleLeave}
                 isInConversation={isInConversation}
+                restoreKey={restore?.key}
+                restoreMessages={restore?.messages}
+                kickoff={kickoff}
+                onAction={onAction}
               />
             </motion.div>
           )}

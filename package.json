@@ -16,7 +16,6 @@
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1070.0",
-    "ffmpeg-static": "^5.2.0",
     "@google/genai": "^1.29.0",
     "@tailwindcss/vite": "^4.3.1",
     "@vitejs/plugin-react": "^6.0.2",
@@ -24,12 +23,14 @@
     "compression": "^1.8.1",
     "dotenv": "^17.2.3",
     "express": "^4.21.2",
+    "ffmpeg-static": "^5.3.0",
     "lucide-react": "^1.20.0",
     "motion": "^12.40.0",
     "node-cron": "^4.4.1",
     "openai": "^6.39.1",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
+    "recharts": "^3.9.0",
     "tailwindcss": "^4.3.1"
   },
   "devDependencies": {

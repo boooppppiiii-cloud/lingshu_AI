@@ -1,15 +1,17 @@
 import { useState, useRef, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Compass, ArrowUp, Loader2, Sparkles, LayoutGrid, MessageSquare, X } from 'lucide-react';
+import { Compass, ArrowUp, Loader2, Sparkles, LayoutGrid, MessageSquare, X, BarChart3 } from 'lucide-react';
 import AgentWorkspace from './AgentWorkspace';
-import type { ConversationContext, Message } from '../App';
+import StrategyDataBoard from './StrategyDataBoard';
+import AgentReply from './AgentReply';
+import type { ConversationContext, Message, RestoreSignal, KickoffSignal, AgentAction } from '../App';
 
-type ViewMode = 'chat' | 'workspace';
+type ViewMode = 'chat' | 'workspace' | 'board';
 
 const SUGGESTIONS = [
   '帮我分析斋月期间中东市场的推广机会',
   '生成本周经营复盘报告',
-  '启动假发产品的反向推品流水线',
+  '启动假发产品的行动建议流水线',
   '我想了解哪些老客最近60天没有互动',
 ];
 
@@ -17,9 +19,12 @@ interface Props {
   onEnterConversation: (ctx: ConversationContext) => void;
   onLeaveConversation: () => void;
   isInConversation: boolean;
+  restore?: RestoreSignal;
+  kickoff?: KickoffSignal;
+  onAction?: AgentAction;
 }
 
-export default function StrategyPage({ onEnterConversation, onLeaveConversation, isInConversation }: Props) {
+export default function StrategyPage({ onEnterConversation, onLeaveConversation, isInConversation, restore, kickoff, onAction }: Props) {
   const [viewMode, setViewMode] = useState<ViewMode>('chat');
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -27,11 +32,15 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  // 从近期会话恢复 / 新建（清空）
+  useEffect(() => { if (restore) { setMessages(restore.messages); setViewMode('chat'); } }, [restore?.key]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 一键执行：自动发起任务（新开一段对话）
+  useEffect(() => { if (kickoff) { setViewMode('chat'); void send(kickoff.text, []); } }, [kickoff?.key]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const send = async (text: string) => {
+  const send = async (text: string, base?: Message[]) => {
     if (!text.trim() || loading) return;
     const userMsg: Message = { role: 'user', content: text };
-    const nextMessages = [...messages, userMsg];
+    const nextMessages = [...(base ?? messages), userMsg];
     setMessages(nextMessages);
     setInput('');
     setLoading(true);
@@ -64,11 +73,24 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
           const payload = line.slice(6).trim();
           if (payload === '[DONE]') break;
           try {
-            const { text: chunk } = JSON.parse(payload) as { text?: string };
-            if (chunk) {
+            const obj = JSON.parse(payload) as { text?: string; sources?: { title: string; uri: string }[]; error?: string };
+            if (obj.text) {
               setMessages(prev => {
                 const copy = [...prev];
-                copy[copy.length - 1] = { role: 'assistant', content: copy[copy.length - 1].content + chunk };
+                copy[copy.length - 1] = { ...copy[copy.length - 1], role: 'assistant', content: copy[copy.length - 1].content + obj.text };
+                return copy;
+              });
+            } else if (obj.error) {
+              setMessages(prev => {
+                const copy = [...prev];
+                const last = copy[copy.length - 1];
+                if (last?.role === 'assistant' && !last.content) copy[copy.length - 1] = { ...last, content: '抱歉，刚刚连接断开了，请再发一次试试 🙏' };
+                return copy;
+              });
+            } else if (obj.sources?.length) {
+              setMessages(prev => {
+                const copy = [...prev];
+                copy[copy.length - 1] = { ...copy[copy.length - 1], sources: obj.sources };
                 return copy;
               });
             }
@@ -104,7 +126,8 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
         <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-surface-2 border border-border">
           {([
             { mode: 'chat' as ViewMode, icon: <MessageSquare size={12} />, label: '对话' },
-            { mode: 'workspace' as ViewMode, icon: <LayoutGrid size={12} />, label: '工作台' },
+            { mode: 'workspace' as ViewMode, icon: <LayoutGrid size={12} />, label: 'AI 智囊团' },
+            { mode: 'board' as ViewMode, icon: <BarChart3 size={12} />, label: '数据大屏' },
           ]).map(({ mode, icon, label }) => (
             <button key={mode} onClick={() => setViewMode(mode)}
               className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold transition-all ${viewMode === mode ? 'bg-surface text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'}`}>
@@ -117,7 +140,11 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
       {/* Content */}
       <div className="flex-1 min-h-0 overflow-hidden">
         <AnimatePresence mode="wait">
-          {viewMode === 'workspace' ? (
+          {viewMode === 'board' ? (
+            <motion.div key="board" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
+              <StrategyDataBoard />
+            </motion.div>
+          ) : viewMode === 'workspace' ? (
             <motion.div key="workspace" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
               <AgentWorkspace onEnterConversation={onEnterConversation} />
             </motion.div>
@@ -131,7 +158,7 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
                       <Compass size={28} />
                     </div>
                     <div className="text-center">
-                      <p className="text-base font-bold text-text-primary font-display">顾问 Agent</p>
+                      <p className="text-base font-bold text-text-primary font-display">策略专家</p>
                       <p className="text-sm text-text-muted mt-1">跨三侧策略编排 · 经营分析 · 多 Agent 协调</p>
                     </div>
                     <div className="grid grid-cols-2 gap-2 max-w-lg w-full">
@@ -153,8 +180,8 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
                             <Sparkles size={12} className="text-white" />
                           </div>
                         )}
-                        <div className={`max-w-[80%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-line ${msg.role === 'user' ? 'rounded-tr-sm bg-accent text-white' : 'rounded-tl-sm bg-surface-2 border border-border text-text-primary'}`}>
-                          {msg.content}
+                        <div className={`max-w-[80%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${msg.role === 'user' ? 'rounded-tr-sm bg-accent text-white whitespace-pre-line' : 'rounded-tl-sm bg-surface-2 border border-border text-text-primary'}`}>
+                          {msg.role === 'assistant' ? <AgentReply content={msg.content} sources={msg.sources} onAction={onAction} /> : msg.content}
                         </div>
                       </motion.div>
                     ))}
@@ -180,7 +207,7 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
                 <div className="max-w-2xl mx-auto rounded-2xl border border-border bg-surface-2 overflow-hidden focus-within:border-border-bright transition-colors">
                   <textarea value={input} onChange={e => setInput(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(input); } }}
-                    placeholder="告诉顾问 Agent 你的目标或问题..." rows={2}
+                    placeholder="告诉策略专家 你的目标或问题..." rows={2}
                     className="w-full px-4 pt-3 pb-1 bg-transparent text-sm text-text-primary placeholder:text-text-muted resize-none outline-none" />
                   <div className="flex items-center justify-end px-3 pb-3 pt-1">
                     <button onClick={() => void send(input)} disabled={!input.trim() || loading}

@@ -1,7 +1,8 @@
 import { useState, useRef, useEffect, type ReactNode } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { ArrowUp, Loader2, X } from 'lucide-react';
-import type { AgentType, ConversationContext, Message } from '../App';
+import type { AgentType, ConversationContext, Message, KickoffSignal, AgentAction } from '../App';
+import AgentReply from './AgentReply';
 
 interface AgentConfig {
   type: AgentType;
@@ -20,20 +21,28 @@ interface Props {
   onLeaveConversation: () => void;
   isInConversation: boolean;
   headerExtra?: ReactNode;
+  restoreKey?: string;
+  restoreMessages?: Message[];
+  kickoff?: KickoffSignal;
+  onAction?: AgentAction;
 }
 
-export default function AgentChatPage({ config, onEnterConversation, onLeaveConversation, headerExtra }: Props) {
+export default function AgentChatPage({ config, onEnterConversation, onLeaveConversation, headerExtra, restoreKey, restoreMessages, kickoff, onAction }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  // 从近期会话恢复 / 新建（清空）
+  useEffect(() => { if (restoreKey !== undefined) setMessages(restoreMessages ?? []); }, [restoreKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 一键执行：从别处跳来并自动发起任务（新开一段对话）
+  useEffect(() => { if (kickoff) void send(kickoff.text, []); }, [kickoff?.key]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const send = async (text: string) => {
+  const send = async (text: string, base?: Message[]) => {
     if (!text.trim() || loading) return;
     const userMsg: Message = { role: 'user', content: text };
-    const next = [...messages, userMsg];
+    const next = [...(base ?? messages), userMsg];
     setMessages(next);
     setInput('');
     setLoading(true);
@@ -64,11 +73,24 @@ export default function AgentChatPage({ config, onEnterConversation, onLeaveConv
           const payload = line.slice(6).trim();
           if (payload === '[DONE]') break;
           try {
-            const { text: chunk } = JSON.parse(payload) as { text?: string };
-            if (chunk) {
+            const obj = JSON.parse(payload) as { text?: string; sources?: { title: string; uri: string }[]; error?: string };
+            if (obj.text) {
               setMessages(prev => {
                 const copy = [...prev];
-                copy[copy.length - 1] = { role: 'assistant', content: copy[copy.length - 1].content + chunk };
+                copy[copy.length - 1] = { ...copy[copy.length - 1], role: 'assistant', content: copy[copy.length - 1].content + obj.text };
+                return copy;
+              });
+            } else if (obj.error) {
+              setMessages(prev => {
+                const copy = [...prev];
+                const last = copy[copy.length - 1];
+                if (last?.role === 'assistant' && !last.content) copy[copy.length - 1] = { ...last, content: '抱歉，刚刚连接断开了，请再发一次试试 🙏' };
+                return copy;
+              });
+            } else if (obj.sources?.length) {
+              setMessages(prev => {
+                const copy = [...prev];
+                copy[copy.length - 1] = { ...copy[copy.length - 1], sources: obj.sources };
                 return copy;
               });
             }
@@ -135,12 +157,14 @@ export default function AgentChatPage({ config, onEnterConversation, onLeaveConv
                       <span className="text-white scale-75">{config.icon}</span>
                     </div>
                   )}
-                  <div className={`max-w-[80%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed whitespace-pre-line ${
+                  <div className={`max-w-[80%] px-4 py-2.5 rounded-2xl text-sm leading-relaxed ${
                     msg.role === 'user'
-                      ? 'rounded-tr-sm bg-accent text-white'
+                      ? 'rounded-tr-sm bg-accent text-white whitespace-pre-line'
                       : 'rounded-tl-sm bg-surface-2 border border-border text-text-primary'
                   }`}>
-                    {msg.content || <span className="opacity-40">...</span>}
+                    {msg.role === 'assistant'
+                      ? (msg.content ? <AgentReply content={msg.content} sources={msg.sources} onAction={onAction} /> : <span className="opacity-40">...</span>)
+                      : msg.content}
                   </div>
                 </motion.div>
               ))}

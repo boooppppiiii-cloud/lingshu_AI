@@ -3,10 +3,9 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Compass, Zap, MessageSquare, RefreshCw,
   Building2, Puzzle, Clock, Radio,
-  Globe, Bell, ChevronRight, Plus,
+  Globe, ChevronRight, Plus, LogOut,
 } from 'lucide-react';
-import type { Page } from '../App';
-import type { ConversationContext } from '../App';
+import type { Page, ConversationContext, Conversation, AgentAction } from '../App';
 import RightPanel from './RightPanel';
 
 interface NavSection {
@@ -15,10 +14,10 @@ interface NavSection {
 
 const PRIMARY_NAV: NavSection = {
   items: [
-    { id: 'strategy',   label: '策略',   icon: <Compass size={16} /> },
-    { id: 'traffic',    label: '流量',    icon: <Zap size={16} /> },
-    { id: 'conversion', label: '转化',    icon: <MessageSquare size={16} /> },
-    { id: 'retention',  label: '留存',    icon: <RefreshCw size={16} /> },
+    { id: 'strategy',   label: '策略专家', icon: <Compass size={16} /> },
+    { id: 'traffic',    label: '流量专家', icon: <Zap size={16} /> },
+    { id: 'conversion', label: '转化专家', icon: <MessageSquare size={16} /> },
+    { id: 'retention',  label: '留存专家', icon: <RefreshCw size={16} /> },
   ],
 };
 
@@ -38,27 +37,33 @@ const AGENT_COLORS: Record<string, string> = {
   retention: '#16a34a',
 };
 
-interface RecentConv {
-  id: string;
-  agent: 'strategy' | 'traffic' | 'conversion' | 'retention';
-  title: string;
-  time: string;
-}
-
-const RECENT_CONVS: RecentConv[] = [
-  { id: '1', agent: 'strategy',   title: '斋月中东市场推广机会分析', time: '2小时前' },
-  { id: '2', agent: 'traffic',    title: '假发TikTok爆款视频拆解', time: '昨天' },
-  { id: '3', agent: 'strategy',   title: '反向推品：越南买家偏好', time: '昨天' },
-  { id: '4', agent: 'conversion', title: '阿语客服话术优化建议', time: '2天前' },
-  { id: '5', agent: 'retention',  title: '75天未复购老客唤醒方案', time: '3天前' },
-];
-
 interface LayoutProps {
   page: Page;
   onNavigate: (p: Page) => void;
   conversation: ConversationContext | null;
   children: ReactNode;
+  session?: import('../lib/auth').AuthSession | null;
+  onLogout?: () => void;
+  conversations?: Conversation[];
+  activeConvId?: string | null;
+  onOpenConversation?: (id: string) => void;
+  onNewConversation?: () => void;
+  suppressRightPanel?: boolean;
+  onAction?: AgentAction;
 }
+
+const relTime = (ts: number) => {
+  const m = Math.floor((Date.now() - ts) / 60000);
+  if (m < 1) return '刚刚';
+  if (m < 60) return `${m} 分钟前`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} 小时前`;
+  return `${Math.floor(h / 24)} 天前`;
+};
+
+const SUB_LABEL: Record<string, string> = {
+  trialing: '试用中', active: '已订阅', past_due: '续费逾期', canceled: '已取消', expired: '已过期', none: '未订阅',
+};
 
 function NavItem({
   item,
@@ -99,8 +104,12 @@ function NavItem({
   );
 }
 
-export default function Layout({ page, onNavigate, conversation, children }: LayoutProps) {
-  const isInConversation = conversation !== null;
+export default function Layout({ page, onNavigate, conversation, children, session, onLogout, conversations, activeConvId, onOpenConversation, onNewConversation, suppressRightPanel, onAction }: LayoutProps) {
+  const recent = (conversations ?? []).filter(c => c.messages.length > 0);
+  const isInConversation = conversation !== null && !suppressRightPanel;
+  const tenantName = session?.tenant?.name || session?.user?.name || session?.user?.email?.split('@')[0] || '未命名';
+  const subStatus = session?.tenant?.subscriptionStatus || session?.subscription?.status || 'none';
+  const initial = (tenantName[0] || '灵').toUpperCase();
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -161,16 +170,21 @@ export default function Layout({ page, onNavigate, conversation, children }: Lay
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
           <div className="px-3 flex items-center justify-between mb-1.5 flex-shrink-0">
             <p className="px-3 text-[10px] font-semibold text-text-muted uppercase tracking-wider">近期会话</p>
-            <button className="p-1 rounded-md hover:bg-black/5 text-text-muted transition-colors">
+            <button onClick={() => onNewConversation?.()} title="新建会话"
+              className="p-1 rounded-md hover:bg-black/5 text-text-muted transition-colors">
               <Plus size={12} />
             </button>
           </div>
           <div className="flex-1 overflow-y-auto px-3 space-y-0.5 pb-2">
-            {RECENT_CONVS.map(conv => (
+            {recent.length === 0 && (
+              <p className="px-3 py-2 text-[11px] text-text-muted leading-relaxed">还没有会话，去和某位专家对话后会出现在这里。</p>
+            )}
+            {recent.map(conv => (
               <button
                 key={conv.id}
-                onClick={() => onNavigate(conv.agent)}
-                className="w-full flex items-start gap-2.5 px-3 py-2 rounded-xl text-left hover:bg-white/70 transition-colors group"
+                onClick={() => onOpenConversation?.(conv.id)}
+                className="w-full flex items-start gap-2.5 px-3 py-2 rounded-xl text-left transition-colors group"
+                style={conv.id === activeConvId ? { background: 'rgba(255,255,255,0.8)' } : undefined}
               >
                 <span
                   className="mt-0.5 w-2 h-2 rounded-full flex-shrink-0"
@@ -180,7 +194,7 @@ export default function Layout({ page, onNavigate, conversation, children }: Lay
                   <p className="text-xs text-text-secondary truncate leading-snug group-hover:text-text-primary transition-colors">
                     {conv.title}
                   </p>
-                  <p className="text-[10px] text-text-muted mt-0.5">{conv.time}</p>
+                  <p className="text-[10px] text-text-muted mt-0.5">{relTime(conv.updatedAt)}</p>
                 </div>
               </button>
             ))}
@@ -193,16 +207,18 @@ export default function Layout({ page, onNavigate, conversation, children }: Lay
             className="w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
             style={{ background: 'linear-gradient(135deg, #4ade80, #16a34a)' }}
           >
-            义
+            {initial}
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-xs font-semibold text-text-primary truncate">义乌商贸</p>
-            <p className="text-[10px] text-text-muted truncate">Free Plan</p>
+            <p className="text-xs font-semibold text-text-primary truncate">{tenantName}</p>
+            <p className="text-[10px] text-text-muted truncate">{SUB_LABEL[subStatus] ?? subStatus}</p>
           </div>
-          <button className="relative p-1 rounded-md hover:bg-black/5 text-text-muted transition-colors flex-shrink-0">
-            <Bell size={13} />
-            <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-accent" />
-          </button>
+          {onLogout && (
+            <button onClick={onLogout} title="退出登录"
+              className="relative p-1 rounded-md hover:bg-black/5 text-text-muted hover:text-text-primary transition-colors flex-shrink-0">
+              <LogOut size={13} />
+            </button>
+          )}
         </div>
       </aside>
 
@@ -222,7 +238,7 @@ export default function Layout({ page, onNavigate, conversation, children }: Lay
             className="flex-shrink-0 bg-white flex flex-col overflow-hidden"
             style={{ boxShadow: '-6px 0 24px rgba(0,0,0,0.06)' }}
           >
-            <RightPanel conversation={conversation} />
+            <RightPanel conversation={conversation} onAction={onAction} />
           </motion.aside>
         )}
       </AnimatePresence>

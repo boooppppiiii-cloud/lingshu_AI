@@ -4,3 +4,12 @@ dist/
 .env.local
 *.bak.*
 pb_data/
+
+# 运行时生成的本地数据（素材上传 / 草稿作品 / BGM 曲库）
+data/media/
+data/materials.json
+data/studio-projects.json
+data/bgm/
+data/bgm.json
+data/tts/
+data/covers/

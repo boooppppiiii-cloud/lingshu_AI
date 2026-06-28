@@ -17,10 +17,10 @@ const DEFAULT: Profile = {
 };
 
 const AGENTS = [
-  { icon: Compass, label: '顾问 Agent', color: '#4f46e5' },
-  { icon: Zap, label: '社媒 Agent', color: '#d97706' },
-  { icon: MessageSquare, label: '客服 Agent', color: '#0891b2' },
-  { icon: RefreshCw, label: 'CRM Agent', color: '#16a34a' },
+  { icon: Compass, label: '策略专家', color: '#4f46e5' },
+  { icon: Zap, label: '流量专家', color: '#d97706' },
+  { icon: MessageSquare, label: '转化专家', color: '#0891b2' },
+  { icon: RefreshCw, label: '留存专家', color: '#16a34a' },
 ];
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
@@ -134,11 +134,11 @@ export default function EnterprisePage() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <Field label="公司名称">
-                <input className={inputCls} placeholder="义乌某某贸易有限公司" value={profile.company.name}
+                <input className={inputCls} placeholder="示例贸易有限公司" value={profile.company.name}
                   onChange={e => set('company')('name', e.target.value)} />
               </Field>
               <Field label="行业类目">
-                <input className={inputCls} placeholder="跨境电商 / 义乌小商品" value={profile.company.industry}
+                <input className={inputCls} placeholder="跨境电商 / 消费品" value={profile.company.industry}
                   onChange={e => set('company')('industry', e.target.value)} />
               </Field>
               <Field label="主攻市场">
@@ -151,7 +151,7 @@ export default function EnterprisePage() {
               </Field>
             </div>
             <Field label="公司简介" hint="一段话描述公司背景、优势、定位">
-              <textarea className={textareaCls} rows={3} placeholder="我们是一家专注中东市场的义乌跨境卖家，主营假发、美妆、日用品，在 TikTok 和 WhatsApp 有稳定私域流量…"
+              <textarea className={textareaCls} rows={3} placeholder="我们是一家专注海外市场的跨境电商品牌，主营美妆个护、家居日用、消费电子，在 TikTok 和 WhatsApp 有稳定私域流量…"
                 value={profile.company.description} onChange={e => set('company')('description', e.target.value)} />
             </Field>
           </section>
@@ -164,7 +164,7 @@ export default function EnterprisePage() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <Field label="主营品类">
-                <input className={inputCls} placeholder="假发、艾灸产品、义乌小商品" value={profile.products.categories}
+                <input className={inputCls} placeholder="美妆个护、家居日用、消费电子" value={profile.products.categories}
                   onChange={e => set('products')('categories', e.target.value)} />
               </Field>
               <Field label="价格区间">
@@ -181,7 +181,7 @@ export default function EnterprisePage() {
               </Field>
             </div>
             <Field label="产品核心优势" hint="工厂直供？独家款式？快速备货？">
-              <textarea className={textareaCls} rows={2} placeholder="工厂直供，7天发货；假发系列有50+款定制色号，支持OEM/ODM"
+              <textarea className={textareaCls} rows={2} placeholder="工厂直供，7天发货；核心系列支持多规格/多色号定制，支持 OEM/ODM"
                 value={profile.products.highlights} onChange={e => set('products')('highlights', e.target.value)} />
             </Field>
           </section>
@@ -208,7 +208,7 @@ export default function EnterprisePage() {
               </Field>
             </div>
             <Field label="核心卖点 (USP)" hint="你最想让买家记住的一句话">
-              <input className={inputCls} placeholder="义乌工厂直供，全球最低价，7天极速发货" value={profile.brand.usp}
+              <input className={inputCls} placeholder="工厂直供，极具价格竞争力，7天极速发货" value={profile.brand.usp}
                 onChange={e => set('brand')('usp', e.target.value)} />
             </Field>
             <Field label="禁忌话题" hint="客服和社媒 Agent 不应涉及的内容">
@@ -225,7 +225,7 @@ export default function EnterprisePage() {
             </div>
             <Field label="自由填写" hint="运营经验、特定市场规则、历史爆款案例、常见买家问题等，Agent 会在对话中参考">
               <textarea className={textareaCls} rows={6}
-                placeholder={"例：\n- 斋月期间中东订单量提升40%，提前备货假发和香皂\n- 东南亚买家对包邮很敏感，建议设$30免邮门槛\n- 我们的最畅销款是棕色直发14寸，月销500+"}
+                placeholder={"例：\n- 旺季前 2 周提前备货核心爆款，避免断货\n- 东南亚买家对包邮很敏感，建议设 $30 免邮门槛\n- 我们的最畅销款月销 500+，可作为引流主推"}
                 value={profile.knowledge} onChange={e => setProfile(prev => ({ ...prev, knowledge: e.target.value }))} />
             </Field>
           </section>

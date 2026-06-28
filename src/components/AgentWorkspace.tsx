@@ -3,10 +3,10 @@ import { Compass, Zap, MessageSquare, RefreshCw, TrendingUp, Users, BarChart2, S
 import type { AgentType, ConversationContext } from '../App';
 
 const AGENTS = [
-  { type: 'strategy' as AgentType, name: '顾问 Agent', desc: '跨三侧策略编排，经营分析与多 Agent 协调', icon: Compass, color: '#4f46e5', bg: 'rgba(79,70,229,0.08)', maturity: 85, status: 'active' as const, recentActivity: '生成斋月中东推广方案', stats: [{ label: '本周方案', value: '6' }, { label: '协调任务', value: '14' }, { label: '采纳率', value: '91%' }] },
-  { type: 'traffic' as AgentType, name: '社媒 Agent', desc: '竞品视频克隆、脚本生成、素材去重矩阵', icon: Zap, color: '#d97706', bg: 'rgba(217,119,6,0.08)', maturity: 72, status: 'running' as const, recentActivity: '分析 TikTok 10 条假发爆款', stats: [{ label: '今日脚本', value: '12' }, { label: '覆盖平台', value: '5' }, { label: '去重命中', value: '3' }] },
-  { type: 'conversion' as AgentType, name: '客服 Agent', desc: '多语种 24/7 接待，大单预警，AI+人工无缝切换', icon: MessageSquare, color: '#0891b2', bg: 'rgba(8,145,178,0.08)', maturity: 61, status: 'idle' as const, recentActivity: '处理 3 条 WhatsApp 阿语询盘', stats: [{ label: '今日询盘', value: '23' }, { label: '转报价', value: '8' }, { label: '大单预警', value: '1' }] },
-  { type: 'retention' as AgentType, name: 'CRM Agent', desc: '老客画像沉淀、生命周期唤醒、反向动态推品', icon: RefreshCw, color: '#16a34a', bg: 'rgba(22,163,74,0.08)', maturity: 89, status: 'active' as const, recentActivity: '识别 2 个采购周期到期老客', stats: [{ label: '老客总数', value: '632' }, { label: '本月唤醒', value: '47' }, { label: '复购率', value: '34%' }] },
+  { type: 'strategy' as AgentType, name: '策略专家', desc: '跨三侧策略编排，经营分析与多 Agent 协调', icon: Compass, color: '#4f46e5', bg: 'rgba(79,70,229,0.08)', maturity: 85, status: 'active' as const, recentActivity: '生成斋月中东推广方案', stats: [{ label: '本周方案', value: '6' }, { label: '协调任务', value: '14' }, { label: '采纳率', value: '91%' }] },
+  { type: 'traffic' as AgentType, name: '流量专家', desc: '竞品视频克隆、脚本生成、素材去重矩阵', icon: Zap, color: '#d97706', bg: 'rgba(217,119,6,0.08)', maturity: 72, status: 'running' as const, recentActivity: '分析 TikTok 10 条假发爆款', stats: [{ label: '今日脚本', value: '12' }, { label: '覆盖平台', value: '5' }, { label: '去重命中', value: '3' }] },
+  { type: 'conversion' as AgentType, name: '转化专家', desc: '多语种 24/7 接待，大单预警，AI+人工无缝切换', icon: MessageSquare, color: '#0891b2', bg: 'rgba(8,145,178,0.08)', maturity: 61, status: 'idle' as const, recentActivity: '处理 3 条 WhatsApp 阿语询盘', stats: [{ label: '今日询盘', value: '23' }, { label: '转报价', value: '8' }, { label: '大单预警', value: '1' }] },
+  { type: 'retention' as AgentType, name: '留存专家', desc: '老客画像沉淀、生命周期唤醒、行动建议', icon: RefreshCw, color: '#16a34a', bg: 'rgba(22,163,74,0.08)', maturity: 89, status: 'active' as const, recentActivity: '识别 2 个采购周期到期老客', stats: [{ label: '老客总数', value: '632' }, { label: '本月唤醒', value: '47' }, { label: '复购率', value: '34%' }] },
 ];
 const SM = { active: { label: '运行中', color: '#16a34a' }, running: { label: '执行中', color: '#d97706' }, idle: { label: '待机', color: '#94a3b8' } };
 
@@ -14,11 +14,11 @@ export default function AgentWorkspace({ onEnterConversation }: { onEnterConvers
   return (
     <div className="p-6 h-full overflow-y-auto">
       <div className="mb-6">
-        <h2 className="text-lg font-bold text-text-primary font-display">数字团队工作台</h2>
-        <p className="text-sm text-text-muted mt-0.5">4 个 Agent 实时运行 · 点击卡片进入对话</p>
+        <h2 className="text-lg font-bold text-text-primary font-display">你的 AI 智囊团</h2>
+        <p className="text-sm text-text-muted mt-0.5">4 位 AI 专家实时运行 · 点击卡片进入对话</p>
       </div>
       <div className="card p-3.5 mb-6 flex items-center gap-3">
-        <div className="flex items-center gap-1.5 flex-shrink-0"><Activity size={13} className="text-accent" /><span className="text-xs font-semibold text-text-primary">反向推品流水线</span></div>
+        <div className="flex items-center gap-1.5 flex-shrink-0"><Activity size={13} className="text-accent" /><span className="text-xs font-semibold text-text-primary">行动建议流水线</span></div>
         <div className="flex-1 flex items-center gap-1">
           {['社媒检测', 'CRM筛选', '生成话术', '待推送'].map((s, i) => (<div key={s} className="flex items-center gap-1 flex-1 min-w-0"><span className="text-[10px] text-text-muted truncate">{s}</span>{i < 3 && <ChevronRight size={10} className="text-border-bright flex-shrink-0" />}</div>))}
         </div>

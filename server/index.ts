@@ -17,6 +17,7 @@ import { channelsRouter } from './routes/channels.js';
 import { schedulerRouter, initScheduler } from './routes/scheduler.js';
 import { pluginsRouter } from './routes/plugins.js';
 import { studioRouter } from './routes/studio.js';
+import { authRouter } from './routes/auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
@@ -25,7 +26,10 @@ dotenv.config({ path: path.join(__dirname, '..', '.env.local'), override: true }
 const PORT = Number(process.env.PORT ?? 8788);
 const app = express();
 
-app.use(compression());
+// 跳过 SSE 流式响应（text/event-stream），否则 gzip 缓冲会拖慢首字
+app.use(compression({
+  filter: (req, res) => res.getHeader('Content-Type') === 'text/event-stream' ? false : compression.filter(req, res),
+}));
 // 50mb to support base64-encoded video uploads (≈37MB raw video)
 app.use(express.json({ limit: '50mb' }));
 
@@ -49,9 +53,26 @@ app.use('/api/overseas/agents', agentChatRouter);
 app.use('/api/overseas/channels', channelsRouter);
 app.use('/api/overseas/scheduler', schedulerRouter);
 app.use('/api/overseas/plugins', pluginsRouter);
+app.use('/api/overseas/auth', authRouter);
 app.use('/api/overseas/studio', studioRouter);
 
 initScheduler();
+
+// 素材库本地文件托管（POST /studio/materials 上传到 data/media/）
+const mediaDir = path.join(__dirname, '..', 'data', 'media');
+app.use('/media', express.static(mediaDir));
+
+// BGM 曲库本地文件托管（内置种子曲 + POST /studio/bgm 上传）
+const bgmDir = path.join(__dirname, '..', 'data', 'bgm');
+app.use('/bgm', express.static(bgmDir));
+
+// TTS 配音音频托管（POST /studio/tts 生成到 data/tts/）
+const ttsDir = path.join(__dirname, '..', 'data', 'tts');
+app.use('/tts', express.static(ttsDir));
+
+// 封面 SVG 托管（POST /studio/cover 生成到 data/covers/）
+const coversDir = path.join(__dirname, '..', 'data', 'covers');
+app.use('/covers', express.static(coversDir));
 
 // Serve built frontend
 const distDir = path.join(__dirname, '..', 'dist');

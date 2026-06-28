@@ -43,7 +43,7 @@ async function executeTrendReport(_task: ScheduledTask): Promise<string> {
   const messages = [{ role: 'user' as const, content: '生成今日TikTok跨境电商爆款趋势简报，包括：热门品类、热门话题标签、建议借势策略，控制在300字以内' }];
   let result = '';
   for await (const chunk of callLLMChatStream(messages, { systemPrompt: `你是跨境电商趋势分析师。${getEnterpriseCtx() ? '\n\n企业信息：' + getEnterpriseCtx() : ''}` })) {
-    result += chunk;
+    if ('text' in chunk) result += chunk.text;
   }
   return result;
 }
@@ -52,7 +52,7 @@ async function executeWeeklyReview(_task: ScheduledTask): Promise<string> {
   const messages = [{ role: 'user' as const, content: '生成本周跨境电商经营复盘报告：流量表现、询盘转化、老客复购情况，并给出下周行动建议，控制在500字' }];
   let result = '';
   for await (const chunk of callLLMChatStream(messages, { systemPrompt: `你是跨境电商经营顾问。${getEnterpriseCtx() ? '\n\n企业信息：' + getEnterpriseCtx() : ''}` })) {
-    result += chunk;
+    if ('text' in chunk) result += chunk.text;
   }
   return result;
 }
@@ -72,7 +72,7 @@ async function executeCrmWakeup(_task: ScheduledTask): Promise<string> {
   const messages = [{ role: 'user' as const, content: '请生成一段针对60天未复购老客的唤醒消息，要有温度感，适合通过WhatsApp发送，不超过100字' }];
   let result = '';
   for await (const chunk of callLLMChatStream(messages, { systemPrompt: `你是跨境电商CRM专员。${getEnterpriseCtx() ? '\n\n企业信息：' + getEnterpriseCtx() : ''}` })) {
-    result += chunk;
+    if ('text' in chunk) result += chunk.text;
   }
   return result;
 }

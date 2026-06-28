@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Zap, MessageSquare, LayoutGrid, Wand2 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import InspirationDashboard from './InspirationDashboard';
 import AiCreateStudio from './AiCreateStudio';
-import type { ConversationContext } from '../App';
+import AgentChatPage from './AgentChatPage';
+import type { ConversationContext, Page, RestoreSignal, KickoffSignal, AgentAction } from '../App';
 
 type ViewMode = 'dashboard' | 'create' | 'chat';
 
@@ -11,14 +12,26 @@ interface Props {
   onEnterConversation: (ctx: ConversationContext) => void;
   onLeaveConversation: () => void;
   isInConversation: boolean;
+  onNavigate?: (p: Page) => void;
+  restore?: RestoreSignal;
+  kickoff?: KickoffSignal;
+  onAction?: AgentAction;
+  onScriptPanelOpen?: () => void;
+  onScriptPanelClose?: () => void;
 }
 
-export default function TrafficPage({ onEnterConversation, isInConversation }: Props) {
+export default function TrafficPage({ onEnterConversation, onLeaveConversation, isInConversation, onNavigate, restore, kickoff, onAction, onScriptPanelOpen, onScriptPanelClose }: Props) {
   const [viewMode, setViewMode] = useState<ViewMode>('dashboard');
+  useEffect(() => { if (restore) setViewMode('chat'); }, [restore?.key]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (kickoff) setViewMode('chat'); }, [kickoff?.key]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleEnterChat = () => {
+  const handleEnterChat = (ctx: ConversationContext = { agent: 'traffic' }) => {
     setViewMode('chat');
-    onEnterConversation({ agent: 'traffic' });
+    onEnterConversation(ctx);
+  };
+  const handleLeave = () => {
+    setViewMode('dashboard');
+    onLeaveConversation();
   };
 
   return (
@@ -33,7 +46,7 @@ export default function TrafficPage({ onEnterConversation, isInConversation }: P
           {isInConversation && (
             <span className="flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full ml-1" style={{ background: 'rgba(217,119,6,0.1)', color: '#d97706' }}>
               <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
-              社媒 Agent 运行中
+              流量专家 运行中
             </span>
           )}
         </div>
@@ -60,23 +73,38 @@ export default function TrafficPage({ onEnterConversation, isInConversation }: P
         <AnimatePresence mode="wait">
           {viewMode === 'dashboard' ? (
             <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full overflow-y-auto">
-              <InspirationDashboard />
+              <InspirationDashboard onScriptPanelOpen={onScriptPanelOpen} onScriptPanelClose={onScriptPanelClose} />
             </motion.div>
           ) : viewMode === 'create' ? (
             <motion.div key="create" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
-              <AiCreateStudio />
+              <AiCreateStudio onNavigate={onNavigate} />
             </motion.div>
           ) : (
-            <motion.div key="chat" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-              className="flex items-center justify-center h-full">
-              <div className="text-center">
-                <div className="w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-4" style={{ background: 'rgba(217,119,6,0.08)', color: '#d97706' }}>
-                  <Zap size={28} />
-                </div>
-                <p className="text-base font-bold text-text-primary font-display">社媒 Agent</p>
-                <p className="text-sm text-text-muted mt-1">竞品视频克隆 · 脚本生成 · 素材去重矩阵</p>
-                <p className="text-xs text-text-muted mt-4">社媒 Agent 对话功能开发中</p>
-              </div>
+            <motion.div key="chat" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
+              <AgentChatPage
+                config={{
+                  type: 'traffic',
+                  apiPath: '/api/overseas/agents/traffic/chat',
+                  color: '#d97706',
+                  bg: 'rgba(217,119,6,0.1)',
+                  icon: <Zap size={13} />,
+                  name: '流量专家',
+                  tagline: '爆款拆解 · 多语言脚本 · 矩阵发布',
+                  suggestions: [
+                    '拆解这条 TikTok 爆款的结构，给我克隆脚本',
+                    '给智能钱包写一条阿拉伯语 TikTok 口播脚本',
+                    '本周发什么选题能起量？给我 3 个内容方向',
+                    '帮我规划 TikTok + Instagram 一周发布节奏',
+                  ],
+                }}
+                onEnterConversation={handleEnterChat}
+                onLeaveConversation={handleLeave}
+                isInConversation={isInConversation}
+                restoreKey={restore?.key}
+                restoreMessages={restore?.messages}
+                kickoff={kickoff}
+                onAction={onAction}
+              />
             </motion.div>
           )}
         </AnimatePresence>
