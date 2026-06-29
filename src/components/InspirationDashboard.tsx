@@ -692,12 +692,11 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
   const [copied, setCopied] = useState(false);
   const [showLangDropdown, setShowLangDropdown] = useState(false);
 
-  useEffect(() => {
-    let cancelled = false;
+  const loadEnterpriseProducts = () => {
     fetch('/api/overseas/enterprise/profile', { headers: authHeader() })
       .then(r => r.ok ? r.json() : null)
       .then((profile: EnterpriseProfileForScript | null) => {
-        if (cancelled || !profile) return;
+        if (!profile) return;
         const options = buildProductOptions(profile);
         setProductOptions(options);
         if (options[0]) {
@@ -706,8 +705,15 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
         }
       })
       .catch(() => {});
-    return () => { cancelled = true; };
+  };
+
+  useEffect(() => {
+    loadEnterpriseProducts();
   }, []);
+
+  useEffect(() => {
+    if (activeTab === 'generate') loadEnterpriseProducts();
+  }, [activeTab, video.id]);
 
   const handleSelectProduct = (id: string) => {
     setSelectedProductId(id);
