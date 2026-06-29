@@ -78,6 +78,7 @@ export interface RenderAuthorization {
 export interface DesktopRenderBridge {
   available: boolean;
   render: (manifest: RenderManifest) => Promise<{ ok: boolean; outputPath?: string; error?: string }>;
+  openInCapcut?: (payload: Record<string, unknown>) => Promise<{ ok: boolean; dir?: string; error?: string }>;
   onProgress: (cb: (pct: number) => void) => () => void; // 返回取消订阅函数
 }
 
@@ -130,13 +131,33 @@ async function del(path: string): Promise<{ ok: boolean }> {
 }
 
 export const studioApi = {
-  script: (b: { materials: string[]; productInfo?: string; language: string; platform: string; duration: number; scriptType?: 'voiceover' | 'storyboard' }, fb: string) =>
+  script: (b: {
+    materials: string[];
+    productInfo?: string;
+    language: string;
+    platform: string;
+    duration: number;
+    scriptType?: 'voiceover' | 'storyboard';
+    provider?: 'gemini' | 'qwen';
+    audience?: string;
+    sellingPoints?: string;
+    tone?: string;
+  }, fb: string) =>
     post<{ script: string }>('script', b, { script: fb }),
 
-  covers: (b: { script?: string; productInfo?: string; language: string }, fb: string[]) =>
+  covers: (b: { script?: string; productInfo?: string; language: string; provider?: 'gemini' | 'qwen'; tone?: string }, fb: string[]) =>
     post<{ covers: string[] }>('covers', b, { covers: fb }),
 
-  caption: (b: { script?: string; productInfo?: string; platform: string; language: string }, fb: { caption: string; hashtags: string[] }) =>
+  caption: (b: {
+    script?: string;
+    productInfo?: string;
+    platform: string;
+    language: string;
+    provider?: 'gemini' | 'qwen';
+    audience?: string;
+    sellingPoints?: string;
+    tone?: string;
+  }, fb: { caption: string; hashtags: string[] }) =>
     post<{ caption: string; hashtags: string[] }>('caption', b, fb),
 
   select: (b: SelectInput, fb: string[]) =>

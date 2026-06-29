@@ -15,12 +15,6 @@ import type { Page } from '../App';
    三栏布局：① 步骤导航  ② 操作区  ③ 实时预览 / 制作摘要
 ─────────────────────────────────────────────────────────────────────────── */
 
-// 素材缩略图复用灵感大屏的 mock 封面图（避免纯色占位）
-const _coverMods = import.meta.glob('../assets/covers/mock-*.png', { eager: true }) as Record<string, { default: string }>;
-const COVER_IMGS: string[] = Object.keys(_coverMods)
-  .sort((a, b) => (+(a.match(/mock-(\d+)/)?.[1] ?? 0)) - (+(b.match(/mock-(\d+)/)?.[1] ?? 0)))
-  .map(k => _coverMods[k].default);
-
 const AMBER = '#d97706';
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
@@ -61,19 +55,16 @@ const STEPS: { id: StepId; label: string; icon: typeof LayoutGrid; hint: string 
   { id: 'publish',  label: '导出/发布', icon: Send,       hint: '下载成片或一键多平台发布' },
 ];
 
-/* ── Mock 数据 ─────────────────────────────────────────────────────────── */
-
 interface MaterialFolder { id: string; name: string; count: number }
 const FOLDERS: MaterialFolder[] = [
-  { id: 'all',     name: '全部素材',   count: 48 },
-  { id: 'hot',     name: '爆款素材',   count: 0 },  // 官方实时更新上传的素材库
+  { id: 'all',     name: '全部素材',   count: 0 },
+  { id: 'hot',     name: '爆款素材',   count: 0 },
   { id: 'upload',  name: '我的上传',   count: 0 },
-  // 以下分类来自「企业中心」信息上传
-  { id: 'product', name: '产品主图',   count: 16 },
-  { id: 'factory', name: '工厂实拍',   count: 9 },
-  { id: 'scene',   name: '使用场景',   count: 12 },
-  { id: 'model',   name: '模特出镜',   count: 7 },
-  { id: 'detail',  name: '细节特写',   count: 4 },
+  { id: 'product', name: '产品主图',   count: 0 },
+  { id: 'factory', name: '工厂实拍',   count: 0 },
+  { id: 'scene',   name: '使用场景',   count: 0 },
+  { id: 'model',   name: '模特出镜',   count: 0 },
+  { id: 'detail',  name: '细节特写',   count: 0 },
 ];
 
 interface Clip {
@@ -87,27 +78,15 @@ interface Clip {
   poster?: string;  // 封面帧画面（视频抽帧 / 图片自身）
   scope?: 'shared' | 'own'; // 公共库 / 我的（缺省按 own）
 }
-const CLIPS: Clip[] = [
-  { id: 'c1',  name: '产品正面展示.mp4',    folder: 'product', type: 'video', duration: 8,  size: '12.4 MB' },
-  { id: 'c2',  name: '开箱细节特写.mp4',    folder: 'detail',  type: 'video', duration: 6,  size: '9.1 MB' },
-  { id: 'c3',  name: '工厂流水线.mov',      folder: 'factory', type: 'video', duration: 12, size: '27.9 MB' },
-  { id: 'c4',  name: '模特使用场景.mp4',    folder: 'model',   type: 'video', duration: 15, size: '34.1 MB' },
-  { id: 'c5',  name: '产品主图01.jpg',      folder: 'product', type: 'image', duration: 0,  size: '690 KB' },
-  { id: 'c6',  name: '材质纹理特写.mp4',    folder: 'detail',  type: 'video', duration: 5,  size: '7.3 MB' },
-  { id: 'c7',  name: '居家使用场景.mp4',    folder: 'scene',   type: 'video', duration: 10, size: '18.7 MB' },
-  { id: 'c8',  name: '功能演示.mp4',        folder: 'scene',   type: 'video', duration: 14, size: '22.5 MB' },
-  { id: 'c9',  name: '产品主图02.jpg',      folder: 'product', type: 'image', duration: 0,  size: '720 KB' },
-  { id: 'c10', name: '包装展示.mp4',        folder: 'product', type: 'video', duration: 7,  size: '11.2 MB' },
-  { id: 'c11', name: '细节质感.jpg',        folder: 'detail',  type: 'image', duration: 0,  size: '540 KB' },
-  { id: 'c12', name: '海外仓发货.mp4',      folder: 'factory', type: 'video', duration: 9,  size: '15.8 MB' },
-  // 爆款素材 —— 官方实时更新的高转化片段库
-  { id: 'h1',  name: '爆款·痛点开场.mp4',    folder: 'hot',     type: 'video', duration: 6,  size: '8.2 MB',  scope: 'shared' },
-  { id: 'h2',  name: '爆款·对比演示.mp4',    folder: 'hot',     type: 'video', duration: 9,  size: '13.6 MB', scope: 'shared' },
-  { id: 'h3',  name: '爆款·结尾 CTA.mp4',     folder: 'hot',     type: 'video', duration: 5,  size: '6.9 MB',  scope: 'shared' },
-  { id: 'h4',  name: '爆款·种草口播.mp4',    folder: 'hot',     type: 'video', duration: 11, size: '17.3 MB', scope: 'shared' },
-];
-// 给没有真实文件的 mock 素材分配一张内容封面，作为缩略图 + 封面候选帧
-CLIPS.forEach((c, i) => { if (!c.url && !c.poster && COVER_IMGS.length) c.poster = COVER_IMGS[i % COVER_IMGS.length]; });
+
+interface ClipEdit {
+  trimStart: number;
+  trimEnd: number;
+  speed: number;
+  transition: string;
+  note: string;
+}
+const CLIPS: Clip[] = [];
 
 interface Bgm { id: string; name: string; mood: string; duration: number; url?: string; recommended?: boolean }
 // 已移除内置曲库（生成质量不达标）；仅展示用户自行上传的音乐
@@ -201,7 +180,6 @@ const PLATFORMS = [
   { id: 'instagram', label: 'Instagram', ratio: '9:16' },
   { id: 'youtube',   label: 'YouTube',   ratio: '16:9' },
   { id: 'facebook',  label: 'Facebook',  ratio: '9:16' },
-  { id: 'pinterest', label: 'Pinterest', ratio: '9:16' },
 ];
 const RATIOS = ['9:16', '1:1', '16:9'];
 const LANGS = [
@@ -238,6 +216,54 @@ const langZh = (code: string) => {
   return label.split(' - ')[1] ?? label;
 };
 
+const LANG_ALIASES: Record<string, string> = {
+  英语: 'en', english: 'en', en: 'en',
+  中文: 'zh', 简体中文: 'zh', chinese: 'zh', zh: 'zh',
+  西班牙语: 'es', spanish: 'es', es: 'es',
+  法语: 'fr', french: 'fr', fr: 'fr',
+  德语: 'de', german: 'de', de: 'de',
+  葡萄牙语: 'pt', portuguese: 'pt', pt: 'pt',
+  意大利语: 'it', italian: 'it', it: 'it',
+  俄语: 'ru', russian: 'ru', ru: 'ru',
+  日语: 'ja', japanese: 'ja', ja: 'ja',
+  韩语: 'ko', korean: 'ko', ko: 'ko',
+  阿拉伯语: 'ar', arabic: 'ar', ar: 'ar',
+  印地语: 'hi', hindi: 'hi', hi: 'hi',
+  印尼语: 'id', 印度尼西亚语: 'id', indonesian: 'id', id: 'id',
+  泰语: 'th', thai: 'th', th: 'th',
+  越南语: 'vi', vietnamese: 'vi', vi: 'vi',
+  土耳其语: 'tr', turkish: 'tr', tr: 'tr',
+  荷兰语: 'nl', dutch: 'nl', nl: 'nl',
+  波兰语: 'pl', polish: 'pl', pl: 'pl',
+};
+
+function languageTextToCode(text = '') {
+  const first = text.split(/[、,，/|;；\s]+/).map(s => s.trim()).find(Boolean) ?? '';
+  const normalized = first.toLowerCase();
+  return LANG_ALIASES[first] ?? LANG_ALIASES[normalized] ?? 'en';
+}
+
+interface EnterpriseProfileLite {
+  company?: { industry?: string; mainMarkets?: string; primaryLanguages?: string };
+  products?: { categories?: string; priceRange?: string; moq?: string; highlights?: string };
+  brand?: { tone?: string; usp?: string; preferredLanguages?: string };
+  strategy?: { focusProducts?: string; focusMarkets?: string };
+  customers?: { targetProfiles?: string };
+}
+
+interface SeedanceKickoff {
+  script?: string;
+  scriptType?: 'voiceover' | 'storyboard';
+  language?: string;
+  productInfo?: string;
+  video?: {
+    title?: string;
+    platform?: string;
+    videoUrl?: string;
+    aiAnalysis?: { materialUrl?: string };
+  };
+}
+
 const SAMPLE_SCRIPT = `[Hook · 0-3s]
 Stop scrolling — this is the one product everyone's been asking about.
 
@@ -249,8 +275,7 @@ Tap the link to grab yours before they sell out again.`;
 
 /* ── 缩略图占位 ────────────────────────────────────────────────────────── */
 function Thumb({ seed, label, ratio = 'aspect-video', src }: { seed: string; label?: string; ratio?: string; src?: string }) {
-  // 有内容缩略图（复用灵感大屏的 mock 封面图）就显示图片，否则退化为渐变占位
-  const fallbackSrc = src ?? COVER_IMGS[Math.abs(seed.charCodeAt(0) * 7 + (seed.charCodeAt(1) ?? 0)) % (COVER_IMGS.length || 1)];
+  const fallbackSrc = src;
   if (fallbackSrc) {
     return (
       <div className={`relative w-full ${ratio} overflow-hidden rounded-lg bg-surface-2`}>
@@ -347,13 +372,17 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
   const [ratio, setRatio] = useState('9:16');
   const [duration, setDuration] = useState(20);
   const [lang, setLang] = useState('en');
+  const [provider, setProvider] = useState<'gemini' | 'qwen'>('gemini');
+  const [productInfo, setProductInfo] = useState('');
+  const [audience, setAudience] = useState('');
+  const [sellingPoints, setSellingPoints] = useState('');
+  const [tone, setTone] = useState('高转化 · 口语化');
 
   const [activeFolder, setActiveFolder] = useState('all');
   const [search, setSearch] = useState('');
-  const [selected, setSelected] = useState<string[]>(['c1', 'c2', 'c4']);
+  const [selected, setSelected] = useState<string[]>([]);
 
-  // 素材库：mock 占位 + 真实上传（真实的排在前面）
-  const [materials, setMaterials] = useState<Clip[]>(CLIPS);
+  const [materials, setMaterials] = useState<Clip[]>([]);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -401,6 +430,33 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
   const [demoAutoLoading, setDemoAutoLoading] = useState(false);
   const [savedToWorks, setSavedToWorks] = useState(false); // 「存入我的作品」反馈
 
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/overseas/enterprise/profile')
+      .then(r => r.json())
+      .then((profile: EnterpriseProfileLite) => {
+        if (!alive) return;
+        const preferred = profile.brand?.preferredLanguages || profile.company?.primaryLanguages || '';
+        setLang(languageTextToCode(preferred));
+        setProductInfo(prev => prev || [
+          profile.strategy?.focusProducts || profile.products?.categories,
+          profile.products?.priceRange,
+          profile.products?.moq,
+        ].filter(Boolean).join('；'));
+        setAudience(prev => prev || [
+          profile.customers?.targetProfiles,
+          profile.strategy?.focusMarkets || profile.company?.mainMarkets,
+        ].filter(Boolean).join('；'));
+        setSellingPoints(prev => prev || [
+          profile.brand?.usp,
+          profile.products?.highlights,
+        ].filter(Boolean).join('；'));
+        setTone(prev => prev || profile.brand?.tone || '高转化 · 口语化');
+      })
+      .catch(() => {});
+    return () => { alive = false; };
+  }, []);
+
   // 成片预览：网页端顺序播放选中的真实视频片段（mock 占位素材无 url，不可播放）
   const [previewIdx, setPreviewIdx] = useState<number | null>(null);
   const [previewNote, setPreviewNote] = useState(false);
@@ -411,6 +467,7 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
   const [subMode, setSubMode] = useState<'target' | 'bilingual'>('target');
   const [subPreviewIdx, setSubPreviewIdx] = useState(0); // 预览叠层当前展示的 cue
   const [cueZh, setCueZh] = useState<string[]>([]);       // 双语字幕的中文译文（与 cues 对齐）
+  const [clipEdits, setClipEdits] = useState<Record<string, ClipEdit>>({});
 
   // 草稿 / 作品
   const [projectId, setProjectId] = useState<string | null>(null);
@@ -419,6 +476,7 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
   const [projects, setProjects] = useState<StudioProject[]>([]);
   const [savingProj, setSavingProj] = useState(false);
   const [savedTick, setSavedTick] = useState(false);
+  const [seedanceKickoff, setSeedanceKickoff] = useState<SeedanceKickoff | null>(null);
 
   const selectedClips = useMemo(() => materials.filter(c => selected.includes(c.id)), [selected, materials]);
   const totalDur = selectedClips.reduce((s, c) => s + (c.type === 'image' ? 3 : c.duration), 0);
@@ -440,6 +498,63 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
 
   const canNext = step === 'material' ? selected.length > 0 : true;
   const isLast = stepIdx === STEPS.length - 1;
+
+  useEffect(() => {
+    let raw = '';
+    try {
+      raw = localStorage.getItem('ow_seedance_kickoff') || '';
+      if (raw) localStorage.removeItem('ow_seedance_kickoff');
+    } catch { /* ignore */ }
+    if (!raw) return;
+    try {
+      const kickoff = JSON.parse(raw) as SeedanceKickoff;
+      setSeedanceKickoff(kickoff);
+      if (kickoff.script) setScript(kickoff.script);
+      if (kickoff.scriptType === 'voiceover' || kickoff.scriptType === 'storyboard') setScriptType(kickoff.scriptType);
+      if (kickoff.language) setLang(kickoff.language);
+      if (kickoff.productInfo) setProductInfo(kickoff.productInfo);
+      if (kickoff.video?.platform) setPlatform(kickoff.video.platform);
+      setProvider('gemini');
+      setMode('material');
+      setActiveFolder('hot');
+      setProjectTitle(kickoff.video?.title ? `Seedance 2.0 · ${kickoff.video.title}` : 'Seedance 2.0 爆款复刻');
+      setStepIdx(STEPS.findIndex(s => s.id === 'material'));
+      autoGen.current = true;
+    } catch { /* ignore malformed kickoff */ }
+  }, []);
+
+  useEffect(() => {
+    if (!seedanceKickoff || materials.length === 0) return;
+    const materialUrl = seedanceKickoff.video?.aiAnalysis?.materialUrl || seedanceKickoff.video?.videoUrl || '';
+    const title = seedanceKickoff.video?.title || '';
+    const matched = materials.find(m => (materialUrl && m.url === materialUrl) || (title && m.name.includes(title.slice(0, 40))));
+    if (matched) setSelected([matched.id]);
+  }, [materials, seedanceKickoff]);
+
+  const editFor = (clip: Clip): ClipEdit => clipEdits[clip.id] ?? {
+    trimStart: 0,
+    trimEnd: clip.type === 'image' ? 3 : clip.duration,
+    speed: 1,
+    transition: '硬切',
+    note: '',
+  };
+  const patchClipEdit = (clip: Clip, patch: Partial<ClipEdit>) => {
+    setClipEdits(prev => {
+      const base = prev[clip.id] ?? {
+        trimStart: 0,
+        trimEnd: clip.type === 'image' ? 3 : clip.duration,
+        speed: 1,
+        transition: '硬切',
+        note: '',
+      };
+      const next = { ...base, ...patch };
+      const maxEnd = clip.type === 'image' ? 10 : Math.max(1, clip.duration);
+      next.trimStart = Math.max(0, Math.min(Number(next.trimStart) || 0, maxEnd));
+      next.trimEnd = Math.max(next.trimStart + 0.5, Math.min(Number(next.trimEnd) || maxEnd, maxEnd));
+      next.speed = Math.max(0.25, Math.min(Number(next.speed) || 1, 4));
+      return { ...prev, [clip.id]: next };
+    });
+  };
 
   const goPreview = async (scriptOverride?: string) => {
     setStepIdx(STEPS.findIndex(s => s.id === 'preview'));
@@ -532,7 +647,7 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
     setScriptLoading(true);
     try {
       const { script: s } = await studioApi.script(
-        { materials: matNames, language: lang, platform, duration, scriptType: type }, script,
+        { materials: matNames, productInfo, language: lang, platform, duration, scriptType: type, provider, audience, sellingPoints, tone }, script,
       );
       setScript(s);
     } catch (err: any) {
@@ -561,7 +676,7 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
   const regenCovers = async () => {
     setCoverLoading(true);
     try {
-      const { covers } = await studioApi.covers({ script, language: lang }, [coverTitle]);
+      const { covers } = await studioApi.covers({ script, productInfo, language: lang, provider, tone }, [coverTitle]);
       if (covers[0]) setCoverTitle(covers[0]);
     } catch (err: any) {
       alert(err?.message || '封面标题生成失败，请稍后重试。');
@@ -639,10 +754,19 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
   };
 
   // 用剪映精修：桌面端把素材+字幕轨导出为剪映草稿并唤起 App；网页端给出提示
-  const openInCapcut = () => {
-    const bridge = getDesktopRender() as unknown as { openInCapcut?: (m: unknown) => void } | undefined;
+  const openInCapcut = async () => {
+    const bridge = getDesktopRender();
     if (bridge?.openInCapcut) {
-      bridge.openInCapcut({ materials: matNames, cues, subMode, coverTitle, ratio, language: lang });
+      const out = await bridge.openInCapcut({
+        materials: selectedClips.map(c => ({ name: c.name, url: c.url, type: c.type, duration: c.duration, edit: editFor(c) })),
+        cues: subMode === 'bilingual' ? cues.map((c, i) => ({ ...c, zh: cueZh[i] })) : cues,
+        subMode,
+        coverTitle,
+        ratio,
+        language: lang,
+        script,
+      });
+      if (!out.ok) setPreviewNote(true);
     } else {
       setPreviewNote(true); // 网页端无法访问剪映本地草稿目录，需在桌面客户端操作
     }
@@ -652,7 +776,7 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
     setCaptionLoading(true);
     try {
       const { caption: cap, hashtags } = await studioApi.caption(
-        { script, platform, language: lang },
+        { script, productInfo, platform, language: lang, provider, audience, sellingPoints, tone },
         { caption, hashtags: [] },
       );
       const tags = (hashtags ?? []).map(t => `#${t.replace(/^#/, '')}`).join(' ');
@@ -672,14 +796,14 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
         ? materials.filter(m => selected.includes(m.id)).map(m => m.name)
         : materials.slice(0, 3).map(m => m.name);
       const scriptResp = await studioApi.script(
-        { materials: matNamesForDemo, language: lang, platform, duration, scriptType },
+        { materials: matNamesForDemo, productInfo, language: lang, platform, duration, scriptType, provider, audience, sellingPoints, tone },
         script,
       );
       setScript(scriptResp.script);
-      const coversResp = await studioApi.covers({ script: scriptResp.script, language: lang }, [coverTitle]);
+      const coversResp = await studioApi.covers({ script: scriptResp.script, productInfo, language: lang, provider, tone }, [coverTitle]);
       if (coversResp.covers[0]) setCoverTitle(coversResp.covers[0]);
       const cap = await studioApi.caption(
-        { script: scriptResp.script, platform, language: lang },
+        { script: scriptResp.script, productInfo, platform, language: lang, provider, audience, sellingPoints, tone },
         { caption, hashtags: [] },
       );
       const tags = (cap.hashtags ?? []).map(t => `#${t.replace(/^#/, '')}`).join(' ');
@@ -692,10 +816,10 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
     }
   };
 
-  /* ── 素材库：拉取真实素材，真实的排在 mock 前面 ──────────────────────── */
+  /* ── 素材库：只拉取真实素材 ──────────────────────── */
   const refreshMaterials = async () => {
     const real = await studioApi.listMaterials();
-    setMaterials(real.length ? [...real.map(materialToClip), ...CLIPS] : CLIPS);
+    setMaterials(real.map(materialToClip));
   };
   useEffect(() => { void refreshMaterials(); }, []);
 
@@ -791,10 +915,11 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
 
   /* ── 草稿 / 作品 ─────────────────────────────────────────────────────── */
   const collectSpec = () => ({
-    mode, platform, ratio, duration, lang,
+    mode, platform, ratio, duration, lang, provider,
+    productInfo, audience, sellingPoints, tone,
     selected, script, scriptType, voice,
     bgm, bgmVol, cover, coverTitle, coverStyle, account, caption,
-    subtitlesOn, subMode,
+    subtitlesOn, subMode, clipEdits,
   });
 
   const applySpec = (s: Record<string, unknown>) => {
@@ -803,6 +928,11 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
     if (s.ratio) setRatio(s.ratio as string);
     if (typeof s.duration === 'number') setDuration(s.duration);
     if (s.lang) setLang(s.lang as string);
+    if (s.provider === 'gemini' || s.provider === 'qwen') setProvider(s.provider);
+    if (typeof s.productInfo === 'string') setProductInfo(s.productInfo);
+    if (typeof s.audience === 'string') setAudience(s.audience);
+    if (typeof s.sellingPoints === 'string') setSellingPoints(s.sellingPoints);
+    if (typeof s.tone === 'string') setTone(s.tone);
     if (Array.isArray(s.selected)) setSelected(s.selected as string[]);
     if (typeof s.script === 'string') setScript(s.script);
     if (s.scriptType) setScriptType(s.scriptType as typeof scriptType);
@@ -816,6 +946,7 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
     if (typeof s.caption === 'string') setCaption(s.caption);
     if (typeof s.subtitlesOn === 'boolean') setSubtitlesOn(s.subtitlesOn);
     if (s.subMode === 'target' || s.subMode === 'bilingual') setSubMode(s.subMode);
+    if (s.clipEdits && typeof s.clipEdits === 'object') setClipEdits(s.clipEdits as Record<string, ClipEdit>);
   };
 
   const saveProject = async (status: 'draft' | 'published' = 'draft') => {
@@ -912,6 +1043,38 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
                     {LANGS.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
                   </select>
                   <ChevronDown size={15} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-text-muted" />
+                </div>
+              </Field>
+              <Field label="生成模型">
+                <div className="flex items-center gap-1.5 p-1 rounded-lg bg-surface-2 border border-border w-fit">
+                  {([
+                    ['gemini', 'Gemini'],
+                    ['qwen', '千问'],
+                  ] as const).map(([id, label]) => (
+                    <button key={id} onClick={() => setProvider(id)}
+                      className={`px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                        provider === id ? 'bg-surface text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'
+                      }`}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              </Field>
+              <Field label="商品与创意参数">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 max-w-2xl">
+                  <input value={productInfo} onChange={e => setProductInfo(e.target.value)}
+                    placeholder="商品信息：品类、价格、核心用途"
+                    className="px-3 py-2 rounded-lg border border-border bg-surface text-sm text-text-primary outline-none focus:border-accent" />
+                  <input value={audience} onChange={e => setAudience(e.target.value)}
+                    placeholder="目标人群：如美国宝妈 / 户外爱好者"
+                    className="px-3 py-2 rounded-lg border border-border bg-surface text-sm text-text-primary outline-none focus:border-accent" />
+                  <input value={sellingPoints} onChange={e => setSellingPoints(e.target.value)}
+                    placeholder="卖点：3秒安装 / 防水 / 工厂价"
+                    className="px-3 py-2 rounded-lg border border-border bg-surface text-sm text-text-primary outline-none focus:border-accent" />
+                  <select value={tone} onChange={e => setTone(e.target.value)}
+                    className="px-3 py-2 rounded-lg border border-border bg-surface text-sm text-text-primary outline-none focus:border-accent">
+                    {['高转化 · 口语化', '测评种草 · 可信', '痛点放大 · 直接', '生活方式 · 治愈', '工厂源头 · 专业'].map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
                 </div>
               </Field>
             </div>
@@ -1377,6 +1540,57 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
                   </div>
                 ))}
               </div>
+              <div className="card !rounded-xl p-3.5 mb-4">
+                <div className="flex items-center gap-2 mb-2.5">
+                  <Film size={15} className="text-text-muted" />
+                  <span className="text-xs font-semibold text-text-secondary">剪辑细化</span>
+                  <span className="text-[10px] text-text-muted">导出剪映时同步为时间线参考</span>
+                </div>
+                <div className="space-y-2 max-h-48 overflow-y-auto pr-1">
+                  {selectedClips.map((clip, i) => {
+                    const edit = editFor(clip);
+                    return (
+                      <div key={clip.id} className="rounded-lg border border-border bg-surface-2 px-2.5 py-2">
+                        <div className="flex items-center gap-2 mb-2">
+                          <span className="w-5 h-5 rounded-md flex items-center justify-center text-[10px] font-bold text-white flex-shrink-0" style={{ background: AMBER }}>{i + 1}</span>
+                          <span className="text-xs font-semibold text-text-primary truncate">{clip.name}</span>
+                          <span className="ml-auto text-[10px] text-text-muted">{clip.type === 'image' ? '图片' : `${clip.duration}s`}</span>
+                        </div>
+                        <div className="grid grid-cols-3 gap-2 mb-2">
+                          <label className="text-[10px] text-text-muted">
+                            入点
+                            <input type="number" min={0} step={0.5} value={edit.trimStart}
+                              onChange={e => patchClipEdit(clip, { trimStart: Number(e.target.value) })}
+                              className="mt-1 w-full px-2 py-1 rounded-md border border-border bg-surface text-xs text-text-primary outline-none focus:border-accent" />
+                          </label>
+                          <label className="text-[10px] text-text-muted">
+                            出点
+                            <input type="number" min={0.5} step={0.5} value={edit.trimEnd}
+                              onChange={e => patchClipEdit(clip, { trimEnd: Number(e.target.value) })}
+                              className="mt-1 w-full px-2 py-1 rounded-md border border-border bg-surface text-xs text-text-primary outline-none focus:border-accent" />
+                          </label>
+                          <label className="text-[10px] text-text-muted">
+                            速度
+                            <select value={edit.speed} onChange={e => patchClipEdit(clip, { speed: Number(e.target.value) })}
+                              className="mt-1 w-full px-2 py-1 rounded-md border border-border bg-surface text-xs text-text-primary outline-none focus:border-accent">
+                              {[0.5, 0.75, 1, 1.25, 1.5, 2].map(v => <option key={v} value={v}>{v}x</option>)}
+                            </select>
+                          </label>
+                        </div>
+                        <div className="grid grid-cols-[86px_1fr] gap-2">
+                          <select value={edit.transition} onChange={e => patchClipEdit(clip, { transition: e.target.value })}
+                            className="px-2 py-1 rounded-md border border-border bg-surface text-xs text-text-primary outline-none focus:border-accent">
+                            {['硬切', '淡入淡出', '推近', '闪白', '卡点'].map(t => <option key={t} value={t}>{t}</option>)}
+                          </select>
+                          <input value={edit.note} onChange={e => patchClipEdit(clip, { note: e.target.value })}
+                            placeholder="给剪映手动精修的备注，如：这里加产品卖点字幕"
+                            className="px-2 py-1 rounded-md border border-border bg-surface text-xs text-text-primary outline-none focus:border-accent" />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
               {/* 字幕：按口播内容自动生成（沿用封面样式），可开关 / 切双语 / 逐句核对 */}
               <div className="card !rounded-xl p-3.5 mb-4">
                 <div className="flex items-center gap-2 mb-2.5">
@@ -1430,7 +1644,7 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
                   <RefreshCw size={12} className={rendering ? 'animate-spin' : ''} /> 重新合成成片
                 </button>
                 {/* 字幕/卡点精修交给本地剪映 */}
-                <button onClick={openInCapcut}
+                <button onClick={() => void openInCapcut()}
                   className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border border-border hover:border-border-bright">
                   <Wand2 size={12} /> 用剪映精修
                 </button>

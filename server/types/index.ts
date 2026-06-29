@@ -1,4 +1,4 @@
-export type Platform = 'tiktok' | 'instagram' | 'youtube' | 'facebook' | 'pinterest';
+export type Platform = 'tiktok' | 'instagram' | 'youtube' | 'facebook';
 export type VideoStatus = 'pending' | 'analyzed' | 'failed';
 export type ScriptType = 'voiceover' | 'storyboard';
 export type ScriptStatus = 'draft' | 'reviewed' | 'published';

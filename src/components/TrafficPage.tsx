@@ -33,6 +33,10 @@ export default function TrafficPage({ onEnterConversation, onLeaveConversation, 
     setViewMode('dashboard');
     onLeaveConversation();
   };
+  const handleEnterWorkflow = (payload: unknown) => {
+    try { localStorage.setItem('ow_seedance_kickoff', JSON.stringify(payload)); } catch { /* ignore */ }
+    setViewMode('create');
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -73,7 +77,7 @@ export default function TrafficPage({ onEnterConversation, onLeaveConversation, 
         <AnimatePresence mode="wait">
           {viewMode === 'dashboard' ? (
             <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full overflow-y-auto">
-              <InspirationDashboard onScriptPanelOpen={onScriptPanelOpen} onScriptPanelClose={onScriptPanelClose} />
+              <InspirationDashboard onScriptPanelOpen={onScriptPanelOpen} onScriptPanelClose={onScriptPanelClose} onEnterWorkflow={handleEnterWorkflow} />
             </motion.div>
           ) : viewMode === 'create' ? (
             <motion.div key="create" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">

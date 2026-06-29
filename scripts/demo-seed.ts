@@ -34,4 +34,4 @@ writeJson('tasks.json', [
 writeJson('studio-projects.json', []);
 writeJson('demo-usage.json', {});
 
-console.log('[demo] seeded placeholder demo data');
+console.log(`[demo] seeded ${first.id} enterprise template`);

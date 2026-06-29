@@ -78,6 +78,80 @@ async function downloadTo(url, dest) {
   return dest;
 }
 
+function safeName(name) {
+  return String(name || 'asset').replace(/[\\/:*?"<>|\n\r]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || 'asset';
+}
+
+function srtTime(sec) {
+  const n = Math.max(0, Number(sec) || 0);
+  const h = Math.floor(n / 3600);
+  const m = Math.floor((n % 3600) / 60);
+  const s = Math.floor(n % 60);
+  const ms = Math.round((n - Math.floor(n)) * 1000);
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
+}
+
+function cuesToSrt(cues) {
+  return (Array.isArray(cues) ? cues : []).map((cue, i) => {
+    const text = [cue.text, cue.zh].filter(Boolean).join('\n');
+    return `${i + 1}\n${srtTime(cue.start)} --> ${srtTime(cue.end)}\n${text}\n`;
+  }).join('\n');
+}
+
+async function exportCapcutPackage(payload) {
+  const root = path.join(os.homedir(), 'Downloads', `lingshu-capcut-${Date.now()}`);
+  const assetDir = path.join(root, 'assets');
+  fs.mkdirSync(assetDir, { recursive: true });
+
+  try {
+    const materials = Array.isArray(payload && payload.materials) ? payload.materials : [];
+    const copied = [];
+    for (let i = 0; i < materials.length; i++) {
+      const m = materials[i] || {};
+      const ext = path.extname(String(m.url || '').split('?')[0]) || (m.type === 'image' ? '.jpg' : '.mp4');
+      const file = `${String(i + 1).padStart(2, '0')}-${safeName(String(m.name || '').replace(/\.[^.]+$/, ''))}${ext}`;
+      const dest = path.join(assetDir, file);
+      if (m.url) {
+        try {
+          await downloadTo(m.url, dest);
+          copied.push({ ...m, localFile: `assets/${file}` });
+        } catch {
+          copied.push({ ...m, localFile: null, error: 'download failed' });
+        }
+      } else {
+        copied.push({ ...m, localFile: null, error: 'no source url' });
+      }
+    }
+
+    const timeline = {
+      app: 'lingshu-ai',
+      targetEditor: 'CapCut/Jianying manual import package',
+      createdAt: new Date().toISOString(),
+      ratio: payload && payload.ratio || '9:16',
+      language: payload && payload.language || 'en',
+      coverTitle: payload && payload.coverTitle || '',
+      materials: copied,
+      subtitles: payload && payload.cues || [],
+      script: payload && payload.script || '',
+    };
+    fs.writeFileSync(path.join(root, 'timeline.json'), JSON.stringify(timeline, null, 2), 'utf8');
+    fs.writeFileSync(path.join(root, 'subtitles.srt'), cuesToSrt(payload && payload.cues), 'utf8');
+    fs.writeFileSync(path.join(root, 'README.txt'), [
+      '灵枢 AI 剪映精修包',
+      '',
+      '1. 打开剪映/CapCut，新建项目。',
+      '2. 导入 assets 文件夹内的素材，按 timeline.json 的顺序铺到时间线。',
+      '3. 按每个素材的 edit.trimStart / edit.trimEnd / edit.speed / edit.transition 做裁剪、变速和转场。',
+      '4. 导入 subtitles.srt 作为字幕轨。',
+      '5. 按 coverTitle/script 做标题、口播和卡点微调。',
+    ].join('\n'), 'utf8');
+
+    return { ok: true, dir: root };
+  } catch (err) {
+    return { ok: false, error: String(err && err.message || err) };
+  }
+}
+
 /**
  * 合成成片。
  * @param {object} manifest 服务器下发的渲染清单
@@ -228,4 +302,4 @@ async function composite(manifest, onProgress = () => {}, outDir) {
   }
 }
 
-module.exports = { composite, resolution, ffmpegPath };
+module.exports = { composite, exportCapcutPackage, resolution, ffmpegPath };

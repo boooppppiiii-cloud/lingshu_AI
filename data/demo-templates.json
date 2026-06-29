@@ -1,86 +1,182 @@
 [
   {
     "id": "template-a",
-    "name": "行业模板 A（待补充）",
-    "description": "占位模板：等待填写目标行业、产品和市场。",
+    "name": "A 美妆行业",
+    "description": "护肤彩妆 OEM/ODM 企业画像，适合测试商品发布、流量脚本、询盘回复与复购运营。",
     "profile": {
       "company": {
-        "name": "Demo Company A",
-        "industry": "待补充行业",
-        "mainMarkets": "待补充目标市场",
-        "founded": "2020",
-        "description": "这是演示用企业资料占位。请替换为真实行业、产品、市场和公司优势。"
+        "name": "GlowNest Beauty Co., Ltd.",
+        "industry": "美妆个护 / 护肤彩妆 OEM/ODM",
+        "companyType": "工贸一体，拥有配方研发与灌装包装协作工厂",
+        "mainMarkets": "美国、沙特、阿联酋、德国、印尼",
+        "primaryLanguages": "英语、阿拉伯语、西班牙语",
+        "founded": "2018",
+        "description": "专注天然温和护肤与彩妆套装的跨境美妆供应商，服务海外独立站品牌、TikTok Shop 卖家、区域批发商和连锁美妆集合店。强项是小批量试单、快速打样、包装定制和合规资料协同。"
       },
       "products": {
-        "categories": "待补充主营品类",
-        "priceRange": "待补充价格区间",
-        "moq": "待补充 MOQ",
-        "certifications": "待补充认证资质",
-        "highlights": "待补充产品优势，例如交期、定制能力、工厂直供、热销规格。"
+        "categories": "玻尿酸精华、维 C 亮肤精华、烟酰胺面霜、唇釉、眉笔、化妆刷套装、旅行装护肤套装",
+        "priceRange": "FOB $1.2 - $9.8 / piece；套装 $6 - $28",
+        "moq": "现货款 100 件起；私标包装 500 件起；配方微调 1000 件起",
+        "certifications": "GMPC、ISO22716、MSDS、COA、CPNP 协助、FDA MoCRA 资料协助",
+        "highlights": "7 天内完成现货样品；15-25 天完成私标包装大货；支持低刺激、纯素、无动物测试、无酒精等卖点组合；可提供英文/阿语标签合规建议。"
       },
       "brand": {
-        "tone": "专业、可靠、高效",
+        "tone": "专业、可信、温和、精致、成分导向",
         "style": "专业",
-        "taboos": "不承诺无法保证的物流时效；不虚构认证或合作品牌。",
-        "usp": "待补充一句核心卖点"
+        "taboos": "不使用 cheap、miracle cure、永久祛斑等低价或夸大功效表达；不承诺未经认证的医疗功效；不使用竞品品牌词。",
+        "usp": "Low-MOQ private-label beauty products with compliant documentation and fast sampling.",
+        "preferredLanguages": "英语、阿拉伯语、西班牙语"
       },
-      "knowledge": "待补充：目标客户画像、常见询盘问题、历史爆款、价格策略、重点市场文化禁忌。"
+      "strategy": {
+        "currentGoal": "提升高质量私标询盘，并用 TikTok/Instagram 内容带动小批量测试单。",
+        "focusProducts": "玻尿酸精华、维 C 亮肤精华、唇釉套装、旅行装护肤套装",
+        "focusMarkets": "美国 DTC 美妆品牌、中东美妆批发商、印尼 TikTok Shop 卖家",
+        "excludedMarkets": "需要动物测试或功效审批周期过长的市场暂不主动推广",
+        "pricingStrategy": "中端私标供应商定位，不主打最低价；样品单可给包材方案优惠，大货坚持 28% 以上毛利。",
+        "minMargin": "28%",
+        "agentAutonomy": "Agent 可自动生成标题、脚本、话术和优化建议；涉及报价、认证承诺、交期承诺必须用户确认。"
+      },
+      "customers": {
+        "targetProfiles": "海外 DTC 美妆初创品牌、TikTok Shop 卖家、中东/东南亚批发商、连锁美妆集合店采购。关注小批量起订、包装质感、成分安全、合规文件和复购稳定性。",
+        "highValueSignals": "询问私标包装、配方稳定性、MSDS/COA/CPNP、目标上架渠道、复购节奏、套装组合和补货周期。",
+        "lowQualitySignals": "只问 lowest price、MOQ 低于 100 件、要求夸大功效、无公司/渠道信息、要求仿制知名品牌包装。",
+        "commonQuestions": "样品费能否抵扣；是否支持 Logo 和外盒设计；是否有英文/阿语标签；敏感肌是否可用；交期和海运/空运选择。",
+        "followupStyle": "报价后第 2 天跟进，强调样品档期和包装设计排期；第 5 天补充同类市场案例和套装建议。"
+      },
+      "operations": {
+        "leadTime": "现货样品 3-7 天；私标包装大货 15-25 天；配方微调 30-45 天。",
+        "customization": "支持 Logo、外盒、瓶型、色号、香型、套装组合和多语言标签；深度配方开发需单独评估。",
+        "logistics": "DHL/FedEx 小样；大货支持空运、海运、DDP 到门和中东专线。",
+        "paymentTerms": "样品费预付；大货 T/T 30% 订金，70% 出货前结清。",
+        "riskNotes": "敏感功效、进口注册和标签合规必须确认目标市场法规；不承诺固定清关时效。"
+      },
+      "agentLearning": {
+        "provenAngles": "天然温和、低 MOQ 私标、快速打样、真实工厂质检、套装组合、英文/阿语标签支持。",
+        "weakAngles": "lowest price、夸大 before/after、泛泛 lifestyle、只讲 factory direct 不讲合规资料。",
+        "pendingAssumptions": "近 30 天中东买家对唇釉套装和阿语标签更敏感，待用户确认是否提高投放优先级。",
+        "userCorrections": "把 cheap 改成 cost-effective；把 whitening 改成 brightening；避免 medical claim。"
+      },
+      "knowledge": "美妆内容脚本优先强调成分、肤感、包装质感和上架合规。社媒视频结构建议：3 秒痛点/质感钩子，6-12 秒展示质地和包装，结尾引导索样或获取私标报价。询盘回复中先问目标市场、预期 MOQ、是否已有品牌设计和上架渠道。"
     }
   },
   {
     "id": "template-b",
-    "name": "行业模板 B（待补充）",
-    "description": "占位模板：可用于第二个 demo 行业。",
+    "name": "B 灯具行业",
+    "description": "LED 商照和家居灯具企业画像，适合测试工程询盘、产品优化和多市场内容生成。",
     "profile": {
       "company": {
-        "name": "Demo Company B",
-        "industry": "待补充行业",
-        "mainMarkets": "待补充目标市场",
-        "founded": "2021",
-        "description": "这是第二套演示行业占位资料。"
+        "name": "LumaPro Lighting Manufacturing",
+        "industry": "LED 灯具 / 商照 / 家居照明",
+        "companyType": "源头工厂，具备结构设计、组装、老化测试和包装定制能力",
+        "mainMarkets": "德国、法国、美国、沙特、澳大利亚",
+        "primaryLanguages": "英语、德语、法语、阿拉伯语",
+        "founded": "2015",
+        "description": "主营 LED 轨道灯、筒灯、线性灯、太阳能庭院灯和智能家居灯具，为工程商、照明设计公司、建材批发商和电商卖家提供 OEM/ODM。"
       },
       "products": {
-        "categories": "待补充主营品类",
-        "priceRange": "待补充价格区间",
-        "moq": "待补充 MOQ",
-        "certifications": "待补充认证资质",
-        "highlights": "待补充产品优势。"
+        "categories": "LED 轨道灯、磁吸轨道系统、筒灯、线性灯、太阳能庭院灯、智能调光灯",
+        "priceRange": "FOB $3.5 - $68 / piece；工程项目按配置报价",
+        "moq": "标准款 100 件起；定制色温/外壳 300 件起；工程项目可按清单评估",
+        "certifications": "CE、RoHS、UKCA、ETL 部分型号、IES/LDT 光学文件、IP65 部分型号",
+        "highlights": "支持光效参数文件、色温/显指/外壳颜色定制；72 小时老化测试；可为工程客户提供灯光方案清单和包装标签。"
       },
       "brand": {
-        "tone": "轻松、可信、转化导向",
-        "style": "亲切",
-        "taboos": "不夸大效果；不使用敏感或侵权素材。",
-        "usp": "待补充一句核心卖点"
+        "tone": "技术型、可靠、工程专业、参数清晰",
+        "style": "正式",
+        "taboos": "不虚构认证；不承诺未测试的防水等级；不使用不准确的瓦数/流明参数。",
+        "usp": "Reliable LED lighting with certified options, fast sampling, and project-ready optical data.",
+        "preferredLanguages": "英语、德语、法语、阿拉伯语"
       },
-      "knowledge": "待补充业务知识。"
+      "strategy": {
+        "currentGoal": "提高工程项目询盘质量，降低低价零散询盘占比。",
+        "focusProducts": "磁吸轨道灯系统、IP65 庭院灯、智能调光线性灯",
+        "focusMarkets": "欧洲商照工程商、中东建材批发商、北美亚马逊品牌商",
+        "excludedMarkets": "暂不主动推广没有认证适配的强制准入市场",
+        "pricingStrategy": "按参数和认证分层报价，强调寿命、稳定性和项目交付，不打价格战。",
+        "minMargin": "24%",
+        "agentAutonomy": "Agent 可生成产品标题、参数卖点、工程跟进话术；认证、项目报价和交期需确认。"
+      },
+      "customers": {
+        "targetProfiles": "照明工程商、室内设计公司、建材批发商、电商品牌商。关注认证、光效、质保、参数文件、交期和项目稳定供货。",
+        "highValueSignals": "提供项目清单、询问 IES/LDT、色温显指、认证、质保、包装标签和长期补货。",
+        "lowQualitySignals": "只问单价、无目标规格、MOQ 过低、要求未认证进入强制认证市场。",
+        "commonQuestions": "是否有 CE/ETL；能否提供 IES 文件；质保几年；是否支持 DALI/0-10V 调光；样品和项目交期。",
+        "followupStyle": "报价后补一份参数对照表和应用场景图；工程客户优先请求项目图纸或 BOM。"
+      },
+      "operations": {
+        "leadTime": "样品 5-10 天；标准大货 20-30 天；定制外壳/驱动 35-45 天。",
+        "customization": "支持色温、显指、光束角、驱动方案、外壳颜色、包装和标签定制。",
+        "logistics": "支持空运、海运、铁路和欧洲/中东专线；可做托盘包装。",
+        "paymentTerms": "T/T 30% 订金，70% 出货前；工程项目可按批次出货。",
+        "riskNotes": "项目参数必须二次确认；涉及电气认证和安装环境时需要确认目标市场标准。"
+      },
+      "agentLearning": {
+        "provenAngles": "认证齐全、IES/LDT 文件、72 小时老化测试、项目清单支持、工程案例。",
+        "weakAngles": "只强调低价、过度生活方式化、参数不清楚的泛文案。",
+        "pendingAssumptions": "欧洲客户更重视认证和光学文件，中东客户更重视交期和批发价格，待更多成交验证。",
+        "userCorrections": "把 best quality 改成 tested reliability；参数必须保守表达。"
+      },
+      "knowledge": "灯具 Agent 输出时应优先结构化参数：功率、流明、色温、显指、光束角、IP 等级、认证和质保。视频脚本可多用安装前后对比、照度效果、老化测试和项目场景。"
     }
   },
   {
     "id": "template-c",
-    "name": "行业模板 C（待补充）",
-    "description": "占位模板：可用于第三个 demo 行业。",
+    "name": "C 小家电行业",
+    "description": "厨房和清洁小家电企业画像，适合测试爆款内容、售前答疑和渠道分层。",
     "profile": {
       "company": {
-        "name": "Demo Company C",
-        "industry": "待补充行业",
-        "mainMarkets": "待补充目标市场",
-        "founded": "2019",
-        "description": "这是第三套演示行业占位资料。"
+        "name": "NovaHome Appliances Co., Ltd.",
+        "industry": "小家电 / 厨房电器 / 清洁电器",
+        "companyType": "工贸一体，整合模具、组装、质检和海外仓资源",
+        "mainMarkets": "美国、英国、墨西哥、巴西、东南亚",
+        "primaryLanguages": "英语、西班牙语、葡萄牙语、印尼语",
+        "founded": "2017",
+        "description": "主营空气炸锅、便携榨汁杯、手持吸尘器、蒸汽熨烫机和宠物饮水机，为电商品牌、电视购物渠道和区域经销商提供标准款与轻定制方案。"
       },
       "products": {
-        "categories": "待补充主营品类",
-        "priceRange": "待补充价格区间",
-        "moq": "待补充 MOQ",
-        "certifications": "待补充认证资质",
-        "highlights": "待补充产品优势。"
+        "categories": "空气炸锅、便携榨汁杯、手持吸尘器、蒸汽熨烫机、宠物饮水机、早餐机",
+        "priceRange": "FOB $6.5 - $42 / piece",
+        "moq": "标准款 100 件起；颜色/Logo 定制 500 件起；结构定制 2000 件起",
+        "certifications": "CE、RoHS、FCC、UL 部分型号、LFGB/FDA 食品接触材料部分型号",
+        "highlights": "热销 SKU 有现货；支持 110V/220V；可做多语言说明书、彩盒、平台图和短视频素材包。"
       },
       "brand": {
-        "tone": "成熟、稳定、服务导向",
-        "style": "正式",
-        "taboos": "不承诺未经确认的库存、交期和平台政策。",
-        "usp": "待补充一句核心卖点"
+        "tone": "实用、可信、生活化、转化导向",
+        "style": "亲切",
+        "taboos": "不夸大功率和容量；不承诺未经确认的海外仓库存；不使用侵权外观或品牌词。",
+        "usp": "Ready-to-sell small appliances with fast stock, compliance options, and content-ready assets.",
+        "preferredLanguages": "英语、西班牙语、葡萄牙语、印尼语"
       },
-      "knowledge": "待补充业务知识。"
+      "strategy": {
+        "currentGoal": "用短视频测试爆款 SKU，并把高互动内容转成批发和电商品牌询盘。",
+        "focusProducts": "6L 空气炸锅、便携榨汁杯、手持吸尘器、宠物饮水机",
+        "focusMarkets": "美国 TikTok Shop 卖家、拉美批发商、东南亚电商卖家",
+        "excludedMarkets": "插头/认证不匹配且短期无法适配的市场",
+        "pricingStrategy": "标准款走高性价比，定制款按包装、认证和售后要求分层报价。",
+        "minMargin": "22%",
+        "agentAutonomy": "Agent 可生成爆款脚本、商品卖点、FAQ 和客户分层建议；库存、认证和电压适配需确认。"
+      },
+      "customers": {
+        "targetProfiles": "TikTok/Amazon/Shopify 卖家、区域批发商、电视购物渠道、礼品渠道。关注现货、认证、电压、售后配件、包装素材和内容转化。",
+        "highValueSignals": "询问 110V/220V、认证、平台上架资料、包装语言、售后配件、海外仓和长期补货。",
+        "lowQualitySignals": "只要样品不谈渠道、要求极低 MOQ 定制、忽视认证和电压、只问最低价。",
+        "commonQuestions": "是否有美规/欧规插头；是否支持彩盒定制；是否有视频素材；质保多久；是否能贴牌。",
+        "followupStyle": "首轮回复先确认目标市场电压和渠道；报价后补热销 SKU 对比表和短视频素材包。"
+      },
+      "operations": {
+        "leadTime": "现货样品 3-5 天；标准大货 15-25 天；彩盒/Logo 定制 25-35 天。",
+        "customization": "支持 Logo、彩盒、说明书语言、颜色、插头规格和套装配件。",
+        "logistics": "支持快递、空运、海运、DDP 和部分美国/欧洲海外仓中转。",
+        "paymentTerms": "样品预付；大货 T/T 30% 订金，70% 出货前；老客可谈滚动订单。",
+        "riskNotes": "电压、插头、认证和食品接触材料必须按目标市场确认；售后配件需按 SKU 预留。"
+      },
+      "agentLearning": {
+        "provenAngles": "真实使用场景、痛点前后对比、厨房效率、开箱质感、现货可发、平台素材包。",
+        "weakAngles": "参数堆砌、无场景纯产品旋转、过度承诺静音或容量。",
+        "pendingAssumptions": "拉美客户对西语包装和葡语/西语脚本响应更高，待广告数据验证。",
+        "userCorrections": "容量和功率必须按实际 SKU；避免 guaranteed viral。"
+      },
+      "knowledge": "小家电内容要突出使用前后差异、操作步骤、清洁便利和真实家庭场景。询盘中优先确认目标市场、电压插头、认证要求、渠道和预计首单量。"
     }
   }
 ]

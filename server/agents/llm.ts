@@ -7,6 +7,7 @@ export interface LLMCallOptions {
   backend?: LLMBackend;
   model?: string;
   systemPrompt?: string;
+  deepThinking?: boolean;
 }
 
 function resolveBackend(opts: LLMCallOptions): LLMBackend {
@@ -77,8 +78,8 @@ async function* streamGeminiChat(messages: ChatMessage[], opts: LLMCallOptions):
   }));
 
   const baseConfig: Record<string, unknown> = {
-    // 关闭 2.5 Flash 的思考预算，显著降低首字延迟（对话场景无需长思考）
-    thinkingConfig: { thinkingBudget: 0 },
+    // 默认低延迟；用户打开深度思考时给中等预算，避免明显拖慢首字。
+    thinkingConfig: { thinkingBudget: opts.deepThinking ? 768 : 0 },
     ...(opts.systemPrompt ? { systemInstruction: { parts: [{ text: opts.systemPrompt }] } } : {}),
   };
 

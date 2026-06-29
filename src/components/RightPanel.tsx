@@ -17,6 +17,13 @@ const AGENT_META = {
   retention:  { label: '留存专家', Icon: RefreshCw,     color: '#16a34a', bg: 'rgba(22,163,74,0.08)' },
 };
 
+const WORKSPACE_STATUS: Record<AgentType, { label: string; color: string }> = {
+  strategy: { label: '运行中', color: '#16a34a' },
+  traffic: { label: '执行中', color: '#d97706' },
+  conversion: { label: '待机', color: '#94a3b8' },
+  retention: { label: '运行中', color: '#16a34a' },
+};
+
 function SectionHeader({ label }: { label: string }) {
   return <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wider mb-2">{label}</p>;
 }
@@ -113,17 +120,15 @@ function StrategyPanel({ conversation, onAction }: { conversation: ConversationC
           <div className="space-y-1.5">
             {(['traffic', 'conversion', 'retention'] as const).map(a => {
               const { Icon, color, bg, label } = AGENT_META[a];
-              const isActive = suggested.includes(a);
+              const status = WORKSPACE_STATUS[a];
               return (
                 <div key={a} className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg border border-border bg-surface">
                   <div className="w-6 h-6 rounded-md flex items-center justify-center flex-shrink-0" style={{ background: bg, color }}>
                     <Icon size={11} />
                   </div>
                   <span className="text-[11px] text-text-secondary flex-1">{label}</span>
-                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full" style={
-                    isActive ? { background: 'rgba(217,119,6,0.1)', color: '#d97706' } : { background: 'rgba(148,163,184,0.1)', color: '#94a3b8' }
-                  }>
-                    {isActive ? '建议触发' : '待机'}
+                  <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full" style={{ background: `${status.color}18`, color: status.color }}>
+                    {suggested.includes(a) ? '建议触发' : status.label}
                   </span>
                 </div>
               );
@@ -173,6 +178,47 @@ function AgentHeader({ conversation, subtitle }: { conversation: ConversationCon
         <div className="bg-surface-2 rounded-lg px-3 py-2">
           <p className="text-base font-bold text-text-primary font-display leading-none">{msgCount}</p>
           <p className="text-[10px] text-text-muted mt-0.5">消息总数</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TrafficPanel({ conversation, onAction }: { conversation: ConversationContext; onAction?: AgentActionFn }) {
+  return (
+    <div className="flex flex-col h-full overflow-hidden">
+      <AgentHeader conversation={conversation} subtitle="爆款采集 · 脚本生成" />
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+        <div>
+          <SectionHeader label="采集快览" />
+          <div className="space-y-2">
+            {[
+              { label: '今日脚本', value: '12', color: '#d97706' },
+              { label: '覆盖平台', value: '5', color: '#4f46e5' },
+              { label: '去重命中', value: '3', color: '#16a34a' },
+            ].map(({ label, value, color }) => (
+              <div key={label} className="flex items-center justify-between px-3 py-2 rounded-lg bg-surface-2 border border-border">
+                <span className="text-[11px] text-text-secondary">{label}</span>
+                <span className="text-sm font-bold font-display" style={{ color }}>{value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div>
+          <SectionHeader label="快捷操作" />
+          <div className="space-y-1.5">
+            {[
+              { icon: <Zap size={11} />, label: '分析 TikTok 10 条假发爆款', color: '#d97706', task: '直接分析 10 条 TikTok 假发爆款的共性，输出表格：钩子、画面、卖点、评论区需求、可复刻脚本方向。' },
+              { icon: <Sparkles size={11} />, label: '生成斋月中东推广方案', color: '#4f46e5', task: '围绕斋月中东市场，直接生成 5 条短视频脚本方向，包含平台、前 3 秒钩子、画面、口播、CTA。' },
+              { icon: <TrendingUp size={11} />, label: '素材去重矩阵', color: '#16a34a', task: '把同一产品拆成 6 个去重内容角度：人群、场景、痛点、证据、优惠、平台适配。用表格输出。' },
+            ].map(({ icon, label, color, task }) => (
+              <button key={label} onClick={() => onAction?.('traffic', task)} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg border border-border bg-surface hover:border-border-bright text-left transition-all group">
+                <span style={{ color }}>{icon}</span>
+                <span className="text-[11px] text-text-secondary group-hover:text-text-primary flex-1">{label}</span>
+                <ArrowRight size={10} className="text-text-muted group-hover:text-text-secondary" />
+              </button>
+            ))}
+          </div>
         </div>
       </div>
     </div>
@@ -286,6 +332,7 @@ function RetentionPanel({ conversation, onAction }: { conversation: Conversation
 export default function RightPanel({ conversation, onAction }: Props) {
   if (!conversation) return null;
   if (conversation.agent === 'strategy')   return <StrategyPanel conversation={conversation} onAction={onAction} />;
+  if (conversation.agent === 'traffic')    return <TrafficPanel conversation={conversation} onAction={onAction} />;
   if (conversation.agent === 'conversion') return <ConversionPanel conversation={conversation} onAction={onAction} />;
   if (conversation.agent === 'retention')  return <RetentionPanel conversation={conversation} onAction={onAction} />;
   return null;

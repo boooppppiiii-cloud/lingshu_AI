@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getPbUrl, pbCreate, pbGet } from '../storage/pb.js';
+import { getPbUrl, getPbAdminToken, pbCreate, pbGet } from '../storage/pb.js';
 import { auth } from '../storage/index.js';
 import { getTenantSubscription } from '../middleware/subscription.js';
 import { buildDemoStatus, demoTrialExpiresAt } from '../lib/demo.js';
@@ -16,12 +16,34 @@ export const authRouter = Router();
 
 interface PbUser { id: string; email?: string; name?: string; tenantId?: string }
 
-async function pbLogin(email: string, password: string): Promise<{ token: string; record: PbUser } | null> {
+async function resolveLoginIdentity(identity: string): Promise<string> {
+  const raw = String(identity).trim();
+  if (raw.includes('@')) return raw;
+
+  const adminToken = await getPbAdminToken();
+  if (!adminToken) return raw;
+
+  const normalized = raw.replace(/\s+/g, ' ');
+  const filter = `name = "${normalized.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
   try {
+    const res = await fetch(`${getPbUrl()}/api/collections/users/records?perPage=1&filter=${encodeURIComponent(filter)}`, {
+      headers: { Authorization: adminToken },
+    });
+    if (!res.ok) return raw;
+    const json = (await res.json()) as { items?: PbUser[] };
+    return json.items?.[0]?.email || raw;
+  } catch {
+    return raw;
+  }
+}
+
+async function pbLogin(identity: string, password: string): Promise<{ token: string; record: PbUser } | null> {
+  try {
+    const loginIdentity = await resolveLoginIdentity(identity);
     const res = await fetch(`${getPbUrl()}/api/collections/users/auth-with-password`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identity: email, password }),
+      body: JSON.stringify({ identity: loginIdentity, password }),
     });
     if (!res.ok) return null;
     return (await res.json()) as { token: string; record: PbUser };

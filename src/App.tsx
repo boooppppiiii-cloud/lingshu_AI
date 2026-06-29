@@ -82,7 +82,14 @@ export default function App() {
   // 每次对话推进都记录/更新近期会话
   const enterConversation = (ctx: ConversationContext) => {
     setConversation(ctx);
-    if (!ctx.messages?.length) return;
+    if (!ctx.messages?.length) {
+      activeIdRef.current = null;
+      setActiveConvId(null);
+      setRestore({ agent: ctx.agent, messages: [], key: `open:${ctx.agent}:${Date.now()}` });
+      setKickoff(null);
+      setPage(ctx.agent);
+      return;
+    }
     let id = activeIdRef.current;
     let list = convsRef.current;
     if (id && list.some(c => c.id === id)) {
