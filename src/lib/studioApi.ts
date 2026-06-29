@@ -121,6 +121,18 @@ export interface StudioProject {
   updatedAt: string;
 }
 
+export interface GeminiVideoResult {
+  ok: boolean;
+  id?: string;
+  title?: string;
+  url?: string;
+  poster?: string;
+  duration?: number;
+  model?: string;
+  error?: string;
+  createdAt?: string;
+}
+
 async function del(path: string): Promise<{ ok: boolean }> {
   try {
     const r = await fetch(`/api/overseas/studio/${path}`, { method: 'DELETE', headers: authHeader() });
@@ -174,6 +186,18 @@ export const studioApi = {
   // 文本翻译（默认译成简体中文，供用户确认外语文案）
   translate: (b: { text: string; target?: string; source?: string }) =>
     post<{ ok: boolean; text: string }>('translate', b, { ok: false, text: '' }),
+
+  // Gemini / Veo 视频生成
+  geminiVideo: (b: {
+    script: string;
+    productInfo?: string;
+    language: string;
+    ratio?: string;
+    duration?: number;
+    resolution?: string;
+    title?: string;
+  }) =>
+    post<GeminiVideoResult>('gemini-video', b, { ok: false, error: 'Gemini video request failed' }),
 
   // 数据看板 AI 结论
   insight: (b: { scope: string; metrics: Record<string, unknown> }) =>

@@ -217,7 +217,7 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
                   {demo.expired ? '已到期' : `剩余 ${demo.daysRemaining ?? '-'} 天`}
                 </span>
               </div>
-              <div className="grid grid-cols-3 gap-1 text-center">
+              <div className="grid grid-cols-4 gap-1 text-center">
                 <div className="rounded-md bg-surface-2 px-1 py-1">
                   <p className="text-[10px] font-bold text-text-primary">{demo.remaining.aiChat}</p>
                   <p className="text-[9px] text-text-muted">对话</p>
@@ -229,6 +229,10 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
                 <div className="rounded-md bg-surface-2 px-1 py-1">
                   <p className="text-[10px] font-bold text-text-primary">{demo.remaining.render}</p>
                   <p className="text-[9px] text-text-muted">预览</p>
+                </div>
+                <div className="rounded-md bg-surface-2 px-1 py-1">
+                  <p className="text-[10px] font-bold text-text-primary">{demo.remaining.videoGeneration ?? 0}</p>
+                  <p className="text-[9px] text-text-muted">视频</p>
                 </div>
               </div>
             </div>

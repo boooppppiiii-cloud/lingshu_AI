@@ -5,7 +5,7 @@ import {
   TrendingUp, Clock, Globe, ChevronDown, X, Loader2,
   Check, Copy, ArrowRight, Zap, LayoutGrid, List, ArrowUp,
   Lightbulb, Flame, BarChart2, ChevronRight, Film, Download, Plus,
-  SlidersHorizontal, Bookmark,
+  SlidersHorizontal, Bookmark, Maximize2, Minimize2,
 } from 'lucide-react';
 import { studioApi } from '../lib/studioApi';
 import { authHeader } from '../lib/auth';
@@ -136,6 +136,7 @@ const AUTO_CRAWL_PLATFORMS: { id: CrawlPlatform; label: string; enabled: boolean
 
 const LANGUAGES = [
   { code: 'en', label: 'English' }, { code: 'zh', label: '中文' },
+  { code: 'id', label: 'Bahasa Indonesia' },
   { code: 'es', label: 'Español' }, { code: 'ar', label: 'العربية' },
   { code: 'fr', label: 'Français' }, { code: 'de', label: 'Deutsch' },
   { code: 'pt', label: 'Português' }, { code: 'ru', label: 'Русский' },
@@ -289,52 +290,205 @@ function getPrimaryProductLabel(productInfo: string): string {
   return productInfo.trim().split('\n')[0]?.replace(/^[-*\s]+/, '').trim() || '当前主推品';
 }
 
-function makeVoiceoverDraft(video: TrendVideo, analysis: ScriptAnalysis, productInfo: string, languageLabel?: string): string {
-  const productLabel = getPrimaryProductLabel(productInfo);
-  const fiveDim = analysis.firstTenSeconds.map(item => `${item.dimension}：${item.detail}`).join('\n');
-  const structure = analysis.structure.map(step => `${step.time} ${step.label}：${step.desc}`).join('\n');
-  const highlights = analysis.referenceHighlights.slice(0, 5).join('；') || video.title;
-  return `**口播脚本｜${productLabel}｜${languageLabel || '中文'}**
-
-**对标视频爆点**
-${highlights}
-
-**前 10 秒复用方向**
-${fiveDim}
-
-**口播正文**
-0-3s：直接抛出用户最关心的结果，把「${productLabel}」和对标视频的高注意力入口绑定。
-3-6s：用一个真实使用场景解释产品为什么值得看，避免空泛形容。
-6-10s：放大核心差异点，用画面或数据证明它解决了什么问题。
-10-20s：展开 2-3 个关键卖点，顺序参考对标视频结构。
-20-30s：补充适用人群、使用方式或购买理由，给出明确行动引导。
-
-**结构参考**
-${structure}
-
-**产品信息**
-${summarizeProductInfo(productInfo)}`;
+function getProductField(productInfo: string, label: string): string {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = productInfo.match(new RegExp(`${escaped}[:：]\\s*([^\\n]+)`));
+  return match?.[1]?.trim() || '';
 }
 
-function makeStoryboardDraft(video: TrendVideo, analysis: ScriptAnalysis, productInfo: string, languageLabel?: string): string {
-  const productLabel = getPrimaryProductLabel(productInfo);
-  const productSummary = summarizeProductInfo(productInfo);
-  const frames = analysis.structure.map((step, index) =>
-    `**分镜 ${index + 1}｜${step.time}**
-画面：围绕「${productLabel}」复刻对标视频的「${step.desc}」信息点
-运镜：保持粗略 3 秒一帧，优先近景/手部/结果对比，避免过密切镜
-口播/字幕：用一句话说清这个画面带来的用户收益
-参考爆点：${analysis.firstTenSeconds[index % analysis.firstTenSeconds.length]?.dimension || '节奏'} - ${analysis.firstTenSeconds[index % analysis.firstTenSeconds.length]?.detail || video.title}`
-  ).join('\n\n');
-  return `**分镜脚本｜${productLabel}｜${languageLabel || '中文'}**
+function shortenText(text: string, max = 72): string {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  return clean.length > max ? `${clean.slice(0, max)}...` : clean;
+}
 
-**主推品信息**
-${productSummary}
+function conciseLines(text: string, maxLines = 6, maxChars = 34): string[] {
+  const clean = String(text || '').replace(/<br\s*\/?>/gi, ' ').replace(/\s+/g, ' ').trim();
+  if (!clean) return [];
+  const parts = clean.split(/\s*(?:。|；|;|，(?=\S{8,})|\. (?=[A-Z0-9]))\s*/).map(s => s.trim()).filter(Boolean);
+  const lines: string[] = [];
+  for (const part of parts.length ? parts : [clean]) {
+    let rest = part;
+    while (rest.length > maxChars && lines.length < maxLines) {
+      lines.push(rest.slice(0, maxChars));
+      rest = rest.slice(maxChars).trim();
+    }
+    if (rest && lines.length < maxLines) lines.push(rest);
+    if (lines.length >= maxLines) break;
+  }
+  return lines.slice(0, maxLines);
+}
 
-**对标视频核心复用**
-${analysis.referenceHighlights.slice(0, 5).join('；') || video.title}
+function productScriptContext(productInfo: string): {
+  label: string;
+  category: string;
+  advantage: string;
+  market: string;
+  proof: string;
+} {
+  const label = getPrimaryProductLabel(productInfo);
+  const category = getProductField(productInfo, '产品类目') || label;
+  const advantage = getProductField(productInfo, '核心优势') || getProductField(productInfo, '品牌 USP') || '可做私标定制、快速打样和合规资料支持';
+  const market = getProductField(productInfo, '目标市场') || '海外美妆买家';
+  const proof = getProductField(productInfo, '认证资质') || getProductField(productInfo, '起订量') || '小批量测试和私标包装支持';
+  return { label, category, advantage, market, proof };
+}
 
+function productLabelForLang(product: ReturnType<typeof productScriptContext>, langCode = 'zh'): string {
+  if (langCode === 'zh') return product.label;
+  if (langCode === 'id') return 'produk unggulan';
+  return 'featured product bundle';
+}
+
+function advantageForLang(product: ReturnType<typeof productScriptContext>, langCode = 'zh'): string {
+  if (langCode === 'zh') return shortenText(product.advantage, 34);
+  if (langCode === 'id') return 'sampel cepat, kemasan private-label, dan dukungan dokumen kepatuhan';
+  return 'fast sampling, private-label packaging, and compliance documentation support';
+}
+
+function voiceLine(line: string, langCode = 'zh'): string {
+  return langCode === 'zh' ? `人物说：“${line}”` : `Voiceover: "${line}"`;
+}
+
+function scriptTitle(product: ReturnType<typeof productScriptContext>, languageLabel?: string, langCode = 'zh'): string {
+  if (langCode === 'zh') return `口播脚本｜${product.label}｜${languageLabel || '中文'}`;
+  if (langCode === 'id') return `Naskah Voiceover | Produk Unggulan | ${languageLabel || 'Bahasa Indonesia'}`;
+  return `Voiceover Script | Featured Product Bundle | ${languageLabel || 'English'}`;
+}
+
+function inferShotAction(detail: ScriptDetail15s, index: number, product: ReturnType<typeof productScriptContext>, langCode = 'zh'): string {
+  const label = productLabelForLang(product, langCode);
+  if (langCode !== 'zh') {
+    const actions = langCode === 'id' ? [
+      `Show ${label} close to the camera with clean packaging and a clear product texture shot`,
+      `Cut to a simple usage moment, keeping the reference video's quick product-first rhythm`,
+      `Show the bundle, shade range, and private-label packaging options in one clean frame`,
+      `Use a close-up result shot to make the texture and finish easy to understand`,
+      `End with the full product set and a clear message prompt for samples or a quote`,
+    ] : [
+      `Show ${label} close to the camera with clean packaging and a clear product texture shot`,
+      `Cut to a simple usage moment, keeping the reference video's quick product-first rhythm`,
+      `Show the bundle, shade range, and private-label packaging options in one clean frame`,
+      `Use a close-up result shot to make the texture and finish easy to understand`,
+      `End with the full product set and a clear message prompt for samples or a quote`,
+    ];
+    return actions[index % actions.length]!;
+  }
+  const lower = `${detail.visual} ${detail.subtitle}`.toLowerCase();
+  if (/hand|手|hold|举起|展示|管|瓶|spatula|applicator|swatch|涂|抹|唇|shade|色/.test(lower)) {
+    return `模特手持「${product.label}」靠近镜头，展示管身、刷头和上唇/手背试色效果；画面保留对标视频的手部特写和产品质感节奏`;
+  }
+  if (/face|脸|skin|肤|look|mirror|镜头|smile|微笑/.test(lower)) {
+    return `模特对镜展示「${product.label}」上唇后的妆效，表情从观察到惊喜，突出颜色贴肤、光泽和日常通勤适配`;
+  }
+  if (/brand|logo|设备|device|包装|box|name|字样/.test(lower)) {
+    return `镜头切到「${product.label}」套装包装、色号排列和私标 Logo 位，手指轻点关键卖点区域`;
+  }
+  if (/result|before|after|效果|证明|评论|热度/.test(lower)) {
+    return `画面用上唇前后对比和多色号并排展示证明「${product.label}」的显色、成膜和套装组合价值`;
+  }
+  const actions = [
+    `开场直接给「${product.label}」上唇结果，保留对标视频先给效果再解释的节奏`,
+    `模特边试色边把「${product.label}」放到镜头前，形成产品和妆效同框`,
+    `切到套装多色号平铺，突出私标包装质感和可组合销售`,
+    `用手背/唇部近景展示颜色、光泽和成膜后的不黏腻感`,
+    `收束到套装全貌和询盘引导，强调低 MOQ、打样快、适合 ${product.market}`,
+  ];
+  return actions[index % actions.length]!;
+}
+
+function localizedVoiceLine(index: number, product: ReturnType<typeof productScriptContext>, langCode = 'zh'): string {
+  const label = productLabelForLang(product, langCode);
+  const advantage = advantageForLang(product, langCode);
+  const zh = [
+    `这款${label}不是只好看，上脸质感也很稳。`,
+    `如果你想做一款容易出单的组合，这套可以直接当主推。`,
+    `它的优势是${advantage}，适合先小批量测市场。`,
+    `近看细节和包装质感都在线，做私标也很容易出效果。`,
+    `想要样品、色号表或报价，可以直接留言给我们。`,
+  ];
+  const en = [
+    `This ${label} is not just pretty. The texture looks reliable from the first look.`,
+    `If you need an easy product bundle to test, this can be your lead item.`,
+    `Its key edge is ${advantage}, so it works for small-batch market testing.`,
+    `The details and packaging look clean on camera, which is friendly for private label orders.`,
+    `Message us for samples, shade options, packaging details, or a quick quote.`,
+  ];
+  const id = [
+    `${label} bukan cuma terlihat cantik. Teksturnya juga terlihat meyakinkan.`,
+    `Kalau kamu ingin coba produk bundle yang mudah dijual, ini bisa jadi produk utama.`,
+    `Keunggulannya adalah ${advantage}, cocok untuk tes pasar kecil.`,
+    `Detail dan kemasannya terlihat rapi di kamera, cocok untuk private label.`,
+    `Kirim pesan untuk sampel, pilihan warna, kemasan, atau penawaran harga.`,
+  ];
+  const source = langCode === 'id' ? id : langCode === 'zh' ? zh : en;
+  return source[index % source.length]!;
+}
+
+function rewriteSubtitle(detail: ScriptDetail15s, index: number, product: ReturnType<typeof productScriptContext>, langCode = 'zh'): string {
+  const original = detail.subtitle.replace(/^基础资料推断[:：]\s*/, '').trim();
+  const line = localizedVoiceLine(index, product, langCode);
+  if (original && !/待 Gemini|视频下载|显示真实|基础资料/.test(original)) {
+    return `${line}（参考原节奏：${shortenText(original, 42)}）`;
+  }
+  return line;
+}
+
+function adaptedFrameLine(detail: ScriptDetail15s, index: number, product: ReturnType<typeof productScriptContext>, langCode = 'zh'): string {
+  const visual = inferShotAction(detail, index, product, langCode);
+  const subtitle = rewriteSubtitle(detail, index, product, langCode);
+  const audio = detail.audio && !/待真实视频|待 Gemini|待视频/.test(detail.audio)
+    ? detail.audio
+    : 'BGM 保持轻快种草节奏，口播短句跟随字幕切点。';
+  const note = detail.note ? `（注：保留对标视频节奏备注：${detail.note}）` : '';
+  if (langCode !== 'zh') {
+    return `[${detail.time}] Shot: close-up or medium shot; Camera: simple handheld movement; Visual: ${visual}; ${voiceLine(subtitle, langCode)}; Captions match the voiceover; Audio: upbeat social commerce music.`;
+  }
+  return `[${detail.time}] ${detail.shot}；${detail.camera}；${visual}；人物说：“${subtitle}”；字幕同口播；${audio}${note}`;
+}
+
+function makeVoiceoverDraft(_video: TrendVideo, analysis: ScriptAnalysis, productInfo: string, languageLabel?: string, langCode = 'zh'): string {
+  const product = productScriptContext(productInfo);
+  const count = Math.min(6, Math.max(4, analysis.scriptDetails15s.length || 5));
+  const lines = Array.from({ length: count }, (_, index) => localizedVoiceLine(index, product, langCode));
+  return `${scriptTitle(product, languageLabel, langCode)}
+
+${lines.map(line => voiceLine(line, langCode)).join('\n')}`;
+}
+
+function makeStoryboardDraft(_video: TrendVideo, analysis: ScriptAnalysis, productInfo: string, languageLabel?: string, langCode = 'zh'): string {
+  const product = productScriptContext(productInfo);
+  const competitors = analysis.scriptSummary15s.competitors.length
+    ? analysis.scriptSummary15s.competitors.map(item => `==${item}==`).join('；')
+    : '无明确竞品露出，复用对标视频的镜头节奏、产品展示方式和字幕口吻';
+  const frames = analysis.scriptDetails15s.map((detail, index) => adaptedFrameLine(detail, index, product, langCode)).join('\n\n');
+  if (langCode !== 'zh') {
+    return `Video Storyboard | Featured Product Bundle | ${languageLabel || 'English'}
+
+Creative style: realistic social commerce video
+Core emotion: quick product discovery, trust, and purchase intent
+Product replacement: use this featured product bundle, with private-label packaging, fast samples, and compliant documentation support.
+Voiceover language: ${languageLabel || 'English'}. All spoken lines must stay in this language.
+Goal: follow the reference video's rhythm while replacing the product, benefits, captions, and call to action.
+
+Storyboard:
 ${frames}`;
+  }
+  return `**可生成视频分镜｜${product.label}｜${languageLabel || '中文'}**
+
+【分析摘要】
+指定画风：${analysis.scriptSummary15s.visualStyle}
+核心情绪：${analysis.scriptSummary15s.coreEmotion}
+竞品识别：${competitors}
+产品替换：主推「${product.label}」，参考产品范围「${shortenText(product.category, 60)}」，证明点「${shortenText(product.proof, 60)}」。
+口播语言：${languageLabel || '中文'}。所有“人物说：”引号内台词必须使用该语言。
+成片目标：按照对标视频的 15 秒时间戳逐镜复刻，只替换为我方产品、卖点、口播语言、字幕和行动引导。
+
+【分镜脚本】
+${frames}`;
+}
+
+function scriptTypeLabel(type: ScriptType): string {
+  return type === 'voiceover' ? '口播短视频脚本' : '分镜短视频脚本';
 }
 
 function splitProfileList(value?: string): string[] {
@@ -583,7 +737,13 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
             {analysis.firstTenSeconds.map((item, i) => (
               <div key={i} className="flex items-start gap-2 px-3 py-2 rounded-lg bg-surface-2 border border-border">
                 <span className="text-accent font-bold text-[11px] flex-shrink-0 mt-px">{item.dimension}</span>
-                <p className="text-[11px] text-text-secondary leading-snug">{item.detail}</p>
+                {item.dimension === '画面' ? (
+                  <div className="text-[11px] text-text-secondary leading-snug space-y-0.5">
+                    {conciseLines(item.detail, 6, 32).map((line, idx) => <p key={idx}>{line}</p>)}
+                  </div>
+                ) : (
+                  <p className="text-[11px] text-text-secondary leading-snug">{shortenText(item.detail, 96)}</p>
+                )}
               </div>
             ))}
           </div>
@@ -677,7 +837,16 @@ interface ScriptPanelProps {
   onRetry?: () => void;
   onFavorite?: () => void;
   favoriting?: boolean;
-  onEnterWorkflow?: (payload: { script: string; video: TrendVideo; scriptType: ScriptType; language: string; productInfo: string }) => void;
+  onEnterWorkflow?: (payload: { script: string; video: TrendVideo; scriptType: ScriptType; language: string; productInfo: string; generatedVideo?: GeneratedVideo }) => void;
+}
+
+interface GeneratedVideo {
+  id: string;
+  title: string;
+  url?: string;
+  poster?: string;
+  duration: number;
+  createdAt: string;
 }
 
 function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterWorkflow }: ScriptPanelProps) {
@@ -691,6 +860,11 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
   const [result, setResult] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [showLangDropdown, setShowLangDropdown] = useState(false);
+  const [voiceLanguageConfirmed, setVoiceLanguageConfirmed] = useState(false);
+  const [videoGenerating, setVideoGenerating] = useState(false);
+  const [videoResult, setVideoResult] = useState<GeneratedVideo | null>(null);
+  const [videoError, setVideoError] = useState('');
+  const [expanded, setExpanded] = useState(false);
 
   const loadEnterpriseProducts = () => {
     fetch('/api/overseas/enterprise/profile', { headers: authHeader() })
@@ -715,6 +889,10 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
     if (activeTab === 'generate') loadEnterpriseProducts();
   }, [activeTab, video.id]);
 
+  useEffect(() => {
+    setVoiceLanguageConfirmed(false);
+  }, [language, scriptType, video.id]);
+
   const handleSelectProduct = (id: string) => {
     setSelectedProductId(id);
     const option = productOptions.find(item => item.id === id);
@@ -724,6 +902,8 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
   const handleGenerate = async () => {
     setGenerating(true);
     setResult(null);
+    setVideoResult(null);
+    setVideoError('');
     await new Promise(r => setTimeout(r, 1800));
     const realAnalysis = getAnalysis(video);
     if (!realAnalysis) {
@@ -733,8 +913,8 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
     }
     const languageLabel = LANGUAGES.find(l => l.code === language)?.label;
     setResult(scriptType === 'voiceover'
-      ? makeVoiceoverDraft(video, realAnalysis, productInfo, languageLabel)
-      : makeStoryboardDraft(video, realAnalysis, productInfo, languageLabel)
+      ? makeVoiceoverDraft(video, realAnalysis, productInfo, languageLabel, language)
+      : makeStoryboardDraft(video, realAnalysis, productInfo, languageLabel, language)
     );
     setGenerating(false);
   };
@@ -743,9 +923,43 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
     if (result) { void navigator.clipboard.writeText(result); setCopied(true); setTimeout(() => setCopied(false), 2000); }
   };
 
-  const enterWorkflow = () => {
+  const generateGeminiVideo = async () => {
     if (!result) return;
-    onEnterWorkflow?.({ script: result, video, scriptType, language, productInfo });
+    setVideoGenerating(true);
+    setVideoResult(null);
+    setVideoError('');
+    try {
+      const duration = Math.max(6, Math.min(15, video.duration || 8));
+      const output = await studioApi.geminiVideo({
+        script: result,
+        productInfo,
+        language,
+        ratio: '9:16',
+        duration,
+        resolution: '720p',
+        title: `Gemini 视频 · ${video.title}`,
+      });
+      if (!output.ok || !output.url) {
+        throw new Error(output.error || 'Gemini 未返回可预览的视频地址');
+      }
+      setVideoResult({
+        id: output.id || `gemini-video-${video.id}-${Date.now()}`,
+        title: output.title || `Gemini 视频 · ${video.title}`,
+        url: output.url,
+        poster: output.poster || video.aiAnalysis?.materialPoster || video.thumbnail,
+        duration: output.duration || duration,
+        createdAt: output.createdAt || new Date().toISOString(),
+      });
+    } catch (err: any) {
+      setVideoError(String(err?.message || err || 'Gemini 视频生成失败'));
+    } finally {
+      setVideoGenerating(false);
+    }
+  };
+
+  const enterWorkflow = () => {
+    if (!result || !videoResult) return;
+    onEnterWorkflow?.({ script: result, video, scriptType, language, productInfo, generatedVideo: videoResult });
   };
 
   const selectedLang = LANGUAGES.find(l => l.code === language);
@@ -754,8 +968,9 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
     <motion.div
       initial={{ opacity: 0, x: 32 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: 32 }}
       transition={{ type: 'spring', damping: 28, stiffness: 300 }}
-      className="fixed top-0 h-full w-[420px] flex flex-col border-l border-border z-50 bg-surface"
-      style={{ right: 0 }}>
+      className={`fixed top-0 h-full flex flex-col border-l border-border z-50 bg-surface ${
+        expanded ? 'left-0 right-0 w-auto shadow-2xl' : 'right-0 w-[420px]'
+      }`}>
 
       {/* Header */}
       <div className="flex items-start justify-between px-4 py-3.5 border-b border-border flex-shrink-0">
@@ -771,6 +986,11 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
               {favoriting ? <Loader2 size={15} className="animate-spin" /> : <Bookmark size={15} />}
             </button>
           )}
+          <button onClick={() => setExpanded(v => !v)}
+            className="p-1.5 rounded-lg hover:bg-surface-2 text-text-muted hover:text-text-primary transition-colors"
+            title={expanded ? '还原侧栏' : '放大为主操作界面'}>
+            {expanded ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+          </button>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-surface-2 text-text-muted hover:text-text-primary transition-colors">
             <X size={15} />
           </button>
@@ -842,6 +1062,15 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
                 </AnimatePresence>
               </div>
             </div>
+            <div className="px-4 py-2 border-b border-border bg-surface-2/60">
+              <label className="flex items-start gap-2 text-xs text-text-secondary leading-relaxed cursor-pointer">
+                <input type="checkbox" checked={voiceLanguageConfirmed} onChange={e => setVoiceLanguageConfirmed(e.target.checked)}
+                  className="mt-0.5 accent-green-600" />
+                <span>
+                  确认口播台词以<span className="font-semibold text-accent"> {selectedLang?.label || '所选语言'} </span>输出
+                </span>
+              </label>
+            </div>
 
             {/* Chat area */}
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -888,12 +1117,48 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
                     </div>
 
                     {getAnalysis(video) && (
-                      <div className="mt-3">
-                        <button onClick={enterWorkflow}
-                          className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold text-white transition-all active:scale-95"
-                          style={{ background: 'var(--color-accent)' }}>
-                          <Film size={13} /> 基于脚本用 Seedance 2.0 生成视频，进入 AI 生成 7 步工作流
-                        </button>
+                      <div className="mt-3 space-y-3">
+                        {!videoResult ? (
+                          <>
+                            <button onClick={() => void generateGeminiVideo()} disabled={videoGenerating}
+                              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold text-white transition-all active:scale-95 disabled:opacity-70"
+                              style={{ background: 'var(--color-accent)' }}>
+                              {videoGenerating ? <Loader2 size={13} className="animate-spin" /> : <Film size={13} />}
+                              {videoGenerating ? 'Gemini 生成视频中…' : '基于脚本用 Gemini 生成视频'}
+                            </button>
+                            {videoError && (
+                              <p className="text-[11px] text-red-500 leading-relaxed">{videoError}</p>
+                            )}
+                          </>
+                        ) : (
+                          <div className="rounded-2xl border border-border bg-surface overflow-hidden">
+                            <div className="flex gap-3 p-3">
+                              <div className="relative w-24 aspect-[9/16] flex-shrink-0 overflow-hidden rounded-xl bg-black">
+                                {videoResult.url ? (
+                                  <video src={videoResult.url} poster={videoResult.poster} controls playsInline className="absolute inset-0 h-full w-full object-cover" />
+                                ) : (
+                                  <img src={videoResult.poster} alt="" className="absolute inset-0 h-full w-full object-cover" />
+                                )}
+                                <span className="absolute left-1.5 top-1.5 rounded bg-black/55 px-1.5 py-0.5 text-[9px] font-bold text-white">Gemini</span>
+                              </div>
+                              <div className="min-w-0 flex-1 py-0.5">
+                                <p className="text-xs font-semibold text-text-primary line-clamp-2">Gemini 输出视频</p>
+                                <p className="mt-1 text-[11px] text-text-muted">请先确认生成效果，再进入剪辑流程做字幕、封面、配乐和发布。</p>
+                                <div className="mt-3 flex flex-wrap gap-2">
+                                  <button onClick={() => void generateGeminiVideo()} disabled={videoGenerating}
+                                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-border text-[11px] font-semibold text-text-secondary hover:text-text-primary disabled:opacity-60">
+                                    {videoGenerating ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />} 重新生成
+                                  </button>
+                                  <button onClick={enterWorkflow}
+                                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-semibold text-white"
+                                    style={{ background: 'var(--color-accent)' }}>
+                                    <ArrowRight size={11} /> 进入剪辑流程
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -920,7 +1185,8 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
                   className="w-full px-4 pt-3 pb-1 bg-transparent text-sm text-text-primary placeholder:text-text-muted resize-none outline-none" />
                 <div className="flex items-center justify-between px-3 pb-3 pt-1">
                   <p className="text-[11px] text-text-muted">{scriptType === 'voiceover' ? '口播脚本' : '分镜脚本'} · {selectedLang?.label}</p>
-                  <button onClick={() => void handleGenerate()} disabled={generating}
+                  <button onClick={() => void handleGenerate()} disabled={generating || !voiceLanguageConfirmed}
+                    title={voiceLanguageConfirmed ? '生成脚本' : '请先确认口播输出语言'}
                     className="w-8 h-8 rounded-xl flex items-center justify-center transition-all disabled:opacity-50"
                     style={{ background: 'var(--color-accent)', boxShadow: '0 2px 8px rgba(22,163,74,0.2)' }}>
                     {generating ? <Loader2 size={13} className="text-white animate-spin" /> : <ArrowUp size={13} className="text-white" />}
@@ -1212,7 +1478,13 @@ function WatchModal({ video, onClose }: { video: TrendVideo; onClose: () => void
   );
 }
 
-function AutoCrawlerPanel({ onImported }: { onImported: (videos: TrendVideo[], autoAnalyze: boolean, keyword: string) => void }) {
+function AutoCrawlerPanel({
+  onImported,
+  onConfigChange,
+}: {
+  onImported: (videos: TrendVideo[], autoAnalyze: boolean, keyword: string) => void;
+  onConfigChange: () => void;
+}) {
   const [expanded, setExpanded] = useState(false);
   const [crawlPlatform, setCrawlPlatform] = useState<CrawlPlatform>('youtube');
   const [keyword, setKeyword] = useState('amazon gadgets product review');
@@ -1230,6 +1502,11 @@ function AutoCrawlerPanel({ onImported }: { onImported: (videos: TrendVideo[], a
   const platformLabel = AUTO_CRAWL_PLATFORMS.find(p => p.id === crawlPlatform)?.label || 'YouTube';
   const keywordInputLabel = '关键词';
   const keywordPlaceholder = '产品词 / 竞品词 / 场景词；也可粘贴公开视频链接';
+  const resetPreviousResult = () => {
+    setLastImported(0);
+    setMessage('配置已更新，点击开始自动采集获取新结果');
+    onConfigChange();
+  };
 
   const startCrawl = async () => {
     setRunning(true);
@@ -1247,6 +1524,8 @@ function AutoCrawlerPanel({ onImported }: { onImported: (videos: TrendVideo[], a
         imported?: number;
         refreshed?: number;
         skipped?: number;
+        skippedExisting?: number;
+        returnedExisting?: number;
         total?: number;
         items?: CrawlerRecord[];
       };
@@ -1255,8 +1534,10 @@ function AutoCrawlerPanel({ onImported }: { onImported: (videos: TrendVideo[], a
       const importedVideos = recordsToVideos(data.items || []);
       onImported(importedVideos, autoAnalyze, keyword.trim());
       setLastImported(importedVideos.length);
-      setMessage(data.message || `采集完成：返回 ${importedVideos.length} 条，新增 ${data.imported || 0} 条，刷新 ${data.refreshed || 0} 条`);
+      setMessage(data.message || `采集完成：返回 ${importedVideos.length} 条（新增 ${data.imported || 0} 条，库内已有 ${data.returnedExisting || 0} 条）`);
     } catch (e) {
+      onConfigChange();
+      setLastImported(0);
       setMessage(e instanceof Error ? e.message : '自动采集失败');
     } finally {
       setRunning(false);
@@ -1313,7 +1594,10 @@ function AutoCrawlerPanel({ onImported }: { onImported: (videos: TrendVideo[], a
           <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr_140px] gap-3 p-4">
             <div className="flex items-center gap-1.5 p-1 rounded-lg bg-surface-2 border border-border">
               {AUTO_CRAWL_PLATFORMS.map(p => (
-                <button key={p.id} onClick={() => setCrawlPlatform(p.id)} disabled={!p.enabled}
+                <button key={p.id} onClick={() => {
+                  setCrawlPlatform(p.id);
+                  resetPreviousResult();
+                }} disabled={!p.enabled}
                   className={`flex-1 px-2 py-1.5 rounded-md text-xs font-semibold transition-colors disabled:opacity-45 ${
                     crawlPlatform === p.id ? 'bg-surface text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'
                   }`}>
@@ -1324,25 +1608,37 @@ function AutoCrawlerPanel({ onImported }: { onImported: (videos: TrendVideo[], a
             <label className="relative block">
               <span className="absolute left-9 top-1/2 -translate-y-1/2 text-xs text-text-muted pointer-events-none">{keywordInputLabel}</span>
               <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
-              <input value={keyword} onChange={e => setKeyword(e.target.value)}
+              <input value={keyword} onChange={e => {
+                setKeyword(e.target.value);
+                resetPreviousResult();
+              }}
                 className="w-full pl-[5.25rem] pr-4 py-2 rounded-xl border border-border bg-surface text-sm text-text-primary placeholder:text-text-muted outline-none focus:border-accent transition-colors"
                 placeholder={keywordPlaceholder} />
             </label>
             <label className="flex items-center gap-2 px-3 py-2 rounded-xl border border-border bg-surface text-xs text-text-muted">
               数量
-              <input type="number" min={1} max={30} value={limit} onChange={e => setLimit(Number(e.target.value))}
+              <input type="number" min={1} max={30} value={limit} onChange={e => {
+                setLimit(Number(e.target.value));
+                resetPreviousResult();
+              }}
                 className="w-full bg-transparent text-sm text-text-primary outline-none" />
             </label>
           </div>
           <div className="px-4 pb-3 -mt-2 grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-3 items-center text-xs text-text-muted">
             <label className="flex items-center gap-2 px-3 py-2 rounded-xl border border-border bg-surface">
               开始日期
-              <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+              <input type="date" value={dateFrom} onChange={e => {
+                setDateFrom(e.target.value);
+                resetPreviousResult();
+              }}
                 className="flex-1 bg-transparent text-sm text-text-primary outline-none" />
             </label>
             <label className="flex items-center gap-2 px-3 py-2 rounded-xl border border-border bg-surface">
               结束日期
-              <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+              <input type="date" value={dateTo} onChange={e => {
+                setDateTo(e.target.value);
+                resetPreviousResult();
+              }}
                 className="flex-1 bg-transparent text-sm text-text-primary outline-none" />
             </label>
             <div className="flex items-center gap-2">
@@ -1364,7 +1660,7 @@ function AutoCrawlerPanel({ onImported }: { onImported: (videos: TrendVideo[], a
 interface InspirationDashboardProps {
   onScriptPanelOpen?: () => void;
   onScriptPanelClose?: () => void;
-  onEnterWorkflow?: (payload: { script: string; video: TrendVideo; scriptType: ScriptType; language: string; productInfo: string }) => void;
+  onEnterWorkflow?: (payload: { script: string; video: TrendVideo; scriptType: ScriptType; language: string; productInfo: string; generatedVideo?: GeneratedVideo }) => void;
 }
 
 export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelClose, onEnterWorkflow }: InspirationDashboardProps) {
@@ -1375,6 +1671,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [sortMode, setSortMode] = useState<SortMode>('crawlTime');
   const [crawledVideos, setCrawledVideos] = useState<TrendVideo[]>([]);
+  const [lastCrawlVideoIds, setLastCrawlVideoIds] = useState<string[]>([]);
   const [analyzingVideoIds, setAnalyzingVideoIds] = useState<string[]>([]);
   const [favoritingMaterialIds, setFavoritingMaterialIds] = useState<string[]>([]);
   const [materialMessage, setMaterialMessage] = useState('');
@@ -1391,10 +1688,25 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
 
   const refreshVideos = async () => {
     try {
-      const r = await fetch('/api/overseas/videos?perPage=100', { headers: authHeader() });
-      const data = await r.json().catch(() => ({})) as { items?: CrawlerRecord[] };
-      if (!r.ok) throw new Error('视频列表加载失败');
-      setCrawledVideos(recordsToVideos(data.items || []));
+      const allRecords: CrawlerRecord[] = [];
+      const perPage = 100;
+      let page = 1;
+      let totalPages = 1;
+      while (page <= totalPages) {
+        const r = await fetch(`/api/overseas/videos?page=${page}&perPage=${perPage}`, { headers: authHeader() });
+        const data = await r.json().catch(() => ({})) as {
+          items?: CrawlerRecord[];
+          page?: number;
+          totalPages?: number;
+        };
+        if (!r.ok) throw new Error('视频列表加载失败');
+        const items = data.items || [];
+        allRecords.push(...items);
+        totalPages = Number(data.totalPages || (items.length < perPage ? page : page + 1));
+        if (items.length === 0) break;
+        page += 1;
+      }
+      setCrawledVideos(recordsToVideos(allRecords));
     } catch {
       setCrawledVideos([]);
     }
@@ -1423,9 +1735,11 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
 
   const allVideos = crawledVideos;
   const filtered = useMemo(() => {
+    const lastCrawlIds = new Set(lastCrawlVideoIds);
     const q = search.trim().toLowerCase();
     return allVideos
       .filter(v =>
+        (lastCrawlIds.size === 0 || lastCrawlIds.has(v.id)) &&
         (platform === 'all' || v.platform === platform) &&
         (!q || v.title.toLowerCase().includes(q) || v.tags.some(t => t.toLowerCase().includes(q)))
       )
@@ -1435,7 +1749,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
         }
         return heatValue(b.views) - heatValue(a.views) || timeValue(b.crawledAt) - timeValue(a.crawledAt);
       });
-  }, [allVideos, platform, search, sortMode]);
+  }, [allVideos, lastCrawlVideoIds, platform, search, sortMode]);
   const recentThreeDayUploads = allVideos.filter(v => {
     const t = v.crawledAt ? new Date(v.crawledAt).getTime() : 0;
     return t > 0 && Date.now() - t <= 3 * 24 * 60 * 60 * 1000;
@@ -1444,6 +1758,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   const handleImported = (videos: TrendVideo[], autoAnalyze: boolean, activeKeyword = '') => {
     void refreshVideos();
     if (videos.length === 0) return;
+    setLastCrawlVideoIds(videos.map(v => v.id));
     setCrawledVideos(prev => {
       const byId = new Map(prev.map(v => [v.id, v]));
       videos.forEach(v => byId.set(v.id, v));
@@ -1451,7 +1766,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
     });
     setPlatform(videos[0]?.platform ?? 'youtube');
     setSortMode('crawlTime');
-    if (activeKeyword && !/^https?:\/\//i.test(activeKeyword)) setSearch(activeKeyword);
+    if (activeKeyword && !/^https?:\/\//i.test(activeKeyword)) setSearch('');
     if (autoAnalyze) {
       const downloadable = videos.filter(v => v.sourceUrl);
       if (downloadable.length > 0) {
@@ -1460,6 +1775,11 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
         void Promise.allSettled(downloadable.map(video => analyzeVideoOnly(video, true)));
       }
     }
+  };
+
+  const clearImportedResultView = () => {
+    setLastCrawlVideoIds([]);
+    setSelectedVideo(null);
   };
 
   const handleWatch = (video: TrendVideo) => {
@@ -1606,13 +1926,13 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
           <div className="grid grid-cols-1 xl:grid-cols-[minmax(260px,1fr)_160px_170px_auto] gap-2.5 items-center">
             <div className="relative min-w-0">
               <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
-              <input type="text" value={search} onChange={e => setSearch(e.target.value)}
+              <input type="text" value={search} onChange={e => { setLastCrawlVideoIds([]); setSearch(e.target.value); }}
                 placeholder="搜索视频标题或标签..."
                 className="w-full pl-9 pr-4 py-2 rounded-xl border border-border bg-surface text-sm text-text-primary placeholder:text-text-muted outline-none focus:border-accent transition-colors" />
             </div>
             <div className="relative">
               <Globe size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
-              <select value={platform} onChange={e => setPlatform(e.target.value as Platform)}
+              <select value={platform} onChange={e => { setLastCrawlVideoIds([]); setPlatform(e.target.value as Platform); }}
                 aria-label="平台筛选"
                 className="w-full appearance-none rounded-xl border border-border bg-surface py-2 pl-9 pr-9 text-sm font-semibold text-text-primary outline-none transition-colors hover:border-border-bright focus:border-accent">
                 {PLATFORM_FILTERS.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
@@ -1624,7 +1944,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
               {sortMode === 'heat'
                 ? <Flame size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
                 : <Clock size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />}
-              <select value={sortMode} onChange={e => setSortMode(e.target.value as SortMode)}
+              <select value={sortMode} onChange={e => { setLastCrawlVideoIds([]); setSortMode(e.target.value as SortMode); }}
                 aria-label="排序方式"
                 className="w-full appearance-none rounded-xl border border-border bg-surface py-2 pl-9 pr-9 text-sm font-semibold text-text-primary outline-none transition-colors hover:border-border-bright focus:border-accent">
                 <option value="crawlTime">按爬取时间</option>
@@ -1660,7 +1980,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
           ))}
         </div>
 
-        <AutoCrawlerPanel onImported={handleImported} />
+        <AutoCrawlerPanel onImported={handleImported} onConfigChange={clearImportedResultView} />
 
         <div className="px-6 pb-6">
           {filtered.length === 0 ? (

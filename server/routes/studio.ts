@@ -49,6 +49,24 @@ function langName(code: string): string {
   return LANG_NAME[code] ?? 'English';
 }
 
+const GENERATED_MEDIA_DIR = path.join(__dirname, '../../data/media/generated');
+
+function geminiVideoConfig() {
+  const apiKey = (process.env.GEMINI_API_KEY || '').trim();
+  const model = (process.env.GEMINI_VIDEO_MODEL || 'veo-2.0-generate-001').trim();
+  return { apiKey, model };
+}
+
+function normalizeVideoDuration(raw: unknown): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 8;
+  return Math.round(n);
+}
+
+function generatedMediaUrl(file: string): string {
+  return `/media/generated/${file}`;
+}
+
 /** 从 LLM 输出里抽取第一个 JSON（对象或数组） */
 function extractJSON<T>(text: string): T | null {
   const match = text.match(/[[{][\s\S]*[\]}]/);
@@ -95,6 +113,94 @@ studioRouter.get('/subscription', async (req, res) => {
 
 /* 收费墙：以下所有 AI / 渲染路由都需有效订阅（未启用强制时直通）。 */
 studioRouter.use(entitlementGate());
+
+/* ── Gemini / Veo 视频生成 ──────────────────────────────────────────────── */
+// POST /studio/gemini-video  Body: { script, productInfo, language, ratio, duration, resolution, title? }
+studioRouter.post('/gemini-video', async (req, res) => {
+  const { apiKey, model } = geminiVideoConfig();
+  if (!apiKey) {
+    res.json({ ok: false, source: 'fallback', error: 'GEMINI_API_KEY not set' });
+    return;
+  }
+
+  const {
+    script = '',
+    productInfo = '',
+    language = 'zh',
+    ratio = '9:16',
+    duration: rawDuration = 8,
+    resolution = '720p',
+    title = 'Gemini 生成视频',
+  } = req.body ?? {};
+  const duration = normalizeVideoDuration(rawDuration);
+  if (duration > 15) {
+    res.status(400).json({ ok: false, error: '单个视频最长 15 秒' });
+    return;
+  }
+  if (!await consumeDemoQuota(req, res, 'videoGeneration')) return;
+
+  const prompt = [
+    `Create a short commercial social video in ${langName(language)}.`,
+    `Use this script/storyboard as the primary direction:\n${String(script).slice(0, 4000)}`,
+    productInfo ? `Product and brand context:\n${String(productInfo).slice(0, 1800)}` : '',
+    'Style: realistic UGC product video, clear product focus, clean lighting, smooth camera movement, high conversion pacing.',
+    'Avoid unreadable text overlays. Keep visual actions aligned with the spoken lines.',
+  ].filter(Boolean).join('\n\n');
+
+  try {
+    fs.mkdirSync(GENERATED_MEDIA_DIR, { recursive: true });
+    const ai = new GoogleGenAI({ apiKey });
+    let operation = await ai.models.generateVideos({
+      model,
+      source: { prompt },
+      config: {
+        numberOfVideos: 1,
+        durationSeconds: duration,
+        aspectRatio: ratio,
+        resolution,
+        personGeneration: 'allow_adult',
+        enhancePrompt: true,
+      },
+    } as any);
+
+    const timeoutMs = Math.max(30_000, Number(process.env.GEMINI_VIDEO_TIMEOUT_MS || 360_000));
+    const intervalMs = Math.max(3_000, Number(process.env.GEMINI_VIDEO_POLL_INTERVAL_MS || 10_000));
+    const deadline = Date.now() + timeoutMs;
+    while (!operation.done && Date.now() < deadline) {
+      await new Promise(r => setTimeout(r, intervalMs));
+      operation = await ai.operations.getVideosOperation({ operation } as any);
+    }
+    if (!operation.done) throw new Error('Gemini video generation timed out');
+    if (operation.error) {
+      const msg = (operation.error as any)?.message || JSON.stringify(operation.error);
+      throw new Error(msg || 'Gemini video generation failed');
+    }
+
+    const generated = operation.response?.generatedVideos?.[0];
+    if (!generated?.video) {
+      const reasons = operation.response?.raiMediaFilteredReasons?.join('；');
+      throw new Error(reasons || 'Gemini did not return a generated video');
+    }
+
+    const id = randomUUID();
+    const file = `${id}.mp4`;
+    const outputPath = path.join(GENERATED_MEDIA_DIR, file);
+    await ai.files.download({ file: generated, downloadPath: outputPath } as any);
+
+    res.json({
+      ok: true,
+      source: 'gemini',
+      id,
+      title,
+      url: generatedMediaUrl(file),
+      duration,
+      model,
+      createdAt: new Date().toISOString(),
+    });
+  } catch (e: any) {
+    res.json({ ok: false, source: 'gemini', error: String(e?.message ?? e).slice(0, 500) });
+  }
+});
 
 /* ── ③ 口播脚本 ────────────────────────────────────────────────────────── */
 // POST /studio/script  Body: { materials?, productInfo?, language?, platform?, duration? }

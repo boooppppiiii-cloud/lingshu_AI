@@ -34,7 +34,7 @@ export default function TrafficPage({ onEnterConversation, onLeaveConversation, 
     onLeaveConversation();
   };
   const handleEnterWorkflow = (payload: unknown) => {
-    try { localStorage.setItem('ow_seedance_kickoff', JSON.stringify(payload)); } catch { /* ignore */ }
+    try { localStorage.setItem('ow_video_kickoff', JSON.stringify(payload)); } catch { /* ignore */ }
     setViewMode('create');
   };
 

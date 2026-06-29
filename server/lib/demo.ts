@@ -8,19 +8,21 @@ import { getTenantSubscription } from '../middleware/subscription.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USAGE_FILE = path.join(__dirname, '../../data/demo-usage.json');
 
-export type DemoQuotaKind = 'aiChat' | 'generation' | 'render';
+export type DemoQuotaKind = 'aiChat' | 'generation' | 'render' | 'videoGeneration';
 
 export interface DemoLimits {
   trialDays: number;
   aiChatDaily: number;
   generationDaily: number;
   renderDaily: number;
+  videoGenerationDaily: number;
 }
 
 export interface DemoUsageDay {
   aiChat: number;
   generation: number;
   render: number;
+  videoGeneration: number;
 }
 
 export interface DemoStatus {
@@ -36,7 +38,7 @@ export interface DemoStatus {
 
 type UsageStore = Record<string, Record<string, DemoUsageDay>>;
 
-const DEFAULT_USAGE: DemoUsageDay = { aiChat: 0, generation: 0, render: 0 };
+const DEFAULT_USAGE: DemoUsageDay = { aiChat: 0, generation: 0, render: 0, videoGeneration: 0 };
 
 export function isDemoMode(): boolean {
   return process.env.DEMO_MODE === 'true';
@@ -53,6 +55,7 @@ export function demoLimits(): DemoLimits {
     aiChatDaily: intEnv('DEMO_DAILY_AI_CHAT_LIMIT', 20),
     generationDaily: intEnv('DEMO_DAILY_GENERATION_LIMIT', 10),
     renderDaily: intEnv('DEMO_DAILY_RENDER_LIMIT', 3),
+    videoGenerationDaily: intEnv('DEMO_VIDEO_GENERATION_LIMIT', intEnv('DEMO_DAILY_VIDEO_GENERATION_LIMIT', 2)),
   };
 }
 
@@ -87,11 +90,16 @@ function emptyUsage(): DemoUsageDay {
   return { ...DEFAULT_USAGE };
 }
 
-function remaining(usage: DemoUsageDay, limits: DemoLimits): DemoUsageDay {
+function totalVideoGenerationUsage(store: UsageStore, key: string): number {
+  return Object.values(store[key] ?? {}).reduce((sum, day) => sum + (day.videoGeneration ?? 0), 0);
+}
+
+function remaining(usage: DemoUsageDay, limits: DemoLimits, videoGenerationUsed = usage.videoGeneration ?? 0): DemoUsageDay {
   return {
     aiChat: Math.max(0, limits.aiChatDaily - usage.aiChat),
     generation: Math.max(0, limits.generationDaily - usage.generation),
     render: Math.max(0, limits.renderDaily - usage.render),
+    videoGeneration: Math.max(0, limits.videoGenerationDaily - videoGenerationUsed),
   };
 }
 
@@ -108,7 +116,9 @@ export async function buildDemoStatus(req: Request, tenantId?: string, expiresAt
   }
 
   const key = tenantId ? `tenant:${tenantId}` : await identityKey(req);
-  const usage = readUsage()[key]?.[todayKey()] ?? emptyUsage();
+  const store = readUsage();
+  const usage = { ...emptyUsage(), ...(store[key]?.[todayKey()] ?? {}) };
+  const videoGenerationUsed = totalVideoGenerationUsage(store, key);
   const expired = isExpired(resolvedExpiresAt);
   const daysRemaining = resolvedExpiresAt
     ? Math.max(0, Math.ceil((new Date(resolvedExpiresAt).getTime() - Date.now()) / (24 * 3600 * 1000)))
@@ -122,13 +132,14 @@ export async function buildDemoStatus(req: Request, tenantId?: string, expiresAt
     expired,
     limits,
     usage,
-    remaining: remaining(usage, limits),
+    remaining: remaining(usage, limits, videoGenerationUsed),
   };
 }
 
 function limitFor(kind: DemoQuotaKind, limits: DemoLimits): number {
   if (kind === 'aiChat') return limits.aiChatDaily;
   if (kind === 'generation') return limits.generationDaily;
+  if (kind === 'videoGeneration') return limits.videoGenerationDaily;
   return limits.renderDaily;
 }
 
@@ -145,9 +156,10 @@ export async function consumeDemoQuota(req: Request, res: Response, kind: DemoQu
   const key = id?.tenantId ? `tenant:${id.tenantId}` : await identityKey(req);
   const day = todayKey();
   const store = readUsage();
-  const usage = store[key]?.[day] ?? emptyUsage();
+  const usage = { ...emptyUsage(), ...(store[key]?.[day] ?? {}) };
   const limits = demoLimits();
-  if (usage[kind] >= limitFor(kind, limits)) {
+  const used = kind === 'videoGeneration' ? totalVideoGenerationUsage(store, key) : usage[kind];
+  if (used >= limitFor(kind, limits)) {
     res.status(429).json({ error: 'demo_quota_exceeded', quota: kind, demo: await buildDemoStatus(req, id?.tenantId, sub?.expiresAt) });
     return false;
   }

@@ -4,7 +4,7 @@ import {
   LayoutGrid, Film, FileText, Music, Image as ImageIcon, Play, Send,
   Check, ChevronLeft, ChevronRight, Folder, Search, Volume2, Globe,
   Mic, Download, Loader2, Sparkles, Wand2, Copy, RefreshCw, Clock,
-  Upload, X, Plus, Smartphone, List, Save, FolderOpen, Trash2, Pause, ChevronDown,
+  Upload, X, Plus, List, Save, FolderOpen, Trash2, Pause, ChevronDown,
 } from 'lucide-react';
 import { studioApi, getDesktopRender, type StudioProject, type Material, type BgmTrack, type CoverStyle, type SubCue } from '../lib/studioApi';
 import type { Page } from '../App';
@@ -12,7 +12,7 @@ import type { Page } from '../App';
 /* ──────────────────────────────────────────────────────────────────────────
    AI 生成内容工作台 — 社媒（流量）页子模块
    流程：选模式 → 选素材 → 口播脚本 → 配乐 → 封面 → 成片预览 → 导出/一键发布
-   三栏布局：① 步骤导航  ② 操作区  ③ 实时预览 / 制作摘要
+   两栏布局：① 步骤导航  ② 操作区
 ─────────────────────────────────────────────────────────────────────────── */
 
 const AMBER = '#d97706';
@@ -251,16 +251,26 @@ interface EnterpriseProfileLite {
   customers?: { targetProfiles?: string };
 }
 
-interface SeedanceKickoff {
+interface VideoKickoff {
   script?: string;
   scriptType?: 'voiceover' | 'storyboard';
   language?: string;
   productInfo?: string;
+  generatedVideo?: {
+    id?: string;
+    title?: string;
+    url?: string;
+    poster?: string;
+    duration?: number;
+    createdAt?: string;
+  };
   video?: {
     title?: string;
     platform?: string;
     videoUrl?: string;
-    aiAnalysis?: { materialUrl?: string };
+    thumbnail?: string;
+    duration?: number;
+    aiAnalysis?: { materialUrl?: string; materialPoster?: string };
   };
 }
 
@@ -476,7 +486,7 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
   const [projects, setProjects] = useState<StudioProject[]>([]);
   const [savingProj, setSavingProj] = useState(false);
   const [savedTick, setSavedTick] = useState(false);
-  const [seedanceKickoff, setSeedanceKickoff] = useState<SeedanceKickoff | null>(null);
+  const [videoKickoff, setVideoKickoff] = useState<VideoKickoff | null>(null);
 
   const selectedClips = useMemo(() => materials.filter(c => selected.includes(c.id)), [selected, materials]);
   const totalDur = selectedClips.reduce((s, c) => s + (c.type === 'image' ? 3 : c.duration), 0);
@@ -502,13 +512,16 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
   useEffect(() => {
     let raw = '';
     try {
-      raw = localStorage.getItem('ow_seedance_kickoff') || '';
-      if (raw) localStorage.removeItem('ow_seedance_kickoff');
+      raw = localStorage.getItem('ow_video_kickoff') || localStorage.getItem('ow_seedance_kickoff') || '';
+      if (raw) {
+        localStorage.removeItem('ow_video_kickoff');
+        localStorage.removeItem('ow_seedance_kickoff');
+      }
     } catch { /* ignore */ }
     if (!raw) return;
     try {
-      const kickoff = JSON.parse(raw) as SeedanceKickoff;
-      setSeedanceKickoff(kickoff);
+      const kickoff = JSON.parse(raw) as VideoKickoff;
+      setVideoKickoff(kickoff);
       if (kickoff.script) setScript(kickoff.script);
       if (kickoff.scriptType === 'voiceover' || kickoff.scriptType === 'storyboard') setScriptType(kickoff.scriptType);
       if (kickoff.language) setLang(kickoff.language);
@@ -517,19 +530,40 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
       setProvider('gemini');
       setMode('material');
       setActiveFolder('hot');
-      setProjectTitle(kickoff.video?.title ? `Seedance 2.0 · ${kickoff.video.title}` : 'Seedance 2.0 爆款复刻');
+      setProjectTitle(kickoff.generatedVideo?.title || (kickoff.video?.title ? `Gemini 视频 · ${kickoff.video.title}` : 'Gemini 视频生成'));
       setStepIdx(STEPS.findIndex(s => s.id === 'material'));
       autoGen.current = true;
     } catch { /* ignore malformed kickoff */ }
   }, []);
 
   useEffect(() => {
-    if (!seedanceKickoff || materials.length === 0) return;
-    const materialUrl = seedanceKickoff.video?.aiAnalysis?.materialUrl || seedanceKickoff.video?.videoUrl || '';
-    const title = seedanceKickoff.video?.title || '';
+    if (!videoKickoff?.generatedVideo) return;
+    const generated = videoKickoff.generatedVideo;
+    const clip: Clip = {
+      id: generated.id || `gemini-video-${videoKickoff.video?.title || 'output'}`,
+      name: generated.title || 'Gemini 输出视频',
+      folder: 'hot',
+      type: 'video',
+      duration: generated.duration || videoKickoff.video?.duration || duration,
+      size: 'Gemini',
+      url: generated.url,
+      poster: generated.poster || videoKickoff.video?.aiAnalysis?.materialPoster || videoKickoff.video?.thumbnail,
+      scope: 'shared',
+    };
+    setMaterials(prev => {
+      if (prev.some(m => m.id === clip.id || (clip.url && m.url === clip.url))) return prev;
+      return [clip, ...prev];
+    });
+    setSelected([clip.id]);
+  }, [duration, videoKickoff]);
+
+  useEffect(() => {
+    if (!videoKickoff || materials.length === 0) return;
+    const materialUrl = videoKickoff.generatedVideo?.url || videoKickoff.video?.aiAnalysis?.materialUrl || videoKickoff.video?.videoUrl || '';
+    const title = videoKickoff.generatedVideo?.title || videoKickoff.video?.title || '';
     const matched = materials.find(m => (materialUrl && m.url === materialUrl) || (title && m.name.includes(title.slice(0, 40))));
     if (matched) setSelected([matched.id]);
-  }, [materials, seedanceKickoff]);
+  }, [materials, videoKickoff]);
 
   const editFor = (clip: Clip): ClipEdit => clipEdits[clip.id] ?? {
     trimStart: 0,
@@ -1846,45 +1880,6 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
         </div>
       </div>
 
-      {/* ── ③ 实时预览 / 制作摘要（选模式步骤不展示） ───────────────────── */}
-      {step !== 'mode' && (
-      <aside className="w-72 flex-shrink-0 border-l border-border flex flex-col bg-surface-2/40">
-        <div className="px-4 py-3 border-b border-border flex items-center gap-2">
-          <Smartphone size={13} className="text-text-muted" />
-          <span className="text-xs font-semibold text-text-secondary">实时预览</span>
-        </div>
-
-        <div className="p-4 flex-1 overflow-y-auto">
-          {/* 手机框预览 */}
-          <div className="mx-auto rounded-2xl overflow-hidden border-2 border-border-bright shadow-sm" style={{ width: 150 }}>
-            <div className="relative aspect-[9/16]">
-              <CoverFace coverUrl={coverUrl} frameUrl={coverFrameUrl} title={coverTitle} style={coverStyle} />
-              <span className="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded text-[9px] font-mono font-bold text-white bg-black/45">
-                {ratio}
-              </span>
-            </div>
-          </div>
-
-          {/* 制作摘要 */}
-          <div className="mt-5 space-y-2.5">
-            <SummaryRow icon={LayoutGrid} label="模式" value={MODES.find(m => m.id === mode)?.title ?? ''} />
-            <SummaryRow icon={Globe} label="平台" value={`${PLATFORMS.find(p => p.id === platform)?.label} · ${ratio}`} />
-            <SummaryRow icon={Clock} label="时长" value={`${totalDur || duration}s`} />
-            <SummaryRow icon={Film} label="素材" value={`${selected.length} 段`} />
-            <SummaryRow icon={Mic} label="配音" value={VOICES.find(v => v.id === voice)?.name.split('（')[0] ?? ''} />
-            <SummaryRow icon={Music} label="配乐" value={bgms.find(b => b.id === bgm)?.name ?? ''} />
-            <SummaryRow icon={Globe} label="语言" value={LANGS.find(l => l.code === lang)?.label ?? ''} />
-          </div>
-
-          {rendered && (
-            <div className="mt-4 flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1.5 rounded-lg"
-              style={{ background: 'var(--color-accent-glow)', color: 'var(--color-accent)' }}>
-              <Check size={12} /> 成片已就绪，可导出或发布
-            </div>
-          )}
-        </div>
-      </aside>
-      )}
       </div>
 
       {/* ── 我的作品 / 草稿 列表浮层 ─────────────────────── */}
@@ -2010,15 +2005,5 @@ function Pill({ active, onClick, children }: { active: boolean; onClick: () => v
         : { background: 'var(--color-surface)', color: 'var(--color-text-secondary)', borderColor: 'var(--color-border)' }}>
       {children}
     </button>
-  );
-}
-
-function SummaryRow({ icon: Icon, label, value }: { icon: typeof LayoutGrid; label: string; value: string }) {
-  return (
-    <div className="flex items-center gap-2.5">
-      <Icon size={13} className="text-text-muted flex-shrink-0" />
-      <span className="text-[11px] text-text-muted w-8 flex-shrink-0">{label}</span>
-      <span className="text-[11px] font-medium text-text-primary flex-1 truncate text-right">{value}</span>
-    </div>
   );
 }

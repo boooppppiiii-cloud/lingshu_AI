@@ -8,7 +8,7 @@ import { copywritingRouter } from './routes/copywriting.js';
 import { translationRouter } from './routes/translation.js';
 import { competitorRouter } from './routes/competitor.js';
 import { strategyRouter } from './routes/strategy.js';
-import { videosRouter } from './routes/videos.js';
+import { initCrawlerOpsWorker, videosRouter } from './routes/videos.js';
 import { scriptsRouter } from './routes/scripts.js';
 import { trendsRouter } from './routes/trends.js';
 import { assetsRouter } from './routes/assets.js';
@@ -86,6 +86,7 @@ app.use('/api/overseas/studio', studioRouter);
 app.use('/api/overseas/platform-integrations', platformIntegrationsRouter);
 
 initScheduler();
+initCrawlerOpsWorker();
 
 // 素材库本地文件托管（POST /studio/materials 上传到 data/media/）
 const mediaDir = path.join(__dirname, '..', 'data', 'media');
