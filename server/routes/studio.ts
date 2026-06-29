@@ -66,7 +66,7 @@ function isGeminiVideoEnabled(): boolean {
 function seedanceVideoConfig() {
   const apiKey = (process.env.SEEDANCE_API_KEY || '').trim();
   const baseUrl = (process.env.SEEDANCE_BASE_URL || SEEDANCE_BASE_URL).replace(/\/+$/, '');
-  const model = (process.env.SEEDANCE_MODEL || 'seedance-2-0-260128').trim();
+  const model = (process.env.SEEDANCE_MODEL || 'doubao-seedance-2-0-fast-260128').trim();
   const timeoutMs = Math.max(60_000, Number(process.env.SEEDANCE_VIDEO_TIMEOUT_MS || 600_000));
   const pollIntervalMs = Math.max(2_000, Number(process.env.SEEDANCE_VIDEO_POLL_INTERVAL_MS || 8_000));
   return { apiKey, baseUrl, model, timeoutMs, pollIntervalMs };
@@ -143,6 +143,17 @@ function seedanceTaskStatus(task: any): string {
 
 function seedanceTaskId(task: any): string {
   return String(task?.id || task?.data?.id || task?.task?.id || '').trim();
+}
+
+function summarizeSeedanceError(error: unknown): string {
+  const text = String((error as any)?.message ?? error);
+  if (/not activated the model|do not have access|model or endpoint/i.test(text)) {
+    return '当前方舟账号尚未开通所选 Seedance 模型服务。请在火山方舟控制台开通 Seedance 2.0 模型，或把 SEEDANCE_MODEL 改成已开通的模型/接入点 ID。';
+  }
+  if (/api key/i.test(text)) {
+    return 'Seedance API Key 无效或不属于当前区域，请检查火山方舟 API Key 和 SEEDANCE_BASE_URL。';
+  }
+  return text.slice(0, 500);
 }
 
 async function waitForSeedanceTask(config: ReturnType<typeof seedanceVideoConfig>, taskId: string): Promise<any> {
@@ -353,7 +364,7 @@ studioRouter.post('/seedance-video', async (req, res) => {
       createdAt: new Date().toISOString(),
     });
   } catch (e: any) {
-    const reason = String(e?.message ?? e).slice(0, 500);
+    const reason = summarizeSeedanceError(e);
     console.error('[studio] Seedance video generation failed:', e);
     res.json({ ok: false, source: 'seedance', error: `Seedance 视频生成失败：${reason}` });
   }

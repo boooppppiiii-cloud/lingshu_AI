@@ -93,6 +93,20 @@ const SYSTEM_PROMPTS: Record<string, string> = {
 
 export const agentChatRouter = Router();
 
+function formatStreamError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  if (/RESOURCE_EXHAUSTED|Too Many Requests|code['"]?:429|quota/i.test(raw)) {
+    return 'Gemini 当前额度或账单资源已耗尽，请在 Google AI Studio/Cloud Billing 开通或恢复额度后重试。';
+  }
+  if (/fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND/i.test(raw)) {
+    return '模型服务网络连接失败，请检查代理或稍后重试。';
+  }
+  if (/API key|GEMINI_API_KEY/i.test(raw)) {
+    return 'Gemini API Key 未配置或不可用。';
+  }
+  return raw.slice(0, 300);
+}
+
 agentChatRouter.post('/:agentType/chat', async (req, res) => {
   const { agentType } = req.params;
   const { messages, deepThinking = false } = req.body as { messages: ChatMessage[]; deepThinking?: boolean };
@@ -119,7 +133,8 @@ agentChatRouter.post('/:agentType/chat', async (req, res) => {
     }
     res.write('data: [DONE]\n\n');
   } catch (err: any) {
-    res.write(`data: ${JSON.stringify({ error: err.message })}\n\n`);
+    res.write(`data: ${JSON.stringify({ error: formatStreamError(err) })}\n\n`);
+    res.write('data: [DONE]\n\n');
   } finally {
     res.end();
   }

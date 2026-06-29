@@ -4,6 +4,7 @@ import { execFileSync } from 'child_process';
 import dotenv from 'dotenv';
 import express from 'express';
 import compression from 'compression';
+import { ProxyAgent, setGlobalDispatcher } from 'undici';
 import { copywritingRouter } from './routes/copywriting.js';
 import { translationRouter } from './routes/translation.js';
 import { competitorRouter } from './routes/competitor.js';
@@ -42,6 +43,7 @@ function configureNetworkProxy(): void {
   process.env.http_proxy ||= proxy;
   process.env.CRAWLER_PROXY ||= proxy;
   process.env.NODE_USE_ENV_PROXY ||= '1';
+  setGlobalDispatcher(new ProxyAgent(proxy));
   console.log(`[network] using proxy ${proxy}`);
 }
 

@@ -613,10 +613,13 @@ export default function PluginsPage() {
     setTesting(pluginKey);
     try {
       const r = await fetch(`/api/overseas/plugins/${pluginKey}/test`, { method: 'POST' });
-      const data = await r.json() as { ok: boolean; shopName?: string; message?: string; error?: string };
+      const data = await r.json() as { ok: boolean; shopName?: string; message?: string; error?: string; rates?: Record<string, number>; source?: string };
+      const rateMsg = data.rates
+        ? `${data.message ?? '汇率连接成功'}：CNY ${data.rates.CNY} / SAR ${data.rates.SAR} / AED ${data.rates.AED}`
+        : null;
       setTestResult(prev => ({
         ...prev,
-        [pluginKey]: { ok: data.ok, msg: data.ok ? (data.shopName ? `连接成功：${data.shopName}` : (data.message ?? '连接成功')) : (data.error ?? '连接失败') },
+        [pluginKey]: { ok: data.ok, msg: data.ok ? (rateMsg ?? (data.shopName ? `连接成功：${data.shopName}` : (data.message ?? '连接成功'))) : (data.error ?? '连接失败') },
       }));
       await fetchPlugins();
     } catch {

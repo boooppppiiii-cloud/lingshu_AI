@@ -49,6 +49,7 @@ export default function AgentChatPage({ config, onEnterConversation, onLeaveConv
   const [deepThinking, setDeepThinking] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inFlightRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
   const sentKickoffKeysRef = useRef(new Set<string>());
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
@@ -88,11 +89,18 @@ export default function AgentChatPage({ config, onEnterConversation, onLeaveConv
       });
     };
 
+    let timeout: number | undefined;
     try {
+      abortRef.current?.abort();
+      const controller = new AbortController();
+      abortRef.current = controller;
+      const timeoutMs = deepThinking ? 75_000 : 45_000;
+      timeout = window.setTimeout(() => controller.abort(), timeoutMs);
       const resp = await fetch(config.apiPath, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeader() },
         body: JSON.stringify({ messages: next, deepThinking }),
+        signal: controller.signal,
       });
       if (!resp.ok || !resp.body) {
         const err = await resp.json().catch(() => ({}));
@@ -119,7 +127,8 @@ export default function AgentChatPage({ config, onEnterConversation, onLeaveConv
           if (obj.text) {
             updateAssistant(msg => ({ ...msg, role: 'assistant', content: msg.content + obj.text }));
           } else if (obj.error) {
-            updateAssistant(msg => ({ ...msg, content: msg.content || '抱歉，刚刚连接断开了，请再发一次试试。' }));
+            updateAssistant(msg => ({ ...msg, content: msg.content || `抱歉，模型连接断开了：${obj.error}` }));
+            finished = true;
           } else if (obj.sources?.length) {
             updateAssistant(msg => ({ ...msg, sources: obj.sources }));
           }
@@ -139,15 +148,19 @@ export default function AgentChatPage({ config, onEnterConversation, onLeaveConv
       }
       if (buf.trim()) consumeLine(buf);
     } catch (err: any) {
-      const message = err?.message || '请求失败，请稍后重试。';
+      const message = err?.name === 'AbortError'
+        ? '这次对话响应超时了，已自动停止。你可以直接再发一次，或先关闭“深度思考”降低延迟。'
+        : err?.message || '请求失败，请稍后重试。';
       if (assistantStarted) {
         updateAssistant(msg => ({ ...msg, content: msg.content ? `${msg.content}\n\n${message}` : message }));
       } else {
         setMessages(prev => [...prev, { role: 'assistant', content: message }]);
       }
     } finally {
+      if (timeout) window.clearTimeout(timeout);
       setLoading(false);
       inFlightRef.current = false;
+      abortRef.current = null;
     }
   };
 

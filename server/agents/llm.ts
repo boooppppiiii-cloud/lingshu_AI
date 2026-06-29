@@ -80,13 +80,14 @@ async function* streamGeminiChat(messages: ChatMessage[], opts: LLMCallOptions):
   const baseConfig: Record<string, unknown> = {
     // 默认低延迟；用户打开深度思考时给中等预算，避免明显拖慢首字。
     thinkingConfig: { thinkingBudget: opts.deepThinking ? 768 : 0 },
+    maxOutputTokens: opts.deepThinking ? 4096 : 2048,
     ...(opts.systemPrompt ? { systemInstruction: { parts: [{ text: opts.systemPrompt }] } } : {}),
   };
 
   // 单次尝试：withSearch 时挂联网检索（可引用真实来源），否则纯生成（更稳）
-  async function* attempt(withSearch: boolean): AsyncGenerator<StreamEvent> {
+  async function* attempt(withSearch: boolean, model = modelId): AsyncGenerator<StreamEvent> {
     const stream = await ai.models.generateContentStream({
-      model: modelId,
+      model,
       contents,
       config: withSearch ? { ...baseConfig, tools: [{ googleSearch: {} }] } : baseConfig,
     });
@@ -111,9 +112,21 @@ async function* streamGeminiChat(messages: ChatMessage[], opts: LLMCallOptions):
       if ('text' in ev) emitted += ev.text.length;
       yield ev;
     }
-  } catch {
+  } catch (err) {
     if (emitted < 20) {
-      for await (const ev of attempt(false)) yield ev;
+      try {
+        for await (const ev of attempt(false)) yield ev;
+      } catch (fallbackErr) {
+        const raw = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+        if (/RESOURCE_EXHAUSTED|Too Many Requests|429|quota/i.test(raw) && modelId !== 'gemini-2.5-flash-lite') {
+          for await (const ev of attempt(false, 'gemini-2.5-flash-lite')) yield ev;
+        } else {
+          throw fallbackErr;
+        }
+      }
+    } else {
+      const raw = err instanceof Error ? err.message : String(err);
+      yield { text: `\n\n（联网检索中断：${raw.slice(0, 120)}）` };
     }
   }
 }

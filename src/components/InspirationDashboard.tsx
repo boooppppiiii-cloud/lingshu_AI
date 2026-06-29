@@ -90,6 +90,7 @@ interface VideoAnalysisPayload {
   crawlerOpsTaskId?: string;
   crawlerOpsStatus?: string;
   crawlerOpsReason?: string;
+  crawlerOpsLastError?: string;
   gemini?: GeminiVideoAnalysis;
 }
 
@@ -554,15 +555,22 @@ function summarizePipelineError(raw?: string): string {
   if (/GEMINI_API_KEY/i.test(text)) {
     return 'Gemini API Key 未配置或不可用，暂时无法完成视频理解分析。';
   }
+  if (/429|RESOURCE_EXHAUSTED|quota|prepayment credits|额度|余额/i.test(text)) {
+    return '待测试用户填入真实 Gemini API Key。当前只展示基础资料分析；配置可用 Key 后，队列会继续升级为视频级分析。';
+  }
   return text.length > 180 ? `${text.slice(0, 180)}...` : text;
 }
 
 function pipelineState(video: TrendVideo): { title: string; desc: string; spinning: boolean; failed: boolean } {
   const analysis = video.aiAnalysis || {};
+  const quotaError = /429|RESOURCE_EXHAUSTED|quota|prepayment credits|额度|余额/i.test(String(analysis.analysisError || analysis.downloadError || analysis.crawlerOpsLastError || ''));
+  if (quotaError) {
+    return { title: '待测试用户填入真实 Gemini API Key', desc: summarizePipelineError(analysis.analysisError || analysis.downloadError || analysis.crawlerOpsLastError), spinning: false, failed: true };
+  }
   if (analysis.downloadStatus === 'ops_queued') {
     return { title: '后台增强分析中', desc: '已先生成基础分析；真实视频获取失败后已自动进入开发团队爬虫队列，成功后会升级为视频级分析。', spinning: true, failed: false };
   }
-  if (analysis.gemini) {
+  if (analysis.gemini && analysis.analysisQuality === 'video') {
     return { title: 'Gemini 分析完成', desc: '已提取前 10 秒五维拆解、脚本结构和可复用爆点。', spinning: false, failed: false };
   }
   if (analysis.analysisError) {
@@ -599,8 +607,15 @@ function needsVideoEnhancement(video: TrendVideo): boolean {
 
 function enhancementStatus(video: TrendVideo): { title: string; desc: string; active: boolean } {
   const analysis = video.aiAnalysis || {};
+  const quotaError = /429|RESOURCE_EXHAUSTED|quota|prepayment credits|额度|余额/i.test(String(analysis.analysisError || analysis.downloadError || analysis.crawlerOpsLastError || ''));
+  if (quotaError) {
+    return { title: '待测试用户填入真实 Gemini API Key', desc: '当前展示基础资料分析；配置可用 Gemini API Key 后可重新排队升级为视频级分析。', active: false };
+  }
   if (analysis.analysisQuality === 'video' || analysis.analysisSource === 'gemini-temp-video' && analysis.downloadStatus === 'analyzed') {
     return { title: '真实视频分析完成', desc: '已升级为视频级 Gemini 分析。', active: false };
+  }
+  if (analysis.downloadStatus === 'ops_queued' || analysis.videoFetchStatus === 'ops_queued') {
+    return { title: '总控爬虫增强中', desc: '自动获取失败，已进入开发团队总控爬虫队列，回填后会升级。', active: true };
   }
   if (analysis.downloadStatus === 'queued' || analysis.videoFetchStatus === 'queued') {
     return { title: '视频获取队列中', desc: '后台已收到任务，等待获取真实视频。', active: true };
@@ -610,9 +625,6 @@ function enhancementStatus(video: TrendVideo): { title: string; desc: string; ac
   }
   if (analysis.downloadStatus === 'analyzing' || analysis.geminiStatus === 'queued' || analysis.geminiStatus === 'analyzing') {
     return { title: 'Gemini 视频分析中', desc: '真实视频已拿到，正在生成视频级脚本拆解。', active: true };
-  }
-  if (analysis.downloadStatus === 'ops_queued' || analysis.videoFetchStatus === 'ops_queued') {
-    return { title: '总控爬虫增强中', desc: '自动获取失败，已进入开发团队总控爬虫队列，回填后会升级。', active: true };
   }
   return { title: '基础分析可用', desc: '当前结果基于标题、标签、平台、热度和时长推断。', active: false };
 }

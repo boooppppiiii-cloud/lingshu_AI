@@ -34,6 +34,25 @@ const PLUGIN_CATALOG: Omit<Plugin, 'status' | 'config' | 'installedAt'>[] = [
   { id: 'pinterest', pluginKey: 'pinterest', name: 'Pinterest', nameZh: 'Pinterest 商家', category: 'social', description: '发布 Pinterest Idea Pin，追踪曝光、保存与点击数据', icon: '📌' },
 ];
 
+const FALLBACK_RATES = {
+  provider: 'fallback',
+  base: 'USD',
+  date: new Date().toISOString().slice(0, 10),
+  rates: { CNY: 6.8, SAR: 3.75, AED: 3.67, VND: 26200, MYR: 4.1, IDR: 16200 },
+};
+
+async function fetchExchangeRates(): Promise<typeof FALLBACK_RATES & { source: 'live' | 'fallback' }> {
+  try {
+    const r = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
+    if (!r.ok) throw new Error(`exchange rate api ${r.status}`);
+    const data = await r.json() as typeof FALLBACK_RATES;
+    if (!data?.rates?.CNY || !data?.rates?.SAR || !data?.rates?.AED) throw new Error('invalid exchange rate payload');
+    return { ...data, source: 'live' };
+  } catch {
+    return { ...FALLBACK_RATES, date: new Date().toISOString().slice(0, 10), source: 'fallback' };
+  }
+}
+
 function load(): Plugin[] {
   try { return JSON.parse(fs.readFileSync(DATA, 'utf8')); } catch { return []; }
 }
@@ -103,10 +122,14 @@ pluginsRouter.post('/:key/test', async (req: Request, res: Response) => {
         break;
       }
       case 'exchangerate': {
-        const r = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
-        const data = await r.json() as { rates: Record<string, number> };
+        const data = await fetchExchangeRates();
         updateStatus(plugin.id, 'installed');
-        res.json({ ok: true, rates: { CNY: data.rates.CNY, SAR: data.rates.SAR, AED: data.rates.AED } });
+        res.json({
+          ok: true,
+          source: data.source,
+          message: data.source === 'live' ? '实时汇率连接成功' : '实时汇率源暂不可用，已启用 Demo 兜底汇率',
+          rates: { CNY: data.rates.CNY, SAR: data.rates.SAR, AED: data.rates.AED },
+        });
         break;
       }
       case 'translate':
@@ -130,10 +153,5 @@ function updateStatus(id: string, status: Plugin['status']) {
 
 // Exchange rate shortcut
 pluginsRouter.get('/exchangerate/rates', async (_req, res) => {
-  try {
-    const r = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
-    res.json(await r.json());
-  } catch (err: any) {
-    res.status(500).json({ error: err.message });
-  }
+  res.json(await fetchExchangeRates());
 });

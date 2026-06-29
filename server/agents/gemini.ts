@@ -165,7 +165,7 @@ function parseScriptDetails15s(value: unknown): VideoAiAnalysis['scriptDetails15
   return rows.length ? rows.slice(0, 12) : undefined;
 }
 
-function normalizeVideoAnalysis(parsed: Partial<VideoAiAnalysis>): VideoAiAnalysis {
+export function normalizeVideoAnalysis(parsed: Partial<VideoAiAnalysis>): VideoAiAnalysis {
   return {
     theme: String(parsed.theme ?? ''),
     hooks: Array.isArray(parsed.hooks) ? parsed.hooks.map(String) : [],
