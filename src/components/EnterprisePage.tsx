@@ -64,11 +64,12 @@ export default function EnterprisePage() {
   const [demoBusy, setDemoBusy] = useState(false);
 
   useEffect(() => {
-    let loadedProfile: Profile | null = null;
-    fetch('/api/overseas/enterprise/profile')
-      .then(r => r.json())
-      .then((data: Partial<Profile>) => {
-        const next = {
+    Promise.all([
+      fetch('/api/overseas/enterprise/profile').then(r => r.json()).catch(() => ({})),
+      fetch('/api/overseas/enterprise/demo/templates').then(r => r.json()).catch(() => []),
+    ])
+      .then(([data, list]: [Partial<Profile>, DemoTemplate[]]) => {
+        const next: Profile = {
           ...DEFAULT,
           ...data,
           company: { ...DEFAULT.company, ...data.company },
@@ -80,27 +81,13 @@ export default function EnterprisePage() {
           agentLearning: { ...DEFAULT.agentLearning, ...data.agentLearning },
           knowledge: data.knowledge ?? '',
         };
-        loadedProfile = next;
-        setProfile(prev => ({
-          company: { ...prev.company, ...data.company },
-          products: { ...prev.products, ...data.products },
-          brand: { ...prev.brand, ...data.brand },
-          strategy: { ...prev.strategy, ...data.strategy },
-          customers: { ...prev.customers, ...data.customers },
-          operations: { ...prev.operations, ...data.operations },
-          agentLearning: { ...prev.agentLearning, ...data.agentLearning },
-          knowledge: data.knowledge ?? '',
-        }));
+        const safeTemplates = Array.isArray(list) ? list : [];
+        setProfile(next);
+        setTemplates(safeTemplates);
+        setTemplateId(matchTemplateId(next, safeTemplates));
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-    fetch('/api/overseas/enterprise/demo/templates')
-      .then(r => r.json())
-      .then((list: DemoTemplate[]) => {
-        setTemplates(Array.isArray(list) ? list : []);
-        if (Array.isArray(list) && loadedProfile) setTemplateId(matchTemplateId(loadedProfile, list));
-      })
-      .catch(() => {});
   }, []);
 
   const set = <K extends keyof Profile>(section: K) =>
