@@ -1,0 +1,20 @@
+node_modules/
+dist/
+.env.local
+*.bak.*
+*.log
+*.tmp
+.DS_Store
+__MACOSX/
+pocketbase.zip
+
+# Local generated media and render outputs.
+data/logs/
+data/renders/
+data/media/
+data/materials.json
+data/studio-projects.json
+data/bgm/
+data/bgm.json
+data/tts/
+data/covers/

@@ -1,0 +1,160 @@
+import { Router } from 'express';
+import { requireAuth, type AuthLocals } from '../middleware/auth.js';
+import { store } from '../storage/index.js';
+import { attachFile, fetchFile } from '../storage/files.js';
+import { analyzeVideo } from '../agents/gemini.js';
+import type { Platform, VideoStatus } from '../types/index.js';
+
+export const videosRouter = Router();
+videosRouter.use(requireAuth);
+
+const COL = 'trend_videos';
+
+// ─── POST /videos/ingest ──────────────────────────────────────────────────────
+// Body: { platform, title?, tags?, sourceUrl?, videoBase64?, mimeType? }
+videosRouter.post('/ingest', async (req, res) => {
+  const { userId, tenantId } = res.locals as AuthLocals;
+  const { platform, title, tags, sourceUrl, videoBase64, mimeType } = req.body as {
+    platform?: Platform;
+    title?: string;
+    tags?: string[];
+    sourceUrl?: string;
+    videoBase64?: string;
+    mimeType?: string;
+  };
+
+  if (!platform) {
+    res.status(400).json({ error: 'platform is required' });
+    return;
+  }
+
+  // Create the record first; the video blob (if any) attaches to it.
+  const record = await store.create(COL, {
+    tenantId,
+    platform: platform ?? 'tiktok',
+    title: title ?? '',
+    thumbnailUrl: '',
+    videoFileId: '',
+    duration: 0,
+    sourceUrl: sourceUrl ?? '',
+    tags: JSON.stringify(tags ?? []),
+    aiAnalysis: JSON.stringify({}),
+    status: 'pending' as VideoStatus,
+    crawledAt: new Date().toISOString(),
+  });
+
+  if (!record) {
+    res.status(500).json({ error: 'Failed to create video record' });
+    return;
+  }
+
+  // Attach the video to the PB record's file field (PB disk storage, no S3).
+  let filename = '';
+  if (videoBase64) {
+    const buf = Buffer.from(videoBase64.replace(/^data:[^,]+,/, ''), 'base64');
+    const ext = (mimeType ?? 'video/mp4').split('/')[1] ?? 'mp4';
+    filename = (await attachFile(COL, record.id, 'videoFile', {
+      name: `video.${ext}`,
+      buf,
+      contentType: mimeType ?? 'video/mp4',
+    })) ?? '';
+    if (!filename) {
+      await store.update(COL, record.id, { status: 'failed' });
+      res.status(500).json({ error: 'Video upload failed' });
+      return;
+    }
+    await store.update(COL, record.id, { videoFileId: filename });
+  }
+
+  // Trigger analysis async (fire and forget)
+  void triggerVideoAnalysis(record.id, filename || undefined, mimeType, userId);
+
+  res.status(201).json({ id: record.id, status: 'pending' });
+});
+
+// ─── GET /videos ──────────────────────────────────────────────────────────────
+// Query: page, perPage, platform, status
+videosRouter.get('/', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const { page = '1', perPage = '20', platform, status } = req.query as Record<string, string>;
+
+  const where: Record<string, string> = { tenantId };
+  if (platform) where.platform = platform;
+  if (status) where.status = status;
+
+  const result = await store.list(COL, {
+    where,
+    sort: '-crawledAt',
+    page: Number(page),
+    perPage: Math.min(100, Number(perPage)),
+  });
+
+  res.json(result);
+});
+
+// ─── GET /videos/:id ──────────────────────────────────────────────────────────
+videosRouter.get('/:id', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const record = await store.getById(COL, req.params.id);
+
+  if (!record || record.tenantId !== tenantId) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
+
+  res.json(record);
+});
+
+// ─── PATCH /videos/:id/reanalyze ─────────────────────────────────────────────
+videosRouter.patch('/:id/reanalyze', async (req, res) => {
+  const { tenantId, userId } = res.locals as AuthLocals;
+  const record = await store.getById(COL, req.params.id);
+
+  if (!record || record.tenantId !== tenantId) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
+
+  const fileId = record.videoFileId as string | undefined;
+  if (!fileId) {
+    res.status(400).json({ error: 'No video file attached to this record' });
+    return;
+  }
+
+  await store.update(COL, req.params.id, { status: 'pending', aiAnalysis: JSON.stringify({}) });
+  void triggerVideoAnalysis(req.params.id, fileId, undefined, userId);
+
+  res.json({ status: 'pending' });
+});
+
+// ─── Internal: async AI analysis ─────────────────────────────────────────────
+async function triggerVideoAnalysis(
+  recordId: string,
+  filename: string | undefined,
+  mimeType: string | undefined,
+  _userId: string,
+): Promise<void> {
+  if (!filename) {
+    await store.update(COL, recordId, { status: 'failed' });
+    return;
+  }
+
+  try {
+    const dl = await fetchFile(COL, recordId, filename);
+    if (!dl) throw new Error('video file fetch failed');
+
+    const analysis = await analyzeVideo({
+      videoBase64: dl.buf.toString('base64'),
+      mimeType: mimeType ?? dl.contentType,
+    });
+
+    await store.update(COL, recordId, {
+      aiAnalysis: JSON.stringify(analysis),
+      status: 'analyzed',
+    });
+    console.log(`[videos] analyzed ${recordId}`);
+  } catch (e) {
+    console.error(`[videos] analysis failed for ${recordId}:`, e);
+    await store.update(COL, recordId, { status: 'failed' });
+  }
+}

@@ -1,0 +1,552 @@
+import axios from 'axios';
+import FormData from 'form-data';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const TIKTOK_API = 'https://open.tiktokapis.com';
+const META_GRAPH = 'https://graph.facebook.com';
+const META_GRAPH_VIDEO = 'https://graph-video.facebook.com';
+
+export type SocialPlatform = 'tiktok' | 'instagram' | 'facebook';
+
+export interface SocialUploadInput {
+  filePath?: string;
+  videoUrl?: string;
+  title: string;
+  description?: string;
+  privacyStatus?: 'private' | 'unlisted' | 'public';
+}
+
+export interface SocialUploadResult {
+  id: string;
+  title: string;
+  privacyStatus: string;
+  url: string;
+}
+
+export interface TikTokTokens {
+  accessToken: string;
+  refreshToken: string;
+  openId: string;
+  scope?: string;
+  expiresIn?: number;
+  refreshExpiresIn?: number;
+}
+
+export interface TikTokUser {
+  openId: string;
+  displayName: string;
+  avatarUrl?: string;
+  profileUrl?: string;
+  followerCount?: number;
+  videoCount?: number;
+  likeCount?: number;
+}
+
+export interface MetaPage {
+  id: string;
+  name: string;
+  accessToken: string;
+  pictureUrl?: string;
+  fanCount?: number;
+  instagram?: {
+    id: string;
+    username: string;
+    profilePictureUrl?: string;
+    followersCount?: number;
+    mediaCount?: number;
+  };
+}
+
+export interface MetaInstagramAccount {
+  id: string;
+  username: string;
+  profilePictureUrl?: string;
+  followersCount?: number;
+  mediaCount?: number;
+}
+
+function mimeType(filePath: string) {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.mp4') return 'video/mp4';
+  if (ext === '.mov') return 'video/quicktime';
+  if (ext === '.webm') return 'video/webm';
+  return 'video/mp4';
+}
+
+function requireFile(filePath?: string) {
+  if (!filePath) throw new Error('缺少视频文件路径');
+  if (!fs.existsSync(filePath)) throw new Error('成片文件不存在，请先重新合成');
+  const stat = fs.statSync(filePath);
+  if (!stat.isFile()) throw new Error('成片路径不是文件');
+  return stat;
+}
+
+function delay(ms: number) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+export async function exchangeTikTokCode(input: {
+  clientKey: string;
+  clientSecret: string;
+  code: string;
+  redirectUri: string;
+}): Promise<TikTokTokens> {
+  const params = new URLSearchParams({
+    client_key: input.clientKey,
+    client_secret: input.clientSecret,
+    code: input.code,
+    grant_type: 'authorization_code',
+    redirect_uri: input.redirectUri,
+  });
+
+  const res = await axios.post(`${TIKTOK_API}/v2/oauth/token/`, params.toString(), {
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+  });
+  return {
+    accessToken: res.data.access_token,
+    refreshToken: res.data.refresh_token,
+    openId: res.data.open_id,
+    scope: res.data.scope,
+    expiresIn: res.data.expires_in,
+    refreshExpiresIn: res.data.refresh_expires_in,
+  };
+}
+
+export async function getTikTokUser(accessToken: string): Promise<TikTokUser> {
+  const fields = [
+    'open_id',
+    'display_name',
+    'avatar_url',
+    'profile_deep_link',
+    'follower_count',
+    'video_count',
+    'likes_count',
+  ].join(',');
+  const res = await axios.get(`${TIKTOK_API}/v2/user/info/`, {
+    params: { fields },
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  const user = res.data?.data?.user;
+  if (!user?.open_id) throw new Error('TikTok 未返回账号信息');
+  return {
+    openId: user.open_id,
+    displayName: user.display_name || 'TikTok',
+    avatarUrl: user.avatar_url,
+    profileUrl: user.profile_deep_link,
+    followerCount: Number(user.follower_count || 0),
+    videoCount: Number(user.video_count || 0),
+    likeCount: Number(user.likes_count || 0),
+  };
+}
+
+export async function getTikTokVideos(accessToken: string, maxResults = 20) {
+  const fields = [
+    'id',
+    'title',
+    'cover_image_url',
+    'share_url',
+    'video_description',
+    'duration',
+    'create_time',
+    'view_count',
+    'like_count',
+    'comment_count',
+    'share_count',
+  ].join(',');
+  const res = await axios.post(
+    `${TIKTOK_API}/v2/video/list/`,
+    { max_count: Math.min(20, maxResults) },
+    {
+      params: { fields },
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json; charset=UTF-8',
+      },
+    },
+  );
+  return (res.data?.data?.videos ?? []).map((v: any) => ({
+    id: String(v.id),
+    title: String(v.title || v.video_description || 'TikTok video'),
+    description: String(v.video_description || ''),
+    publishedAt: v.create_time ? new Date(Number(v.create_time) * 1000).toISOString() : '',
+    thumbnailUrl: String(v.cover_image_url || ''),
+    viewCount: Number(v.view_count || 0),
+    likeCount: Number(v.like_count || 0),
+    commentCount: Number(v.comment_count || 0),
+    duration: String(v.duration || ''),
+    permalinkUrl: String(v.share_url || ''),
+  }));
+}
+
+export async function uploadTikTokVideo(accessToken: string, input: SocialUploadInput): Promise<SocialUploadResult> {
+  const stat = requireFile(input.filePath);
+  const title = (input.title || input.description || 'Untitled video').slice(0, 150);
+  const init = await axios.post(
+    `${TIKTOK_API}/v2/post/publish/video/init/`,
+    {
+      post_info: {
+        title,
+        privacy_level: input.privacyStatus === 'public' ? 'PUBLIC_TO_EVERYONE' : 'SELF_ONLY',
+        disable_duet: false,
+        disable_comment: false,
+        disable_stitch: false,
+      },
+      source_info: {
+        source: 'FILE_UPLOAD',
+        video_size: stat.size,
+        chunk_size: stat.size,
+        total_chunk_count: 1,
+      },
+    },
+    {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        'Content-Type': 'application/json; charset=UTF-8',
+      },
+    },
+  );
+  const uploadUrl = init.data?.data?.upload_url;
+  const publishId = init.data?.data?.publish_id;
+  if (!uploadUrl || !publishId) throw new Error('TikTok 未返回上传地址');
+
+  await axios.put(uploadUrl, fs.createReadStream(input.filePath!), {
+    headers: {
+      'Content-Type': mimeType(input.filePath!),
+      'Content-Length': String(stat.size),
+      'Content-Range': `bytes 0-${stat.size - 1}/${stat.size}`,
+    },
+    maxBodyLength: Infinity,
+    maxContentLength: Infinity,
+    timeout: 0,
+  });
+
+  return {
+    id: String(publishId),
+    title,
+    privacyStatus: input.privacyStatus === 'public' ? 'public' : 'private',
+    url: '',
+  };
+}
+
+export async function exchangeMetaCode(input: {
+  appId: string;
+  appSecret: string;
+  code: string;
+  redirectUri: string;
+  graphVersion: string;
+}) {
+  const res = await axios.get(`${META_GRAPH}/${input.graphVersion}/oauth/access_token`, {
+    params: {
+      client_id: input.appId,
+      client_secret: input.appSecret,
+      redirect_uri: input.redirectUri,
+      code: input.code,
+    },
+  });
+  return String(res.data.access_token || '');
+}
+
+export async function getMetaPages(accessToken: string, graphVersion: string): Promise<MetaPage[]> {
+  const res = await axios.get(`${META_GRAPH}/${graphVersion}/me/accounts`, {
+    params: {
+      access_token: accessToken,
+      fields: 'id,name,access_token,fan_count,picture{url},instagram_business_account{id,username,profile_picture_url,followers_count,media_count}',
+      limit: 100,
+    },
+  });
+  return (res.data?.data ?? []).map((page: any) => ({
+    id: String(page.id),
+    name: String(page.name || 'Facebook Page'),
+    accessToken: String(page.access_token || ''),
+    pictureUrl: page.picture?.data?.url,
+    fanCount: Number(page.fan_count || 0),
+    instagram: page.instagram_business_account ? {
+      id: String(page.instagram_business_account.id),
+      username: String(page.instagram_business_account.username || 'Instagram'),
+      profilePictureUrl: page.instagram_business_account.profile_picture_url,
+      followersCount: Number(page.instagram_business_account.followers_count || 0),
+      mediaCount: Number(page.instagram_business_account.media_count || 0),
+    } : undefined,
+  }));
+}
+
+function normalizeMetaPage(page: any, accessTokenFallback = ''): MetaPage {
+  return {
+    id: String(page.id),
+    name: String(page.name || 'Facebook Page'),
+    accessToken: String(page.access_token || accessTokenFallback || ''),
+    pictureUrl: page.picture?.data?.url,
+    fanCount: Number(page.fan_count || 0),
+    instagram: page.instagram_business_account ? {
+      id: String(page.instagram_business_account.id),
+      username: String(page.instagram_business_account.username || 'Instagram'),
+      profilePictureUrl: page.instagram_business_account.profile_picture_url,
+      followersCount: Number(page.instagram_business_account.followers_count || 0),
+      mediaCount: Number(page.instagram_business_account.media_count || 0),
+    } : undefined,
+  };
+}
+
+export async function getMetaBusinessPages(accessToken: string, graphVersion: string): Promise<MetaPage[]> {
+  const fields = [
+    'id',
+    'name',
+    'owned_pages.limit(100){id,name,access_token,fan_count,picture{url},instagram_business_account{id,username,profile_picture_url,followers_count,media_count}}',
+    'client_pages.limit(100){id,name,access_token,fan_count,picture{url},instagram_business_account{id,username,profile_picture_url,followers_count,media_count}}',
+  ].join(',');
+  const res = await axios.get(`${META_GRAPH}/${graphVersion}/me/businesses`, {
+    params: {
+      access_token: accessToken,
+      fields,
+      limit: 100,
+    },
+  });
+  const pages: MetaPage[] = [];
+  for (const business of res.data?.data ?? []) {
+    for (const page of business.owned_pages?.data ?? []) pages.push(normalizeMetaPage(page));
+    for (const page of business.client_pages?.data ?? []) pages.push(normalizeMetaPage(page));
+  }
+  const seen = new Set<string>();
+  return pages.filter(page => {
+    if (!page.id || seen.has(page.id)) return false;
+    seen.add(page.id);
+    return true;
+  });
+}
+
+export async function getFacebookPage(pageAccessToken: string, graphVersion: string, pageId?: string): Promise<MetaPage> {
+  const node = pageId?.trim() || 'me';
+  const res = await axios.get(`${META_GRAPH}/${graphVersion}/${node}`, {
+    params: {
+      access_token: pageAccessToken,
+      fields: 'id,name,fan_count,picture{url}',
+    },
+  });
+  const page = res.data;
+  if (!page?.id) throw new Error('Facebook Page token 无法读取主页信息');
+  return {
+    id: String(page.id),
+    name: String(page.name || 'Facebook Page'),
+    accessToken: pageAccessToken,
+    pictureUrl: page.picture?.data?.url,
+    fanCount: Number(page.fan_count || 0),
+  };
+}
+
+export async function getInstagramAccount(igUserId: string, pageAccessToken: string, graphVersion: string): Promise<MetaInstagramAccount> {
+  const res = await axios.get(`${META_GRAPH}/${graphVersion}/${igUserId}`, {
+    params: {
+      access_token: pageAccessToken,
+      fields: 'id,username,profile_picture_url,followers_count,media_count',
+    },
+  });
+  const account = res.data;
+  if (!account?.id) throw new Error('Instagram token 无法读取专业账号信息');
+  return {
+    id: String(account.id),
+    username: String(account.username || 'Instagram'),
+    profilePictureUrl: account.profile_picture_url,
+    followersCount: Number(account.followers_count || 0),
+    mediaCount: Number(account.media_count || 0),
+  };
+}
+
+export async function getInstagramAccountFromPage(pageId: string, pageAccessToken: string, graphVersion: string) {
+  const res = await axios.get(`${META_GRAPH}/${graphVersion}/${pageId}`, {
+    params: {
+      access_token: pageAccessToken,
+      fields: 'id,name,instagram_business_account{id,username,profile_picture_url,followers_count,media_count}',
+    },
+  });
+  const page = res.data;
+  const account = page?.instagram_business_account;
+  if (!account?.id) throw new Error('该 Facebook Page 没有关联 Instagram 专业账号');
+  return {
+    page: {
+      id: String(page.id || pageId),
+      name: String(page.name || 'Facebook Page'),
+    },
+    instagram: {
+      id: String(account.id),
+      username: String(account.username || 'Instagram'),
+      profilePictureUrl: account.profile_picture_url,
+      followersCount: Number(account.followers_count || 0),
+      mediaCount: Number(account.media_count || 0),
+    } satisfies MetaInstagramAccount,
+  };
+}
+
+export async function getFacebookVideos(pageId: string, pageAccessToken: string, graphVersion: string, maxResults = 25) {
+  const res = await axios.get(`${META_GRAPH}/${graphVersion}/${pageId}/videos`, {
+    params: {
+      access_token: pageAccessToken,
+      fields: 'id,title,description,created_time,permalink_url,thumbnails,views,likes.summary(true),comments.summary(true)',
+      limit: Math.min(50, maxResults),
+    },
+  });
+  return (res.data?.data ?? []).map((v: any) => ({
+    id: String(v.id),
+    title: String(v.title || v.description || 'Facebook video'),
+    description: String(v.description || ''),
+    publishedAt: String(v.created_time || ''),
+    thumbnailUrl: String(v.thumbnails?.data?.[0]?.uri || ''),
+    viewCount: Number(v.views || 0),
+    likeCount: Number(v.likes?.summary?.total_count || 0),
+    commentCount: Number(v.comments?.summary?.total_count || 0),
+    duration: '',
+    permalinkUrl: String(v.permalink_url || ''),
+  }));
+}
+
+export async function getFacebookComments(videoId: string, pageAccessToken: string, graphVersion: string, maxResults = 50) {
+  const res = await axios.get(`${META_GRAPH}/${graphVersion}/${videoId}/comments`, {
+    params: {
+      access_token: pageAccessToken,
+      fields: 'id,from,message,like_count,created_time',
+      limit: Math.min(100, maxResults),
+    },
+  });
+  return (res.data?.data ?? []).map((c: any) => ({
+    id: String(c.id),
+    authorName: String(c.from?.name || 'Facebook user'),
+    authorProfileImageUrl: '',
+    textDisplay: String(c.message || ''),
+    likeCount: Number(c.like_count || 0),
+    publishedAt: String(c.created_time || ''),
+    videoId,
+  }));
+}
+
+export async function uploadFacebookVideo(pageId: string, pageAccessToken: string, graphVersion: string, input: SocialUploadInput): Promise<SocialUploadResult> {
+  const stat = requireFile(input.filePath);
+  const title = (input.title || 'Untitled video').slice(0, 255);
+  const form = new FormData();
+  form.append('title', title);
+  form.append('description', input.description || '');
+  form.append('published', input.privacyStatus !== 'private' ? 'true' : 'false');
+  form.append('access_token', pageAccessToken);
+  form.append('source', fs.createReadStream(input.filePath!), {
+    filename: path.basename(input.filePath!),
+    contentType: mimeType(input.filePath!),
+    knownLength: stat.size,
+  });
+
+  const res = await axios.post(
+    `${META_GRAPH_VIDEO}/${graphVersion}/${pageId}/videos`,
+    form,
+    {
+      headers: form.getHeaders(),
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+      timeout: 10 * 60 * 1000,
+    },
+  );
+  const id = String(res.data?.id || '');
+  if (!id) throw new Error('Facebook 未返回视频 ID');
+  return {
+    id,
+    title,
+    privacyStatus: input.privacyStatus === 'private' ? 'private' : 'public',
+    url: `https://www.facebook.com/${pageId}/videos/${id}`,
+  };
+}
+
+export async function getInstagramMedia(igUserId: string, pageAccessToken: string, graphVersion: string, maxResults = 25) {
+  const res = await axios.get(`${META_GRAPH}/${graphVersion}/${igUserId}/media`, {
+    params: {
+      access_token: pageAccessToken,
+      fields: 'id,caption,media_type,media_url,thumbnail_url,permalink,timestamp,comments_count,like_count',
+      limit: Math.min(50, maxResults),
+    },
+  });
+  return (res.data?.data ?? []).map((m: any) => ({
+    id: String(m.id),
+    title: String(m.caption || 'Instagram media').slice(0, 120),
+    description: String(m.caption || ''),
+    publishedAt: String(m.timestamp || ''),
+    thumbnailUrl: String(m.thumbnail_url || m.media_url || ''),
+    viewCount: 0,
+    likeCount: Number(m.like_count || 0),
+    commentCount: Number(m.comments_count || 0),
+    duration: '',
+    permalinkUrl: String(m.permalink || ''),
+  }));
+}
+
+export async function getInstagramComments(mediaId: string, pageAccessToken: string, graphVersion: string, maxResults = 50) {
+  const res = await axios.get(`${META_GRAPH}/${graphVersion}/${mediaId}/comments`, {
+    params: {
+      access_token: pageAccessToken,
+      fields: 'id,text,username,timestamp,like_count',
+      limit: Math.min(100, maxResults),
+    },
+  });
+  return (res.data?.data ?? []).map((c: any) => ({
+    id: String(c.id),
+    authorName: String(c.username || 'Instagram user'),
+    authorProfileImageUrl: '',
+    textDisplay: String(c.text || ''),
+    likeCount: Number(c.like_count || 0),
+    publishedAt: String(c.timestamp || ''),
+    videoId: mediaId,
+  }));
+}
+
+export async function publishInstagramReel(igUserId: string, pageAccessToken: string, graphVersion: string, input: SocialUploadInput): Promise<SocialUploadResult> {
+  if (!input.videoUrl) {
+    throw new Error('Instagram 发布需要公网可访问的视频 URL。请配置 R2_PUBLIC_URL 或传入 videoUrl。');
+  }
+  const caption = input.description || input.title || '';
+  const create = await axios.post(`${META_GRAPH}/${graphVersion}/${igUserId}/media`, null, {
+    params: {
+      access_token: pageAccessToken,
+      media_type: 'REELS',
+      video_url: input.videoUrl,
+      caption,
+    },
+  });
+  const creationId = String(create.data?.id || '');
+  if (!creationId) throw new Error('Instagram 未返回媒体容器 ID');
+
+  await waitForInstagramContainer(creationId, pageAccessToken, graphVersion);
+
+  const publish = await axios.post(`${META_GRAPH}/${graphVersion}/${igUserId}/media_publish`, null, {
+    params: {
+      access_token: pageAccessToken,
+      creation_id: creationId,
+    },
+  });
+  const id = String(publish.data?.id || creationId);
+  return {
+    id,
+    title: input.title,
+    privacyStatus: 'public',
+    url: `https://www.instagram.com/reel/${id}`,
+  };
+}
+
+async function waitForInstagramContainer(creationId: string, pageAccessToken: string, graphVersion: string) {
+  const maxAttempts = Number(process.env.INSTAGRAM_MEDIA_PUBLISH_MAX_ATTEMPTS ?? 30);
+  const intervalMs = Number(process.env.INSTAGRAM_MEDIA_PUBLISH_POLL_MS ?? 3000);
+  let lastStatus = '';
+  let lastError = '';
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const res = await axios.get(`${META_GRAPH}/${graphVersion}/${creationId}`, {
+      params: {
+        access_token: pageAccessToken,
+        fields: 'id,status,status_code',
+      },
+    });
+    lastStatus = String(res.data?.status_code || res.data?.status || '');
+    lastError = String(res.data?.status || '');
+    if (lastStatus === 'FINISHED') return;
+    if (lastStatus === 'ERROR' || lastStatus === 'EXPIRED') {
+      throw new Error(`Instagram 视频处理失败：${lastError || lastStatus}`);
+    }
+    await delay(intervalMs);
+  }
+
+  throw new Error(`Instagram 视频仍在处理中，请稍后重试。最后状态：${lastStatus || '未知'}`);
+}

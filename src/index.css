@@ -1,0 +1,114 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ink: #f8fafc;
+  --color-surface: #ffffff;
+  --color-surface-2: #f1f5f9;
+  --color-border: #e2e8f0;
+  --color-border-bright: #cbd5e1;
+  --color-text-primary: #0f172a;
+  --color-text-secondary: #475569;
+  --color-text-muted: #94a3b8;
+  --color-accent: #16a34a;
+  --color-accent-dim: #15803d;
+  --color-accent-glow: rgba(22, 163, 74, 0.08);
+  --color-amber: #b45309;
+  --color-amber-dim: rgba(180, 83, 9, 0.08);
+  --color-green: #047857;
+  --color-red: #b91c1c;
+
+  --font-display: "Outfit", ui-sans-serif, system-ui, sans-serif;
+  --font-sans: "DM Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "DM Mono", ui-monospace, monospace;
+}
+
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html { -webkit-font-smoothing: antialiased; }
+
+  body {
+    @apply bg-ink text-text-primary min-h-screen font-sans;
+    background-image:
+      radial-gradient(ellipse 80% 50% at 50% -10%, rgba(22, 163, 74, 0.03) 0%, transparent 60%);
+  }
+
+  ::-webkit-scrollbar { width: 5px; height: 5px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--color-border-bright); border-radius: 9999px; }
+}
+
+@layer components {
+  .card {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 1rem;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  .card:hover {
+    border-color: var(--color-border-bright);
+    box-shadow: 0 0 0 1px var(--color-border-bright), 0 8px 24px rgba(0,0,0,0.08);
+  }
+
+  .card-accent {
+    background: var(--color-surface);
+    border: 1px solid var(--color-border);
+    border-radius: 1rem;
+    box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+  }
+
+  .btn-primary {
+    @apply px-5 py-2.5 rounded-xl font-semibold text-sm transition-all active:scale-95 cursor-pointer;
+    background: var(--color-accent);
+    color: #fff;
+    box-shadow: 0 2px 8px rgba(22, 163, 74, 0.2);
+  }
+  .btn-primary:hover {
+    background: var(--color-accent-dim);
+    box-shadow: 0 4px 16px rgba(22, 163, 74, 0.3);
+  }
+
+  .btn-ghost {
+    @apply px-5 py-2.5 rounded-xl font-semibold text-sm transition-all active:scale-95 cursor-pointer;
+    color: var(--color-text-secondary);
+    border: 1px solid var(--color-border);
+    background: transparent;
+  }
+  .btn-ghost:hover {
+    color: var(--color-text-primary);
+    border-color: var(--color-border-bright);
+    background: var(--color-surface-2);
+  }
+
+  .tag {
+    @apply inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium;
+    background: var(--color-surface-2);
+    border: 1px solid var(--color-border);
+    color: var(--color-text-secondary);
+  }
+
+  .nav-item {
+    @apply flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all cursor-pointer;
+    color: var(--color-text-secondary);
+  }
+  .nav-item:hover {
+    color: var(--color-text-primary);
+    background: var(--color-surface-2);
+  }
+  .nav-item.active {
+    color: var(--color-text-primary);
+    background: var(--color-surface-2);
+  }
+
+  .platform-badge {
+    @apply inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-bold;
+  }
+
+  .glow-accent {
+    box-shadow: 0 0 24px rgba(22, 163, 74, 0.15);
+  }
+
+  .divider {
+    border-top: 1px solid var(--color-border);
+  }
+}

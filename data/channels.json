@@ -1,0 +1,14 @@
+[
+  {
+    "id": "ch_1782710180137",
+    "type": "whatsapp",
+    "label": "WhatsApp Business",
+    "enabled": false,
+    "config": {},
+    "status": "disconnected",
+    "stats": {
+      "sent": 0,
+      "received": 0
+    }
+  }
+]

@@ -1,0 +1,41 @@
+[
+  {
+    "id": "tiktok_ads",
+    "pluginKey": "tiktok_ads",
+    "name": "TikTok for Business",
+    "nameZh": "TikTok 广告",
+    "category": "social",
+    "description": "连接 TikTok Ads Manager，AI 分析广告效果并自动生成优化建议",
+    "icon": "🎵",
+    "status": "not_installed",
+    "config": {},
+    "installedAt": "2026-06-23T02:35:03.210Z"
+  },
+  {
+    "id": "shopify",
+    "pluginKey": "shopify",
+    "name": "Shopify",
+    "nameZh": "Shopify 店铺",
+    "category": "ecommerce",
+    "description": "同步 Shopify 订单、商品和客户数据，AI 自动分析店铺经营数据",
+    "icon": "🛍️",
+    "status": "not_installed",
+    "config": {},
+    "installedAt": "2026-06-26T18:04:42.208Z"
+  },
+  {
+    "id": "whatsapp_business",
+    "pluginKey": "whatsapp_business",
+    "name": "WhatsApp Business",
+    "nameZh": "WhatsApp 商业版",
+    "category": "social",
+    "description": "通过 WhatsApp Business API 批量触达买家，支持模板消息和自动回复",
+    "icon": "💬",
+    "status": "not_installed",
+    "config": {
+      "verifyToken": "owb_d36b3f73f4c4d6bc453cd2d1d84a466a130d",
+      "graphVersion": "v25.0"
+    },
+    "installedAt": "2026-06-29T05:22:25.250Z"
+  }
+]
