@@ -4,7 +4,7 @@ import {
   Search, Play, Sparkles, FileText, Layout as LayoutIcon,
   TrendingUp, Clock, Globe, ChevronDown, X, Loader2,
   Check, Copy, ArrowRight, Zap, LayoutGrid, List, ArrowUp,
-  Lightbulb, Tag, Flame, BarChart2, ChevronRight, Film, Download, Plus,
+  Lightbulb, Flame, BarChart2, ChevronRight, Film, Download, Plus,
   SlidersHorizontal, Bookmark,
 } from 'lucide-react';
 import { studioApi } from '../lib/studioApi';
@@ -38,6 +38,35 @@ interface GeminiVideoAnalysis {
   sellingPoints?: string[];
   mood?: string;
   structure?: string;
+  firstTenSeconds?: {
+    atmosphere?: string;
+    audioVisual?: string;
+    camera?: string;
+    visuals?: string;
+    voiceMusic?: string;
+  };
+  coarseStructure?: Array<{
+    time?: string;
+    frame?: string;
+    label?: string;
+    description?: string;
+    desc?: string;
+  }>;
+  scriptSummary15s?: {
+    visualStyle?: string;
+    coreEmotion?: string;
+    competitors?: string[];
+  };
+  scriptDetails15s?: Array<{
+    time?: string;
+    timestamp?: string;
+    shot?: string;
+    camera?: string;
+    visual?: string;
+    subtitle?: string;
+    audio?: string;
+    note?: string;
+  }>;
   recommendedScriptType?: 'voiceover' | 'storyboard';
 }
 
@@ -51,6 +80,8 @@ interface VideoAnalysisPayload {
   materialUrl?: string;
   materialPoster?: string;
   downloadStatus?: string;
+  videoFetchStatus?: string;
+  geminiStatus?: string;
   downloadError?: string;
   analysisSource?: string;
   analysisQuality?: string;
@@ -63,16 +94,17 @@ interface VideoAnalysisPayload {
 }
 
 interface StructureStep { time: string; label: string; desc: string }
+interface FirstTenSecondInsight { dimension: string; detail: string }
+interface ScriptDetail15s { time: string; shot: string; camera: string; visual: string; subtitle: string; audio: string; note?: string }
+interface ScriptSummary15s { visualStyle: string; coreEmotion: string; competitors: string[] }
 interface ScriptAnalysis {
   videoType: string;
-  hookType: string;
-  hookLine: string;
-  hookStrategy: string;
   structure: StructureStep[];
-  whyTrending: string[];
-  productFit: string[];
+  firstTenSeconds: FirstTenSecondInsight[];
+  scriptSummary15s: ScriptSummary15s;
+  scriptDetails15s: ScriptDetail15s[];
+  referenceHighlights: string[];
   adaptTip: string;
-  viralScore: number;
   emotion: string;
   infoSpeed: string;
 }
@@ -116,43 +148,244 @@ function getAnalysis(video: TrendVideo): ScriptAnalysis | null {
   const hooks = Array.isArray(gemini.hooks) ? gemini.hooks.filter(Boolean) : [];
   const sellingPoints = Array.isArray(gemini.sellingPoints) ? gemini.sellingPoints.filter(Boolean) : [];
   const isMetadataFallback = video.aiAnalysis?.analysisSource === 'metadata-fallback' || video.aiAnalysis?.analysisQuality === 'metadata';
+  const structure = buildCoarseStructure(gemini, video);
   return {
     videoType: isMetadataFallback ? '基础资料拆解' : gemini.recommendedScriptType === 'storyboard' ? '分镜评测型' : '口播转化型',
-    hookType: hooks[0] || 'Gemini 识别中',
-    hookLine: hooks[0] || gemini.theme || '暂无可提取钩子',
-    hookStrategy: hooks.length > 1 ? hooks.slice(1).join('；') : (gemini.theme || 'Gemini 未返回更多钩子策略'),
-    structure: splitStructure(gemini.structure),
-    whyTrending: [
+    structure,
+    firstTenSeconds: buildFirstTenSecondInsights(gemini, video, hooks, sellingPoints),
+    scriptSummary15s: buildScriptSummary15s(gemini, video, sellingPoints),
+    scriptDetails15s: buildScriptDetails15s(gemini, video, structure),
+    referenceHighlights: [
       gemini.theme ? `主题：${gemini.theme}` : '',
       gemini.mood ? `情绪：${gemini.mood}` : '',
-      ...sellingPoints.map(point => `卖点：${point}`),
+      ...hooks.slice(0, 2).map(point => `注意力入口：${point}`),
+      ...sellingPoints.slice(0, 4).map(point => `可复用爆点：${point}`),
     ].filter(Boolean),
-    productFit: sellingPoints.length ? sellingPoints.slice(0, 5) : video.tags.slice(0, 5),
-    adaptTip: gemini.structure ? `复用该视频的结构：${gemini.structure}` : 'Gemini 尚未返回可复用结构',
-    viralScore: scoreFromVideo(video),
+    adaptTip: structure.length
+      ? `生成脚本时优先复用「${structure.slice(0, 3).map(step => step.desc).join(' → ')}」的节奏，并把产品卖点放进同一信息密度。`
+      : 'Gemini 尚未返回可复用结构',
     emotion: gemini.mood || (isMetadataFallback ? '基础分析' : '真实分析'),
     infoSpeed: video.duration > 90 ? '中密度' : '高密度',
   };
 }
 
-function splitStructure(structure?: string): StructureStep[] {
-  const raw = (structure || '').trim();
-  if (!raw) return [{ time: '待分析', label: 'Gemini', desc: '视频下载并分析完成后显示真实结构' }];
-  const parts = raw.split(/\s*(?:→|->|,|，|;|；)\s*/).filter(Boolean);
-  return (parts.length ? parts : [raw]).slice(0, 6).map((desc, index) => ({
-    time: index === 0 ? '开头' : `阶段 ${index + 1}`,
-    label: index === 0 ? '钩子' : '结构',
-    desc,
+function buildScriptSummary15s(gemini: GeminiVideoAnalysis, video: TrendVideo, sellingPoints: string[]): ScriptSummary15s {
+  const summary = gemini.scriptSummary15s || {};
+  const competitors = Array.isArray(summary.competitors)
+    ? summary.competitors.map(String).filter(Boolean)
+    : sellingPoints.filter(point => /brand|品牌|竞品|vs|对比/i.test(point)).slice(0, 3);
+  return {
+    visualStyle: summary.visualStyle || (video.platform === 'youtube' ? '真人写实评测风格' : '真人社媒写实风格'),
+    coreEmotion: summary.coreEmotion || gemini.mood || '好奇、信任、种草',
+    competitors,
+  };
+}
+
+function buildScriptDetails15s(gemini: GeminiVideoAnalysis, video: TrendVideo, structure: StructureStep[]): ScriptDetail15s[] {
+  const details = Array.isArray(gemini.scriptDetails15s) ? gemini.scriptDetails15s : [];
+  const normalized = details.map((item, index) => {
+    const visual = String(item.visual || '').trim();
+    const subtitle = String(item.subtitle || '').trim();
+    if (!visual && !subtitle) return null;
+    return {
+      time: String(item.time || item.timestamp || `${Math.max(0.2, index * 1.5).toFixed(1)}s`),
+      shot: String(item.shot || '中近景'),
+      camera: String(item.camera || '固定镜头'),
+      visual: visual || `画面承接「${video.title}」的核心信息。`,
+      subtitle: subtitle || '字幕待 Gemini 从真实视频中补全',
+      audio: String(item.audio || 'BGM/配音待 Gemini 从真实视频中补全'),
+      note: item.note ? String(item.note) : undefined,
+    };
+  }).filter(Boolean) as ScriptDetail15s[];
+  if (normalized.length) return normalized.slice(0, 12);
+
+  const source = structure.length ? structure : splitStructure(video.title, Math.min(video.duration, 15));
+  return source.slice(0, 5).map((step, index) => ({
+    time: index === 0 ? '0.2s' : `${(index * 3).toFixed(1)}s-${Math.min(index * 3 + 3, 15).toFixed(1)}s`,
+    shot: index === 0 ? '特写' : '中近景',
+    camera: index === 0 ? '固定镜头' : '轻微推近',
+    visual: `基础资料推断：画面围绕「${step.desc}」展开，真实视频分析完成后会回填人物、产品、动作和场景细节。`,
+    subtitle: `字幕/口播围绕「${video.title}」强化当前信息点。`,
+    audio: video.platform === 'youtube' ? '配音解释为主，背景音乐轻量铺底。' : '社媒节奏 BGM，配合字幕快速推进。',
   }));
 }
 
-function scoreFromVideo(video: TrendVideo): number {
-  const raw = video.views.toLowerCase();
-  const n = Number(raw.replace(/[^\d.]/g, ''));
-  if (!Number.isFinite(n)) return video.status === 'analyzed' ? 70 : 0;
-  if (raw.includes('m') || raw.includes('百万')) return Math.min(99, Math.round(82 + n));
-  if (raw.includes('k') || raw.includes('千')) return Math.min(88, Math.round(55 + n / 40));
-  return Math.min(80, Math.round(50 + n / 100000));
+function buildCoarseStructure(gemini: GeminiVideoAnalysis, video: TrendVideo): StructureStep[] {
+  const frames = Array.isArray(gemini.coarseStructure) ? gemini.coarseStructure : [];
+  const normalized = frames.map((frame, index) => {
+    const desc = String(frame.description || frame.desc || frame.frame || '').trim();
+    if (!desc) return null;
+    return {
+      time: String(frame.time || `${index * 3}-${(index + 1) * 3}s`),
+      label: String(frame.label || (index === 0 ? '开场画面' : `粗略帧 ${index + 1}`)),
+      desc,
+    };
+  }).filter(Boolean) as StructureStep[];
+  if (normalized.length) return normalized.slice(0, 10);
+  return splitStructure(gemini.structure, video.duration);
+}
+
+function splitStructure(structure?: string, duration = 30): StructureStep[] {
+  const raw = (structure || '').trim();
+  if (!raw) return [{ time: '待分析', label: 'Gemini', desc: '视频下载并分析完成后显示真实结构' }];
+  const parts = raw.split(/\s*(?:→|->|,|，|;|；)\s*/).filter(Boolean);
+  const frameCount = Math.min(10, Math.max(3, Math.ceil(Math.min(duration || 30, 30) / 3)));
+  const source = parts.length ? parts : [raw];
+  return Array.from({ length: Math.min(frameCount, Math.max(source.length, 3)) }, (_, index) => {
+    const desc = source[index] || source[source.length - 1] || raw;
+    return {
+      time: `${index * 3}-${(index + 1) * 3}s`,
+      label: index === 0 ? '开场画面' : `粗略帧 ${index + 1}`,
+      desc,
+    };
+  });
+}
+
+function buildFirstTenSecondInsights(
+  gemini: GeminiVideoAnalysis,
+  video: TrendVideo,
+  hooks: string[],
+  sellingPoints: string[],
+): FirstTenSecondInsight[] {
+  const firstTen = gemini.firstTenSeconds || {};
+  const fallbackTheme = gemini.theme || video.title;
+  const fallbackMood = gemini.mood || '待 Gemini 识别';
+  const firstHook = hooks[0] || fallbackTheme;
+  const primaryPoint = sellingPoints[0] || video.tags[0] || fallbackTheme;
+  const values: FirstTenSecondInsight[] = [
+    {
+      dimension: '氛围',
+      detail: firstTen.atmosphere || `前 10 秒围绕「${fallbackTheme}」建立观看期待，整体情绪倾向为「${fallbackMood}」。`,
+    },
+    {
+      dimension: '音画',
+      detail: firstTen.audioVisual || `标题/字幕/画面信息需要快速同屏解释「${firstHook}」，让用户不用等待也能理解看点。`,
+    },
+    {
+      dimension: '运镜',
+      detail: firstTen.camera || '建议关注开场是否使用近景、快速切换或手持展示来制造即时感；视频级分析完成后会回填真实运镜细节。',
+    },
+    {
+      dimension: '画面',
+      detail: firstTen.visuals || `画面应优先呈现主产品、使用结果或强对比场景，核心视觉承接「${primaryPoint}」。`,
+    },
+    {
+      dimension: '配音配乐',
+      detail: firstTen.voiceMusic || `配音/配乐需要匹配「${fallbackMood}」的节奏，前 10 秒内用短句或节拍推动信息密度。`,
+    },
+  ];
+  return values.map(item => ({ ...item, detail: item.detail.trim() })).filter(item => item.detail);
+}
+
+function summarizeProductInfo(input: string): string {
+  const text = input.trim();
+  if (!text) return '未选择主推品，请先从企业中心产品中选择或补充产品信息。';
+  return text.length > 500 ? `${text.slice(0, 500)}...` : text;
+}
+
+function getPrimaryProductLabel(productInfo: string): string {
+  const match = productInfo.match(/主推品[:：]\s*([^\n]+)/);
+  if (match?.[1]) return match[1].trim();
+  return productInfo.trim().split('\n')[0]?.replace(/^[-*\s]+/, '').trim() || '当前主推品';
+}
+
+function makeVoiceoverDraft(video: TrendVideo, analysis: ScriptAnalysis, productInfo: string, languageLabel?: string): string {
+  const productLabel = getPrimaryProductLabel(productInfo);
+  const fiveDim = analysis.firstTenSeconds.map(item => `${item.dimension}：${item.detail}`).join('\n');
+  const structure = analysis.structure.map(step => `${step.time} ${step.label}：${step.desc}`).join('\n');
+  const highlights = analysis.referenceHighlights.slice(0, 5).join('；') || video.title;
+  return `**口播脚本｜${productLabel}｜${languageLabel || '中文'}**
+
+**对标视频爆点**
+${highlights}
+
+**前 10 秒复用方向**
+${fiveDim}
+
+**口播正文**
+0-3s：直接抛出用户最关心的结果，把「${productLabel}」和对标视频的高注意力入口绑定。
+3-6s：用一个真实使用场景解释产品为什么值得看，避免空泛形容。
+6-10s：放大核心差异点，用画面或数据证明它解决了什么问题。
+10-20s：展开 2-3 个关键卖点，顺序参考对标视频结构。
+20-30s：补充适用人群、使用方式或购买理由，给出明确行动引导。
+
+**结构参考**
+${structure}
+
+**产品信息**
+${summarizeProductInfo(productInfo)}`;
+}
+
+function makeStoryboardDraft(video: TrendVideo, analysis: ScriptAnalysis, productInfo: string, languageLabel?: string): string {
+  const productLabel = getPrimaryProductLabel(productInfo);
+  const productSummary = summarizeProductInfo(productInfo);
+  const frames = analysis.structure.map((step, index) =>
+    `**分镜 ${index + 1}｜${step.time}**
+画面：围绕「${productLabel}」复刻对标视频的「${step.desc}」信息点
+运镜：保持粗略 3 秒一帧，优先近景/手部/结果对比，避免过密切镜
+口播/字幕：用一句话说清这个画面带来的用户收益
+参考爆点：${analysis.firstTenSeconds[index % analysis.firstTenSeconds.length]?.dimension || '节奏'} - ${analysis.firstTenSeconds[index % analysis.firstTenSeconds.length]?.detail || video.title}`
+  ).join('\n\n');
+  return `**分镜脚本｜${productLabel}｜${languageLabel || '中文'}**
+
+**主推品信息**
+${productSummary}
+
+**对标视频核心复用**
+${analysis.referenceHighlights.slice(0, 5).join('；') || video.title}
+
+${frames}`;
+}
+
+function splitProfileList(value?: string): string[] {
+  return String(value || '')
+    .split(/[\n,，;；、/]+/)
+    .map(item => item.trim())
+    .filter(Boolean);
+}
+
+interface EnterpriseProfileForScript {
+  company?: { name?: string; industry?: string; mainMarkets?: string; description?: string };
+  products?: { categories?: string; priceRange?: string; moq?: string; certifications?: string; highlights?: string };
+  brand?: { tone?: string; style?: string; usp?: string; preferredLanguages?: string };
+  strategy?: { focusProducts?: string; focusMarkets?: string; currentGoal?: string; pricingStrategy?: string };
+  knowledge?: string;
+}
+
+interface ProductOption { id: string; label: string; info: string }
+
+function buildProductOptions(profile: EnterpriseProfileForScript): ProductOption[] {
+  const focusProducts = splitProfileList(profile.strategy?.focusProducts);
+  const categories = splitProfileList(profile.products?.categories);
+  const names = Array.from(new Set([...focusProducts, ...categories]));
+  const baseLines = [
+    profile.products?.categories ? `产品类目：${profile.products.categories}` : '',
+    profile.products?.priceRange ? `价格区间：${profile.products.priceRange}` : '',
+    profile.products?.moq ? `起订量：${profile.products.moq}` : '',
+    profile.products?.certifications ? `认证资质：${profile.products.certifications}` : '',
+    profile.products?.highlights ? `核心优势：${profile.products.highlights}` : '',
+    profile.brand?.usp ? `品牌 USP：${profile.brand.usp}` : '',
+    profile.brand?.tone ? `品牌语气：${profile.brand.tone}` : '',
+    profile.strategy?.focusMarkets || profile.company?.mainMarkets ? `目标市场：${profile.strategy?.focusMarkets || profile.company?.mainMarkets}` : '',
+    profile.strategy?.currentGoal ? `当前目标：${profile.strategy.currentGoal}` : '',
+    profile.company?.description ? `公司背景：${profile.company.description}` : '',
+  ].filter(Boolean);
+
+  const options = names.map((name, index) => ({
+    id: `product-${index}`,
+    label: name,
+    info: [`主推品：${name}`, ...baseLines].join('\n'),
+  }));
+
+  if (baseLines.length) {
+    options.unshift({
+      id: 'enterprise-products',
+      label: '企业产品组合',
+      info: ['主推品：企业产品组合', ...baseLines].join('\n'),
+    });
+  }
+
+  return options;
 }
 
 function summarizePipelineError(raw?: string): string {
@@ -176,7 +409,7 @@ function pipelineState(video: TrendVideo): { title: string; desc: string; spinni
     return { title: '后台增强分析中', desc: '已先生成基础分析；真实视频获取失败后已自动进入开发团队爬虫队列，成功后会升级为视频级分析。', spinning: true, failed: false };
   }
   if (analysis.gemini) {
-    return { title: 'Gemini 分析完成', desc: '已提取脚本结构、钩子和卖点。', spinning: false, failed: false };
+    return { title: 'Gemini 分析完成', desc: '已提取前 10 秒五维拆解、脚本结构和可复用爆点。', spinning: false, failed: false };
   }
   if (analysis.analysisError) {
     return { title: 'Gemini 分析失败', desc: summarizePipelineError(analysis.analysisError), spinning: false, failed: true };
@@ -194,12 +427,40 @@ function pipelineState(video: TrendVideo): { title: string; desc: string; spinni
     return { title: '正在获取真实视频', desc: '正在拉取低清分析版视频，完成后会立即提交 Gemini。', spinning: true, failed: false };
   }
   if (analysis.downloadStatus === 'analyzing') {
-    return { title: 'Gemini 正在分析视频', desc: '真实视频已拿到，正在提取钩子、结构和卖点；分析完成后临时文件会被清理。', spinning: true, failed: false };
+    return { title: 'Gemini 正在分析视频', desc: '真实视频已拿到，正在生成前 10 秒五维拆解和粗略脚本结构；分析完成后临时文件会被清理。', spinning: true, failed: false };
   }
   if (analysis.downloadStatus === 'downloaded' || video.videoUrl) {
-    return { title: 'Gemini 正在分析视频', desc: '真实视频已下载，正在提取钩子、结构和卖点。通常 30 秒到 3 分钟。', spinning: true, failed: false };
+    return { title: 'Gemini 正在分析视频', desc: '真实视频已下载，正在提取前 10 秒五维拆解和脚本结构。通常 30 秒到 3 分钟。', spinning: true, failed: false };
   }
   return { title: '等待真实视频分析', desc: '只有拿到真实视频内容后才能做 Gemini 分析；后台会临时获取视频，不存入素材库。', spinning: true, failed: false };
+}
+
+function needsVideoEnhancement(video: TrendVideo): boolean {
+  const analysis = video.aiAnalysis;
+  if (!analysis?.gemini) return true;
+  return analysis.analysisSource === 'metadata-fallback' ||
+    analysis.analysisQuality === 'metadata' ||
+    analysis.downloadStatus === 'ops_queued';
+}
+
+function enhancementStatus(video: TrendVideo): { title: string; desc: string; active: boolean } {
+  const analysis = video.aiAnalysis || {};
+  if (analysis.analysisQuality === 'video' || analysis.analysisSource === 'gemini-temp-video' && analysis.downloadStatus === 'analyzed') {
+    return { title: '真实视频分析完成', desc: '已升级为视频级 Gemini 分析。', active: false };
+  }
+  if (analysis.downloadStatus === 'queued' || analysis.videoFetchStatus === 'queued') {
+    return { title: '视频获取队列中', desc: '后台已收到任务，等待获取真实视频。', active: true };
+  }
+  if (analysis.downloadStatus === 'downloading' || analysis.videoFetchStatus === 'downloading') {
+    return { title: '正在获取真实视频', desc: '正在拉取 360p 内分析版视频，成功后自动进入 Gemini 队列。', active: true };
+  }
+  if (analysis.downloadStatus === 'analyzing' || analysis.geminiStatus === 'queued' || analysis.geminiStatus === 'analyzing') {
+    return { title: 'Gemini 视频分析中', desc: '真实视频已拿到，正在生成视频级脚本拆解。', active: true };
+  }
+  if (analysis.downloadStatus === 'ops_queued' || analysis.videoFetchStatus === 'ops_queued') {
+    return { title: '总控爬虫增强中', desc: '自动获取失败，已进入开发团队总控爬虫队列，回填后会升级。', active: true };
+  }
+  return { title: '基础分析可用', desc: '当前结果基于标题、标签、平台、热度和时长推断。', active: false };
 }
 
 // ── Fallback thumbnail ────────────────────────────────────────────────────────
@@ -220,6 +481,7 @@ function VideoThumbnail({ platform, title }: { platform: Exclude<Platform, 'all'
 function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo; onGenerateScript: () => void; onRetry?: () => void }) {
   const [loaded, setLoaded] = useState(false);
   const [analysis, setAnalysis] = useState<ScriptAnalysis | null>(null);
+  const analysisKey = JSON.stringify(video.aiAnalysis || {});
 
   useEffect(() => {
     setLoaded(false);
@@ -227,9 +489,9 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
     const t = setTimeout(() => {
       setAnalysis(getAnalysis(video));
       setLoaded(true);
-    }, 1600);
+    }, video.aiAnalysis?.gemini ? 250 : 900);
     return () => clearTimeout(t);
-  }, [video.id]);
+  }, [video.id, analysisKey]);
 
   if (!loaded) {
     return (
@@ -240,7 +502,7 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
         </div>
         <div className="text-center space-y-1">
           <p className="text-sm font-semibold text-text-primary">AI 正在分析脚本结构…</p>
-          <p className="text-xs text-text-muted">识别钩子类型 · 拆解节奏 · 提取爆款因子</p>
+          <p className="text-xs text-text-muted">前 10 秒五维拆解 · 粗略 3 秒结构 · 提取复用爆点</p>
         </div>
         <div className="w-48 h-1.5 rounded-full bg-surface-2 overflow-hidden">
           <motion.div className="h-full rounded-full bg-accent"
@@ -289,54 +551,26 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
         {(video.aiAnalysis?.analysisQuality === 'metadata' || video.aiAnalysis?.analysisSource === 'metadata-fallback') && (
           <div className="rounded-xl border border-amber/30 bg-amber/10 px-3 py-2">
             <div className="flex items-start gap-2">
-              <Sparkles size={12} className="text-amber mt-0.5 flex-shrink-0" />
+              {enhancementStatus(video).active
+                ? <Loader2 size={12} className="text-amber mt-0.5 flex-shrink-0 animate-spin" />
+                : <Sparkles size={12} className="text-amber mt-0.5 flex-shrink-0" />}
               <div>
                 <p className="text-[11px] font-semibold text-text-primary">
-                  基础分析可用{video.aiAnalysis?.downloadStatus === 'ops_queued' ? '，后台正在增强真实视频分析' : ''}
+                  {enhancementStatus(video).title}
                 </p>
                 <p className="text-[10px] text-text-muted leading-relaxed mt-0.5">
-                  当前结果基于标题、标签、平台、热度和时长推断；开发团队爬虫拿到真实视频后会自动升级为视频级 Gemini 分析。
+                  {enhancementStatus(video).desc}
                 </p>
               </div>
             </div>
           </div>
         )}
 
-        {/* 爆款评分 */}
-        <div className="flex items-center gap-3 p-3 rounded-xl border border-border bg-surface-2">
-          <div className="w-12 h-12 rounded-xl flex items-center justify-center flex-shrink-0"
-            style={{ background: 'rgba(22,163,74,0.1)' }}>
-            <span className="text-lg font-black text-accent">{analysis.viralScore}</span>
-          </div>
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="text-xs font-semibold text-text-primary">爆款指数</span>
-              <span className="text-[10px] px-1.5 py-0.5 rounded font-medium text-white"
-                style={{ background: 'rgba(22,163,74,0.8)' }}>{analysis.videoType}</span>
-            </div>
-            <div className="flex items-center gap-3 text-[10px] text-text-muted">
-              <span className="flex items-center gap-1"><Flame size={9} className="text-amber" />{analysis.emotion}</span>
-              <span className="flex items-center gap-1"><BarChart2 size={9} className="text-accent" />信息速度 {analysis.infoSpeed}</span>
-              <span className="flex items-center gap-1"><TrendingUp size={9} />{video.views} 播放</span>
-            </div>
-          </div>
-        </div>
-
-        {/* 钩子分析 */}
-        <div>
-          <div className="flex items-center gap-1.5 mb-2">
-            <Zap size={11} className="text-amber" />
-            <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wider">开头钩子</p>
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-surface-2 border border-border text-text-muted">{analysis.hookType}</span>
-          </div>
-          <div className="rounded-xl border border-border overflow-hidden">
-            <div className="px-3 py-2.5 bg-surface-2 border-b border-border">
-              <p className="text-xs text-text-primary font-mono leading-relaxed italic">"{analysis.hookLine}"</p>
-            </div>
-            <div className="px-3 py-2">
-              <p className="text-[11px] text-text-secondary leading-relaxed">{analysis.hookStrategy}</p>
-            </div>
-          </div>
+        <div className="flex flex-wrap items-center gap-2 text-[10px] text-text-muted">
+          <span className="px-2 py-1 rounded-md border border-border bg-surface-2 text-text-secondary font-semibold">{analysis.videoType}</span>
+          <span className="flex items-center gap-1"><BarChart2 size={9} className="text-accent" />信息速度 {analysis.infoSpeed}</span>
+          <span className="flex items-center gap-1"><TrendingUp size={9} />{video.views} 播放</span>
+          <span>{analysis.emotion}</span>
         </div>
 
         {/* 脚本结构 */}
@@ -371,29 +605,14 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
         <div>
           <div className="flex items-center gap-1.5 mb-2">
             <Lightbulb size={11} className="text-accent" />
-            <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wider">爆款核心原因</p>
+            <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wider">爆款核心原因 · 前 10 秒五维拆解</p>
           </div>
           <div className="space-y-1.5">
-            {analysis.whyTrending.map((reason, i) => (
+            {analysis.firstTenSeconds.map((item, i) => (
               <div key={i} className="flex items-start gap-2 px-3 py-2 rounded-lg bg-surface-2 border border-border">
-                <span className="text-accent font-bold text-[11px] flex-shrink-0 mt-px">0{i + 1}</span>
-                <p className="text-[11px] text-text-secondary leading-snug">{reason}</p>
+                <span className="text-accent font-bold text-[11px] flex-shrink-0 mt-px">{item.dimension}</span>
+                <p className="text-[11px] text-text-secondary leading-snug">{item.detail}</p>
               </div>
-            ))}
-          </div>
-        </div>
-
-        {/* 产品适配 */}
-        <div>
-          <div className="flex items-center gap-1.5 mb-2">
-            <Tag size={11} style={{ color: '#c13584' }} />
-            <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wider">产品带货适配</p>
-          </div>
-          <div className="flex flex-wrap gap-1.5">
-            {analysis.productFit.map(p => (
-              <span key={p} className="px-2 py-0.5 rounded-md text-[11px] font-medium bg-surface-2 border border-border text-text-secondary">
-                {p}
-              </span>
             ))}
           </div>
         </div>
@@ -431,12 +650,38 @@ interface ScriptPanelProps {
 function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterWorkflow }: ScriptPanelProps) {
   const [activeTab, setActiveTab] = useState<'analysis' | 'generate'>('analysis');
   const [scriptType, setScriptType] = useState<ScriptType>('voiceover');
-  const [language, setLanguage] = useState('en');
+  const [language, setLanguage] = useState('zh');
   const [productInfo, setProductInfo] = useState('');
+  const [productOptions, setProductOptions] = useState<ProductOption[]>([]);
+  const [selectedProductId, setSelectedProductId] = useState('');
   const [generating, setGenerating] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [showLangDropdown, setShowLangDropdown] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch('/api/overseas/enterprise/profile', { headers: authHeader() })
+      .then(r => r.ok ? r.json() : null)
+      .then((profile: EnterpriseProfileForScript | null) => {
+        if (cancelled || !profile) return;
+        const options = buildProductOptions(profile);
+        setProductOptions(options);
+        if (options[0]) {
+          setSelectedProductId(current => current || options[0]!.id);
+          setProductInfo(current => current.trim() ? current : options[0]!.info);
+        }
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
+  const handleSelectProduct = (id: string) => {
+    setSelectedProductId(id);
+    const option = productOptions.find(item => item.id === id);
+    if (option) setProductInfo(option.info);
+  };
+
   const handleGenerate = async () => {
     setGenerating(true);
     setResult(null);
@@ -447,11 +692,10 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
       setGenerating(false);
       return;
     }
+    const languageLabel = LANGUAGES.find(l => l.code === language)?.label;
     setResult(scriptType === 'voiceover'
-      ? `**[Hook — ${realAnalysis.hookType}]**\n"${realAnalysis.hookLine}"\n\n**[结构复用]**\n${realAnalysis.structure.map(step => `${step.time} ${step.label}：${step.desc}`).join('\n')}\n\n**[产品植入]**\n${productInfo || '你的产品'} 需要承接该视频的核心卖点：${realAnalysis.productFit.join(' / ') || '请补充产品卖点'}。\n\n**[情绪与节奏]**\n情绪：${realAnalysis.emotion}；信息速度：${realAnalysis.infoSpeed}。\n\n**[CTA]**\n围绕真实分析中最强的钩子继续引导点击、收藏或询盘。`
-      : realAnalysis.structure.map((step, index) =>
-        `**Scene ${index + 1}** (${step.time})\n景别: 按原视频节奏复刻\n画面: ${step.desc}\n口播: 围绕「${productInfo || realAnalysis.productFit[0] || video.title}」表达该阶段信息`
-      ).join('\n\n')
+      ? makeVoiceoverDraft(video, realAnalysis, productInfo, languageLabel)
+      : makeStoryboardDraft(video, realAnalysis, productInfo, languageLabel)
     );
     setGenerating(false);
   };
@@ -461,7 +705,7 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
   };
 
   const enterWorkflow = () => {
-    if (!result || !video.videoUrl) return;
+    if (!result) return;
     onEnterWorkflow?.({ script: result, video, scriptType, language, productInfo });
   };
 
@@ -569,7 +813,7 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
                   </div>
                   <div>
                     <p className="text-xs font-medium text-text-primary">基于 "{video.title}" 的脚本结构</p>
-                    <p className="text-xs text-text-muted mt-0.5">输入你的产品信息，生成专属脚本</p>
+                    <p className="text-xs text-text-muted mt-0.5">选择企业中心主推品，生成口播或分镜脚本</p>
                   </div>
                 </div>
               )}
@@ -604,7 +848,7 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
                       </button>
                     </div>
 
-                    {video.videoUrl && getAnalysis(video) && (
+                    {getAnalysis(video) && (
                       <div className="mt-3">
                         <button onClick={enterWorkflow}
                           className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold text-white transition-all active:scale-95"
@@ -621,9 +865,19 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
             {/* Input */}
             <div className="p-4 border-t border-border flex-shrink-0">
               <div className="rounded-2xl border border-border bg-surface-2 overflow-hidden transition-colors focus-within:border-border-bright">
+                {productOptions.length > 0 && (
+                  <div className="px-3 pt-3 pb-2 border-b border-border/70">
+                    <select value={selectedProductId} onChange={e => handleSelectProduct(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg border border-border bg-surface text-xs font-semibold text-text-primary outline-none focus:border-accent">
+                      {productOptions.map(option => (
+                        <option key={option.id} value={option.id}>{option.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 <textarea value={productInfo} onChange={e => setProductInfo(e.target.value)}
-                  placeholder="描述你的产品：名称、核心功能、目标人群、价格区间..."
-                  rows={3}
+                  placeholder="主推品信息：名称、核心功能、目标人群、价格区间..."
+                  rows={4}
                   className="w-full px-4 pt-3 pb-1 bg-transparent text-sm text-text-primary placeholder:text-text-muted resize-none outline-none" />
                 <div className="flex items-center justify-between px-3 pb-3 pt-1">
                   <p className="text-[11px] text-text-muted">{scriptType === 'voiceover' ? '口播脚本' : '分镜脚本'} · {selectedLang?.label}</p>
@@ -679,7 +933,7 @@ function VideoCard({ video, index, isSelected, onSelect, onWatch, onAnalyzeVideo
           <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-white text-neutral-900">
             <Play size={11} fill="currentColor" />{video.videoUrl ? '观看' : '原站'}
           </span>
-          <button onClick={e => { e.stopPropagation(); if (!video.aiAnalysis?.gemini) onAnalyzeVideo?.(); onSelect(); }}
+          <button onClick={e => { e.stopPropagation(); if (needsVideoEnhancement(video)) onAnalyzeVideo?.(); onSelect(); }}
             disabled={analyzingVideo}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold"
             style={{ background: meta.bg, color: meta.color }}>
@@ -760,7 +1014,7 @@ function VideoListItem({ video, isSelected, onSelect, onWatch, onAnalyzeVideo, o
         <p className="text-xs font-mono text-text-secondary">{Math.floor(video.duration / 60)}:{String(video.duration % 60).padStart(2, '0')}</p>
         <p className="text-[10px] text-text-muted">{video.views}</p>
       </div>
-      <button onClick={e => { e.stopPropagation(); if (!video.aiAnalysis?.gemini) onAnalyzeVideo?.(); onSelect(); }}
+      <button onClick={e => { e.stopPropagation(); if (needsVideoEnhancement(video)) onAnalyzeVideo?.(); onSelect(); }}
         disabled={analyzingVideo}
         className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all opacity-0 group-hover:opacity-100"
         style={{ color: 'var(--color-accent)', borderColor: 'rgba(22,163,74,0.25)', background: 'var(--color-accent-glow)' }}>
@@ -919,7 +1173,7 @@ function WatchModal({ video, onClose }: { video: TrendVideo; onClose: () => void
   );
 }
 
-function AutoCrawlerPanel({ onImported }: { onImported: (videos: TrendVideo[], autoAnalyze: boolean) => void }) {
+function AutoCrawlerPanel({ onImported }: { onImported: (videos: TrendVideo[], autoAnalyze: boolean, keyword: string) => void }) {
   const [expanded, setExpanded] = useState(false);
   const [crawlPlatform, setCrawlPlatform] = useState<CrawlPlatform>('youtube');
   const [keyword, setKeyword] = useState('amazon gadgets product review');
@@ -960,7 +1214,7 @@ function AutoCrawlerPanel({ onImported }: { onImported: (videos: TrendVideo[], a
       if (!r.ok) throw new Error(data.message || data.error || '自动采集失败');
 
       const importedVideos = recordsToVideos(data.items || []);
-      onImported(importedVideos, autoAnalyze);
+      onImported(importedVideos, autoAnalyze, keyword.trim());
       setLastImported(importedVideos.length);
       setMessage(data.message || `采集完成：返回 ${importedVideos.length} 条，新增 ${data.imported || 0} 条，刷新 ${data.refreshed || 0} 条`);
     } catch (e) {
@@ -1085,6 +1339,8 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   const [analyzingVideoIds, setAnalyzingVideoIds] = useState<string[]>([]);
   const [favoritingMaterialIds, setFavoritingMaterialIds] = useState<string[]>([]);
   const [materialMessage, setMaterialMessage] = useState('');
+  const platformLabel = PLATFORM_FILTERS.find(f => f.id === platform)?.label ?? '全部平台';
+  const sortLabel = sortMode === 'crawlTime' ? '按爬取时间' : '按热度';
 
   useEffect(() => {
     if (selectedVideo) { onScriptPanelOpen?.(); }
@@ -1120,6 +1376,12 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
     return () => window.clearInterval(timer);
   }, [crawledVideos]);
 
+  useEffect(() => {
+    if (!selectedVideo) return;
+    const latest = crawledVideos.find(v => v.id === selectedVideo.id);
+    if (latest && latest !== selectedVideo) setSelectedVideo(latest);
+  }, [crawledVideos, selectedVideo]);
+
   const allVideos = crawledVideos;
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -1140,7 +1402,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
     return t > 0 && Date.now() - t <= 3 * 24 * 60 * 60 * 1000;
   }).length;
 
-  const handleImported = (videos: TrendVideo[], autoAnalyze: boolean) => {
+  const handleImported = (videos: TrendVideo[], autoAnalyze: boolean, activeKeyword = '') => {
     void refreshVideos();
     if (videos.length === 0) return;
     setCrawledVideos(prev => {
@@ -1150,10 +1412,11 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
     });
     setPlatform(videos[0]?.platform ?? 'youtube');
     setSortMode('crawlTime');
+    if (activeKeyword && !/^https?:\/\//i.test(activeKeyword)) setSearch(activeKeyword);
     if (autoAnalyze) {
       const downloadable = videos.filter(v => v.sourceUrl);
       if (downloadable.length > 0) {
-        setMaterialMessage(`已批量加入 Gemini 分析队列：${downloadable.length} 条`);
+        setMaterialMessage(`已进入视频获取队列和 Gemini 分析队列：${downloadable.length} 条`);
         setTimeout(() => setMaterialMessage(''), 3500);
         void Promise.allSettled(downloadable.map(video => analyzeVideoOnly(video, true)));
       }
@@ -1194,7 +1457,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
       };
       if (!r.ok) throw new Error(data.error || '视频分析失败');
       if (r.status === 202) {
-        setMaterialMessage(`已加入 Gemini 分析队列：${video.title}`);
+        setMaterialMessage(`已加入视频获取队列，获取成功后自动进入 Gemini 分析：${video.title}`);
         setTimeout(() => setMaterialMessage(''), 3500);
         void refreshVideos();
         return;
@@ -1289,7 +1552,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
 
   return (
     <div className="relative">
-      <div className={`transition-all duration-300 ${selectedVideo ? 'mr-[420px]' : ''}`}>
+      <div className="transition-all duration-300">
         <div className="px-6 pt-5 pb-4">
           <div className="flex items-start justify-between mb-4">
             <div>
@@ -1301,40 +1564,37 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
               <span>{materialMessage || `今日已推送 ${allVideos.length} 条`}</span>
             </div>
           </div>
-          <div className="flex items-center gap-2.5 flex-wrap">
-            <div className="relative min-w-48 max-w-64">
+          <div className="grid grid-cols-1 xl:grid-cols-[minmax(260px,1fr)_160px_170px_auto] gap-2.5 items-center">
+            <div className="relative min-w-0">
               <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
               <input type="text" value={search} onChange={e => setSearch(e.target.value)}
                 placeholder="搜索视频标题或标签..."
                 className="w-full pl-9 pr-4 py-2 rounded-xl border border-border bg-surface text-sm text-text-primary placeholder:text-text-muted outline-none focus:border-accent transition-colors" />
             </div>
-            <div className="flex items-center gap-1.5 flex-wrap flex-1">
-              {PLATFORM_FILTERS.map(f => (
-                <button key={f.id} onClick={() => setPlatform(f.id)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
-                    platform === f.id
-                      ? 'bg-accent text-white shadow-[0_2px_8px_rgba(22,163,74,0.25)]'
-                      : 'bg-surface border border-border text-text-secondary hover:border-border-bright hover:text-text-primary'
-                  }`}>
-                  {f.label}
-                </button>
-              ))}
+            <div className="relative">
+              <Globe size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+              <select value={platform} onChange={e => setPlatform(e.target.value as Platform)}
+                aria-label="平台筛选"
+                className="w-full appearance-none rounded-xl border border-border bg-surface py-2 pl-9 pr-9 text-sm font-semibold text-text-primary outline-none transition-colors hover:border-border-bright focus:border-accent">
+                {PLATFORM_FILTERS.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
+              </select>
+              <ChevronDown size={13} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+              <span className="sr-only">{platformLabel}</span>
             </div>
-            <div className="flex items-center gap-0.5 p-1 rounded-lg bg-surface-2 border border-border flex-shrink-0">
-              {[
-                { mode: 'heat' as SortMode, icon: <Flame size={12} />, label: '按热度' },
-                { mode: 'crawlTime' as SortMode, icon: <Clock size={12} />, label: '按爬取时间' },
-              ].map(item => (
-                <button key={item.mode} onClick={() => setSortMode(item.mode)}
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold transition-colors ${
-                    sortMode === item.mode ? 'bg-surface text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'
-                  }`}>
-                  {item.icon}
-                  <span>{item.label}</span>
-                </button>
-              ))}
+            <div className="relative">
+              {sortMode === 'heat'
+                ? <Flame size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+                : <Clock size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />}
+              <select value={sortMode} onChange={e => setSortMode(e.target.value as SortMode)}
+                aria-label="排序方式"
+                className="w-full appearance-none rounded-xl border border-border bg-surface py-2 pl-9 pr-9 text-sm font-semibold text-text-primary outline-none transition-colors hover:border-border-bright focus:border-accent">
+                <option value="crawlTime">按爬取时间</option>
+                <option value="heat">按热度</option>
+              </select>
+              <ChevronDown size={13} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+              <span className="sr-only">{sortLabel}</span>
             </div>
-            <div className="flex items-center gap-0.5 p-1 rounded-lg bg-surface-2 border border-border flex-shrink-0">
+            <div className="flex items-center gap-0.5 p-1 rounded-lg bg-surface-2 border border-border justify-self-start xl:justify-self-end">
               <button onClick={() => setViewMode('grid')} className={`p-1.5 rounded-md transition-colors ${viewMode === 'grid' ? 'bg-surface text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'}`}>
                 <LayoutGrid size={13} />
               </button>

@@ -10,7 +10,7 @@ import ffmpegStatic from 'ffmpeg-static';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 import { store } from '../storage/index.js';
 import { attachFile, fetchFile } from '../storage/files.js';
-import { analyzeVideo } from '../agents/gemini.js';
+import { analyzeVideo, analyzeYouTubeUrl } from '../agents/gemini.js';
 import type { Platform, VideoAiAnalysis, VideoStatus } from '../types/index.js';
 
 export const videosRouter = Router();
@@ -37,6 +37,7 @@ interface CrawledVideo {
   views: string;
   tags: string[];
   uploadedAt?: string;
+  dateEvidence?: string;
 }
 
 interface Material {
@@ -177,6 +178,7 @@ videosRouter.post('/crawl', async (req, res) => {
             source: crawlerSource,
             views: item.views,
             uploadedAt: item.uploadedAt,
+            dateEvidence: item.dateEvidence,
             gemini: existingAnalysis.gemini || fallback,
             analysisSource: existingAnalysis.gemini ? existingAnalysis.analysisSource || 'gemini-video' : 'metadata-fallback',
             analysisQuality: existingAnalysis.gemini ? existingAnalysis.analysisQuality || 'video-or-existing' : 'metadata',
@@ -206,6 +208,7 @@ videosRouter.post('/crawl', async (req, res) => {
           source: crawlerSource,
           views: item.views,
           uploadedAt: item.uploadedAt,
+          dateEvidence: item.dateEvidence,
           gemini: metadataFallbackAnalysis(item),
           analysisSource: 'metadata-fallback',
           analysisQuality: 'metadata',
@@ -244,6 +247,8 @@ videosRouter.post('/crawl', async (req, res) => {
       });
       return;
     }
+
+    await enqueueCrawledRecordsForAnalysis(resultRecords);
 
     const message = crawlerMessage
       || (resultRecords.length < target
@@ -408,6 +413,10 @@ videosRouter.get('/', async (req, res) => {
     perPage: Math.min(100, Number(perPage)),
   });
 
+  void enqueueCrawledRecordsForAnalysis(result.items).catch((e) => {
+    console.warn('[videos] opportunistic analysis enqueue failed:', e instanceof Error ? e.message : e);
+  });
+
   res.json(result);
 });
 
@@ -536,6 +545,10 @@ async function handleAnalyzeSource(
     };
 
     if (input.async && record?.id) {
+      if (!shouldQueueVideoAnalysis(record)) {
+        res.status(202).json({ ok: true, status: 'already_queued', id: record.id });
+        return;
+      }
       await queueAnalyzeSource(record, job);
       res.status(202).json({ ok: true, status: 'queued', id: record.id });
       return;
@@ -561,6 +574,8 @@ async function queueAnalyzeSource(
     aiAnalysis: JSON.stringify({
       ...analysis,
       downloadStatus: 'queued',
+      videoFetchStatus: 'queued',
+      geminiStatus: 'waiting_for_video',
       analysisSource: 'gemini-temp-video',
       analysisError: undefined,
       downloadError: undefined,
@@ -575,6 +590,29 @@ async function queueAnalyzeSource(
   }).catch((e) => {
     console.warn('[videos] async analyze-source failed:', e instanceof Error ? e.message : e);
   });
+}
+
+async function enqueueCrawledRecordsForAnalysis(records: unknown[]): Promise<void> {
+  for (const raw of records) {
+    const record = raw as Record<string, unknown>;
+    const id = String(record.id || '');
+    if (!id) continue;
+    const latest = await store.getById(COL, id);
+    if (!latest || !shouldQueueVideoAnalysis(latest)) continue;
+    await queueAnalyzeSource(latest);
+  }
+}
+
+function shouldQueueVideoAnalysis(record: Record<string, unknown>): boolean {
+  const sourceUrl = String(record.sourceUrl || '').trim();
+  if (!/^https?:\/\//i.test(sourceUrl)) return false;
+  const analysis = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
+  const status = String(analysis.downloadStatus || '');
+  if (['queued', 'downloading', 'analyzing'].includes(status)) return false;
+  if (analysis.analysisQuality === 'video' && status === 'analyzed') return false;
+  const queuedAt = Date.parse(String(analysis.analysisQueuedAt || analysis.videoAnalysisAttemptedAt || ''));
+  if (Number.isFinite(queuedAt) && Date.now() - queuedAt < 5 * 60 * 1000) return false;
+  return true;
 }
 
 async function handleDownloadMaterial(
@@ -722,12 +760,24 @@ async function analyzeSourceVideoJobInner(input: {
   const recordId = input.record?.id ? String(input.record.id) : '';
   let tempPath = '';
   try {
+    if (input.platform === 'youtube') {
+      const direct = await tryAnalyzeYouTubeUrl(input);
+      if (direct) return direct;
+    }
+
     if (recordId) {
       const latest = await store.getById(COL, recordId);
       const analysis = parseJsonRecord(latest?.aiAnalysis ?? input.record?.aiAnalysis, {});
       await store.update(COL, recordId, {
         status: 'pending' as VideoStatus,
-        aiAnalysis: JSON.stringify({ ...analysis, downloadStatus: 'downloading', analysisSource: 'gemini-temp-video', downloadStartedAt: new Date().toISOString() }),
+        aiAnalysis: JSON.stringify({
+          ...analysis,
+          downloadStatus: 'downloading',
+          videoFetchStatus: 'downloading',
+          geminiStatus: 'waiting_for_video',
+          analysisSource: 'gemini-temp-video',
+          downloadStartedAt: new Date().toISOString(),
+        }),
       });
     }
 
@@ -741,9 +791,26 @@ async function analyzeSourceVideoJobInner(input: {
         aiAnalysis: JSON.stringify({
           ...analysis,
           downloadStatus: 'analyzing',
+          videoFetchStatus: 'fetched',
+          geminiStatus: 'queued',
           analysisSource: 'gemini-temp-video',
           analysisFileSize: humanSize(downloaded.size),
           downloadedAt: new Date().toISOString(),
+        }),
+      });
+    }
+
+    if (recordId) {
+      const latest = await store.getById(COL, recordId);
+      const analysis = parseJsonRecord(latest?.aiAnalysis ?? input.record?.aiAnalysis, {});
+      await store.update(COL, recordId, {
+        status: 'pending' as VideoStatus,
+        aiAnalysis: JSON.stringify({
+          ...analysis,
+          downloadStatus: 'analyzing',
+          videoFetchStatus: 'fetched',
+          geminiStatus: 'analyzing',
+          geminiStartedAt: new Date().toISOString(),
         }),
       });
     }
@@ -763,7 +830,10 @@ async function analyzeSourceVideoJobInner(input: {
           ...previous,
           gemini: geminiAnalysis,
           analysisSource: 'gemini-temp-video',
+          analysisQuality: 'video',
           downloadStatus: 'analyzed',
+          videoFetchStatus: 'fetched',
+          geminiStatus: 'analyzed',
           analyzedAt: new Date().toISOString(),
           tempVideoDeleted: true,
         }),
@@ -802,6 +872,8 @@ async function analyzeSourceVideoJobInner(input: {
           analysisQuality: previous.gemini ? previous.analysisQuality || 'metadata' : 'metadata',
           videoAnalysisAttemptedAt: new Date().toISOString(),
           downloadStatus: 'ops_queued',
+          videoFetchStatus: 'ops_queued',
+          geminiStatus: 'waiting_for_video',
           crawlerOpsTaskId: opsTask.id,
           crawlerOpsStatus: opsTask.status,
           crawlerOpsReason: soft?.status || 'download_failed',
@@ -815,6 +887,66 @@ async function analyzeSourceVideoJobInner(input: {
     throw e;
   } finally {
     if (tempPath) cleanupTempVideo(tempPath);
+  }
+}
+
+async function tryAnalyzeYouTubeUrl(input: {
+  record: Record<string, unknown> | null;
+  sourceUrl: string;
+  title: string;
+  platform: Platform;
+}): Promise<unknown | null> {
+  const recordId = input.record?.id ? String(input.record.id) : '';
+  try {
+    if (recordId) {
+      const latest = await store.getById(COL, recordId);
+      const analysis = parseJsonRecord(latest?.aiAnalysis ?? input.record?.aiAnalysis, {});
+      await store.update(COL, recordId, {
+        status: 'pending' as VideoStatus,
+        aiAnalysis: JSON.stringify({
+          ...analysis,
+          downloadStatus: 'analyzing',
+          videoFetchStatus: 'direct_url',
+          geminiStatus: 'analyzing',
+          analysisSource: 'gemini-youtube-url',
+          geminiStartedAt: new Date().toISOString(),
+        }),
+      });
+    }
+    const geminiAnalysis = await analyzeYouTubeUrl({ url: input.sourceUrl });
+    if (recordId) {
+      const latest = await store.getById(COL, recordId);
+      const previous = parseJsonRecord<Record<string, unknown>>(latest?.aiAnalysis ?? input.record?.aiAnalysis, {});
+      await store.update(COL, recordId, {
+        status: 'analyzed' as VideoStatus,
+        aiAnalysis: JSON.stringify({
+          ...previous,
+          gemini: geminiAnalysis,
+          analysisSource: 'gemini-youtube-url',
+          analysisQuality: 'video',
+          downloadStatus: 'analyzed',
+          videoFetchStatus: 'direct_url',
+          geminiStatus: 'analyzed',
+          analyzedAt: new Date().toISOString(),
+        }),
+      });
+    }
+    return geminiAnalysis;
+  } catch (e) {
+    if (recordId) {
+      const latest = await store.getById(COL, recordId);
+      const previous = parseJsonRecord<Record<string, unknown>>(latest?.aiAnalysis ?? input.record?.aiAnalysis, {});
+      await store.update(COL, recordId, {
+        status: 'pending' as VideoStatus,
+        aiAnalysis: JSON.stringify({
+          ...previous,
+          youtubeDirectError: e instanceof Error ? e.message : 'YouTube direct Gemini analysis failed',
+          videoFetchStatus: 'queued',
+          geminiStatus: 'waiting_for_video',
+        }),
+      });
+    }
+    return null;
   }
 }
 
@@ -937,16 +1069,22 @@ async function downloadVideoForAnalysis(input: {
   fs.mkdirSync(ANALYSIS_DIR, { recursive: true });
   const id = randomUUID();
   const outTpl = path.join(ANALYSIS_DIR, `${id}.%(ext)s`);
+  const clipSeconds = Math.max(30, Number(process.env.VIDEO_ANALYSIS_CLIP_SECONDS || 180));
   const downloadArgs = [
     '--no-playlist',
     '--merge-output-format', 'mp4',
     '--max-filesize', process.env.VIDEO_ANALYSIS_MAX_FILESIZE || '80m',
-    '-f', 'bv*[height<=360][ext=mp4]+ba[ext=m4a]/b[height<=360][ext=mp4]/bv*[height<=360]+ba/best[height<=360]/best',
+    '--download-sections', `*0-${clipSeconds}`,
+    '-f', 'bv*[height<=360]+ba/b[height<=360]/best[height<=360]/best',
     '-o', outTpl,
   ];
 
   try {
-    await execFileAsync('python3', buildYtDlpArgs(downloadArgs, input.sourceUrl, false), { maxBuffer: 4 * 1024 * 1024, timeout: 150_000, env: crawlerExecEnv() });
+    if (input.platform === 'youtube' && cookieBrowsers().length > 0) {
+      await execYtDlpWithCookieFallback(downloadArgs, input.sourceUrl, 150_000, 4 * 1024 * 1024);
+    } else {
+      await execFileAsync('python3', buildYtDlpArgs(downloadArgs, input.sourceUrl, false), { maxBuffer: 4 * 1024 * 1024, timeout: 150_000, env: crawlerExecEnv() });
+    }
   } catch {
     await execYtDlpWithCookieFallback(downloadArgs, input.sourceUrl, 150_000, 4 * 1024 * 1024);
   }
@@ -973,25 +1111,39 @@ function metadataFallbackAnalysis(input: Pick<CrawledVideo, 'platform' | 'title'
   const title = cleanupAnalysisTitle(input.title);
   const platform = PLATFORM_LABEL[input.platform] || input.platform;
   const topic = tags.length > 0 ? tags.slice(0, 3).join(' / ') : title;
-  const durationHint = input.duration && input.duration > 90 ? 'long-form demo/review' : 'short-form social video';
+  const durationHint = input.duration && input.duration > 90 ? '长视频评测/教程' : '短视频种草';
   return {
-    theme: `${platform} ${durationHint}: ${title}`,
+    theme: `${platform} ${durationHint}：${title}`,
     hooks: [
-      `Use the title promise as the opening hook: ${title}`,
-      input.views ? `Lead with social proof from visible heat: ${input.views}` : 'Open with a clear product/problem contrast',
-      tags.length ? `Anchor the first 3 seconds around ${tags[0]}` : 'Show the product/result before explaining details',
+      `用标题承诺切入：${title}`,
+      input.views ? `用热度做社会证明：${input.views}` : '先展示结果或冲突，再解释产品',
+      tags.length ? `前三秒围绕「${tags[0]}」放大场景痛点` : '前三秒突出产品效果或前后反差',
     ],
     sellingPoints: tags.length
-      ? tags.map(tag => `Likely product/content angle: ${tag}`)
-      : ['Product demonstration', 'Problem-solution framing', 'Audience curiosity', 'Clear benefit reveal'],
-    mood: input.platform === 'tiktok' || input.platform === 'instagram' ? 'fast, social, visual' : 'informative, review-oriented',
-    structure: `title/cover hook → product or scene setup → key demo points (${topic}) → proof/detail → CTA`,
+      ? tags.map(tag => `可围绕「${tag}」展开卖点或场景`)
+      : ['产品演示', '痛点解决', '结果证明', '行动引导'],
+    mood: input.platform === 'tiktok' || input.platform === 'instagram' ? '快节奏 / 社媒感 / 视觉种草' : '信息型 / 评测型 / 解释清晰',
+    structure: `标题/封面钩子 → 场景痛点 → 核心展示（${topic}） → 证明细节 → CTA`,
+    firstTenSeconds: {
+      atmosphere: `基础资料推断：前 10 秒大概率用「${title}」建立观看预期，并借助 ${platform} 平台语境形成信任或好奇。`,
+      audioVisual: `基础资料推断：字幕/标题应快速解释「${topic}」，画面需要同步出现产品、结果或痛点。`,
+      camera: '基础资料推断：真实运镜待视频级 Gemini 回填；建议先按近景展示、快速切换、结果对比三类镜头理解。',
+      visuals: tags.length ? `基础资料推断：画面核心应围绕「${tags.slice(0, 3).join(' / ')}」展开。` : '基础资料推断：画面核心应优先呈现产品、使用场景和前后反差。',
+      voiceMusic: `基础资料推断：配音/配乐应匹配「${input.platform === 'tiktok' || input.platform === 'instagram' ? '快节奏种草' : '评测解释'}」节奏。`,
+    },
+    coarseStructure: [
+      { time: '0-3s', label: '标题承诺', description: `用标题或封面信息承接：${title}` },
+      { time: '3-6s', label: '场景痛点', description: tags[0] ? `放大「${tags[0]}」相关使用场景或问题` : '展示用户痛点或结果反差' },
+      { time: '6-9s', label: '核心展示', description: `进入核心展示：${topic}` },
+      { time: '9-12s', label: '证明细节', description: input.views ? `用热度/评论/使用结果强化可信度：${input.views}` : '补充使用细节或效果证明' },
+      { time: '12-15s', label: '行动引导', description: '给出购买、收藏、询盘或继续观看理由' },
+    ],
     recommendedScriptType: input.duration && input.duration > 60 ? 'storyboard' : 'voiceover',
   };
 }
 
 function cleanupAnalysisTitle(title: string): string {
-  return title.replace(/\s+/g, ' ').trim().slice(0, 140) || 'Untitled social video';
+  return title.replace(/\s+/g, ' ').trim().slice(0, 140) || '未命名社媒视频';
 }
 
 function cleanupTempVideo(filePath: string): void {
@@ -1005,6 +1157,10 @@ function cleanupTempVideo(filePath: string): void {
 }
 
 async function crawlYouTubeSearch(keyword: string, limit: number, dateFrom = '', dateTo = ''): Promise<CrawledVideo[]> {
+  if (hasDateRange(dateFrom, dateTo)) {
+    const filtered = await crawlYouTubeUploadDateFilteredSearch(keyword, limit, dateFrom, dateTo);
+    if (filtered.length > 0) return filtered;
+  }
   try {
     return await crawlYtDlpSearch('youtube', `ytsearch${limit}:${keyword}`, keyword, limit, dateFrom, dateTo);
   } catch (e) {
@@ -1054,6 +1210,43 @@ async function crawlYouTubeSearch(keyword: string, limit: number, dateFrom = '',
 
   if (out.length === 0) throw new Error('No YouTube videos parsed from search results');
   return out;
+}
+
+async function crawlYouTubeUploadDateFilteredSearch(keyword: string, limit: number, dateFrom = '', dateTo = ''): Promise<CrawledVideo[]> {
+  const sp = youtubeUploadDateFilterParam(dateFrom, dateTo);
+  if (!sp) return [];
+  const searchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(keyword)}&sp=${sp}`;
+  try {
+    const items = await crawlYtDlpSearch('youtube', searchUrl, keyword, limit, '', '');
+    return items
+      .map(item => ({
+        ...item,
+        thumbnailUrl: item.thumbnailUrl || youtubeThumbnailFromUrl(item.sourceUrl),
+        dateEvidence: 'youtube-upload-filter',
+      }))
+      .filter(item => hasRealThumbnail(item));
+  } catch (e) {
+    console.warn('[videos] youtube upload-date filtered search failed:', e);
+    return [];
+  }
+}
+
+function youtubeUploadDateFilterParam(dateFrom = '', dateTo = ''): string {
+  const from = compactDate(dateFrom);
+  const to = compactDate(dateTo);
+  if (!from && !to) return '';
+  const end = to ? dateFromCompact(to) : new Date();
+  const start = from ? dateFromCompact(from) : new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const days = Math.max(1, Math.ceil((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000)) + 1);
+  if (days <= 1) return 'EgIIAg%253D%253D'; // today
+  if (days <= 7) return 'EgIIAw%253D%253D'; // this week
+  if (days <= 31) return 'EgIIBA%253D%253D'; // this month
+  if (days <= 366) return 'EgIIBQ%253D%253D'; // this year
+  return '';
+}
+
+function dateFromCompact(input: string): Date {
+  return new Date(`${input.slice(0, 4)}-${input.slice(4, 6)}-${input.slice(6, 8)}T00:00:00.000Z`);
 }
 
 async function crawlYtDlpSearch(platform: Platform, searchUrl: string, keyword: string, limit: number, dateFrom = '', dateTo = ''): Promise<CrawledVideo[]> {
@@ -1253,6 +1446,10 @@ function verifiedKeywordSeedItems(platform: Platform, keyword: string): CrawledV
 
   if (platform === 'facebook') {
     return [
+      keywordSeedItem('facebook', 'CeraVe CLEANSE LIKE A DERM skincare cleanser', 'https://www.facebook.com/ceraveusa/videos/cleanse-like-a-derm/1708418906948849/', tags, '1.8K', '2026-06-23T00:00:00.000Z'),
+      keywordSeedItem('facebook', 'CeraVe CLEANSE LIKE A DERM skincare routine', 'https://www.facebook.com/ceraveusa/videos/cleanse-like-a-derm/36491528767158943/', tags, '2.3K', '2026-06-22T00:00:00.000Z'),
+      keywordSeedItem('facebook', 'CeraVe CLEANSE LIKE A DERM dermatologist skincare', 'https://www.facebook.com/ceraveusa/videos/cleanse-like-a-derm/1578311336968419/', tags, '9.1K', '2026-06-22T00:00:00.000Z'),
+      keywordSeedItem('facebook', 'WishCare Amazon Beautyverse 2026 skincare booth', 'https://www.facebook.com/mywishcare/videos/what-a-weekend-at-amazon-beautyverse-2026from-conversations-at-our-booth-to-seei/1555685299236375/', tags, '97K', '2026-06-24T00:00:00.000Z'),
       keywordSeedItem('facebook', 'Expert Developed Care for your Skin Type - BABOR skincare routine', 'https://www.facebook.com/reel/543985773883885/', tags, '1.2K'),
       keywordSeedItem('facebook', 'BABOR Expert Developed Care for your Skin Type', 'https://www.facebook.com/baborUS/videos/455285893967718/', tags, '4.5K'),
       keywordSeedItem('facebook', 'DOCTOR BABOR retinol power serum skincare texture routine', 'https://www.facebook.com/baborUS/videos/refine-renew-and-even-your-skin-texture-with-doctor-babor-retinol-power-serum-am/1146000789435558/', tags, 'Facebook'),
@@ -1443,13 +1640,28 @@ function metaToCrawledVideo(platform: Platform, keyword: string): (meta: Record<
       platform,
       title,
       sourceUrl: webpageUrl,
-      thumbnailUrl: extractBestThumbnail(meta.thumbnails) || String(meta.thumbnail || ''),
+      thumbnailUrl: extractBestThumbnail(meta.thumbnails) || String(meta.thumbnail || '') || (platform === 'youtube' ? youtubeThumbnailFromUrl(webpageUrl) : ''),
       duration,
       views,
       tags,
       uploadedAt: uploadedAtFromMeta(meta),
     };
   };
+}
+
+function youtubeThumbnailFromUrl(url: string): string {
+  const id = youtubeVideoId(url);
+  return id ? `https://i.ytimg.com/vi/${id}/hq720.jpg` : '';
+}
+
+function youtubeVideoId(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.hostname.includes('youtu.be')) return parsed.pathname.replace(/^\//, '');
+    return parsed.searchParams.get('v') || parsed.pathname.match(/\/(?:shorts|embed)\/([^/?#]+)/)?.[1] || '';
+  } catch {
+    return url.match(/(?:v=|youtu\.be\/|\/shorts\/)([A-Za-z0-9_-]{6,})/)?.[1] || '';
+  }
 }
 
 function metadataTitle(platform: Platform, meta: Record<string, unknown>): string {
@@ -1782,7 +1994,7 @@ function uploadedAtFromMeta(meta: Record<string, unknown>): string | undefined {
 
 function filterDateRangeItems(items: CrawledVideo[], dateFrom = '', dateTo = ''): CrawledVideo[] {
   if (!hasDateRange(dateFrom, dateTo)) return items;
-  return items.filter(item => isWithinDateRange(item.uploadedAt, dateFrom, dateTo));
+  return items.filter(item => item.dateEvidence === 'youtube-upload-filter' || isWithinDateRange(item.uploadedAt, dateFrom, dateTo));
 }
 
 function isWithinDateRange(uploadedAt: string | undefined, dateFrom = '', dateTo = ''): boolean {
@@ -1830,8 +2042,8 @@ function filterKeywordRelevantItems(items: CrawledVideo[], keyword: string): Cra
 function isKeywordRelevant(item: CrawledVideo, keyword: string): boolean {
   const terms = keywordSearchTerms(keyword);
   if (terms.length === 0) return true;
-  const haystack = normalizeSearchText(`${item.title} ${item.sourceUrl} ${item.tags.join(' ')}`);
-  return terms.some(term => haystack.includes(term));
+  const haystack = normalizeSearchText(`${item.title} ${item.tags.join(' ')}`);
+  return terms.some(term => hasSearchTerm(haystack, term));
 }
 
 function keywordSearchTerms(keyword: string): string[] {
@@ -1839,6 +2051,15 @@ function keywordSearchTerms(keyword: string): string[] {
   if (!normalized || /^https?:\/\//i.test(keyword.trim())) return [];
   const words = normalized.split(/\s+/).filter(Boolean);
   const terms = new Set(words);
+
+  const specificAliasGroups: string[][] = [
+    ['mask', 'face mask', 'facial mask', 'sheet mask', 'clay mask', 'masque', '面膜'],
+  ];
+  for (const group of specificAliasGroups) {
+    if (group.some(alias => hasSearchTerm(normalized, normalizeSearchText(alias)))) {
+      group.forEach(alias => terms.add(normalizeSearchText(alias)));
+    }
+  }
 
   const aliasGroups: string[][] = [
     ['skincare', 'skin care', 'skin', 'sunscreen', 'serum', 'moisturizer', 'cleanser', 'toner', 'pore', 'acne', 'anti aging', 'beauty', 'routine', '护肤', '保养', '防晒', '精华', '面霜', '洁面', '爽肤', '毛孔', '痘', '美白', '抗老', '皮肤'],
@@ -1857,7 +2078,7 @@ function keywordSearchTerms(keyword: string): string[] {
 function keywordCategory(keyword: string): 'skincare' | 'makeup' | 'haircare' | 'general' {
   const normalized = normalizeSearchText(keyword);
   const hasAny = (terms: string[]) => terms.some(term => normalized.includes(normalizeSearchText(term)));
-  if (hasAny(['skincare', 'skin care', 'skin', 'sunscreen', 'serum', 'moisturizer', 'cleanser', 'toner', 'pore', 'acne', 'retinol', 'glycolic', 'niacinamide', 'cerave', 'the ordinary', 'derm', '护肤', '保养', '防晒', '精华', '面霜', '洁面', '爽肤', '毛孔', '抗老', '皮肤'])) return 'skincare';
+  if (hasAny(['skincare', 'skin care', 'skin', 'sunscreen', 'serum', 'moisturizer', 'cleanser', 'toner', 'pore', 'acne', 'retinol', 'glycolic', 'niacinamide', 'cerave', 'the ordinary', 'derm', 'mask', 'face mask', 'facial mask', 'sheet mask', 'clay mask', 'masque', '护肤', '保养', '防晒', '精华', '面霜', '洁面', '爽肤', '毛孔', '抗老', '皮肤', '面膜'])) return 'skincare';
   if (hasAny(['makeup', 'cosmetic', 'cosmetics', 'lipstick', 'foundation', 'mascara', 'blush', 'concealer', 'eyeliner', '美妆', '彩妆', '化妆', '口红', '粉底', '睫毛', '腮红', '遮瑕'])) return 'makeup';
   if (hasAny(['haircare', 'hair care', 'hair', 'shampoo', 'conditioner', 'scalp', 'hairstyle', '护发', '洗发', '头发', '发型', '头皮'])) return 'haircare';
   return 'general';
@@ -1871,6 +2092,13 @@ function normalizeSearchText(input: string): string {
     .replace(/[^\p{L}\p{N}]+/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+function hasSearchTerm(haystack: string, term: string): boolean {
+  if (!term) return false;
+  if (/[\u4e00-\u9fff]/.test(term)) return haystack.includes(term);
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+  return new RegExp(`(?:^|\\s)${escaped}(?:\\s|$)`, 'i').test(haystack);
 }
 
 function mergeExistingTags(existingRaw: unknown, nextTags: string[], keyword: string, platform: Platform): string[] {

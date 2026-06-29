@@ -14,3 +14,5 @@ data/bgm/
 data/bgm.json
 data/tts/
 data/covers/
+data/analysis-temp/
+data/crawler-ops-queue.json

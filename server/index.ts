@@ -1,5 +1,6 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { execFileSync } from 'child_process';
 import dotenv from 'dotenv';
 import express from 'express';
 import compression from 'compression';
@@ -24,9 +25,34 @@ import { isDemoMode, demoLimits } from './lib/demo.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
 dotenv.config({ path: path.join(__dirname, '..', '.env.local'), override: true });
+configureNetworkProxy();
 
 const PORT = Number(process.env.PORT ?? 8788);
 const app = express();
+
+function configureNetworkProxy(): void {
+  const configured = process.env.GEMINI_PROXY || process.env.HTTPS_PROXY || process.env.https_proxy || process.env.CRAWLER_PROXY;
+  const proxy = configured || detectLocalProxy();
+  if (!proxy) return;
+  process.env.HTTPS_PROXY ||= proxy;
+  process.env.HTTP_PROXY ||= proxy;
+  process.env.https_proxy ||= proxy;
+  process.env.http_proxy ||= proxy;
+  process.env.CRAWLER_PROXY ||= proxy;
+  process.env.NODE_USE_ENV_PROXY ||= '1';
+  console.log(`[network] using proxy ${proxy}`);
+}
+
+function detectLocalProxy(): string {
+  if (process.env.NODE_ENV === 'production') return '';
+  for (const port of [7890, 7897, 1087, 1080, 20171]) {
+    try {
+      execFileSync('nc', ['-z', '127.0.0.1', String(port)], { stdio: 'ignore', timeout: 600 });
+      return `http://127.0.0.1:${port}`;
+    } catch { /* try next */ }
+  }
+  return '';
+}
 
 // 跳过 SSE 流式响应（text/event-stream），否则 gzip 缓冲会拖慢首字
 app.use(compression({

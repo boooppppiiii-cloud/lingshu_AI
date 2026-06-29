@@ -12,6 +12,19 @@ export interface VideoAiAnalysis {
   sellingPoints: string[];
   mood: string;
   structure: string;
+  firstTenSeconds?: {
+    atmosphere?: string;
+    audioVisual?: string;
+    camera?: string;
+    visuals?: string;
+    voiceMusic?: string;
+  };
+  coarseStructure?: Array<{
+    time?: string;
+    frame?: string;
+    label?: string;
+    description?: string;
+  }>;
   recommendedScriptType: 'voiceover' | 'storyboard';
 }
 

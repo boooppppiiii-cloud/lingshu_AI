@@ -1,7 +1,7 @@
 import { GoogleGenAI, type Content } from '@google/genai';
 import type { VideoAiAnalysis, VoiceoverContent, StoryboardContent, ScriptType, Language } from '../types/index.js';
 
-const MODEL = () => (process.env.GEMINI_MODEL ?? 'gemini-2.0-flash').trim();
+const MODEL = () => (process.env.GEMINI_MODEL ?? 'gemini-2.5-flash').trim();
 
 function client(): GoogleGenAI {
   const apiKey = process.env.GEMINI_API_KEY?.trim();
@@ -104,6 +104,50 @@ function parseJson<T>(raw: string, fallback: T): T {
   try { return JSON.parse(raw) as T; } catch { return fallback; }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value));
+}
+
+function parseFirstTenSeconds(value: unknown): VideoAiAnalysis['firstTenSeconds'] | undefined {
+  if (!isRecord(value)) return undefined;
+  const result = {
+    atmosphere: String(value.atmosphere ?? '').trim(),
+    audioVisual: String(value.audioVisual ?? '').trim(),
+    camera: String(value.camera ?? '').trim(),
+    visuals: String(value.visuals ?? '').trim(),
+    voiceMusic: String(value.voiceMusic ?? '').trim(),
+  };
+  return Object.values(result).some(Boolean) ? result : undefined;
+}
+
+function parseCoarseStructure(value: unknown): VideoAiAnalysis['coarseStructure'] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const rows = value.map((item, index) => {
+    if (!isRecord(item)) return null;
+    const description = String(item.description ?? item.frame ?? item.desc ?? '').trim();
+    if (!description) return null;
+    return {
+      time: String(item.time ?? `${index * 3}-${(index + 1) * 3}s`).trim(),
+      label: String(item.label ?? `粗略帧 ${index + 1}`).trim(),
+      description,
+    };
+  }).filter((item): item is NonNullable<typeof item> => Boolean(item));
+  return rows.length ? rows.slice(0, 12) : undefined;
+}
+
+function normalizeVideoAnalysis(parsed: Partial<VideoAiAnalysis>): VideoAiAnalysis {
+  return {
+    theme: String(parsed.theme ?? ''),
+    hooks: Array.isArray(parsed.hooks) ? parsed.hooks.map(String) : [],
+    sellingPoints: Array.isArray(parsed.sellingPoints) ? parsed.sellingPoints.map(String) : [],
+    mood: String(parsed.mood ?? ''),
+    structure: String(parsed.structure ?? ''),
+    firstTenSeconds: parseFirstTenSeconds(parsed.firstTenSeconds),
+    coarseStructure: parseCoarseStructure(parsed.coarseStructure),
+    recommendedScriptType: parsed.recommendedScriptType === 'storyboard' ? 'storyboard' : 'voiceover',
+  };
+}
+
 // ─── Public AI operations ─────────────────────────────────────────────────────
 
 /** Analyze a video file (provided as base64) and return structured metadata */
@@ -111,15 +155,23 @@ export async function analyzeVideo(opts: {
   videoBase64: string;
   mimeType: string;
 }): Promise<VideoAiAnalysis> {
-  const systemInstruction = `You are an expert short-video content analyst for overseas e-commerce marketing.
-Analyze the provided video and extract structured metadata. Output ONLY valid JSON — no markdown, no code blocks, no preamble.
+  const systemInstruction = `你是一个面向出海电商营销的短视频内容分析专家。
+请分析提供的视频，并提取结构化信息。除 recommendedScriptType 字段外，所有字符串内容必须使用简体中文输出。
+只输出合法 JSON，不要 markdown，不要代码块，不要前后解释。
 
-Required JSON fields:
-- theme: string, one-line description of the video's core topic/product
-- hooks: string[], 2–4 specific attention-grabbing opening techniques used
-- sellingPoints: string[], 3–6 key product benefits or features demonstrated
-- mood: string, emotional tone (e.g. "energetic", "aspirational", "educational", "humorous")
-- structure: string, narrative flow description (e.g. "problem → solution → CTA", "demo → testimonial → offer")
+必需 JSON 字段：
+- theme: string，用一句中文概括视频核心主题/产品/场景
+- hooks: string[], 2–4 个中文开头钩子或吸引注意力的方法
+- sellingPoints: string[], 3–6 个中文卖点、利益点或画面展示点
+- mood: string，中文情绪/风格描述，例如“高能评测”“种草感”“教程感”“幽默反差”
+- structure: string，中文叙事结构，例如“痛点 → 展示 → 证明 → CTA”
+- firstTenSeconds: object，详细分析视频前 10 秒，包含以下中文字段：
+  - atmosphere: 氛围
+  - audioVisual: 音画配合
+  - camera: 运镜
+  - visuals: 画面
+  - voiceMusic: 配音配乐
+- coarseStructure: array，粗略脚本结构即可，按约 3 秒一帧拆解 0–30 秒；每项包含 time、label、description
 - recommendedScriptType: "voiceover" | "storyboard"`;
 
   const raw = await withRetry(() =>
@@ -128,7 +180,7 @@ Required JSON fields:
         {
           parts: [
             { inlineData: { data: opts.videoBase64.replace(/^data:[^,]+,/, ''), mimeType: opts.mimeType } },
-            { text: 'Analyze this video and return the JSON.' },
+            { text: '请分析这个视频，并返回中文 JSON。' },
           ],
         },
       ] as Content[],
@@ -138,14 +190,49 @@ Required JSON fields:
   );
 
   const parsed = parseJson<Partial<VideoAiAnalysis>>(raw, {});
-  return {
-    theme: String(parsed.theme ?? ''),
-    hooks: Array.isArray(parsed.hooks) ? parsed.hooks.map(String) : [],
-    sellingPoints: Array.isArray(parsed.sellingPoints) ? parsed.sellingPoints.map(String) : [],
-    mood: String(parsed.mood ?? ''),
-    structure: String(parsed.structure ?? ''),
-    recommendedScriptType: parsed.recommendedScriptType === 'storyboard' ? 'storyboard' : 'voiceover',
-  };
+  return normalizeVideoAnalysis(parsed);
+}
+
+/** Analyze a public YouTube URL directly with Gemini, avoiding local download when possible. */
+export async function analyzeYouTubeUrl(opts: {
+  url: string;
+}): Promise<VideoAiAnalysis> {
+  const systemInstruction = `你是一个面向出海电商营销的短视频内容分析专家。
+请分析提供的 YouTube 视频，并提取结构化信息。除 recommendedScriptType 字段外，所有字符串内容必须使用简体中文输出。
+只输出合法 JSON，不要 markdown，不要代码块，不要前后解释。
+
+必需 JSON 字段：
+- theme: string，用一句中文概括视频核心主题/产品/场景
+- hooks: string[], 2–4 个中文开头钩子或吸引注意力的方法
+- sellingPoints: string[], 3–6 个中文卖点、利益点或画面展示点
+- mood: string，中文情绪/风格描述
+- structure: string，中文叙事结构，例如“痛点 → 展示 → 证明 → CTA”
+- firstTenSeconds: object，详细分析视频前 10 秒，包含以下中文字段：
+  - atmosphere: 氛围
+  - audioVisual: 音画配合
+  - camera: 运镜
+  - visuals: 画面
+  - voiceMusic: 配音配乐
+- coarseStructure: array，粗略脚本结构即可，按约 3 秒一帧拆解 0–30 秒；每项包含 time、label、description
+- recommendedScriptType: "voiceover" | "storyboard"`;
+
+  const raw = await withRetry(() =>
+    generateText({
+      contents: [
+        {
+          parts: [
+            { text: '请分析这个 YouTube 视频，并返回中文 JSON。' },
+            { fileData: { fileUri: opts.url } },
+          ],
+        },
+      ] as Content[],
+      systemInstruction,
+      jsonMode: true,
+    }),
+  );
+
+  const parsed = parseJson<Partial<VideoAiAnalysis>>(raw, {});
+  return normalizeVideoAnalysis(parsed);
 }
 
 /** Generate a voiceover script from video analysis */
