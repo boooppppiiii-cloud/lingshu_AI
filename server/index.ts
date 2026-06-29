@@ -1,5 +1,6 @@
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { execFileSync } from 'child_process';
 import dotenv from 'dotenv';
 import express from 'express';
 import compression from 'compression';
@@ -20,13 +21,40 @@ import { studioRouter } from './routes/studio.js';
 import { authRouter } from './routes/auth.js';
 import { youtubeRouter } from './routes/youtube.js';
 import { socialRouter } from './routes/social.js';
+import { platformIntegrationsRouter } from './routes/platformIntegrations.js';
+import { isDemoMode, demoLimits } from './lib/demo.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
 dotenv.config({ path: path.join(__dirname, '..', '.env.local'), override: true });
+configureNetworkProxy();
 
 const PORT = Number(process.env.PORT ?? 8788);
 const app = express();
+
+function configureNetworkProxy(): void {
+  const configured = process.env.GEMINI_PROXY || process.env.HTTPS_PROXY || process.env.https_proxy || process.env.CRAWLER_PROXY;
+  const proxy = configured || detectLocalProxy();
+  if (!proxy) return;
+  process.env.HTTPS_PROXY ||= proxy;
+  process.env.HTTP_PROXY ||= proxy;
+  process.env.https_proxy ||= proxy;
+  process.env.http_proxy ||= proxy;
+  process.env.CRAWLER_PROXY ||= proxy;
+  process.env.NODE_USE_ENV_PROXY ||= '1';
+  console.log(`[network] using proxy ${proxy}`);
+}
+
+function detectLocalProxy(): string {
+  if (process.env.NODE_ENV === 'production') return '';
+  for (const port of [7890, 7897, 1087, 1080, 20171]) {
+    try {
+      execFileSync('nc', ['-z', '127.0.0.1', String(port)], { stdio: 'ignore', timeout: 600 });
+      return `http://127.0.0.1:${port}`;
+    } catch { /* try next */ }
+  }
+  return '';
+}
 
 // 跳过 SSE 流式响应（text/event-stream），否则 gzip 缓冲会拖慢首字
 app.use(compression({
@@ -36,7 +64,7 @@ app.use(compression({
 app.use(express.json({ limit: '50mb' }));
 
 app.get('/api/overseas/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'overseas-marketing-agent', port: PORT });
+  res.json({ status: 'ok', service: 'overseas-marketing-agent', port: PORT, demoMode: isDemoMode(), demoLimits: demoLimits() });
 });
 
 // Legacy routes (stub → to be implemented separately)
@@ -59,6 +87,7 @@ app.use('/api/overseas/scheduler', schedulerRouter);
 app.use('/api/overseas/plugins', pluginsRouter);
 app.use('/api/overseas/auth', authRouter);
 app.use('/api/overseas/studio', studioRouter);
+app.use('/api/overseas/platform-integrations', platformIntegrationsRouter);
 
 initScheduler();
 

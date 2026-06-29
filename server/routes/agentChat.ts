@@ -4,6 +4,7 @@ import { buildEnterpriseContext } from './enterprise.js';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { consumeDemoQuota } from '../lib/demo.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENTERPRISE_FILE = path.join(__dirname, '../../data/enterprise.json');
@@ -22,9 +23,26 @@ const FORMAT_RULE = `
   · 关键结论、重点数字用 **加粗**
   · 列表用 "- " 或 "1. "，不要多层数字嵌套（如 1. 里再套 1. 2.）
   · 引用网址 / 案例链接用 [说明文字](https://网址)
+- 话术、营销文案、邮件、WhatsApp 消息、短视频脚本、广告文案等"可直接复制使用"的内容，必须放进可复制块：
+  · 优先使用 fenced block，格式为三反引号 + copy，例如：
+    \`\`\`copy
+    [EN] Hello ...
+    \`\`\`
+  · 每个语言版本单独一个 copy 块，块前用简短标题说明用途
+- 多语言规则：
+  · 默认根据【当前企业知识库】里的主攻市场、补充知识推断，最多输出 2 种首选语言版本
+  · 如果用户要求的语言种类超过 2 种，但没有明确列出具体语言，先用一句话询问"需要哪几种语言版本"，不要直接生成一大串
+  · 语言标注用 [EN] [AR] [ES] [FR] 等，不要混在同一个段落里
+- 需要对比、排期、分阶段方案、客户名单、素材清单时，优先用 Markdown 表格：
+  · 表格必须包含表头、分隔行和完整行，例如 | 阶段 | 动作 | 负责人 |
+  · 不要输出残缺的表格分隔符，不要在单元格里写 <br>，多点内容用分号隔开
+  · 表格过宽时拆成两张小表
 - 结构清晰：先给结论，再展开；每节之间空一行
+- 禁止输出残缺 Markdown：不要单独输出 ###、####、#####；不要留下未闭合的 **；不要把标题符号和正文挤在同一行造成 "##### 1." 这种格式
 - 控制在 2-3 条核心建议，不要长篇大论
-- 结尾用一句温暖、鼓励的话给用户情绪价值（例如"放心，这一步我帮你盯着，咱们稳稳推进 💪"）`;
+- 【重要】用户系统里通常已有经营数据。**不要反问索取数据，也不要只讲通用原理/方法论**；若消息中已给数据就直接用它分析，若没给就用合理的示例数据，**直接给出可落地的具体结果**（具体数字、具体话术、具体名单）
+- 结尾可以有一句自然的情绪价值，但必须根据用户上一轮语气和本次任务状态临场生成；不要套固定句式，不要复用示例话术，不要重复用户刚说过的话，不要每次都用"放心/稳稳推进/我帮你盯着/咱们"这类固定组合
+- 如果用户是在纠错、质疑或要求判断，先正面承认问题并给出具体修正，不要用安抚话术盖过去；emoji 只在语境自然时使用，默认不用`;
 
 const SYSTEM_PROMPTS: Record<string, string> = {
   conversion: `你是灵枢AI的客服Agent，服务于义乌跨境电商卖家，处理买家询盘和客户服务。
@@ -77,12 +95,13 @@ export const agentChatRouter = Router();
 
 agentChatRouter.post('/:agentType/chat', async (req, res) => {
   const { agentType } = req.params;
-  const { messages } = req.body as { messages: ChatMessage[] };
+  const { messages, deepThinking = false } = req.body as { messages: ChatMessage[]; deepThinking?: boolean };
 
   if (!messages?.length) { res.status(400).json({ error: 'messages required' }); return; }
 
   const basePrompt = SYSTEM_PROMPTS[agentType];
   if (!basePrompt) { res.status(404).json({ error: `Unknown agent: ${agentType}` }); return; }
+  if (!await consumeDemoQuota(req, res, 'aiChat')) return;
 
   const enterpriseCtx = getEnterpriseContext();
   const systemPrompt = enterpriseCtx
@@ -95,7 +114,7 @@ agentChatRouter.post('/:agentType/chat', async (req, res) => {
   res.flushHeaders();
 
   try {
-    for await (const ev of callLLMChatStream(messages, { systemPrompt })) {
+    for await (const ev of callLLMChatStream(messages, { systemPrompt, deepThinking })) {
       res.write(`data: ${JSON.stringify(ev)}\n\n`);
     }
     res.write('data: [DONE]\n\n');

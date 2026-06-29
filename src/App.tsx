@@ -59,6 +59,7 @@ const loadConvs = (): Conversation[] => {
 export default function App() {
   const [page, setPage] = useState<Page>('strategy');
   const [conversation, setConversation] = useState<ConversationContext | null>(null);
+  const [scriptPanelOpen, setScriptPanelOpen] = useState(false);
 
   // 会话历史（近期会话，本地持久化）
   const [conversations, setConversations] = useState<Conversation[]>(loadConvs);
@@ -83,7 +84,14 @@ export default function App() {
   // 每次对话推进都记录/更新近期会话
   const enterConversation = (ctx: ConversationContext) => {
     setConversation(ctx);
-    if (!ctx.messages?.length) return;
+    if (!ctx.messages?.length) {
+      activeIdRef.current = null;
+      setActiveConvId(null);
+      setRestore({ agent: ctx.agent, messages: [], key: `open:${ctx.agent}:${Date.now()}` });
+      setKickoff(null);
+      setPage(ctx.agent);
+      return;
+    }
     let id = activeIdRef.current;
     let list = convsRef.current;
     if (id && list.some(c => c.id === id)) {
@@ -139,10 +147,27 @@ export default function App() {
     );
   }
   if (!session) return <AuthScreen onAuthed={setSession} />;
+  if (session.demo?.enabled && session.demo.expired) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-surface-2 px-6">
+        <div className="w-full max-w-md rounded-2xl bg-white border border-border p-6 text-center shadow-sm">
+          <p className="text-sm font-bold text-text-primary">Demo 试用已到期</p>
+          <p className="text-sm text-text-muted mt-2 leading-relaxed">
+            当前试用账号已超过 {session.demo.trialDays} 天有效期。请联系团队开通正式版或延长试用。
+          </p>
+          <button onClick={handleLogout}
+            className="mt-5 px-4 py-2 rounded-lg bg-text-primary text-white text-sm font-semibold">
+            退出登录
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <Layout page={page} onNavigate={handleNavigate} conversation={conversation} session={session} onLogout={handleLogout}
-      conversations={conversations} activeConvId={activeConvId} onOpenConversation={openConversation} onNewConversation={newConversation}>
+      conversations={conversations} activeConvId={activeConvId} onOpenConversation={openConversation} onNewConversation={newConversation}
+      suppressRightPanel={scriptPanelOpen} onAction={startAgentTask}>
       {page === 'strategy' && (
         <StrategyPage
           onEnterConversation={enterConversation}
@@ -162,6 +187,8 @@ export default function App() {
           restore={restoreFor('traffic')}
           kickoff={kickoffFor('traffic')}
           onAction={startAgentTask}
+          onScriptPanelOpen={() => setScriptPanelOpen(true)}
+          onScriptPanelClose={() => setScriptPanelOpen(false)}
         />
       )}
       {page === 'conversion' && (

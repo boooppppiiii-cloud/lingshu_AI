@@ -3,7 +3,6 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'node:crypto';
-import { createRequire } from 'node:module';
 import { spawn } from 'node:child_process';
 import ffmpegStatic from 'ffmpeg-static';
 import { GoogleGenAI } from '@google/genai';
@@ -17,6 +16,7 @@ import {
   isSubscriptionEnforced,
 } from '../middleware/subscription.js';
 import { signRenderToken } from '../lib/renderToken.js';
+import { consumeDemoQuota } from '../lib/demo.js';
 
 /* ──────────────────────────────────────────────────────────────────────────
    Studio 路由 —— 服务于「社媒 / AI 生成内容」混剪工作台
@@ -25,12 +25,7 @@ import { signRenderToken } from '../lib/renderToken.js';
 ─────────────────────────────────────────────────────────────────────────── */
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const require = createRequire(import.meta.url);
-const { composite } = require('../../desktop/render.cjs') as {
-  composite: (manifest: RenderManifest, onProgress?: (pct: number) => void, outDir?: string) => Promise<{ ok: boolean; outputPath?: string; error?: string }>;
-};
 const ENTERPRISE_FILE = path.join(__dirname, '../../data/enterprise.json');
-const RENDERS_DIR = path.join(__dirname, '../../data/renders');
 
 function enterpriseCtx(): string {
   try {
@@ -104,10 +99,23 @@ studioRouter.use(entitlementGate());
 /* ── ③ 口播脚本 ────────────────────────────────────────────────────────── */
 // POST /studio/script  Body: { materials?, productInfo?, language?, platform?, duration? }
 studioRouter.post('/script', async (req, res) => {
-  const { materials = [], productInfo = '', language = 'en', platform = 'tiktok', duration = 20, scriptType = 'voiceover' } = req.body ?? {};
+  if (!await consumeDemoQuota(req, res, 'generation')) return;
+  const {
+    materials = [],
+    productInfo = '',
+    language = 'en',
+    platform = 'tiktok',
+    duration = 20,
+    scriptType = 'voiceover',
+    audience = '',
+    sellingPoints = '',
+    tone = 'high-converting',
+    provider,
+  } = req.body ?? {};
   const lang = langName(language);
   const clips = (materials as string[]).join(', ') || '(generic product clips)';
   const product = productInfo || '(use the enterprise profile)';
+  const providerOpt = provider === 'qwen' || provider === 'gemini' ? provider : undefined;
 
   const prompt = scriptType === 'storyboard'
     ? `You are a short-video director for a Chinese cross-border (overseas) e-commerce seller.
@@ -115,6 +123,9 @@ Write a ${duration}-second ${platform} storyboard in ${lang}, broken into 4-6 sc
 
 Selected clips: ${clips}
 Product info: ${product}
+Target audience: ${audience || '(infer from product and platform)'}
+Key selling points: ${sellingPoints || '(infer from product info)'}
+Tone/style: ${tone}
 
 For EACH scene use this exact block format (no markdown symbols):
 Scene N (start-end s)
@@ -128,6 +139,9 @@ Write a ${duration}-second ${platform} voiceover script in ${lang}.
 
 Selected clips: ${clips}
 Product info: ${product}
+Target audience: ${audience || '(infer from product and platform)'}
+Key selling points: ${sellingPoints || '(infer from product info)'}
+Tone/style: ${tone}
 
 Requirements:
 - Exactly three sections, each on its own block, labelled like "[Hook · 0-3s]", "[Body · 3-${duration - 5}s]", "[CTA · ${duration - 5}-${duration}s]".
@@ -136,7 +150,7 @@ Requirements:
 - Output ONLY the script text.`;
 
   try {
-    const text = await callLLM(prompt, { systemPrompt: enterpriseCtx() || undefined });
+    const text = await callLLM(prompt, { backend: providerOpt, systemPrompt: enterpriseCtx() || undefined });
     res.json({ ok: true, source: 'ai', script: text.trim() });
   } catch {
     res.json({ ok: true, source: 'fallback', script: scriptType === 'storyboard' ? fallbackStoryboard(duration) : fallbackScript(productInfo, duration) });
@@ -146,15 +160,17 @@ Requirements:
 /* ── ⑤ 封面标题候选 ────────────────────────────────────────────────────── */
 // POST /studio/covers  Body: { script?, productInfo?, language? }
 studioRouter.post('/covers', async (req, res) => {
-  const { script = '', productInfo = '', language = 'en' } = req.body ?? {};
+  if (!await consumeDemoQuota(req, res, 'generation')) return;
+  const { script = '', productInfo = '', language = 'en', provider, tone = '' } = req.body ?? {};
   const lang = langName(language);
+  const providerOpt = provider === 'qwen' || provider === 'gemini' ? provider : undefined;
 
   const prompt = `Generate 3 punchy ${lang} video cover titles (max 6 words each) for an overseas e-commerce short video.
-Context — product: ${productInfo || '(see enterprise profile)'} ; script: ${script.slice(0, 300)}
+Context — product: ${productInfo || '(see enterprise profile)'} ; tone: ${tone || '(fit platform)'} ; script: ${script.slice(0, 300)}
 Return ONLY a JSON array of 3 strings. No other text.`;
 
   try {
-    const text = await callLLM(prompt, { systemPrompt: enterpriseCtx() || undefined });
+    const text = await callLLM(prompt, { backend: providerOpt, systemPrompt: enterpriseCtx() || undefined });
     const arr = extractJSON<string[]>(text);
     if (arr && arr.length) {
       res.json({ ok: true, source: 'ai', covers: arr.slice(0, 3) });
@@ -169,15 +185,17 @@ Return ONLY a JSON array of 3 strings. No other text.`;
 /* ── ⑦ 发布文案 + 话题标签 ─────────────────────────────────────────────── */
 // POST /studio/caption  Body: { script?, productInfo?, platform?, language? }
 studioRouter.post('/caption', async (req, res) => {
-  const { script = '', productInfo = '', platform = 'tiktok', language = 'en' } = req.body ?? {};
+  if (!await consumeDemoQuota(req, res, 'generation')) return;
+  const { script = '', productInfo = '', platform = 'tiktok', language = 'en', provider, audience = '', sellingPoints = '', tone = '' } = req.body ?? {};
   const lang = langName(language);
+  const providerOpt = provider === 'qwen' || provider === 'gemini' ? provider : undefined;
 
   const prompt = `Write a ${platform} post caption in ${lang} for this overseas e-commerce video.
-Product: ${productInfo || '(see enterprise profile)'} ; script: ${script.slice(0, 300)}
+Product: ${productInfo || '(see enterprise profile)'} ; audience: ${audience || '(infer)'} ; selling points: ${sellingPoints || '(infer)'} ; tone: ${tone || '(fit platform)'} ; script: ${script.slice(0, 300)}
 Return ONLY JSON: { "caption": string (1-2 sentences, may include 1-2 emojis), "hashtags": string[] (5-8 trending tags, no # prefix) }`;
 
   try {
-    const text = await callLLM(prompt, { systemPrompt: enterpriseCtx() || undefined });
+    const text = await callLLM(prompt, { backend: providerOpt, systemPrompt: enterpriseCtx() || undefined });
     const obj = extractJSON<{ caption: string; hashtags: string[] }>(text);
     if (obj?.caption) {
       res.json({ ok: true, source: 'ai', caption: obj.caption, hashtags: obj.hashtags ?? [] });
@@ -192,6 +210,7 @@ Return ONLY JSON: { "caption": string (1-2 sentences, may include 1-2 emojis), "
 /* ── 文本翻译（默认译成简体中文，给用户确认外语文案） ───────────────────── */
 // POST /studio/translate  Body: { text, target?, source? }
 studioRouter.post('/translate', async (req, res) => {
+  if (!await consumeDemoQuota(req, res, 'generation')) return;
   const { text = '', target = 'zh' } = req.body ?? {};
   const src = String(text).trim();
   if (!src) { res.json({ ok: true, source: 'noop', text: '' }); return; }
@@ -211,6 +230,7 @@ Text: ${src}`;
 /* ── 数据看板 AI 结论 ──────────────────────────────────────────────────── */
 // POST /studio/insight  Body: { scope, metrics } → { summary, actions[] }
 studioRouter.post('/insight', async (req, res) => {
+  if (!await consumeDemoQuota(req, res, 'generation')) return;
   const { scope = 'traffic', metrics = {} } = req.body ?? {};
   const prompt = `你是跨境电商社媒操盘手。根据以下「${scope}」当期数据（JSON），给运营一句中文洞察 + 2-3 条可执行建议。
 数据：${JSON.stringify(metrics)}
@@ -231,6 +251,7 @@ studioRouter.post('/insight', async (req, res) => {
 /* ── ② AI 智能选材 ─────────────────────────────────────────────────────── */
 // POST /studio/select  Body: { materials: {id,name,type,duration}[], duration? }
 studioRouter.post('/select', async (req, res) => {
+  if (!await consumeDemoQuota(req, res, 'generation')) return;
   const { materials = [], duration = 20 } = req.body ?? {};
   const list = materials as { id: string; name: string; type: string; duration: number }[];
 
@@ -320,7 +341,8 @@ function buildManifest(jobId: string, spec: RenderSpec, base: string): RenderMan
 }
 
 // POST /studio/render  Body: RenderSpec → { ok, token, expiresAt, manifest }
-studioRouter.post('/render', (req, res) => {
+studioRouter.post('/render', async (req, res) => {
+  if (!await consumeDemoQuota(req, res, 'render')) return;
   const spec = (req.body ?? {}) as RenderSpec;
   const jobId = randomUUID();
   const base = `${req.protocol}://${req.get('host')}`;
@@ -334,28 +356,6 @@ studioRouter.post('/render', (req, res) => {
     expiresAt: new Date(payload.exp * 1000).toISOString(),
     manifest,
   });
-});
-
-// POST /studio/render/local  Body: { manifest } → { ok, outputPath }
-// Used by the browser build when the Electron desktop bridge is unavailable.
-studioRouter.post('/render/local', async (req, res) => {
-  const manifest = ((req.body ?? {}) as { manifest?: RenderManifest }).manifest;
-  if (!manifest || typeof manifest !== 'object') {
-    res.status(400).json({ ok: false, error: 'manifest is required' });
-    return;
-  }
-
-  fs.mkdirSync(RENDERS_DIR, { recursive: true });
-  try {
-    const result = await composite(manifest, () => {}, RENDERS_DIR);
-    if (!result.ok || !result.outputPath) {
-      res.status(500).json({ ok: false, error: result.error ?? '本地合成失败' });
-      return;
-    }
-    res.status(201).json({ ok: true, outputPath: result.outputPath });
-  } catch (error: any) {
-    res.status(500).json({ ok: false, error: error?.message ?? '本地合成失败' });
-  }
 });
 
 /* ── 素材库（本地磁盘存储，无需 R2）───────────────────────────────────────
@@ -398,39 +398,6 @@ async function extractPoster(videoPath: string, outPath: string, atSec = 1): Pro
   return ok && fs.existsSync(outPath);
 }
 
-/* 公共库种子：首次无公共素材时用 ffmpeg 生成几条示例资产（图片/短视频），幂等 */
-const SHARED_SEED: { id: string; name: string; folder: string; type: 'image' | 'video'; c0: string; c1: string }[] = [
-  { id: 'sh-warm',   name: '示例·暖阳渐变', folder: 'sample', type: 'image', c0: '0xfbbf24', c1: '0xd97706' },
-  { id: 'sh-blue',   name: '示例·静谧蓝',   folder: 'sample', type: 'image', c0: '0x60a5fa', c1: '0x1e3a8a' },
-  { id: 'sh-stripe', name: '示例·流光条纹', folder: 'sample', type: 'video', c0: '0x16a34a', c1: '0x064e3b' },
-];
-let sharedSeeded = false;
-async function ensureSharedSeed(): Promise<void> {
-  if (sharedSeeded) return;
-  const list = loadMaterials();
-  if (list.some(m => m.scope === 'shared') || !ffmpegBin) { sharedSeeded = true; return; }
-  try { fs.mkdirSync(MEDIA_DIR, { recursive: true }); } catch { /* ignore */ }
-
-  const added: Material[] = [];
-  for (const s of SHARED_SEED) {
-    if (s.type === 'image') {
-      const file = `${s.id}.jpg`;
-      const ok = await runFfmpeg(['-f', 'lavfi', '-i', `gradients=s=1080x1920:c0=${s.c0}:c1=${s.c1}:type=linear`, '-frames:v', '1', '-y', path.join(MEDIA_DIR, file)]);
-      if (!ok) continue;
-      added.push({ id: s.id, name: s.name, folder: s.folder, type: 'image', duration: 0, size: humanSize(fs.statSync(path.join(MEDIA_DIR, file)).size), file, url: `/media/${file}`, poster: `/media/${file}`, scope: 'shared', createdAt: new Date().toISOString() });
-    } else {
-      const file = `${s.id}.mp4`;
-      const ok = await runFfmpeg(['-f', 'lavfi', '-i', `gradients=s=1080x1920:c0=${s.c0}:c1=${s.c1}:type=linear:d=4:r=24`, '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-t', '4', '-y', path.join(MEDIA_DIR, file)]);
-      if (!ok) continue;
-      const posterFile = `${s.id}.poster.jpg`;
-      const pok = await extractPoster(path.join(MEDIA_DIR, file), path.join(MEDIA_DIR, posterFile), 1);
-      added.push({ id: s.id, name: s.name, folder: s.folder, type: 'video', duration: 4, size: humanSize(fs.statSync(path.join(MEDIA_DIR, file)).size), file, url: `/media/${file}`, poster: pok ? `/media/${posterFile}` : undefined, scope: 'shared', createdAt: new Date().toISOString() });
-    }
-  }
-  if (added.length) persistMaterials([...loadMaterials(), ...added]);
-  sharedSeeded = true;
-}
-
 function loadMaterials(): Material[] {
   try {
     return JSON.parse(fs.readFileSync(MATERIALS_FILE, 'utf8')) as Material[];
@@ -449,12 +416,18 @@ function humanSize(bytes: number): string {
 
 // GET /studio/materials?scope=shared|own → Material[]（按上传时间倒序）
 studioRouter.get('/materials', async (req, res) => {
-  await ensureSharedSeed();
   const scope = req.query.scope as string | undefined;
-  let list = loadMaterials();
+  let list = loadMaterials().filter(m => !isMockMaterial(m));
   if (scope === 'shared' || scope === 'own') list = list.filter(m => (m.scope ?? 'own') === scope);
   res.json(list.sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
 });
+
+function isMockMaterial(m: Material): boolean {
+  return (m.scope ?? 'own') === 'shared'
+    || /^sh-/.test(m.id)
+    || /^示例[·・]/.test(m.name)
+    || m.folder === 'sample';
+}
 
 // POST /studio/materials  Body: { name, folder?, type, duration?, dataBase64, mimeType?, scope? } → 上传单个文件
 studioRouter.post('/materials', async (req, res) => {
@@ -628,7 +601,8 @@ function inlineFrame(bgImageUrl?: string): string | undefined {
 }
 
 // POST /studio/cover  Body: { title, ratio?, accent?, bgImageUrl?, color?, size?, position?, align? } → { ok, url }
-studioRouter.post('/cover', (req, res) => {
+studioRouter.post('/cover', async (req, res) => {
+  if (!await consumeDemoQuota(req, res, 'generation')) return;
   const { title = '', ratio = '9:16', accent = '#d97706', bgImageUrl, color, size, position, align, font } = req.body ?? {};
   try {
     fs.mkdirSync(COVERS_DIR, { recursive: true });
@@ -692,6 +666,7 @@ function wavFromPcm(pcm: Buffer, sampleRate: number, channels = 1, bits = 16): B
 
 // POST /studio/tts  Body: { script?, text?, voice?, language? } → { ok, url, duration }
 studioRouter.post('/tts', async (req, res) => {
+  if (!await consumeDemoQuota(req, res, 'generation')) return;
   const { script = '', text = '', voice = 'v1' } = req.body ?? {};
   const spoken = (text || spokenText(script)).trim();
   if (!spoken) { res.status(400).json({ ok: false, error: 'no spoken text' }); return; }

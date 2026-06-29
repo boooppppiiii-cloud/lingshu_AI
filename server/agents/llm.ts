@@ -7,6 +7,7 @@ export interface LLMCallOptions {
   backend?: LLMBackend;
   model?: string;
   systemPrompt?: string;
+  deepThinking?: boolean;
 }
 
 function resolveBackend(opts: LLMCallOptions): LLMBackend {
@@ -76,30 +77,45 @@ async function* streamGeminiChat(messages: ChatMessage[], opts: LLMCallOptions):
     parts: [{ text: m.content }],
   }));
 
-  const stream = await ai.models.generateContentStream({
-    model: modelId,
-    contents,
-    config: {
-      // 关闭 2.5 Flash 的思考预算，显著降低首字延迟（对话场景无需长思考）
-      thinkingConfig: { thinkingBudget: 0 },
-      // 联网检索：让回复可引用真实网页来源（像 Gemini 一样可跳转）
-      tools: [{ googleSearch: {} }],
-      ...(opts.systemPrompt ? { systemInstruction: { parts: [{ text: opts.systemPrompt }] } } : {}),
-    },
-  });
+  const baseConfig: Record<string, unknown> = {
+    // 默认低延迟；用户打开深度思考时给中等预算，避免明显拖慢首字。
+    thinkingConfig: { thinkingBudget: opts.deepThinking ? 768 : 0 },
+    ...(opts.systemPrompt ? { systemInstruction: { parts: [{ text: opts.systemPrompt }] } } : {}),
+  };
 
-  const sources: GroundingSource[] = [];
-  const seen = new Set<string>();
-  for await (const chunk of stream) {
-    const text = chunk.text;
-    if (text) yield { text };
-    const gm = (chunk as any).candidates?.[0]?.groundingMetadata;
-    for (const g of gm?.groundingChunks ?? []) {
-      const uri = g?.web?.uri;
-      if (uri && !seen.has(uri)) { seen.add(uri); sources.push({ title: g.web.title ?? uri, uri }); }
+  // 单次尝试：withSearch 时挂联网检索（可引用真实来源），否则纯生成（更稳）
+  async function* attempt(withSearch: boolean): AsyncGenerator<StreamEvent> {
+    const stream = await ai.models.generateContentStream({
+      model: modelId,
+      contents,
+      config: withSearch ? { ...baseConfig, tools: [{ googleSearch: {} }] } : baseConfig,
+    });
+    const sources: GroundingSource[] = [];
+    const seen = new Set<string>();
+    for await (const chunk of stream) {
+      const text = chunk.text;
+      if (text) yield { text };
+      const gm = (chunk as any).candidates?.[0]?.groundingMetadata;
+      for (const g of gm?.groundingChunks ?? []) {
+        const uri = g?.web?.uri;
+        if (uri && !seen.has(uri)) { seen.add(uri); sources.push({ title: g.web.title ?? uri, uri }); }
+      }
+    }
+    if (sources.length) yield { sources: sources.slice(0, 6) };
+  }
+
+  // 联网流偶发中途断流（terminated）。已吐内容就保留；几乎没吐就无联网重试一次（很稳）。
+  let emitted = 0;
+  try {
+    for await (const ev of attempt(true)) {
+      if ('text' in ev) emitted += ev.text.length;
+      yield ev;
+    }
+  } catch {
+    if (emitted < 20) {
+      for await (const ev of attempt(false)) yield ev;
     }
   }
-  if (sources.length) yield { sources: sources.slice(0, 6) };
 }
 
 async function* streamQwenChat(messages: ChatMessage[], opts: LLMCallOptions): AsyncGenerator<StreamEvent> {

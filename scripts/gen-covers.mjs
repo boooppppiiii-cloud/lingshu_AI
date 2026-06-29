@@ -10,7 +10,10 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const OUT_DIR = path.join(__dirname, '../src/assets/covers');
-const API_KEY = 'AIzaSyD4btFB_mh-9l1OkMZQF9fTSjYGHY9nzR4';
+const API_KEY = process.env.GEMINI_API_KEY;
+if (!API_KEY) {
+  throw new Error('GEMINI_API_KEY is required');
+}
 const ai = new GoogleGenAI({ apiKey: API_KEY });
 
 // ── 42 cover definitions ─────────────────────────────────────────────────────

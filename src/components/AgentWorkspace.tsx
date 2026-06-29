@@ -1,5 +1,6 @@
+import { useMemo } from 'react';
 import { motion } from 'motion/react';
-import { Compass, Zap, MessageSquare, RefreshCw, TrendingUp, Users, BarChart2, Sparkles, ChevronRight, Activity } from 'lucide-react';
+import { Compass, Zap, MessageSquare, RefreshCw, TrendingUp, Users, BarChart2, Sparkles, ChevronRight, Activity, CalendarDays } from 'lucide-react';
 import type { AgentType, ConversationContext } from '../App';
 
 const AGENTS = [
@@ -10,13 +11,81 @@ const AGENTS = [
 ];
 const SM = { active: { label: '运行中', color: '#16a34a' }, running: { label: '执行中', color: '#d97706' }, idle: { label: '待机', color: '#94a3b8' } };
 
+function getBeijingMonthPlan() {
+  const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
+  const year = now.getFullYear();
+  const month = now.getMonth();
+  const monthNo = month + 1;
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  const pad = (day: number) => `${monthNo}/${day}`;
+  const isJune = monthNo === 6;
+  const isNovember = monthNo === 11;
+  const isDecember = monthNo === 12;
+  const mainNode = isJune ? '年中大促 / 618 复盘'
+    : isNovember ? '黑五网一备战'
+      : isDecember ? '圣诞季收口'
+        : '本月主推市场营销节点';
+  return {
+    label: `${year}年${monthNo}月`,
+    rows: [
+      { date: `${pad(1)}-${pad(3)}`, type: '运营周期', owner: '策略专家', action: '复盘上月 GMV、询盘、复购与素材消耗，拆成本月目标。', status: now.getDate() > 3 ? '已过' : '本周' },
+      { date: '每周一 10:00', type: '定时任务', owner: '流量专家', action: '采集 TikTok / Instagram / YouTube 爆款视频，更新素材库与脚本方向。', status: '循环' },
+      { date: '每周三 15:00', type: '关键行动', owner: '转化专家', action: '检查大单询盘、未报价客户和多语种跟单话术，补齐人工介入清单。', status: '循环' },
+      { date: '每周五 16:30', type: '定时任务', owner: '留存专家', action: '筛选 30/60/90 天沉默客户，生成 WhatsApp / 邮件唤醒批次。', status: '循环' },
+      { date: `${pad(10)}-${pad(20)}`, type: '营销节点', owner: '策略专家', action: mainNode, status: now.getDate() <= 20 ? '进行中' : '已过' },
+      { date: `${pad(Math.max(1, lastDay - 2))}-${pad(lastDay)}`, type: '关键行动', owner: '全体 Agent', action: '月末经营复盘、下月选题池、素材去重与自动任务校准。', status: now.getDate() >= lastDay - 2 ? '本周' : '待办' },
+    ],
+  };
+}
+
 export default function AgentWorkspace({ onEnterConversation }: { onEnterConversation: (ctx: ConversationContext) => void }) {
+  const monthPlan = useMemo(() => getBeijingMonthPlan(), []);
   return (
     <div className="p-6 h-full overflow-y-auto">
       <div className="mb-6">
         <h2 className="text-lg font-bold text-text-primary font-display">你的 AI 智囊团</h2>
         <p className="text-sm text-text-muted mt-0.5">4 位 AI 专家实时运行 · 点击卡片进入对话</p>
       </div>
+      <section className="mb-6 rounded-2xl border border-border bg-surface overflow-hidden">
+        <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border">
+          <div className="flex items-center gap-2">
+            <div className="w-8 h-8 rounded-xl bg-accent-glow text-accent flex items-center justify-center">
+              <CalendarDays size={16} />
+            </div>
+            <div>
+              <p className="text-sm font-semibold text-text-primary">工作日历</p>
+              <p className="text-[11px] text-text-muted">北京时间 · {monthPlan.label} · 定时任务 / 营销节点 / 运营周期</p>
+            </div>
+          </div>
+          <span className="text-[10px] font-semibold text-accent bg-accent-glow px-2.5 py-1 rounded-full border border-accent/20">本月视图</span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-left text-xs">
+            <thead className="bg-surface-2 text-text-muted">
+              <tr>
+                <th className="px-4 py-2.5 font-semibold whitespace-nowrap">时间</th>
+                <th className="px-4 py-2.5 font-semibold whitespace-nowrap">类型</th>
+                <th className="px-4 py-2.5 font-semibold whitespace-nowrap">负责 Agent</th>
+                <th className="px-4 py-2.5 font-semibold">关键行动</th>
+                <th className="px-4 py-2.5 font-semibold whitespace-nowrap">状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              {monthPlan.rows.map(row => (
+                <tr key={`${row.date}-${row.type}`} className="border-t border-border/70">
+                  <td className="px-4 py-2.5 font-medium text-text-primary whitespace-nowrap">{row.date}</td>
+                  <td className="px-4 py-2.5 text-text-secondary whitespace-nowrap">{row.type}</td>
+                  <td className="px-4 py-2.5 text-text-secondary whitespace-nowrap">{row.owner}</td>
+                  <td className="px-4 py-2.5 text-text-secondary leading-relaxed min-w-72">{row.action}</td>
+                  <td className="px-4 py-2.5 whitespace-nowrap">
+                    <span className="rounded-full bg-surface-2 border border-border px-2 py-0.5 text-[10px] font-semibold text-text-muted">{row.status}</span>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </section>
       <div className="card p-3.5 mb-6 flex items-center gap-3">
         <div className="flex items-center gap-1.5 flex-shrink-0"><Activity size={13} className="text-accent" /><span className="text-xs font-semibold text-text-primary">行动建议流水线</span></div>
         <div className="flex-1 flex items-center gap-1">
@@ -28,7 +97,10 @@ export default function AgentWorkspace({ onEnterConversation }: { onEnterConvers
         {AGENTS.map((agent, i) => {
           const sm = SM[agent.status]; const Icon = agent.icon;
           return (
-            <motion.div key={agent.type} initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.07 }} className="card p-4 cursor-pointer flex flex-col gap-3 hover:border-border-bright" onClick={() => onEnterConversation({ agent: agent.type })}>
+            <motion.button key={agent.type} type="button" data-agent-card={agent.type}
+              initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.07 }}
+              className="card p-4 cursor-pointer flex flex-col gap-3 hover:border-border-bright text-left"
+              onClick={() => onEnterConversation({ agent: agent.type })}>
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-2.5">
                   <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: agent.bg, color: agent.color }}><Icon size={18} /></div>
@@ -43,7 +115,7 @@ export default function AgentWorkspace({ onEnterConversation }: { onEnterConvers
               </div>
               <div className="grid grid-cols-3 gap-1 pt-2 border-t border-border">{agent.stats.map(s => (<div key={s.label} className="text-center"><p className="text-sm font-bold text-text-primary font-display">{s.value}</p><p className="text-[9px] text-text-muted mt-0.5">{s.label}</p></div>))}</div>
               <div className="flex items-start gap-1.5 px-2.5 py-1.5 rounded-lg" style={{ background: agent.bg }}><TrendingUp size={10} className="flex-shrink-0 mt-0.5" style={{ color: agent.color }} /><p className="text-[10px] leading-relaxed" style={{ color: agent.color }}>{agent.recentActivity}</p></div>
-            </motion.div>
+            </motion.button>
           );
         })}
       </div>

@@ -369,10 +369,11 @@ function CustomerChatView({
   const [humanInput, setHumanInput]     = useState('');
   const [suggestionOpen, setSuggestionOpen] = useState(false);
   const [translating, setTranslating]   = useState(false);
+  const [sentMessages, setSentMessages] = useState<ChatMsg[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const inquiry      = INQUIRIES.find(i => i.id === selectedId)!;
-  const thread       = MOCK_THREADS[selectedId] ?? [];
+  const thread       = [...(MOCK_THREADS[selectedId] ?? []), ...sentMessages];
   const aiSuggestion = AI_SUGGESTIONS[selectedId];
   const langMeta     = LANG_META[inquiry.lang] ?? LANG_META.EN;
   const hasChinese   = /[一-鿿]/.test(humanInput);
@@ -387,6 +388,7 @@ function CustomerChatView({
     setAiMode(true);
     setHumanInput('');
     setSuggestionOpen(false);
+    setSentMessages([]);
     bottomRef.current?.scrollIntoView({ behavior: 'instant' });
   }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -413,6 +415,21 @@ function CustomerChatView({
       setHumanInput(mockTranslate(inquiry.lang, humanInput));
       setTranslating(false);
     }, 700);
+  };
+
+  const handleSend = () => {
+    const text = humanInput.trim();
+    if (!text) return;
+    setSentMessages(prev => [...prev, {
+      role: 'seller',
+      time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
+      content: text,
+      byAi: false,
+      zh: 'Demo 模拟发送成功；正式版将通过已连接渠道外发并记录送达状态',
+    }]);
+    setHumanInput('');
+    setSuggestionOpen(false);
+    setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
   };
 
   return (
@@ -619,7 +636,7 @@ function CustomerChatView({
                     className="flex items-center gap-1 text-xs text-text-muted hover:text-text-secondary transition-colors">
                     <Bot size={11} />切回 AI 托管
                   </button>
-                  <button disabled={!humanInput.trim()}
+                  <button onClick={handleSend} disabled={!humanInput.trim()}
                     className="w-8 h-8 rounded-xl flex items-center justify-center transition-all disabled:opacity-40"
                     style={{ background: '#0891b2', boxShadow: '0 2px 8px rgba(8,145,178,0.3)' }}>
                     <Send size={13} className="text-white" />

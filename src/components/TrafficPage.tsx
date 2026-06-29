@@ -16,9 +16,11 @@ interface Props {
   restore?: RestoreSignal;
   kickoff?: KickoffSignal;
   onAction?: AgentAction;
+  onScriptPanelOpen?: () => void;
+  onScriptPanelClose?: () => void;
 }
 
-export default function TrafficPage({ onEnterConversation, onLeaveConversation, isInConversation, onNavigate, restore, kickoff, onAction }: Props) {
+export default function TrafficPage({ onEnterConversation, onLeaveConversation, isInConversation, onNavigate, restore, kickoff, onAction, onScriptPanelOpen, onScriptPanelClose }: Props) {
   const [viewMode, setViewMode] = useState<ViewMode>('dashboard');
   useEffect(() => { if (restore) setViewMode('chat'); }, [restore?.key]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (kickoff) setViewMode('chat'); }, [kickoff?.key]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -30,6 +32,10 @@ export default function TrafficPage({ onEnterConversation, onLeaveConversation, 
   const handleLeave = () => {
     setViewMode('dashboard');
     onLeaveConversation();
+  };
+  const handleEnterWorkflow = (payload: unknown) => {
+    try { localStorage.setItem('ow_seedance_kickoff', JSON.stringify(payload)); } catch { /* ignore */ }
+    setViewMode('create');
   };
 
   return (
@@ -71,7 +77,7 @@ export default function TrafficPage({ onEnterConversation, onLeaveConversation, 
         <AnimatePresence mode="wait">
           {viewMode === 'dashboard' ? (
             <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full overflow-y-auto">
-              <InspirationDashboard />
+              <InspirationDashboard onScriptPanelOpen={onScriptPanelOpen} onScriptPanelClose={onScriptPanelClose} onEnterWorkflow={handleEnterWorkflow} />
             </motion.div>
           ) : viewMode === 'create' ? (
             <motion.div key="create" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">

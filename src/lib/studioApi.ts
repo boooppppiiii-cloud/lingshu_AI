@@ -8,9 +8,14 @@ async function post<T>(path: string, body: unknown, fallback: T): Promise<T & { 
       headers: { 'Content-Type': 'application/json', ...authHeader() },
       body: JSON.stringify(body),
     });
+    if (r.status === 402 || r.status === 429) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error === 'demo_expired' ? 'Demo 试用已到期，请联系团队开通正式版或延长试用。' : '今日 Demo 额度已用完，请明天再试或联系团队开通正式版。');
+    }
     if (!r.ok) throw new Error(String(r.status));
     return (await r.json()) as T & { source?: string };
-  } catch {
+  } catch (err: any) {
+    if (String(err?.message || '').includes('Demo')) throw err;
     return { ...fallback, source: 'local' };
   }
 }
@@ -73,6 +78,7 @@ export interface RenderAuthorization {
 export interface DesktopRenderBridge {
   available: boolean;
   render: (manifest: RenderManifest) => Promise<{ ok: boolean; outputPath?: string; error?: string }>;
+  openInCapcut?: (payload: Record<string, unknown>) => Promise<{ ok: boolean; dir?: string; error?: string }>;
   onProgress: (cb: (pct: number) => void) => () => void; // 返回取消订阅函数
 }
 
@@ -125,13 +131,33 @@ async function del(path: string): Promise<{ ok: boolean }> {
 }
 
 export const studioApi = {
-  script: (b: { materials: string[]; productInfo?: string; language: string; platform: string; duration: number; scriptType?: 'voiceover' | 'storyboard' }, fb: string) =>
+  script: (b: {
+    materials: string[];
+    productInfo?: string;
+    language: string;
+    platform: string;
+    duration: number;
+    scriptType?: 'voiceover' | 'storyboard';
+    provider?: 'gemini' | 'qwen';
+    audience?: string;
+    sellingPoints?: string;
+    tone?: string;
+  }, fb: string) =>
     post<{ script: string }>('script', b, { script: fb }),
 
-  covers: (b: { script?: string; productInfo?: string; language: string }, fb: string[]) =>
+  covers: (b: { script?: string; productInfo?: string; language: string; provider?: 'gemini' | 'qwen'; tone?: string }, fb: string[]) =>
     post<{ covers: string[] }>('covers', b, { covers: fb }),
 
-  caption: (b: { script?: string; productInfo?: string; platform: string; language: string }, fb: { caption: string; hashtags: string[] }) =>
+  caption: (b: {
+    script?: string;
+    productInfo?: string;
+    platform: string;
+    language: string;
+    provider?: 'gemini' | 'qwen';
+    audience?: string;
+    sellingPoints?: string;
+    tone?: string;
+  }, fb: { caption: string; hashtags: string[] }) =>
     post<{ caption: string; hashtags: string[] }>('caption', b, fb),
 
   select: (b: SelectInput, fb: string[]) =>
@@ -161,24 +187,15 @@ export const studioApi = {
         headers: { 'Content-Type': 'application/json', ...authHeader() },
         body: JSON.stringify(spec),
       });
+      if (r.status === 402 || r.status === 429) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error === 'demo_expired' ? 'Demo 试用已到期，请联系团队开通正式版或延长试用。' : '今日 Demo 视频预览额度已用完，请明天再试或联系团队开通正式版。');
+      }
       if (!r.ok) throw new Error(String(r.status));
       return (await r.json()) as RenderAuthorization;
-    } catch {
+    } catch (err: any) {
+      if (String(err?.message || '').includes('Demo')) throw err;
       return { source: 'local', token: null, expiresAt: null, manifest: localManifest(spec) };
-    }
-  },
-
-  renderLocal: async (manifest: RenderManifest): Promise<{ ok: boolean; outputPath?: string; error?: string }> => {
-    try {
-      const r = await fetch('/api/overseas/studio/render/local', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeader() },
-        body: JSON.stringify({ manifest }),
-      });
-      const data = await r.json().catch(() => ({})) as { ok?: boolean; outputPath?: string; error?: string };
-      return { ok: r.ok && data.ok === true, outputPath: data.outputPath, error: data.error };
-    } catch (error) {
-      return { ok: false, error: error instanceof Error ? error.message : '本地合成失败' };
     }
   },
 

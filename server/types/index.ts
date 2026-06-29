@@ -1,11 +1,10 @@
-export type Platform = 'tiktok' | 'instagram' | 'youtube' | 'facebook' | 'pinterest';
+export type Platform = 'tiktok' | 'instagram' | 'youtube' | 'facebook';
 export type VideoStatus = 'pending' | 'analyzed' | 'failed';
 export type ScriptType = 'voiceover' | 'storyboard';
 export type ScriptStatus = 'draft' | 'reviewed' | 'published';
 export type AssetType = 'image' | 'video';
 export type AssetStatus = 'generating' | 'done' | 'failed';
 export type TrendStatus = 'pending' | 'selected';
-export type YouTubeAccountStatus = 'connected' | 'error' | 'expired';
 
 export interface VideoAiAnalysis {
   theme: string;
@@ -13,6 +12,34 @@ export interface VideoAiAnalysis {
   sellingPoints: string[];
   mood: string;
   structure: string;
+  firstTenSeconds?: {
+    atmosphere?: string;
+    audioVisual?: string;
+    camera?: string;
+    visuals?: string;
+    voiceMusic?: string;
+  };
+  coarseStructure?: Array<{
+    time?: string;
+    frame?: string;
+    label?: string;
+    description?: string;
+  }>;
+  scriptSummary15s?: {
+    visualStyle?: string;
+    coreEmotion?: string;
+    competitors?: string[];
+  };
+  scriptDetails15s?: Array<{
+    time?: string;
+    timestamp?: string;
+    shot?: string;
+    camera?: string;
+    visual?: string;
+    subtitle?: string;
+    audio?: string;
+    note?: string;
+  }>;
   recommendedScriptType: 'voiceover' | 'storyboard';
 }
 
@@ -39,51 +66,6 @@ export interface StoryboardContent {
 }
 
 export type ScriptContent = VoiceoverContent | StoryboardContent;
-
-// YouTube Integration Types
-export interface YouTubeChannelInfo {
-  id: string;
-  title: string;
-  description: string;
-  customUrl?: string;
-  subscriberCount: number;
-  videoCount: number;
-  viewCount: number;
-  thumbnailUrl?: string;
-}
-
-export interface YouTubeVideoData {
-  id: string;
-  title: string;
-  description: string;
-  publishedAt: string;
-  thumbnailUrl: string;
-  viewCount: number;
-  likeCount: number;
-  commentCount: number;
-  duration: string;
-}
-
-export interface YouTubeCommentData {
-  id: string;
-  authorName: string;
-  authorProfileImageUrl?: string;
-  textDisplay: string;
-  likeCount: number;
-  publishedAt: string;
-  videoId: string;
-}
-
-export interface YouTubeSuperChatData {
-  id: string;
-  authorName: string;
-  authorProfileImageUrl?: string;
-  textDisplay: string;
-  amountMicros: number;
-  currency: string;
-  publishedAt: string;
-  videoId?: string;
-}
 
 export const SUPPORTED_LANGUAGES = [
   'en', 'zh', 'es', 'ar', 'fr', 'de', 'pt', 'ru', 'ja', 'ko',

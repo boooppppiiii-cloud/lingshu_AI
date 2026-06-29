@@ -1,8 +1,9 @@
 import { useState, useRef, useEffect, type ReactNode } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ArrowUp, Loader2, X } from 'lucide-react';
+import { ArrowUp, Brain, Loader2, X } from 'lucide-react';
 import type { AgentType, ConversationContext, Message, KickoffSignal, AgentAction } from '../App';
 import AgentReply from './AgentReply';
+import { authHeader } from '../lib/auth';
 
 interface AgentConfig {
   type: AgentType;
@@ -27,41 +28,103 @@ interface Props {
   onAction?: AgentAction;
 }
 
+function mergeConsecutiveAssistant(list: Message[]): Message[] {
+  const merged: Message[] = [];
+  for (const msg of list) {
+    const last = merged[merged.length - 1];
+    if (last?.role === 'assistant' && msg.role === 'assistant') {
+      last.content = [last.content, msg.content].filter(Boolean).join('\n\n');
+      last.sources = msg.sources ?? last.sources;
+    } else {
+      merged.push({ ...msg });
+    }
+  }
+  return merged;
+}
+
 export default function AgentChatPage({ config, onEnterConversation, onLeaveConversation, headerExtra, restoreKey, restoreMessages, kickoff, onAction }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [deepThinking, setDeepThinking] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const inFlightRef = useRef(false);
+  const sentKickoffKeysRef = useRef(new Set<string>());
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
   // 从近期会话恢复 / 新建（清空）
-  useEffect(() => { if (restoreKey !== undefined) setMessages(restoreMessages ?? []); }, [restoreKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (restoreKey !== undefined) setMessages(mergeConsecutiveAssistant(restoreMessages ?? [])); }, [restoreKey]); // eslint-disable-line react-hooks/exhaustive-deps
   // 一键执行：从别处跳来并自动发起任务（新开一段对话）
-  useEffect(() => { if (kickoff) void send(kickoff.text, []); }, [kickoff?.key]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!kickoff || sentKickoffKeysRef.current.has(kickoff.key)) return;
+    sentKickoffKeysRef.current.add(kickoff.key);
+    void send(kickoff.text, []);
+  }, [kickoff?.key]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const send = async (text: string, base?: Message[]) => {
-    if (!text.trim() || loading) return;
+    if (!text.trim() || loading || inFlightRef.current) return;
+    inFlightRef.current = true;
     const userMsg: Message = { role: 'user', content: text };
-    const next = [...(base ?? messages), userMsg];
+    const next = [...mergeConsecutiveAssistant(base ?? messages), userMsg];
+    let assistantStarted = false;
     setMessages(next);
     setInput('');
     setLoading(true);
     onEnterConversation({ agent: config.type, messages: next });
 
+    const ensureAssistant = () => {
+      if (assistantStarted) return;
+      assistantStarted = true;
+      setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
+      setLoading(false);
+    };
+    const updateAssistant = (patch: (msg: Message) => Message) => {
+      ensureAssistant();
+      setMessages(prev => {
+        const copy = [...prev];
+        const idx = copy.length - 1;
+        copy[idx] = patch(copy[idx]);
+        return copy;
+      });
+    };
+
     try {
       const resp = await fetch(config.apiPath, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: next }),
+        headers: { 'Content-Type': 'application/json', ...authHeader() },
+        body: JSON.stringify({ messages: next, deepThinking }),
       });
-      if (!resp.ok || !resp.body) throw new Error('API error');
+      if (!resp.ok || !resp.body) {
+        const err = await resp.json().catch(() => ({}));
+        if (resp.status === 402 || err.error === 'demo_expired') throw new Error('Demo 试用已到期，请联系团队开通正式版或延长试用。');
+        if (resp.status === 429 || err.error === 'demo_quota_exceeded') throw new Error('今日 Demo 额度已用完，请明天再试或联系团队开通正式版。');
+        throw new Error('API error');
+      }
 
-      setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
-      setLoading(false);
+      ensureAssistant();
 
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
       let buf = '';
+      let finished = false;
+      const consumeLine = (line: string) => {
+        if (!line.startsWith('data: ')) return;
+        const payload = line.slice(6).trim();
+        if (payload === '[DONE]') {
+          finished = true;
+          return;
+        }
+        try {
+          const obj = JSON.parse(payload) as { text?: string; sources?: { title: string; uri: string }[]; error?: string };
+          if (obj.text) {
+            updateAssistant(msg => ({ ...msg, role: 'assistant', content: msg.content + obj.text }));
+          } else if (obj.error) {
+            updateAssistant(msg => ({ ...msg, content: msg.content || '抱歉，刚刚连接断开了，请再发一次试试。' }));
+          } else if (obj.sources?.length) {
+            updateAssistant(msg => ({ ...msg, sources: obj.sources }));
+          }
+        } catch { /* skip */ }
+      };
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
@@ -69,30 +132,22 @@ export default function AgentChatPage({ config, onEnterConversation, onLeaveConv
         const lines = buf.split('\n');
         buf = lines.pop() ?? '';
         for (const line of lines) {
-          if (!line.startsWith('data: ')) continue;
-          const payload = line.slice(6).trim();
-          if (payload === '[DONE]') break;
-          try {
-            const obj = JSON.parse(payload) as { text?: string; sources?: { title: string; uri: string }[] };
-            if (obj.text) {
-              setMessages(prev => {
-                const copy = [...prev];
-                copy[copy.length - 1] = { ...copy[copy.length - 1], role: 'assistant', content: copy[copy.length - 1].content + obj.text };
-                return copy;
-              });
-            } else if (obj.sources?.length) {
-              setMessages(prev => {
-                const copy = [...prev];
-                copy[copy.length - 1] = { ...copy[copy.length - 1], sources: obj.sources };
-                return copy;
-              });
-            }
-          } catch { /* skip */ }
+          consumeLine(line);
+          if (finished) break;
         }
+        if (finished) break;
       }
-    } catch {
-      setMessages(prev => [...prev, { role: 'assistant', content: '请求失败，请稍后重试。' }]);
+      if (buf.trim()) consumeLine(buf);
+    } catch (err: any) {
+      const message = err?.message || '请求失败，请稍后重试。';
+      if (assistantStarted) {
+        updateAssistant(msg => ({ ...msg, content: msg.content ? `${msg.content}\n\n${message}` : message }));
+      } else {
+        setMessages(prev => [...prev, { role: 'assistant', content: message }]);
+      }
+    } finally {
       setLoading(false);
+      inFlightRef.current = false;
     }
   };
 
@@ -186,7 +241,17 @@ export default function AgentChatPage({ config, onEnterConversation, onLeaveConv
             onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(input); } }}
             placeholder={`向 ${config.name} 提问…`} rows={2}
             className="w-full px-4 pt-3 pb-1 bg-transparent text-sm text-text-primary placeholder:text-text-muted resize-none outline-none" />
-          <div className="flex items-center justify-end px-3 pb-3 pt-1">
+          <div className="flex items-center justify-between px-3 pb-3 pt-1">
+            <button type="button" onClick={() => setDeepThinking(v => !v)}
+              title="打开后会多花一点时间做更细判断"
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                deepThinking
+                  ? 'bg-surface text-text-primary shadow-sm'
+                  : 'text-text-muted hover:text-text-secondary hover:bg-surface'
+              }`}>
+              <Brain size={12} />
+              <span>深度思考</span>
+            </button>
             <button onClick={() => void send(input)} disabled={!input.trim() || loading}
               className="w-8 h-8 rounded-xl flex items-center justify-center transition-all disabled:opacity-40"
               style={{ background: config.color, boxShadow: `0 2px 8px ${config.color}44` }}>

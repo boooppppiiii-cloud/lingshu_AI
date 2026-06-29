@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('desktopRender', {
   available: true,
   /** @param {object} manifest 服务器下发的渲染清单 */
   render: manifest => ipcRenderer.invoke('render:start', manifest),
+  /** 导出剪映/CapCut 手动精修包 */
+  openInCapcut: payload => ipcRenderer.invoke('capcut:open', payload),
   /** 订阅进度，返回取消订阅函数 */
   onProgress: cb => {
     const listener = (_e, pct) => cb(pct);

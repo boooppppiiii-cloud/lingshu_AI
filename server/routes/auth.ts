@@ -1,7 +1,8 @@
 import { Router } from 'express';
-import { getPbUrl, pbCreate, pbGet } from '../storage/pb.js';
+import { getPbUrl, getPbAdminToken, pbCreate, pbGet } from '../storage/pb.js';
 import { auth } from '../storage/index.js';
 import { getTenantSubscription } from '../middleware/subscription.js';
+import { buildDemoStatus, demoTrialExpiresAt } from '../lib/demo.js';
 
 /* ──────────────────────────────────────────────────────────────────────────
    账号 / 登录（基于 PocketBase）
@@ -15,12 +16,34 @@ export const authRouter = Router();
 
 interface PbUser { id: string; email?: string; name?: string; tenantId?: string }
 
-async function pbLogin(email: string, password: string): Promise<{ token: string; record: PbUser } | null> {
+async function resolveLoginIdentity(identity: string): Promise<string> {
+  const raw = String(identity).trim();
+  if (raw.includes('@')) return raw;
+
+  const adminToken = await getPbAdminToken();
+  if (!adminToken) return raw;
+
+  const normalized = raw.replace(/\s+/g, ' ');
+  const filter = `name = "${normalized.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
   try {
+    const res = await fetch(`${getPbUrl()}/api/collections/users/records?perPage=1&filter=${encodeURIComponent(filter)}`, {
+      headers: { Authorization: adminToken },
+    });
+    if (!res.ok) return raw;
+    const json = (await res.json()) as { items?: PbUser[] };
+    return json.items?.[0]?.email || raw;
+  } catch {
+    return raw;
+  }
+}
+
+async function pbLogin(identity: string, password: string): Promise<{ token: string; record: PbUser } | null> {
+  try {
+    const loginIdentity = await resolveLoginIdentity(identity);
     const res = await fetch(`${getPbUrl()}/api/collections/users/auth-with-password`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ identity: email, password }),
+      body: JSON.stringify({ identity: loginIdentity, password }),
     });
     if (!res.ok) return null;
     return (await res.json()) as { token: string; record: PbUser };
@@ -45,12 +68,17 @@ function publicTenant(t: Record<string, unknown> | null) {
 
 // POST /auth/register  { email, password, companyName? }
 authRouter.post('/register', async (req, res) => {
-  const { email, password, companyName } = req.body ?? {};
+  const { email, password, companyName, inviteCode } = req.body ?? {};
   if (!email || !password) { res.status(400).json({ error: '邮箱和密码必填' }); return; }
   if (String(password).length < 8) { res.status(400).json({ error: '密码至少 8 位' }); return; }
+  const expectedInvite = process.env.DEMO_INVITE_CODE?.trim();
+  if (expectedInvite && inviteCode !== expectedInvite) {
+    res.status(403).json({ error: '邀请码无效，请联系团队获取 Demo 访问码' });
+    return;
+  }
 
   const now = new Date();
-  const expiresAt = new Date(now.getTime() + 14 * 24 * 3600 * 1000).toISOString(); // 14 天试用
+  const expiresAt = demoTrialExpiresAt(now);
   const tenant = await pbCreate('tenants', {
     name: companyName || String(email).split('@')[0],
     subscriptionStatus: 'trialing',
@@ -68,7 +96,7 @@ authRouter.post('/register', async (req, res) => {
 
   const login = await pbLogin(email, password);
   if (!login) { res.status(500).json({ error: '注册后自动登录失败' }); return; }
-  res.json({ token: login.token, user: publicUser(login.record), tenant: publicTenant(tenant) });
+  res.json({ token: login.token, user: publicUser(login.record), tenant: publicTenant(tenant), demo: await buildDemoStatus(req, String(tenant.id), String(tenant.subscriptionExpiresAt ?? expiresAt)) });
 });
 
 // POST /auth/login  { email, password }
@@ -78,7 +106,8 @@ authRouter.post('/login', async (req, res) => {
   const login = await pbLogin(email, password);
   if (!login) { res.status(401).json({ error: '邮箱或密码错误' }); return; }
   const tenant = login.record.tenantId ? await pbGet('tenants', login.record.tenantId) : null;
-  res.json({ token: login.token, user: publicUser(login.record), tenant: publicTenant(tenant) });
+  const subscription = login.record.tenantId ? await getTenantSubscription(login.record.tenantId) : null;
+  res.json({ token: login.token, user: publicUser(login.record), tenant: publicTenant(tenant), demo: await buildDemoStatus(req, login.record.tenantId, subscription?.expiresAt) });
 });
 
 // GET /auth/me  (Authorization: Bearer <token>)
@@ -87,9 +116,11 @@ authRouter.get('/me', async (req, res) => {
   if (!id) { res.status(401).json({ error: 'Unauthorized' }); return; }
   const [user, tenant] = await Promise.all([pbGet('users', id.userId), pbGet('tenants', id.tenantId)]);
   const subscription = await getTenantSubscription(id.tenantId);
+  const demo = await buildDemoStatus(req, id.tenantId, subscription.expiresAt);
   res.json({
     user: user ? publicUser(user as unknown as PbUser) : { id: id.userId, email: '', name: '', tenantId: id.tenantId },
     tenant: publicTenant(tenant),
     subscription,
+    demo,
   });
 });

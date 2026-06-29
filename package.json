@@ -11,6 +11,8 @@
     "preview": "vite preview",
     "start": "NODE_ENV=production NODE_USE_ENV_PROXY=1 tsx server/index.ts",
     "setup:pb": "tsx scripts/setup-pb.ts",
+    "demo:seed": "tsx scripts/demo-seed.ts",
+    "demo:reset": "tsx scripts/demo-reset.ts",
     "desktop": "electron desktop/main.cjs",
     "lint": "tsc --noEmit"
   },

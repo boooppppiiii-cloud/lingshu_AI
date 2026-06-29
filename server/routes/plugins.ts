@@ -5,6 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { testShopify } from '../integrations/shopify.js';
 import { getPhoneNumberInfo, verifyWhatsAppWebhook } from '../integrations/whatsapp.js';
+import { isDemoMode } from '../lib/demo.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA = path.join(__dirname, '../../data/plugins.json');
@@ -166,6 +167,17 @@ pluginsRouter.delete('/:key', (req: Request, res: Response) => {
 pluginsRouter.post('/:key/test', async (req: Request, res: Response) => {
   const plugin = load().find(p => p.pluginKey === req.params.key);
   if (!plugin) { res.status(404).json({ error: 'not installed' }); return; }
+
+  if (isDemoMode()) {
+    updateStatus(plugin.id, 'installed');
+    res.json({
+      ok: true,
+      source: 'demo',
+      message: 'Demo 模式：插件测试已模拟通过，真实 OAuth/数据同步由平台集成模块接入。',
+      sample: { connectedAccount: `${plugin.nameZh || plugin.name} Demo Account`, syncedAt: new Date().toISOString() },
+    });
+    return;
+  }
 
   try {
     switch (plugin.pluginKey) {

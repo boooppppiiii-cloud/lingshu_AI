@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'motion/react';
-import { Globe, Loader2, Mail, Lock, Building2 } from 'lucide-react';
+import { Globe, Loader2, Mail, Lock, Building2, KeyRound } from 'lucide-react';
 import { authApi, setToken, type AuthSession } from '../lib/auth';
 
 export default function AuthScreen({ onAuthed }: { onAuthed: (s: AuthSession) => void }) {
@@ -8,6 +8,7 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (s: AuthSession) =>
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [company, setCompany] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -19,9 +20,9 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (s: AuthSession) =>
     try {
       const r = mode === 'login'
         ? await authApi.login(email, password)
-        : await authApi.register(email, password, company);
+        : await authApi.register(email, password, company, inviteCode);
       setToken(r.token);
-      onAuthed({ user: r.user, tenant: r.tenant });
+      onAuthed({ user: r.user, tenant: r.tenant, demo: r.demo });
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : '请求失败');
     } finally {
@@ -44,14 +45,21 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (s: AuthSession) =>
 
         <div className="card !rounded-2xl p-6">
           <h1 className="text-base font-bold text-text-primary mb-1">{mode === 'login' ? '登录' : '注册'}</h1>
-          <p className="text-xs text-text-muted mb-5">{mode === 'login' ? '欢迎回来，继续你的出海营销' : '创建账号，享 14 天免费试用'}</p>
+          <p className="text-xs text-text-muted mb-5">{mode === 'login' ? '欢迎回来，继续你的出海营销' : '创建账号，开始 Demo 试用'}</p>
 
           <div className="space-y-3">
             {mode === 'register' && (
-              <div className="relative">
-                <Building2 size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
-                <input value={company} onChange={e => setCompany(e.target.value)} placeholder="公司名称（选填）" className={inputCls} />
-              </div>
+              <>
+                <div className="relative">
+                  <Building2 size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+                  <input value={company} onChange={e => setCompany(e.target.value)} placeholder="公司名称（选填）" className={inputCls} />
+                </div>
+                <div className="relative">
+                  <KeyRound size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+                  <input value={inviteCode} onChange={e => setInviteCode(e.target.value)} placeholder="Demo 邀请码（如已启用）" className={inputCls}
+                    onKeyDown={e => e.key === 'Enter' && void submit()} />
+                </div>
+              </>
             )}
             <div className="relative">
               <Mail size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />

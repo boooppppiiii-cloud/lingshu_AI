@@ -1,1 +1,55 @@
-{}
+{
+  "company": {
+    "name": "GlowNest Beauty Co., Ltd.",
+    "industry": "美妆个护 / 护肤彩妆 OEM/ODM",
+    "companyType": "工贸一体，拥有配方研发与灌装包装协作工厂",
+    "mainMarkets": "美国、沙特、阿联酋、德国、印尼",
+    "primaryLanguages": "英语、阿拉伯语、西班牙语",
+    "founded": "2018",
+    "description": "专注天然温和护肤与彩妆套装的跨境美妆供应商，服务海外独立站品牌、TikTok Shop 卖家、区域批发商和连锁美妆集合店。强项是小批量试单、快速打样、包装定制和合规资料协同。"
+  },
+  "products": {
+    "categories": "玻尿酸精华、维 C 亮肤精华、烟酰胺面霜、唇釉、眉笔、化妆刷套装、旅行装护肤套装",
+    "priceRange": "FOB $1.2 - $9.8 / piece；套装 $6 - $28",
+    "moq": "现货款 100 件起；私标包装 500 件起；配方微调 1000 件起",
+    "certifications": "GMPC、ISO22716、MSDS、COA、CPNP 协助、FDA MoCRA 资料协助",
+    "highlights": "7 天内完成现货样品；15-25 天完成私标包装大货；支持低刺激、纯素、无动物测试、无酒精等卖点组合；可提供英文/阿语标签合规建议。"
+  },
+  "brand": {
+    "tone": "专业、可信、温和、精致、成分导向",
+    "style": "专业",
+    "taboos": "不使用 cheap、miracle cure、永久祛斑等低价或夸大功效表达；不承诺未经认证的医疗功效；不使用竞品品牌词。",
+    "usp": "Low-MOQ private-label beauty products with compliant documentation and fast sampling.",
+    "preferredLanguages": "英语、阿拉伯语、西班牙语"
+  },
+  "strategy": {
+    "currentGoal": "提升高质量私标询盘，并用 TikTok/Instagram 内容带动小批量测试单。",
+    "focusProducts": "玻尿酸精华、维 C 亮肤精华、唇釉套装、旅行装护肤套装",
+    "focusMarkets": "美国 DTC 美妆品牌、中东美妆批发商、印尼 TikTok Shop 卖家",
+    "excludedMarkets": "需要动物测试或功效审批周期过长的市场暂不主动推广",
+    "pricingStrategy": "中端私标供应商定位，不主打最低价；样品单可给包材方案优惠，大货坚持 28% 以上毛利。",
+    "minMargin": "28%",
+    "agentAutonomy": "Agent 可自动生成标题、脚本、话术和优化建议；涉及报价、认证承诺、交期承诺必须用户确认。"
+  },
+  "customers": {
+    "targetProfiles": "海外 DTC 美妆初创品牌、TikTok Shop 卖家、中东/东南亚批发商、连锁美妆集合店采购。关注小批量起订、包装质感、成分安全、合规文件和复购稳定性。",
+    "highValueSignals": "询问私标包装、配方稳定性、MSDS/COA/CPNP、目标上架渠道、复购节奏、套装组合和补货周期。",
+    "lowQualitySignals": "只问 lowest price、MOQ 低于 100 件、要求夸大功效、无公司/渠道信息、要求仿制知名品牌包装。",
+    "commonQuestions": "样品费能否抵扣；是否支持 Logo 和外盒设计；是否有英文/阿语标签；敏感肌是否可用；交期和海运/空运选择。",
+    "followupStyle": "报价后第 2 天跟进，强调样品档期和包装设计排期；第 5 天补充同类市场案例和套装建议。"
+  },
+  "operations": {
+    "leadTime": "现货样品 3-7 天；私标包装大货 15-25 天；配方微调 30-45 天。",
+    "customization": "支持 Logo、外盒、瓶型、色号、香型、套装组合和多语言标签；深度配方开发需单独评估。",
+    "logistics": "DHL/FedEx 小样；大货支持空运、海运、DDP 到门和中东专线。",
+    "paymentTerms": "样品费预付；大货 T/T 30% 订金，70% 出货前结清。",
+    "riskNotes": "敏感功效、进口注册和标签合规必须确认目标市场法规；不承诺固定清关时效。"
+  },
+  "agentLearning": {
+    "provenAngles": "天然温和、低 MOQ 私标、快速打样、真实工厂质检、套装组合、英文/阿语标签支持。",
+    "weakAngles": "lowest price、夸大 before/after、泛泛 lifestyle、只讲 factory direct 不讲合规资料。",
+    "pendingAssumptions": "近 30 天中东买家对唇釉套装和阿语标签更敏感，待用户确认是否提高投放优先级。",
+    "userCorrections": "把 cheap 改成 cost-effective；把 whitening 改成 brightening；避免 medical claim。"
+  },
+  "knowledge": "美妆内容脚本优先强调成分、肤感、包装质感和上架合规。社媒视频结构建议：3 秒痛点/质感钩子，6-12 秒展示质地和包装，结尾引导索样或获取私标报价。询盘回复中先问目标市场、预期 MOQ、是否已有品牌设计和上架渠道。"
+}

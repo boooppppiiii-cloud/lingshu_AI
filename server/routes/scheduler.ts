@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import cron, { type ScheduledTask as CronJob } from 'node-cron';
 import { callLLMChatStream } from '../agents/llm.js';
 import { buildEnterpriseContext } from './enterprise.js';
+import { isDemoMode } from '../lib/demo.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA = path.join(__dirname, '../../data/tasks.json');
@@ -78,6 +79,20 @@ async function executeCrmWakeup(_task: ScheduledTask): Promise<string> {
 }
 
 async function executeTask(task: ScheduledTask): Promise<string> {
+  if (isDemoMode()) {
+    switch (task.taskType) {
+      case 'trend_report':
+        return '【Demo 趋势简报】今日建议围绕占位行业模板补充 3 条短视频选题：痛点开场、工厂实力背书、客户案例转化。真实平台数据接入后，这里会替换为 TikTok/Instagram/Shopify 数据分析。';
+      case 'weekly_review':
+        return '【Demo 周报】本周模拟数据：流量增长 18%，询盘转化率 12%，老客唤醒 6 人。建议下周优先完善真实商品库与渠道授权。';
+      case 'exchange_rate':
+        return '【Demo 汇率日报】USD/CNY 7.20 | USD/AED 3.67 | USD/SAR 3.75。正式版将接实时汇率源。';
+      case 'crm_wakeup':
+        return '【Demo 老客唤醒】您好，我们根据您的历史采购偏好准备了新品方案。若您方便，我可以发一份最新目录和报价给您参考。';
+      default:
+        return '【Demo 任务】已模拟执行成功，真实推送由渠道集成模块接入。';
+    }
+  }
   switch (task.taskType) {
     case 'trend_report':  return executeTrendReport(task);
     case 'weekly_review': return executeWeeklyReview(task);
