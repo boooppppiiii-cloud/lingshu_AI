@@ -135,6 +135,36 @@ function parseCoarseStructure(value: unknown): VideoAiAnalysis['coarseStructure'
   return rows.length ? rows.slice(0, 12) : undefined;
 }
 
+function parseScriptSummary15s(value: unknown): VideoAiAnalysis['scriptSummary15s'] | undefined {
+  if (!isRecord(value)) return undefined;
+  const result = {
+    visualStyle: String(value.visualStyle ?? '').trim(),
+    coreEmotion: String(value.coreEmotion ?? '').trim(),
+    competitors: Array.isArray(value.competitors) ? value.competitors.map(String).filter(Boolean) : [],
+  };
+  return result.visualStyle || result.coreEmotion || result.competitors.length ? result : undefined;
+}
+
+function parseScriptDetails15s(value: unknown): VideoAiAnalysis['scriptDetails15s'] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const rows = value.map((item) => {
+    if (!isRecord(item)) return null;
+    const visual = String(item.visual ?? '').trim();
+    const subtitle = String(item.subtitle ?? '').trim();
+    if (!visual && !subtitle) return null;
+    return {
+      time: String(item.time ?? item.timestamp ?? '').trim(),
+      shot: String(item.shot ?? '').trim(),
+      camera: String(item.camera ?? '').trim(),
+      visual,
+      subtitle,
+      audio: String(item.audio ?? '').trim(),
+      note: String(item.note ?? '').trim(),
+    };
+  }).filter((item): item is NonNullable<typeof item> => Boolean(item));
+  return rows.length ? rows.slice(0, 12) : undefined;
+}
+
 function normalizeVideoAnalysis(parsed: Partial<VideoAiAnalysis>): VideoAiAnalysis {
   return {
     theme: String(parsed.theme ?? ''),
@@ -144,6 +174,8 @@ function normalizeVideoAnalysis(parsed: Partial<VideoAiAnalysis>): VideoAiAnalys
     structure: String(parsed.structure ?? ''),
     firstTenSeconds: parseFirstTenSeconds(parsed.firstTenSeconds),
     coarseStructure: parseCoarseStructure(parsed.coarseStructure),
+    scriptSummary15s: parseScriptSummary15s(parsed.scriptSummary15s),
+    scriptDetails15s: parseScriptDetails15s(parsed.scriptDetails15s),
     recommendedScriptType: parsed.recommendedScriptType === 'storyboard' ? 'storyboard' : 'voiceover',
   };
 }
@@ -172,6 +204,15 @@ export async function analyzeVideo(opts: {
   - visuals: 画面
   - voiceMusic: 配音配乐
 - coarseStructure: array，粗略脚本结构即可，按约 3 秒一帧拆解 0–30 秒；每项包含 time、label、description
+- scriptSummary15s: object，15 秒脚本详析摘要，包含 visualStyle（指定画风）、coreEmotion（核心情绪）、competitors（竞品/品牌/视觉参照物数组；如无明确识别则空数组）
+- scriptDetails15s: array，逐时间戳详析 0–15 秒，每项必须包含：
+  - time: string，使用类似 "0.2s" 或 "5.2s–7.2s" 的时间戳
+  - shot: string，景别，例如“特写”“中景”“近景”
+  - camera: string，运镜，例如“固定镜头”“微推近”“手持晃动”“旋转运镜”
+  - visual: string，具体画面人物/产品/动作/场景
+  - subtitle: string，画面字幕或口播原句；没有字幕则概括口播
+  - audio: string，配音、BGM、音效
+  - note: string，可选，记录字幕口误、品牌露出、无法确认信息
 - recommendedScriptType: "voiceover" | "storyboard"`;
 
   const raw = await withRetry(() =>
@@ -214,6 +255,15 @@ export async function analyzeYouTubeUrl(opts: {
   - visuals: 画面
   - voiceMusic: 配音配乐
 - coarseStructure: array，粗略脚本结构即可，按约 3 秒一帧拆解 0–30 秒；每项包含 time、label、description
+- scriptSummary15s: object，15 秒脚本详析摘要，包含 visualStyle（指定画风）、coreEmotion（核心情绪）、competitors（竞品/品牌/视觉参照物数组；如无明确识别则空数组）
+- scriptDetails15s: array，逐时间戳详析 0–15 秒，每项必须包含：
+  - time: string，使用类似 "0.2s" 或 "5.2s–7.2s" 的时间戳
+  - shot: string，景别，例如“特写”“中景”“近景”
+  - camera: string，运镜，例如“固定镜头”“微推近”“手持晃动”“旋转运镜”
+  - visual: string，具体画面人物/产品/动作/场景
+  - subtitle: string，画面字幕或口播原句；没有字幕则概括口播
+  - audio: string，配音、BGM、音效
+  - note: string，可选，记录字幕口误、品牌露出、无法确认信息
 - recommendedScriptType: "voiceover" | "storyboard"`;
 
   const raw = await withRetry(() =>

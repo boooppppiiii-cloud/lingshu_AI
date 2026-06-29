@@ -25,6 +25,21 @@ export interface VideoAiAnalysis {
     label?: string;
     description?: string;
   }>;
+  scriptSummary15s?: {
+    visualStyle?: string;
+    coreEmotion?: string;
+    competitors?: string[];
+  };
+  scriptDetails15s?: Array<{
+    time?: string;
+    timestamp?: string;
+    shot?: string;
+    camera?: string;
+    visual?: string;
+    subtitle?: string;
+    audio?: string;
+    note?: string;
+  }>;
   recommendedScriptType: 'voiceover' | 'storyboard';
 }
 

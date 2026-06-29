@@ -573,11 +573,27 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
           <span>{analysis.emotion}</span>
         </div>
 
+        {/* 爆款原因 */}
+        <div>
+          <div className="flex items-center gap-1.5 mb-2">
+            <Lightbulb size={11} className="text-accent" />
+            <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wider">爆款核心原因 · 前 10 秒五维拆解</p>
+          </div>
+          <div className="space-y-1.5">
+            {analysis.firstTenSeconds.map((item, i) => (
+              <div key={i} className="flex items-start gap-2 px-3 py-2 rounded-lg bg-surface-2 border border-border">
+                <span className="text-accent font-bold text-[11px] flex-shrink-0 mt-px">{item.dimension}</span>
+                <p className="text-[11px] text-text-secondary leading-snug">{item.detail}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
         {/* 脚本结构 */}
         <div>
           <div className="flex items-center gap-1.5 mb-2">
             <LayoutIcon size={11} style={{ color: '#0891b2' }} />
-            <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wider">脚本结构拆解</p>
+            <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wider">视频结构拆解</p>
           </div>
           <div className="space-y-1.5">
             {analysis.structure.map((step, i) => (
@@ -601,19 +617,36 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
           </div>
         </div>
 
-        {/* 爆款原因 */}
+        {/* 15 秒脚本详析 */}
         <div>
           <div className="flex items-center gap-1.5 mb-2">
-            <Lightbulb size={11} className="text-accent" />
-            <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wider">爆款核心原因 · 前 10 秒五维拆解</p>
+            <FileText size={11} className="text-amber" />
+            <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wider">15 秒脚本详析</p>
           </div>
-          <div className="space-y-1.5">
-            {analysis.firstTenSeconds.map((item, i) => (
-              <div key={i} className="flex items-start gap-2 px-3 py-2 rounded-lg bg-surface-2 border border-border">
-                <span className="text-accent font-bold text-[11px] flex-shrink-0 mt-px">{item.dimension}</span>
-                <p className="text-[11px] text-text-secondary leading-snug">{item.detail}</p>
-              </div>
-            ))}
+          <div className="rounded-xl border border-border overflow-hidden">
+            <div className="px-3 py-2.5 bg-surface-2 border-b border-border space-y-1">
+              <p className="text-[11px] text-text-secondary"><span className="font-semibold text-text-primary">指定画风：</span>{analysis.scriptSummary15s.visualStyle}</p>
+              <p className="text-[11px] text-text-secondary"><span className="font-semibold text-text-primary">核心情绪：</span>{analysis.scriptSummary15s.coreEmotion}</p>
+              <p className="text-[11px] text-text-secondary">
+                <span className="font-semibold text-text-primary">竞品识别：</span>
+                {analysis.scriptSummary15s.competitors.length
+                  ? analysis.scriptSummary15s.competitors.map(item => `==${item}==`).join('；')
+                  : '未识别到明确竞品/品牌露出'}
+              </p>
+            </div>
+            <div className="divide-y divide-border">
+              {analysis.scriptDetails15s.map((item, i) => (
+                <div key={`${item.time}-${i}`} className="px-3 py-2.5">
+                  <p className="text-[11px] leading-relaxed text-text-secondary">
+                    <span className="font-mono font-semibold text-accent">[{item.time}]</span>{' '}
+                    <span className="font-semibold text-text-primary">{item.shot}</span>；{item.camera}；{item.visual}
+                    {item.subtitle ? `；字幕：“${item.subtitle}”` : ''}
+                    {item.audio ? `；${item.audio}` : ''}
+                    {item.note ? `（注：${item.note}）` : ''}
+                  </p>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
 
