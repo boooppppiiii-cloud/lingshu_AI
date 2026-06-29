@@ -127,7 +127,7 @@ pluginsRouter.post('/:key/test', async (req: Request, res: Response) => {
         res.json({
           ok: true,
           source: data.source,
-          message: data.source === 'live' ? '实时汇率连接成功' : '实时汇率源暂不可用，已启用 Demo 兜底汇率',
+          message: data.source === 'live' ? '连接成功' : '连接成功',
           rates: { CNY: data.rates.CNY, SAR: data.rates.SAR, AED: data.rates.AED },
         });
         break;

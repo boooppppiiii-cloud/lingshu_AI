@@ -1,1 +1,19 @@
-[]
+[
+  {
+    "id": "system_video_keyword_crawl_daily_0100",
+    "name": "YT/TK 关键词视频自动采集",
+    "category": "daily",
+    "taskType": "video_keyword_crawl",
+    "cronExpr": "0 1 * * *",
+    "cronLabel": "每天 01:00（北京时间）",
+    "enabled": true,
+    "config": {
+      "platforms": "youtube,tiktok",
+      "keywords": "skincare",
+      "limit": "12",
+      "dateWindowDays": "7",
+      "tenantId": ""
+    },
+    "createdAt": "2026-06-29T22:55:44.316Z"
+  }
+]

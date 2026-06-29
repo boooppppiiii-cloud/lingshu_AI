@@ -614,12 +614,9 @@ export default function PluginsPage() {
     try {
       const r = await fetch(`/api/overseas/plugins/${pluginKey}/test`, { method: 'POST' });
       const data = await r.json() as { ok: boolean; shopName?: string; message?: string; error?: string; rates?: Record<string, number>; source?: string };
-      const rateMsg = data.rates
-        ? `${data.message ?? '汇率连接成功'}：CNY ${data.rates.CNY} / SAR ${data.rates.SAR} / AED ${data.rates.AED}`
-        : null;
       setTestResult(prev => ({
         ...prev,
-        [pluginKey]: { ok: data.ok, msg: data.ok ? (rateMsg ?? (data.shopName ? `连接成功：${data.shopName}` : (data.message ?? '连接成功'))) : (data.error ?? '连接失败') },
+        [pluginKey]: { ok: data.ok, msg: data.ok ? (data.shopName ? `连接成功：${data.shopName}` : (data.message ?? '连接成功')) : (data.error ?? '连接失败') },
       }));
       await fetchPlugins();
     } catch {
@@ -714,7 +711,7 @@ export default function PluginsPage() {
                           <div className="flex gap-2 mt-3">
                             {!plugin.installed ? (
                               <button
-                                onClick={() => void install(plugin.pluginKey)}
+                                onClick={e => { e.preventDefault(); e.stopPropagation(); void install(plugin.pluginKey); }}
                                 disabled={installing === plugin.pluginKey}
                                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-white font-medium disabled:opacity-50 transition-colors"
                                 style={{ background: '#16a34a' }}
@@ -725,14 +722,14 @@ export default function PluginsPage() {
                               <>
                                 {fields.length > 0 && (
                                   <button
-                                    onClick={() => { setConfigTarget(plugin); setConfigValues(plugin.config); }}
+                                    onClick={e => { e.preventDefault(); e.stopPropagation(); setConfigTarget(plugin); setConfigValues(plugin.config); }}
                                     className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition-colors"
                                   >
                                     <Settings size={12} /> 配置
                                   </button>
                                 )}
                                 <button
-                                  onClick={() => void testPlugin(plugin.pluginKey)}
+                                  onClick={e => { e.preventDefault(); e.stopPropagation(); void testPlugin(plugin.pluginKey); }}
                                   disabled={testing === plugin.pluginKey}
                                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-white disabled:opacity-50 transition-colors"
                                   style={{ background: '#16a34a' }}
@@ -740,7 +737,7 @@ export default function PluginsPage() {
                                   {testing === plugin.pluginKey ? '测试中...' : '测试'}
                                 </button>
                                 <button
-                                  onClick={() => void uninstall(plugin.pluginKey)}
+                                  onClick={e => { e.preventDefault(); e.stopPropagation(); void uninstall(plugin.pluginKey); }}
                                   className="px-2.5 py-1.5 border border-gray-200 rounded-lg text-gray-400 hover:text-red-400 hover:border-red-200 transition-colors"
                                 >
                                   <Trash2 size={12} />

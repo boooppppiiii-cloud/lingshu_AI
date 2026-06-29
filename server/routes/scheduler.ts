@@ -6,6 +6,9 @@ import cron, { type ScheduledTask as CronJob } from 'node-cron';
 import { callLLMChatStream } from '../agents/llm.js';
 import { buildEnterpriseContext } from './enterprise.js';
 import { isDemoMode } from '../lib/demo.js';
+import { store } from '../storage/index.js';
+import { crawlVideosForTenant, getVideoPipelineStats } from './videos.js';
+import type { Platform } from '../types/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA = path.join(__dirname, '../../data/tasks.json');
@@ -15,7 +18,7 @@ export interface ScheduledTask {
   id: string;
   name: string;
   category: 'daily' | 'monitor' | 'report' | 'automation';
-  taskType: 'trend_report' | 'weekly_review' | 'crm_wakeup' | 'exchange_rate' | 'holiday_push' | 'custom';
+  taskType: 'trend_report' | 'weekly_review' | 'crm_wakeup' | 'exchange_rate' | 'holiday_push' | 'video_keyword_crawl' | 'custom';
   cronExpr: string;      // e.g. "0 8 * * *"
   cronLabel: string;     // e.g. "每天 08:00"
   enabled: boolean;
@@ -39,6 +42,30 @@ function getEnterpriseCtx(): string {
 
 // Active cron jobs registry
 const activeJobs = new Map<string, CronJob>();
+const DEFAULT_VIDEO_CRAWL_TASK_ID = 'system_video_keyword_crawl_daily_0100';
+
+function ensureDefaultVideoCrawlTask(): void {
+  const tasks = load();
+  if (tasks.some(task => task.id === DEFAULT_VIDEO_CRAWL_TASK_ID || task.taskType === 'video_keyword_crawl')) return;
+  const task: ScheduledTask = {
+    id: DEFAULT_VIDEO_CRAWL_TASK_ID,
+    name: 'YT/TK 关键词视频自动采集',
+    category: 'daily',
+    taskType: 'video_keyword_crawl',
+    cronExpr: '0 1 * * *',
+    cronLabel: '每天 01:00（北京时间）',
+    enabled: true,
+    config: {
+      platforms: 'youtube,tiktok',
+      keywords: process.env.SCHEDULED_VIDEO_KEYWORDS || 'skincare',
+      limit: process.env.SCHEDULED_VIDEO_LIMIT || '12',
+      dateWindowDays: process.env.SCHEDULED_VIDEO_DATE_WINDOW_DAYS || '7',
+      tenantId: process.env.SCHEDULED_VIDEO_TENANT_ID || '',
+    },
+    createdAt: new Date().toISOString(),
+  };
+  save([task, ...tasks]);
+}
 
 async function executeTrendReport(_task: ScheduledTask): Promise<string> {
   const messages = [{ role: 'user' as const, content: '生成今日TikTok跨境电商爆款趋势简报，包括：热门品类、热门话题标签、建议借势策略，控制在300字以内' }];
@@ -78,7 +105,71 @@ async function executeCrmWakeup(_task: ScheduledTask): Promise<string> {
   return result;
 }
 
+async function resolveSchedulerTenantId(task: ScheduledTask): Promise<string> {
+  const configured = task.config.tenantId || process.env.SCHEDULED_VIDEO_TENANT_ID || process.env.DEFAULT_TENANT_ID || '';
+  if (configured.trim()) return configured.trim();
+  const latestVideo = await store.list<Record<string, unknown>>('trend_videos', { page: 1, perPage: 1, sort: '-crawledAt' });
+  const videoTenantId = String(latestVideo.items[0]?.tenantId || '').trim();
+  if (videoTenantId) return videoTenantId;
+  const tenants = await store.list<Record<string, unknown>>('tenants', { page: 1, perPage: 1 });
+  const tenantId = String(tenants.items[0]?.id || '').trim();
+  if (!tenantId) throw new Error('未找到可执行视频采集的租户，请在任务 config.tenantId 或 SCHEDULED_VIDEO_TENANT_ID 中配置');
+  return tenantId;
+}
+
+function beijingDateRange(daysRaw: string | undefined): { dateFrom: string; dateTo: string } {
+  const days = Math.max(1, Math.min(30, Number(daysRaw || 7) || 7));
+  const dayMs = 24 * 60 * 60 * 1000;
+  const bjNow = new Date(Date.now() + 8 * 60 * 60 * 1000);
+  const end = bjNow.toISOString().slice(0, 10);
+  const start = new Date(bjNow.getTime() - (days - 1) * dayMs).toISOString().slice(0, 10);
+  return { dateFrom: start, dateTo: end };
+}
+
+function splitConfigList(value: string | undefined, fallback: string[]): string[] {
+  const items = String(value || '')
+    .split(/[\n,，;；、]+/)
+    .map(item => item.trim())
+    .filter(Boolean);
+  return items.length > 0 ? items : fallback;
+}
+
+async function executeVideoKeywordCrawl(task: ScheduledTask): Promise<string> {
+  const tenantId = await resolveSchedulerTenantId(task);
+  const platforms = splitConfigList(task.config.platforms, ['youtube', 'tiktok'])
+    .filter((platform): platform is Platform => ['youtube', 'tiktok'].includes(platform));
+  const keywords = splitConfigList(task.config.keywords || task.config.keyword, ['skincare']);
+  const limit = Math.max(1, Math.min(30, Number(task.config.limit || 12) || 12));
+  const { dateFrom, dateTo } = beijingDateRange(task.config.dateWindowDays);
+  const lines: string[] = [];
+  let imported = 0;
+  let returned = 0;
+  let existing = 0;
+
+  for (const keyword of keywords) {
+    for (const platform of platforms) {
+      try {
+        const result = await crawlVideosForTenant({ tenantId, platform, keyword, limit, dateFrom, dateTo });
+        imported += result.imported;
+        returned += result.items.length;
+        existing += result.returnedExisting;
+        lines.push(`${platform} / ${keyword}: 返回 ${result.items.length} 条，新增 ${result.imported} 条，库内已有 ${result.returnedExisting} 条`);
+      } catch (e) {
+        lines.push(`${platform} / ${keyword}: 执行失败 - ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
+  }
+
+  return [
+    `【视频关键词自动采集】${dateFrom} 至 ${dateTo}`,
+    `平台：${platforms.join(', ')}；关键词：${keywords.join('、')}；每组数量：${limit}`,
+    `汇总：返回 ${returned} 条，新增 ${imported} 条，库内已有 ${existing} 条`,
+    ...lines,
+  ].join('\n');
+}
+
 async function executeTask(task: ScheduledTask): Promise<string> {
+  if (task.taskType === 'video_keyword_crawl') return executeVideoKeywordCrawl(task);
   if (isDemoMode()) {
     switch (task.taskType) {
       case 'trend_report':
@@ -119,12 +210,13 @@ function scheduleTask(task: ScheduledTask) {
     }
     // TODO: send result to configured channel
     console.log(`[scheduler] task "${task.name}" done:`, result.slice(0, 100));
-  });
+  }, { timezone: 'Asia/Shanghai' });
   activeJobs.set(task.id, job);
 }
 
 // Boot: restore active tasks
 export function initScheduler() {
+  ensureDefaultVideoCrawlTask();
   load().filter(t => t.enabled).forEach(scheduleTask);
   console.log('[scheduler] initialized with', load().filter(t => t.enabled).length, 'active tasks');
 }
@@ -132,6 +224,14 @@ export function initScheduler() {
 export const schedulerRouter = Router();
 
 schedulerRouter.get('/', (_req, res) => res.json(load()));
+
+schedulerRouter.get('/video-stats', async (_req, res) => {
+  const tasks = load().filter(task => task.taskType === 'video_keyword_crawl');
+  res.json({
+    tasks,
+    stats: await getVideoPipelineStats(),
+  });
+});
 
 schedulerRouter.post('/', (req: Request, res: Response) => {
   const tasks = load();
