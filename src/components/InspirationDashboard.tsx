@@ -144,11 +144,19 @@ const LANGUAGES = [
   { code: 'ja', label: '日本語' },   { code: 'ko', label: '한국어' },
 ];
 
+function cleanAnalysisText(value: unknown): string {
+  return String(value || '')
+    .replace(/基础(?:资料|信息)推断[:：]\s*/g, '')
+    .replace(/基于标题、标签、平台、热度和时长推断[:：]?\s*/g, '')
+    .replace(/真实视频分析完成后会回填/g, '视频级分析会补充')
+    .trim();
+}
+
 function getAnalysis(video: TrendVideo): ScriptAnalysis | null {
   const gemini = video.aiAnalysis?.gemini;
   if (!gemini) return null;
-  const hooks = Array.isArray(gemini.hooks) ? gemini.hooks.filter(Boolean) : [];
-  const sellingPoints = Array.isArray(gemini.sellingPoints) ? gemini.sellingPoints.filter(Boolean) : [];
+  const hooks = Array.isArray(gemini.hooks) ? gemini.hooks.map(cleanAnalysisText).filter(Boolean) : [];
+  const sellingPoints = Array.isArray(gemini.sellingPoints) ? gemini.sellingPoints.map(cleanAnalysisText).filter(Boolean) : [];
   const isMetadataFallback = video.aiAnalysis?.analysisSource === 'metadata-fallback' || video.aiAnalysis?.analysisQuality === 'metadata';
   const structure = buildCoarseStructure(gemini, video);
   return {
@@ -158,15 +166,15 @@ function getAnalysis(video: TrendVideo): ScriptAnalysis | null {
     scriptSummary15s: buildScriptSummary15s(gemini, video, sellingPoints),
     scriptDetails15s: buildScriptDetails15s(gemini, video, structure),
     referenceHighlights: [
-      gemini.theme ? `主题：${gemini.theme}` : '',
-      gemini.mood ? `情绪：${gemini.mood}` : '',
+      gemini.theme ? `主题：${cleanAnalysisText(gemini.theme)}` : '',
+      gemini.mood ? `情绪：${cleanAnalysisText(gemini.mood)}` : '',
       ...hooks.slice(0, 2).map(point => `注意力入口：${point}`),
       ...sellingPoints.slice(0, 4).map(point => `可复用爆点：${point}`),
     ].filter(Boolean),
     adaptTip: structure.length
       ? `生成脚本时优先复用「${structure.slice(0, 3).map(step => step.desc).join(' → ')}」的节奏，并把产品卖点放进同一信息密度。`
       : 'Gemini 尚未返回可复用结构',
-    emotion: gemini.mood || (isMetadataFallback ? '基础分析' : '真实分析'),
+    emotion: cleanAnalysisText(gemini.mood) || (isMetadataFallback ? '基础分析' : '真实分析'),
     infoSpeed: video.duration > 90 ? '中密度' : '高密度',
   };
 }
@@ -177,17 +185,17 @@ function buildScriptSummary15s(gemini: GeminiVideoAnalysis, video: TrendVideo, s
     ? summary.competitors.map(String).filter(Boolean)
     : sellingPoints.filter(point => /brand|品牌|竞品|vs|对比/i.test(point)).slice(0, 3);
   return {
-    visualStyle: summary.visualStyle || (video.platform === 'youtube' ? '真人写实评测风格' : '真人社媒写实风格'),
-    coreEmotion: summary.coreEmotion || gemini.mood || '好奇、信任、种草',
-    competitors,
+    visualStyle: cleanAnalysisText(summary.visualStyle) || (video.platform === 'youtube' ? '真人写实评测风格' : '真人社媒写实风格'),
+    coreEmotion: cleanAnalysisText(summary.coreEmotion) || cleanAnalysisText(gemini.mood) || '好奇、信任、种草',
+    competitors: competitors.map(cleanAnalysisText).filter(Boolean),
   };
 }
 
 function buildScriptDetails15s(gemini: GeminiVideoAnalysis, video: TrendVideo, structure: StructureStep[]): ScriptDetail15s[] {
   const details = Array.isArray(gemini.scriptDetails15s) ? gemini.scriptDetails15s : [];
   const normalized = details.map((item, index) => {
-    const visual = String(item.visual || '').trim();
-    const subtitle = String(item.subtitle || '').trim();
+    const visual = cleanAnalysisText(item.visual);
+    const subtitle = cleanAnalysisText(item.subtitle);
     if (!visual && !subtitle) return null;
     return {
       time: String(item.time || item.timestamp || `${Math.max(0.2, index * 1.5).toFixed(1)}s`),
@@ -195,8 +203,8 @@ function buildScriptDetails15s(gemini: GeminiVideoAnalysis, video: TrendVideo, s
       camera: String(item.camera || '固定镜头'),
       visual: visual || `画面承接「${video.title}」的核心信息。`,
       subtitle: subtitle || '字幕待 Gemini 从真实视频中补全',
-      audio: String(item.audio || 'BGM/配音待 Gemini 从真实视频中补全'),
-      note: item.note ? String(item.note) : undefined,
+      audio: cleanAnalysisText(item.audio) || 'BGM/配音待 Gemini 从真实视频中补全',
+      note: item.note ? cleanAnalysisText(item.note) : undefined,
     };
   }).filter(Boolean) as ScriptDetail15s[];
   if (normalized.length) return normalized.slice(0, 12);
@@ -206,7 +214,7 @@ function buildScriptDetails15s(gemini: GeminiVideoAnalysis, video: TrendVideo, s
     time: index === 0 ? '0.2s' : `${(index * 3).toFixed(1)}s-${Math.min(index * 3 + 3, 15).toFixed(1)}s`,
     shot: index === 0 ? '特写' : '中近景',
     camera: index === 0 ? '固定镜头' : '轻微推近',
-    visual: `基础资料推断：画面围绕「${step.desc}」展开，真实视频分析完成后会回填人物、产品、动作和场景细节。`,
+    visual: `画面围绕「${cleanAnalysisText(step.desc)}」展开，视频级分析会补充人物、产品、动作和场景细节。`,
     subtitle: `字幕/口播围绕「${video.title}」强化当前信息点。`,
     audio: video.platform === 'youtube' ? '配音解释为主，背景音乐轻量铺底。' : '社媒节奏 BGM，配合字幕快速推进。',
   }));
@@ -215,7 +223,7 @@ function buildScriptDetails15s(gemini: GeminiVideoAnalysis, video: TrendVideo, s
 function buildCoarseStructure(gemini: GeminiVideoAnalysis, video: TrendVideo): StructureStep[] {
   const frames = Array.isArray(gemini.coarseStructure) ? gemini.coarseStructure : [];
   const normalized = frames.map((frame, index) => {
-    const desc = String(frame.description || frame.desc || frame.frame || '').trim();
+    const desc = cleanAnalysisText(frame.description || frame.desc || frame.frame);
     if (!desc) return null;
     return {
       time: String(frame.time || `${index * 3}-${(index + 1) * 3}s`),
@@ -250,8 +258,8 @@ function buildFirstTenSecondInsights(
   sellingPoints: string[],
 ): FirstTenSecondInsight[] {
   const firstTen = gemini.firstTenSeconds || {};
-  const fallbackTheme = gemini.theme || video.title;
-  const fallbackMood = gemini.mood || '待 Gemini 识别';
+  const fallbackTheme = cleanAnalysisText(gemini.theme) || video.title;
+  const fallbackMood = cleanAnalysisText(gemini.mood) || '待 Gemini 识别';
   const firstHook = hooks[0] || fallbackTheme;
   const primaryPoint = sellingPoints[0] || video.tags[0] || fallbackTheme;
   const values: FirstTenSecondInsight[] = [
@@ -276,7 +284,7 @@ function buildFirstTenSecondInsights(
       detail: firstTen.voiceMusic || `配音/配乐需要匹配「${fallbackMood}」的节奏，前 10 秒内用短句或节拍推动信息密度。`,
     },
   ];
-  return values.map(item => ({ ...item, detail: item.detail.trim() })).filter(item => item.detail);
+  return values.map(item => ({ ...item, detail: cleanAnalysisText(item.detail) })).filter(item => item.detail);
 }
 
 function summarizeProductInfo(input: string): string {
@@ -426,7 +434,7 @@ function localizedVoiceLine(index: number, product: ReturnType<typeof productScr
 }
 
 function rewriteSubtitle(detail: ScriptDetail15s, index: number, product: ReturnType<typeof productScriptContext>, langCode = 'zh'): string {
-  const original = detail.subtitle.replace(/^基础资料推断[:：]\s*/, '').trim();
+  const original = cleanAnalysisText(detail.subtitle);
   const line = localizedVoiceLine(index, product, langCode);
   if (original && !/待 Gemini|视频下载|显示真实|基础资料/.test(original)) {
     return `${line}（参考原节奏：${shortenText(original, 42)}）`;
@@ -1547,7 +1555,7 @@ function AutoCrawlerPanel({
   const [expanded, setExpanded] = useState(false);
   const [crawlPlatform, setCrawlPlatform] = useState<CrawlPlatform>('youtube');
   const [keyword, setKeyword] = useState('amazon gadgets product review');
-  const [limit, setLimit] = useState(12);
+  const [limit, setLimit] = useState(5);
   const [dateFrom, setDateFrom] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() - 7);

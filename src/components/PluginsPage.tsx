@@ -67,6 +67,7 @@ const PLUGIN_FIELDS: Record<string, { key: string; label: string; placeholder: s
 // ── Skill types & data ────────────────────────────────────────────────────────
 type SkillStatus = 'active' | 'placeholder';
 type SkillCategory = 'sales' | 'industry' | 'product';
+type PluginAction = { label: string; desc: string };
 
 interface SkillVariable { name: string; desc: string; example: string }
 interface ConversationStage { id: number; label: string; desc: string }
@@ -215,6 +216,187 @@ const CATEGORY_SECTIONS: { id: SkillCategory; label: string; desc: string }[] = 
   { id: 'industry', label: '行业专家',      desc: '垂直领域知识注入，让 Agent 具备行业洞察力' },
   { id: 'product',  label: '客户产品知识库', desc: '结构化产品信息，减少幻觉，提升应答准确率' },
 ];
+
+const PLUGIN_INTERACTIONS: Record<string, PluginAction[]> = {
+  shopify: [
+    { label: '商品同步', desc: '读取商品、库存、价格字段，供企业中心和内容生成引用' },
+    { label: '订单样例', desc: 'Demo 展示模拟订单；正式版由同事接真实店铺 API' },
+  ],
+  amazon: [
+    { label: 'Listing 读取', desc: '拉取 ASIN、标题、卖点和类目，用于策略建议' },
+    { label: '竞品记录', desc: 'Demo 只保留占位数据，真实 SP-API 对接预留接口' },
+  ],
+  tiktok_ads: [
+    { label: '广告诊断', desc: '读取广告消耗、点击和转化，生成优化建议' },
+    { label: '素材建议', desc: '把投放表现回流给流量专家，推荐下一条短视频方向' },
+  ],
+  whatsapp_business: [
+    { label: '询盘消息', desc: 'Demo 使用模拟 WhatsApp 对话，正式版接收 webhook' },
+    { label: '模板触达', desc: '唤醒老客时生成模板消息，Demo 默认模拟发送成功' },
+  ],
+  instagram: [
+    { label: '主页内容', desc: '读取主页基础信息、帖子和互动数据' },
+    { label: '发布入口', desc: '预留 Reels/帖子发布接口，Demo 不真实外发' },
+  ],
+  facebook: [
+    { label: '主页帖子', desc: '读取主页帖子、评论和基础互动数据' },
+    { label: '内容分发', desc: '把流量专家生成内容映射成主页帖子草稿' },
+  ],
+  pinterest: [
+    { label: 'Idea Pin', desc: '生成 Pin 标题、描述和落地页建议' },
+    { label: '曝光回传', desc: '正式版回传曝光、保存和点击数据，Demo 使用样例' },
+  ],
+  exchangerate: [
+    { label: '汇率查询', desc: '给报价、策略和询盘回复提供 USD/EUR/GBP/JPY/CNY 汇率' },
+    { label: '报价换算', desc: 'Demo 可用 fallback 汇率；正式版接实时汇率服务和缓存' },
+  ],
+  google_translate: [
+    { label: '多语翻译', desc: '用于社媒文案、询盘回复和产品卖点多语转换' },
+    { label: '语言检测', desc: 'Demo 可模拟识别；正式版接翻译 API' },
+  ],
+};
+
+function pluginStatusText(plugin: Plugin) {
+  if (!plugin.installed) return '未安装';
+  if (plugin.status === 'error') return '需检查';
+  return '已接入';
+}
+
+function PluginDrawer({
+  plugin,
+  testResult,
+  testing,
+  installing,
+  onClose,
+  onInstall,
+  onUninstall,
+  onConfigure,
+  onTest,
+}: {
+  plugin: Plugin;
+  testResult?: { ok: boolean; msg: string };
+  testing: boolean;
+  installing: boolean;
+  onClose: () => void;
+  onInstall: () => void;
+  onUninstall: () => void;
+  onConfigure: () => void;
+  onTest: () => void;
+}) {
+  const fields = PLUGIN_FIELDS[plugin.pluginKey] ?? [];
+  const actions = PLUGIN_INTERACTIONS[plugin.pluginKey] ?? [
+    { label: '数据读取', desc: '预留平台数据读取接口，Demo 使用占位数据展示链路' },
+    { label: '动作执行', desc: '预留外部动作接口，Demo 默认只模拟执行结果' },
+  ];
+
+  return (
+    <motion.div
+      initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
+      transition={{ type: 'spring', damping: 30, stiffness: 300 }}
+      className="fixed top-0 right-0 h-full w-[460px] bg-white border-l border-gray-200 z-50 flex flex-col shadow-2xl"
+      onClick={e => e.stopPropagation()}
+    >
+      <div className="flex items-start gap-3 px-5 py-4 border-b border-gray-100">
+        <div className="text-3xl w-11 h-11 rounded-xl bg-gray-50 flex items-center justify-center flex-shrink-0">{plugin.icon}</div>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-gray-900">{plugin.nameZh}</h3>
+            <span className={`text-[10px] px-1.5 py-0.5 rounded-md font-medium ${
+              plugin.status === 'error' ? 'bg-red-50 text-red-600' : plugin.installed ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-500'
+            }`}>
+              {pluginStatusText(plugin)}
+            </span>
+          </div>
+          <p className="text-xs text-gray-500 mt-1 leading-relaxed">{plugin.description}</p>
+        </div>
+        <button type="button" onClick={onClose} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600 flex-shrink-0">
+          <X size={16} />
+        </button>
+      </div>
+
+      <div className="flex-1 overflow-y-auto p-5 space-y-5">
+        <div>
+          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-3">互动页面</p>
+          <div className="grid grid-cols-1 gap-2">
+            {actions.map(action => (
+              <div key={action.label} className="rounded-xl border border-gray-200 p-3 bg-white">
+                <p className="text-xs font-semibold text-gray-800">{action.label}</p>
+                <p className="text-[11px] text-gray-500 leading-relaxed mt-1">{action.desc}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div>
+          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-3">接口边界</p>
+          <div className="rounded-xl bg-gray-50 border border-gray-200 p-3 space-y-2">
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-gray-500">Demo 行为</span>
+              <span className="text-xs font-medium text-gray-800">模拟发送 / 样例数据 / 可测试连通</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-gray-500">正式授权</span>
+              <span className="text-xs font-medium text-gray-800">预留 API，由平台接入同事完成</span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-gray-500">配置字段</span>
+              <span className="text-xs font-medium text-gray-800">{fields.length ? `${fields.length} 个` : '无需配置'}</span>
+            </div>
+          </div>
+        </div>
+
+        {testResult && (
+          <div className={`text-xs px-3 py-2 rounded-xl flex items-center gap-1.5 ${testResult.ok ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'}`}>
+            {testResult.ok ? <CheckCircle size={12} /> : <AlertCircle size={12} />}
+            {testResult.msg}
+          </div>
+        )}
+      </div>
+
+      <div className="border-t border-gray-100 p-4 flex gap-2">
+        {!plugin.installed ? (
+          <button
+            type="button"
+            onClick={onInstall}
+            disabled={installing}
+            className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs text-white font-medium disabled:opacity-50 transition-colors"
+            style={{ background: '#16a34a' }}
+          >
+            <Plus size={12} /> {installing ? '安装中...' : '安装'}
+          </button>
+        ) : (
+          <>
+            {fields.length > 0 && (
+              <button
+                type="button"
+                onClick={onConfigure}
+                className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 border border-gray-200 rounded-xl text-xs text-gray-600 hover:bg-gray-50 transition-colors"
+              >
+                <Settings size={12} /> 配置
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onTest}
+              disabled={testing}
+              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs text-white disabled:opacity-50 transition-colors"
+              style={{ background: '#16a34a' }}
+            >
+              {testing ? '测试中...' : '测试'}
+            </button>
+            <button
+              type="button"
+              onClick={onUninstall}
+              className="px-3 py-2 border border-gray-200 rounded-xl text-gray-400 hover:text-red-400 hover:border-red-200 transition-colors"
+            >
+              <Trash2 size={13} />
+            </button>
+          </>
+        )}
+      </div>
+    </motion.div>
+  );
+}
 
 // ── Prompt renderer (highlights {variables}) ──────────────────────────────────
 function PromptCode({ text }: { text: string }) {
@@ -575,6 +757,7 @@ export default function PluginsPage() {
   const [testing, setTesting] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<Record<string, { ok: boolean; msg: string }>>({});
   const [installing, setInstalling] = useState<string | null>(null);
+  const [selectedPluginKey, setSelectedPluginKey] = useState<string | null>(null);
 
   useEffect(() => { void fetchPlugins(); }, []);
 
@@ -618,7 +801,11 @@ export default function PluginsPage() {
         ...prev,
         [pluginKey]: { ok: data.ok, msg: data.ok ? (data.shopName ? `连接成功：${data.shopName}` : (data.message ?? '连接成功')) : (data.error ?? '连接失败') },
       }));
-      await fetchPlugins();
+      setPlugins(prev => prev.map(plugin => (
+        plugin.pluginKey === pluginKey && data.ok
+          ? { ...plugin, installed: true, status: 'installed' }
+          : plugin
+      )));
     } catch {
       setTestResult(prev => ({ ...prev, [pluginKey]: { ok: false, msg: '网络错误' } }));
     } finally { setTesting(null); }
@@ -629,9 +816,10 @@ export default function PluginsPage() {
   }, {});
 
   const installedCount = plugins.filter(p => p.installed && p.status === 'installed').length;
+  const selectedPlugin = plugins.find(p => p.pluginKey === selectedPluginKey) ?? null;
 
   return (
-    <div className="flex flex-col h-full bg-white">
+    <div className="flex flex-col h-full bg-white" onClick={() => setSelectedPluginKey(null)}>
       {/* Header */}
       <div className="px-8 pt-8 pb-4 border-b border-gray-100">
         <div className="flex items-center justify-between">
@@ -649,8 +837,9 @@ export default function PluginsPage() {
         <div className="flex gap-1 mt-5">
           {(['plugins', 'skills', 'auth'] as const).map(tab => (
             <button
+              type="button"
               key={tab}
-              onClick={() => setActiveTab(tab)}
+              onClick={e => { e.stopPropagation(); setActiveTab(tab); }}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === tab ? 'bg-gray-100 text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}
             >
               {tab === 'plugins' ? '插件' : tab === 'skills' ? '技能' : '应用授权'}
@@ -681,7 +870,19 @@ export default function PluginsPage() {
                     const tr = testResult[plugin.pluginKey];
                     const fields = PLUGIN_FIELDS[plugin.pluginKey] ?? [];
                     return (
-                      <div key={plugin.pluginKey} className="border border-gray-200 rounded-xl p-4 flex items-start gap-4">
+                      <div
+                        key={plugin.pluginKey}
+                        role="button"
+                        tabIndex={0}
+                        onClick={e => { e.stopPropagation(); setSelectedPluginKey(plugin.pluginKey); }}
+                        onKeyDown={e => {
+                          if (e.key === 'Enter' || e.key === ' ') {
+                            e.preventDefault();
+                            setSelectedPluginKey(plugin.pluginKey);
+                          }
+                        }}
+                        className="border border-gray-200 rounded-xl p-4 flex items-start gap-4 cursor-pointer hover:border-gray-300 hover:shadow-sm transition-all"
+                      >
                         <div className="text-3xl flex-shrink-0 mt-0.5">{plugin.icon}</div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-start justify-between gap-2">
@@ -711,6 +912,7 @@ export default function PluginsPage() {
                           <div className="flex gap-2 mt-3">
                             {!plugin.installed ? (
                               <button
+                                type="button"
                                 onClick={e => { e.preventDefault(); e.stopPropagation(); void install(plugin.pluginKey); }}
                                 disabled={installing === plugin.pluginKey}
                                 className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-white font-medium disabled:opacity-50 transition-colors"
@@ -722,6 +924,7 @@ export default function PluginsPage() {
                               <>
                                 {fields.length > 0 && (
                                   <button
+                                    type="button"
                                     onClick={e => { e.preventDefault(); e.stopPropagation(); setConfigTarget(plugin); setConfigValues(plugin.config); }}
                                     className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition-colors"
                                   >
@@ -729,6 +932,7 @@ export default function PluginsPage() {
                                   </button>
                                 )}
                                 <button
+                                  type="button"
                                   onClick={e => { e.preventDefault(); e.stopPropagation(); void testPlugin(plugin.pluginKey); }}
                                   disabled={testing === plugin.pluginKey}
                                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-white disabled:opacity-50 transition-colors"
@@ -737,6 +941,7 @@ export default function PluginsPage() {
                                   {testing === plugin.pluginKey ? '测试中...' : '测试'}
                                 </button>
                                 <button
+                                  type="button"
                                   onClick={e => { e.preventDefault(); e.stopPropagation(); void uninstall(plugin.pluginKey); }}
                                   className="px-2.5 py-1.5 border border-gray-200 rounded-lg text-gray-400 hover:text-red-400 hover:border-red-200 transition-colors"
                                 >
@@ -758,6 +963,23 @@ export default function PluginsPage() {
 
       {/* Plugin Config Modal */}
       <AnimatePresence>
+        {selectedPlugin && (
+          <>
+            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+              className="fixed inset-0 bg-black/20 z-40" onClick={() => setSelectedPluginKey(null)} />
+            <PluginDrawer
+              plugin={selectedPlugin}
+              testResult={testResult[selectedPlugin.pluginKey]}
+              testing={testing === selectedPlugin.pluginKey}
+              installing={installing === selectedPlugin.pluginKey}
+              onClose={() => setSelectedPluginKey(null)}
+              onInstall={() => void install(selectedPlugin.pluginKey)}
+              onUninstall={() => void uninstall(selectedPlugin.pluginKey)}
+              onConfigure={() => { setConfigTarget(selectedPlugin); setConfigValues(selectedPlugin.config); }}
+              onTest={() => void testPlugin(selectedPlugin.pluginKey)}
+            />
+          </>
+        )}
         {configTarget && (
           <motion.div
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -774,7 +996,7 @@ export default function PluginsPage() {
                   <span className="text-2xl">{configTarget.icon}</span>
                   <h3 className="font-semibold text-gray-900">{configTarget.nameZh} 配置</h3>
                 </div>
-                <button onClick={() => setConfigTarget(null)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+                <button type="button" onClick={() => setConfigTarget(null)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
               </div>
               <div className="space-y-4">
                 {(PLUGIN_FIELDS[configTarget.pluginKey] ?? []).map(f => (
@@ -791,8 +1013,9 @@ export default function PluginsPage() {
                 ))}
               </div>
               <div className="flex gap-3 mt-5">
-                <button onClick={() => setConfigTarget(null)} className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600">取消</button>
+                <button type="button" onClick={() => setConfigTarget(null)} className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600">取消</button>
                 <button
+                  type="button"
                   onClick={() => void saveConfig(configTarget)}
                   className="flex-1 py-2.5 rounded-xl text-sm text-white font-medium"
                   style={{ background: '#16a34a' }}

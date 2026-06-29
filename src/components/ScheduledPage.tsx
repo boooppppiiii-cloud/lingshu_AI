@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Clock, Plus, X, Play, Pause, Trash2, ChevronRight, CheckCircle, AlertCircle, Loader } from 'lucide-react';
+import { Activity, BarChart3, Clock, DownloadCloud, Plus, X, Play, Trash2, CheckCircle, Loader } from 'lucide-react';
 
 interface ScheduledTask {
   id: string;
@@ -17,6 +17,36 @@ interface ScheduledTask {
   createdAt: string;
 }
 
+interface VideoStatsPayload {
+  tasks?: ScheduledTask[];
+  stats?: {
+    updatedAt?: string;
+    crawl?: {
+      total?: number;
+      today?: number;
+      last24h?: number;
+      latestAt?: string;
+      byPlatform?: Record<string, number>;
+    };
+    fetchQueue?: {
+      queued?: number;
+      byStatus?: Record<string, number>;
+      ops?: {
+        total?: number;
+        workerActive?: boolean;
+        workerEnabled?: boolean;
+      };
+    };
+    analysisQueue?: {
+      queued?: number;
+      byStatus?: Record<string, number>;
+      pendingRecords?: number;
+      analyzedRecords?: number;
+      failedRecords?: number;
+    };
+  };
+}
+
 const CATEGORY_LABELS: Record<string, string> = {
   daily: '日常',
   monitor: '监控',
@@ -25,6 +55,16 @@ const CATEGORY_LABELS: Record<string, string> = {
 };
 
 const TASK_TEMPLATES = [
+  {
+    taskType: 'video_keyword_crawl',
+    name: 'YT/TK 关键词视频自动采集',
+    category: 'daily' as const,
+    cronExpr: '0 1 * * *',
+    cronLabel: '每天 01:00（北京时间）',
+    icon: '🎬',
+    desc: '每天凌晨自动采集 YouTube 和 TikTok 关键词视频，并排队获取真实视频 / Gemini 分析',
+    config: { platforms: 'youtube,tiktok', keywords: 'skincare', limit: '12', dateWindowDays: '7' },
+  },
   { taskType: 'trend_report', name: 'TikTok 爆款日报', category: 'daily' as const, cronExpr: '0 8 * * *', cronLabel: '每天 08:00', icon: '🔥', desc: '每日生成 TikTok 跨境电商热门趋势简报' },
   { taskType: 'exchange_rate', name: '汇率日报', category: 'daily' as const, cronExpr: '0 9 * * *', cronLabel: '每天 09:00', icon: '💱', desc: '实时获取 USD/SAR/AED/VND/MYR 等汇率并发送' },
   { taskType: 'weekly_review', name: '每周经营复盘', category: 'report' as const, cronExpr: '0 18 * * 5', cronLabel: '每周五 18:00', icon: '📊', desc: 'AI 生成本周流量、询盘、转化、复购复盘报告' },
@@ -33,6 +73,7 @@ const TASK_TEMPLATES = [
 ];
 
 const CRON_PRESETS = [
+  { label: '每天 01:00（北京时间）', expr: '0 1 * * *' },
   { label: '每天 08:00', expr: '0 8 * * *' },
   { label: '每天 09:00', expr: '0 9 * * *' },
   { label: '每天 18:00', expr: '0 18 * * *' },
@@ -52,8 +93,14 @@ export default function ScheduledPage() {
   const [runningId, setRunningId] = useState<string | null>(null);
   const [runResult, setRunResult] = useState<Record<string, string>>({});
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [videoStats, setVideoStats] = useState<VideoStatsPayload | null>(null);
 
-  useEffect(() => { fetchTasks(); }, []);
+  useEffect(() => {
+    void fetchTasks();
+    void fetchVideoStats();
+    const timer = window.setInterval(() => { void fetchVideoStats(); }, 5000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   async function fetchTasks() {
     setLoading(true);
@@ -61,6 +108,16 @@ export default function ScheduledPage() {
       const r = await fetch('/api/overseas/scheduler');
       setTasks(await r.json());
     } finally { setLoading(false); }
+  }
+
+  async function fetchVideoStats() {
+    try {
+      const r = await fetch('/api/overseas/scheduler/video-stats');
+      if (!r.ok) return;
+      setVideoStats(await r.json());
+    } catch {
+      // Keep the previous snapshot visible during backend hot reloads.
+    }
   }
 
   async function createTask() {
@@ -96,6 +153,7 @@ export default function ScheduledPage() {
       setRunResult(prev => ({ ...prev, [id]: data.result ?? '执行完成' }));
       setExpandedId(id);
       await fetchTasks();
+      await fetchVideoStats();
     } finally { setRunningId(null); }
   }
 
@@ -109,6 +167,14 @@ export default function ScheduledPage() {
   const grouped = filtered.reduce<Record<string, ScheduledTask[]>>((acc, t) => {
     (acc[t.category] ??= []).push(t); return acc;
   }, {});
+  const stats = videoStats?.stats;
+  const crawl = stats?.crawl ?? {};
+  const fetchQueue = stats?.fetchQueue ?? {};
+  const analysisQueue = stats?.analysisQueue ?? {};
+  const crawlTask = (videoStats?.tasks ?? tasks).find(t => t.taskType === 'video_keyword_crawl');
+  const formatTime = (value?: string) => value
+    ? new Date(value).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+    : '暂无';
 
   return (
     <div className="flex h-full bg-white">
@@ -149,6 +215,63 @@ export default function ScheduledPage() {
         </div>
 
         <div className="flex-1 overflow-y-auto px-8 py-6">
+          <div className="mb-6">
+            <div className="flex items-center justify-between mb-3">
+              <div>
+                <h2 className="text-sm font-semibold text-gray-900">视频采集实时看板</h2>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {crawlTask ? `${crawlTask.name} · ${crawlTask.cronLabel}` : '自动采集任务未创建'} · 更新时间 {formatTime(stats?.updatedAt)}
+                </p>
+              </div>
+              <button
+                onClick={() => { void fetchTasks(); void fetchVideoStats(); }}
+                className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-600 hover:bg-gray-50"
+              >
+                刷新
+              </button>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <div className="rounded-xl border border-gray-200 p-4 bg-white">
+                <div className="flex items-center gap-2 text-xs text-gray-500">
+                  <BarChart3 size={14} className="text-orange-500" />
+                  视频爬取数据
+                </div>
+                <div className="mt-3 flex items-end gap-3">
+                  <span className="text-2xl font-semibold text-gray-900">{crawl.total ?? 0}</span>
+                  <span className="text-xs text-gray-500 pb-1">库内视频</span>
+                </div>
+                <p className="text-xs text-gray-500 mt-2">今日 {crawl.today ?? 0} 条 · 24小时 {crawl.last24h ?? 0} 条 · 最新 {formatTime(crawl.latestAt)}</p>
+                <p className="text-xs text-gray-400 mt-1">YT {crawl.byPlatform?.youtube ?? 0} / TK {crawl.byPlatform?.tiktok ?? 0} / IG {crawl.byPlatform?.instagram ?? 0} / FB {crawl.byPlatform?.facebook ?? 0}</p>
+              </div>
+
+              <div className="rounded-xl border border-gray-200 p-4 bg-white">
+                <div className="flex items-center gap-2 text-xs text-gray-500">
+                  <DownloadCloud size={14} className="text-blue-500" />
+                  获取视频排队数据
+                </div>
+                <div className="mt-3 flex items-end gap-3">
+                  <span className="text-2xl font-semibold text-gray-900">{fetchQueue.queued ?? 0}</span>
+                  <span className="text-xs text-gray-500 pb-1">等待/处理中</span>
+                </div>
+                <p className="text-xs text-gray-500 mt-2">Ops 队列 {fetchQueue.ops?.total ?? 0} · Worker {fetchQueue.ops?.workerActive ? '运行中' : fetchQueue.ops?.workerEnabled ? '待命' : '关闭'}</p>
+                <p className="text-xs text-gray-400 mt-1">queued {fetchQueue.byStatus?.queued ?? 0} / downloading {fetchQueue.byStatus?.downloading ?? 0} / ops {fetchQueue.byStatus?.ops_queued ?? 0}</p>
+              </div>
+
+              <div className="rounded-xl border border-gray-200 p-4 bg-white">
+                <div className="flex items-center gap-2 text-xs text-gray-500">
+                  <Activity size={14} className="text-green-500" />
+                  视频分析排队数据
+                </div>
+                <div className="mt-3 flex items-end gap-3">
+                  <span className="text-2xl font-semibold text-gray-900">{analysisQueue.queued ?? 0}</span>
+                  <span className="text-xs text-gray-500 pb-1">Gemini 队列</span>
+                </div>
+                <p className="text-xs text-gray-500 mt-2">已分析 {analysisQueue.analyzedRecords ?? 0} · 待处理 {analysisQueue.pendingRecords ?? 0} · 失败 {analysisQueue.failedRecords ?? 0}</p>
+                <p className="text-xs text-gray-400 mt-1">queued {analysisQueue.byStatus?.queued ?? 0} / analyzing {analysisQueue.byStatus?.analyzing ?? 0} / video {analysisQueue.byStatus?.analyzed ?? 0}</p>
+              </div>
+            </div>
+          </div>
+
           {loading && <div className="text-sm text-gray-400 py-12 text-center">加载中...</div>}
 
           {!loading && tasks.length === 0 && (

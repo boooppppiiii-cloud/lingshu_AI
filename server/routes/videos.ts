@@ -109,7 +109,7 @@ export interface CrawlVideosResult {
 // Body: { platform?: 'youtube' | 'tiktok' | 'facebook' | 'instagram', keyword?: string, limit?: number, dateFrom?: string, dateTo?: string }
 videosRouter.post('/crawl', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
-  const { platform = 'youtube', keyword = DEFAULT_CRAWL_KEYWORDS, limit = 12, dateFrom = '', dateTo = '' } = req.body as {
+  const { platform = 'youtube', keyword = DEFAULT_CRAWL_KEYWORDS, limit = 5, dateFrom = '', dateTo = '' } = req.body as {
     platform?: Platform;
     keyword?: string;
     limit?: number;
@@ -139,12 +139,12 @@ export async function crawlVideosForTenant(input: CrawlVideosInput): Promise<Cra
   const tenantId = input.tenantId;
   const platform = input.platform ?? 'youtube';
   const keyword = input.keyword ?? DEFAULT_CRAWL_KEYWORDS;
-  const limit = input.limit ?? 12;
+  const limit = input.limit ?? 5;
   const dateFrom = input.dateFrom ?? '';
   const dateTo = input.dateTo ?? '';
 
   await purgeLegacyFakeVideos();
-  const target = Math.min(30, Math.max(1, Number(limit) || 12));
+  const target = Math.min(30, Math.max(1, Number(limit) || 5));
   let crawlerSource = `${platform}-search`;
   let crawlerMessage = '';
   let items: CrawledVideo[];
@@ -1461,11 +1461,11 @@ function metadataFallbackAnalysis(input: Pick<CrawledVideo, 'platform' | 'title'
     mood: input.platform === 'tiktok' || input.platform === 'instagram' ? '快节奏 / 社媒感 / 视觉种草' : '信息型 / 评测型 / 解释清晰',
     structure: `标题/封面钩子 → 场景痛点 → 核心展示（${topic}） → 证明细节 → CTA`,
     firstTenSeconds: {
-      atmosphere: `基础资料推断：前 10 秒大概率用「${title}」建立观看预期，并借助 ${platform} 平台语境形成信任或好奇。`,
-      audioVisual: `基础资料推断：字幕/标题应快速解释「${topic}」，画面需要同步出现产品、结果或痛点。`,
-      camera: '基础资料推断：真实运镜待视频级 Gemini 回填；建议先按近景展示、快速切换、结果对比三类镜头理解。',
-      visuals: tags.length ? `基础资料推断：画面核心应围绕「${tags.slice(0, 3).join(' / ')}」展开。` : '基础资料推断：画面核心应优先呈现产品、使用场景和前后反差。',
-      voiceMusic: `基础资料推断：配音/配乐应匹配「${input.platform === 'tiktok' || input.platform === 'instagram' ? '快节奏种草' : '评测解释'}」节奏。`,
+      atmosphere: `前 10 秒大概率用「${title}」建立观看预期，并借助 ${platform} 平台语境形成信任或好奇。`,
+      audioVisual: `字幕/标题应快速解释「${topic}」，画面需要同步出现产品、结果或痛点。`,
+      camera: '建议先按近景展示、快速切换、结果对比三类镜头理解；视频级分析完成后会回填真实运镜细节。',
+      visuals: tags.length ? `画面核心应围绕「${tags.slice(0, 3).join(' / ')}」展开。` : '画面核心应优先呈现产品、使用场景和前后反差。',
+      voiceMusic: `配音/配乐应匹配「${input.platform === 'tiktok' || input.platform === 'instagram' ? '快节奏种草' : '评测解释'}」节奏。`,
     },
     coarseStructure: [
       { time: '0-3s', label: '标题承诺', description: `用标题或封面信息承接：${title}` },
@@ -1484,7 +1484,7 @@ function metadataFallbackAnalysis(input: Pick<CrawledVideo, 'platform' | 'title'
         time: '0.2s',
         shot: '特写',
         camera: '固定镜头',
-        visual: `基础资料推断：用标题或封面信息承接「${title}」，优先出现人物、产品或结果画面。`,
+        visual: `用标题或封面信息承接「${title}」，优先出现人物、产品或结果画面。`,
         subtitle: `围绕「${title}」建立观看理由。`,
         audio: '配音/BGM 待真实视频分析回填。',
       },
@@ -1492,7 +1492,7 @@ function metadataFallbackAnalysis(input: Pick<CrawledVideo, 'platform' | 'title'
         time: '3.2s',
         shot: '中近景',
         camera: '轻微推近',
-        visual: tags[0] ? `基础资料推断：放大「${tags[0]}」相关场景或痛点。` : '基础资料推断：展示用户痛点或使用前后反差。',
+        visual: tags[0] ? `放大「${tags[0]}」相关场景或痛点。` : '展示用户痛点或使用前后反差。',
         subtitle: '用一句口播解释为什么继续看。',
         audio: '轻节奏 BGM 或解释型配音。',
       },
@@ -1500,7 +1500,7 @@ function metadataFallbackAnalysis(input: Pick<CrawledVideo, 'platform' | 'title'
         time: '6.2s-9.2s',
         shot: '近景',
         camera: '固定或手持跟拍',
-        visual: `基础资料推断：进入核心展示「${topic}」，突出产品、动作或效果。`,
+        visual: `进入核心展示「${topic}」，突出产品、动作或效果。`,
         subtitle: '说明核心卖点/使用结果。',
         audio: '音效配合产品展示或字幕节奏。',
       },
@@ -1508,7 +1508,7 @@ function metadataFallbackAnalysis(input: Pick<CrawledVideo, 'platform' | 'title'
         time: '9.2s-12.2s',
         shot: '中景',
         camera: '慢切或平移',
-        visual: input.views ? `基础资料推断：用热度、评论或结果画面强化可信度：${input.views}。` : '基础资料推断：补充细节证明和真实使用反馈。',
+        visual: input.views ? `用热度、评论或结果画面强化可信度：${input.views}。` : '补充细节证明和真实使用反馈。',
         subtitle: '补强可信度和适用人群。',
         audio: '配音继续解释，BGM 不抢信息。',
       },
@@ -1516,7 +1516,7 @@ function metadataFallbackAnalysis(input: Pick<CrawledVideo, 'platform' | 'title'
         time: '12.2s-15.0s',
         shot: '中近景',
         camera: '收束镜头',
-        visual: '基础资料推断：以结果、产品正面或人物反应收束，引导收藏/询盘/继续观看。',
+        visual: '以结果、产品正面或人物反应收束，引导收藏/询盘/继续观看。',
         subtitle: '给出行动引导。',
         audio: 'BGM 进入收束节拍。',
       },
@@ -1546,6 +1546,20 @@ function isQwenConfigured(): boolean {
 
 function shouldUseQwenFirst(): boolean {
   return process.env.VIDEO_ANALYSIS_PROVIDER?.trim().toLowerCase() === 'qwen';
+}
+
+function qwenFallbackTimeoutMs(): number {
+  return Math.max(3000, Number(process.env.QWEN_VIDEO_FALLBACK_TIMEOUT_MS || 12000));
+}
+
+function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<T>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
 }
 
 async function extractQwenAnalysisFrames(filePath: string, maxFrames = 6): Promise<Array<{ base64: string; mimeType: string; timeLabel: string }>> {
@@ -1614,10 +1628,13 @@ async function analyzeDownloadedVideoWithFallback(opts: {
 
   try {
     const buf = fs.readFileSync(opts.filePath);
-    const analysis = await analyzeVideo({
-      videoBase64: buf.toString('base64'),
-      mimeType: opts.mimeType,
-    });
+    const geminiPromise = analyzeVideo({
+        videoBase64: buf.toString('base64'),
+        mimeType: opts.mimeType,
+      });
+    const analysis = isQwenConfigured()
+      ? await withTimeout(geminiPromise, qwenFallbackTimeoutMs(), 'Gemini analysis timed out before Qwen fallback')
+      : await geminiPromise;
     return { analysis, source: opts.sourceLabel };
   } catch (e) {
     if (!isQwenConfigured()) throw e;
