@@ -16,12 +16,12 @@ import {
   isSubscriptionEnforced,
 } from '../middleware/subscription.js';
 import { signRenderToken } from '../lib/renderToken.js';
-import { consumeDemoQuota } from '../lib/demo.js';
+import { consumeDemoQuota, isDemoMode } from '../lib/demo.js';
 
 /* ──────────────────────────────────────────────────────────────────────────
    Studio 路由 —— 服务于「社媒 / AI 生成内容」混剪工作台
-   只负责纯 AI 文本环节（脚本 / 文案 / 封面标题 / 智能选材），无需 PocketBase 鉴权。
-   未配置 GEMINI_API_KEY 时自动降级为本地生成，接口始终可用。
+   负责脚本 / 文案 / 封面标题 / 智能选材 / Gemini 视频生成等工作台能力。
+   Gemini 视频生成必须真实调用 Gemini/Veo；失败时返回明确错误，不生成本地假预览。
 ─────────────────────────────────────────────────────────────────────────── */
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -50,6 +50,7 @@ function langName(code: string): string {
 }
 
 const GENERATED_MEDIA_DIR = path.join(__dirname, '../../data/media/generated');
+const GEMINI_VIDEO_WORKER = path.join(__dirname, '../../scripts/gemini-video-worker.mjs');
 
 function geminiVideoConfig() {
   const apiKey = (process.env.GEMINI_API_KEY || '').trim();
@@ -57,14 +58,80 @@ function geminiVideoConfig() {
   return { apiKey, model };
 }
 
+function isGeminiVideoEnabled(): boolean {
+  return process.env.GEMINI_VIDEO_ENABLED === 'true';
+}
+
 function normalizeVideoDuration(raw: unknown): number {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return 8;
-  return Math.round(n);
+  // Current Gemini/Veo API accepts only 5-8 seconds for durationSeconds.
+  return Math.max(5, Math.min(8, Math.round(n)));
 }
 
 function generatedMediaUrl(file: string): string {
   return `/media/generated/${file}`;
+}
+
+function proxyEnvDefaults() {
+  const proxy = process.env.GEMINI_PROXY || process.env.HTTPS_PROXY || process.env.HTTP_PROXY || 'http://127.0.0.1:7890';
+  return {
+    NODE_USE_ENV_PROXY: process.env.NODE_USE_ENV_PROXY || '1',
+    HTTPS_PROXY: process.env.HTTPS_PROXY || proxy,
+    HTTP_PROXY: process.env.HTTP_PROXY || proxy,
+    https_proxy: process.env.https_proxy || process.env.HTTPS_PROXY || proxy,
+    http_proxy: process.env.http_proxy || process.env.HTTP_PROXY || proxy,
+  };
+}
+
+async function runGeminiVideoWorker(job: Record<string, unknown>, timeoutMs: number) {
+  fs.mkdirSync(GENERATED_MEDIA_DIR, { recursive: true });
+  const jobFile = path.join(GENERATED_MEDIA_DIR, `gemini-job-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
+  fs.writeFileSync(jobFile, JSON.stringify(job), 'utf8');
+  try {
+    const result = await new Promise<any>((resolve, reject) => {
+      const child = spawn(process.execPath, [GEMINI_VIDEO_WORKER, jobFile], {
+        cwd: path.join(__dirname, '../..'),
+        env: { ...process.env, ...proxyEnvDefaults() },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      let stderr = '';
+      const timer = setTimeout(() => {
+        child.kill('SIGTERM');
+        reject(new Error('Gemini video worker timed out'));
+      }, timeoutMs + 30_000);
+      child.stdout.on('data', chunk => { stdout += chunk.toString(); });
+      child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+      child.on('error', error => {
+        clearTimeout(timer);
+        reject(error);
+      });
+      child.on('close', code => {
+        clearTimeout(timer);
+        const text = stdout.trim();
+        if (!text) {
+          reject(new Error((stderr || `Gemini video worker exited with code ${code}`).slice(0, 500)));
+          return;
+        }
+        try {
+          resolve(JSON.parse(text));
+        } catch {
+          const jsonStart = text.lastIndexOf('{"ok"');
+          if (jsonStart >= 0) {
+            try {
+              resolve(JSON.parse(text.slice(jsonStart)));
+              return;
+            } catch {}
+          }
+          reject(new Error(`Gemini video worker returned invalid JSON: ${text.slice(0, 300)}`));
+        }
+      });
+    });
+    return result;
+  } finally {
+    try { fs.unlinkSync(jobFile); } catch {}
+  }
 }
 
 /** 从 LLM 输出里抽取第一个 JSON（对象或数组） */
@@ -117,12 +184,15 @@ studioRouter.use(entitlementGate());
 /* ── Gemini / Veo 视频生成 ──────────────────────────────────────────────── */
 // POST /studio/gemini-video  Body: { script, productInfo, language, ratio, duration, resolution, title? }
 studioRouter.post('/gemini-video', async (req, res) => {
-  const { apiKey, model } = geminiVideoConfig();
-  if (!apiKey) {
-    res.json({ ok: false, source: 'fallback', error: 'GEMINI_API_KEY not set' });
+  if (!isGeminiVideoEnabled() || isDemoMode()) {
+    res.status(423).json({
+      ok: false,
+      locked: true,
+      source: 'gemini',
+      error: '测试版已预留 Gemini/Veo 视频生成接口，当前不接通外部生成服务；正式版支持接入客户自己的 Gemini Key。',
+    });
     return;
   }
-
   const {
     script = '',
     productInfo = '',
@@ -133,11 +203,12 @@ studioRouter.post('/gemini-video', async (req, res) => {
     title = 'Gemini 生成视频',
   } = req.body ?? {};
   const duration = normalizeVideoDuration(rawDuration);
-  if (duration > 15) {
-    res.status(400).json({ ok: false, error: '单个视频最长 15 秒' });
+  if (!await consumeDemoQuota(req, res, 'videoGeneration')) return;
+  const { apiKey, model } = geminiVideoConfig();
+  if (!apiKey) {
+    res.json({ ok: false, source: 'gemini', error: 'GEMINI_API_KEY not set' });
     return;
   }
-  if (!await consumeDemoQuota(req, res, 'videoGeneration')) return;
 
   const prompt = [
     `Create a short commercial social video in ${langName(language)}.`,
@@ -148,57 +219,22 @@ studioRouter.post('/gemini-video', async (req, res) => {
   ].filter(Boolean).join('\n\n');
 
   try {
-    fs.mkdirSync(GENERATED_MEDIA_DIR, { recursive: true });
-    const ai = new GoogleGenAI({ apiKey });
-    let operation = await ai.models.generateVideos({
-      model,
-      source: { prompt },
-      config: {
-        numberOfVideos: 1,
-        durationSeconds: duration,
-        aspectRatio: ratio,
-        resolution,
-        personGeneration: 'allow_adult',
-        enhancePrompt: true,
-      },
-    } as any);
-
     const timeoutMs = Math.max(30_000, Number(process.env.GEMINI_VIDEO_TIMEOUT_MS || 360_000));
-    const intervalMs = Math.max(3_000, Number(process.env.GEMINI_VIDEO_POLL_INTERVAL_MS || 10_000));
-    const deadline = Date.now() + timeoutMs;
-    while (!operation.done && Date.now() < deadline) {
-      await new Promise(r => setTimeout(r, intervalMs));
-      operation = await ai.operations.getVideosOperation({ operation } as any);
-    }
-    if (!operation.done) throw new Error('Gemini video generation timed out');
-    if (operation.error) {
-      const msg = (operation.error as any)?.message || JSON.stringify(operation.error);
-      throw new Error(msg || 'Gemini video generation failed');
-    }
-
-    const generated = operation.response?.generatedVideos?.[0];
-    if (!generated?.video) {
-      const reasons = operation.response?.raiMediaFilteredReasons?.join('；');
-      throw new Error(reasons || 'Gemini did not return a generated video');
-    }
-
-    const id = randomUUID();
-    const file = `${id}.mp4`;
-    const outputPath = path.join(GENERATED_MEDIA_DIR, file);
-    await ai.files.download({ file: generated, downloadPath: outputPath } as any);
-
-    res.json({
-      ok: true,
-      source: 'gemini',
-      id,
-      title,
-      url: generatedMediaUrl(file),
-      duration,
+    const output = await runGeminiVideoWorker({
+      prompt,
       model,
-      createdAt: new Date().toISOString(),
-    });
+      title,
+      ratio,
+      duration,
+      resolution,
+      outputDir: GENERATED_MEDIA_DIR,
+      timeoutMs,
+    }, timeoutMs);
+    res.json(output);
   } catch (e: any) {
-    res.json({ ok: false, source: 'gemini', error: String(e?.message ?? e).slice(0, 500) });
+    const reason = String(e?.message ?? e).slice(0, 500);
+    console.error('[studio] Gemini video generation failed:', e);
+    res.json({ ok: false, source: 'gemini', error: `Gemini 视频生成失败：${reason}` });
   }
 });
 

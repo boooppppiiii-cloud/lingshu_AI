@@ -48,7 +48,7 @@ type StepId = 'mode' | 'material' | 'script' | 'bgm' | 'cover' | 'preview' | 'pu
 const STEPS: { id: StepId; label: string; icon: typeof LayoutGrid; hint: string }[] = [
   { id: 'mode',     label: '选模式',  icon: LayoutGrid, hint: '选择生成起点与全局参数' },
   { id: 'material', label: '选素材',  icon: Film,       hint: '从素材库挑选并排序片段' },
-  { id: 'script',   label: '口播脚本', icon: FileText,   hint: 'AI 生成口播 + 配音音色' },
+  { id: 'script',   label: '口播脚本', icon: FileText,   hint: 'AI 生成口播，音频由 Seedance 同步生成' },
   { id: 'bgm',      label: '配乐',     icon: Music,      hint: 'AI 推荐背景乐与音量平衡' },
   { id: 'cover',    label: '封面',     icon: ImageIcon,  hint: '生成封面候选并选定标题' },
   { id: 'preview',  label: '成片预览', icon: Play,       hint: '合成成片，局部微调重渲染' },
@@ -1255,10 +1255,10 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
             </div>
 
             <Field label="配音音色">
-              <div className="grid grid-cols-2 gap-2 max-w-xl">
+              <div className="grid grid-cols-2 gap-2 max-w-xl opacity-60">
                 {VOICES.map(v => (
-                  <button key={v.id} onClick={() => pickVoice(v.id)}
-                    className="card !rounded-xl p-3 flex items-center gap-2.5 text-left"
+                  <button key={v.id} disabled
+                    className="card !rounded-xl p-3 flex items-center gap-2.5 text-left cursor-not-allowed"
                     style={voice === v.id ? { borderColor: AMBER, boxShadow: `0 0 0 1px ${AMBER}` } : undefined}>
                     <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0"
                       style={{ background: voice === v.id ? AMBER : 'var(--color-surface-2)', color: voice === v.id ? '#fff' : 'var(--color-text-muted)' }}>
@@ -1266,37 +1266,17 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
                     </div>
                     <div className="min-w-0">
                       <p className="text-xs font-semibold text-text-primary truncate">{v.name}</p>
-                      <p className="text-[10px] text-text-muted">{v.id === 'v4' ? v.tag : `${v.tag} · ${langZh(lang)}配音`}</p>
+                      <p className="text-[10px] text-text-muted">{v.id === 'v4' ? v.tag : `${v.tag} · 待解锁`}</p>
                     </div>
                   </button>
                 ))}
               </div>
 
-              {/* 生成 / 试听配音 */}
               <div className="flex items-center gap-3 mt-3 max-w-xl">
-                {voice === 'v4' ? (
-                  <span className="text-xs text-text-muted">真人口播：上传音频后直接使用，无需 AI 配音</span>
-                ) : (
-                  <>
-                    <button onClick={() => void genTts()} disabled={ttsLoading}
-                      className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold text-white transition-all active:scale-95 disabled:opacity-50"
-                      style={{ background: AMBER }}>
-                      {ttsLoading ? <Loader2 size={14} className="animate-spin" /> : <Mic size={14} />}
-                      {ttsLoading ? 'AI 配音生成中…' : voiceoverUrl ? '重新生成配音' : '生成 AI 配音'}
-                    </button>
-                    {voiceoverUrl && (
-                      <button onClick={toggleTts}
-                        className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold border border-border hover:border-border-bright">
-                        {ttsPlaying ? <Pause size={14} /> : <Play size={14} />} 试听 {fmtDur(voiceoverDur)}
-                      </button>
-                    )}
-                    {voiceoverUrl && (
-                      <span className="flex items-center gap-1 text-xs font-medium" style={{ color: 'var(--color-accent)' }}>
-                        <Check size={13} /> 已生成
-                      </span>
-                    )}
-                  </>
-                )}
+                <span className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold border border-border text-text-muted bg-surface-2">
+                  <Mic size={14} /> 待解锁
+                </span>
+                <span className="text-xs text-text-muted">Seedance 生成视频时会同步生成音频，当前测试版无需单独配音。</span>
               </div>
               <audio ref={ttsAudioRef} onEnded={() => setTtsPlaying(false)} className="hidden" />
             </Field>

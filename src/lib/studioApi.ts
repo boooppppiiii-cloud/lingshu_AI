@@ -1,4 +1,4 @@
-/* 混剪工作台 AI 接口封装 —— 任何失败都回退本地，保证 UI 永不中断 */
+/* 混剪工作台 AI 接口封装 */
 import { authHeader } from './auth';
 
 async function post<T>(path: string, body: unknown, fallback: T): Promise<T & { source?: string }> {
@@ -27,6 +27,25 @@ async function get<T>(path: string, fallback: T): Promise<T & { source?: string 
     return (await r.json()) as T & { source?: string };
   } catch {
     return { ...fallback, source: 'local' };
+  }
+}
+
+async function postGeminiVideo(body: unknown): Promise<GeminiVideoResult> {
+  try {
+    const r = await fetch('/api/overseas/studio/gemini-video', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeader() },
+      body: JSON.stringify(body),
+    });
+    if (r.status === 402 || r.status === 429) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error === 'demo_expired' ? 'Demo 试用已到期，请联系团队开通正式版或延长试用。' : '今日 Demo 额度已用完，请明天再试或联系团队开通正式版。');
+    }
+    if (!r.ok) throw new Error(String(r.status));
+    return (await r.json()) as GeminiVideoResult;
+  } catch (err: any) {
+    if (String(err?.message || '').includes('Demo')) throw err;
+    return { ok: false, source: 'gemini', error: String(err?.message || err || 'Gemini video request failed') };
   }
 }
 
@@ -123,6 +142,7 @@ export interface StudioProject {
 
 export interface GeminiVideoResult {
   ok: boolean;
+  source?: string;
   id?: string;
   title?: string;
   url?: string;
@@ -197,7 +217,7 @@ export const studioApi = {
     resolution?: string;
     title?: string;
   }) =>
-    post<GeminiVideoResult>('gemini-video', b, { ok: false, error: 'Gemini video request failed' }),
+    postGeminiVideo(b),
 
   // 数据看板 AI 结论
   insight: (b: { scope: string; metrics: Record<string, unknown> }) =>

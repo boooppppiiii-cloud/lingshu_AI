@@ -5,7 +5,7 @@ import {
   TrendingUp, Clock, Globe, ChevronDown, X, Loader2,
   Check, Copy, ArrowRight, Zap, LayoutGrid, List, ArrowUp,
   Lightbulb, Flame, BarChart2, ChevronRight, Film, Download, Plus,
-  SlidersHorizontal, Bookmark, Maximize2, Minimize2,
+  SlidersHorizontal, Bookmark, Maximize2, Minimize2, Lock,
 } from 'lucide-react';
 import { studioApi } from '../lib/studioApi';
 import { authHeader } from '../lib/auth';
@@ -847,6 +847,8 @@ interface GeneratedVideo {
   poster?: string;
   duration: number;
   createdAt: string;
+  source?: string;
+  error?: string;
 }
 
 function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterWorkflow }: ScriptPanelProps) {
@@ -865,6 +867,8 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
   const [videoResult, setVideoResult] = useState<GeneratedVideo | null>(null);
   const [videoError, setVideoError] = useState('');
   const [expanded, setExpanded] = useState(false);
+  const [geminiVideoLocked, setGeminiVideoLocked] = useState(true);
+  const [productInfoOpen, setProductInfoOpen] = useState(false);
 
   const loadEnterpriseProducts = () => {
     fetch('/api/overseas/enterprise/profile', { headers: authHeader() })
@@ -883,6 +887,12 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
 
   useEffect(() => {
     loadEnterpriseProducts();
+    fetch('/api/overseas/health')
+      .then(r => r.ok ? r.json() : null)
+      .then((health: { featureLocks?: { geminiVideo?: boolean } } | null) => {
+        setGeminiVideoLocked(health?.featureLocks?.geminiVideo !== false);
+      })
+      .catch(() => setGeminiVideoLocked(true));
   }, []);
 
   useEffect(() => {
@@ -925,11 +935,12 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
 
   const generateGeminiVideo = async () => {
     if (!result) return;
+    if (geminiVideoLocked) return;
     setVideoGenerating(true);
     setVideoResult(null);
     setVideoError('');
     try {
-      const duration = Math.max(6, Math.min(15, video.duration || 8));
+      const duration = Math.max(5, Math.min(8, Math.round(video.duration || 8)));
       const output = await studioApi.geminiVideo({
         script: result,
         productInfo,
@@ -949,6 +960,8 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
         poster: output.poster || video.aiAnalysis?.materialPoster || video.thumbnail,
         duration: output.duration || duration,
         createdAt: output.createdAt || new Date().toISOString(),
+        source: output.source,
+        error: output.error,
       });
     } catch (err: any) {
       setVideoError(String(err?.message || err || 'Gemini 视频生成失败'));
@@ -1120,12 +1133,28 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
                       <div className="mt-3 space-y-3">
                         {!videoResult ? (
                           <>
-                            <button onClick={() => void generateGeminiVideo()} disabled={videoGenerating}
-                              className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold text-white transition-all active:scale-95 disabled:opacity-70"
-                              style={{ background: 'var(--color-accent)' }}>
-                              {videoGenerating ? <Loader2 size={13} className="animate-spin" /> : <Film size={13} />}
-                              {videoGenerating ? 'Gemini 生成视频中…' : '基于脚本用 Gemini 生成视频'}
-                            </button>
+                            {geminiVideoLocked ? (
+                              <div className="rounded-2xl border border-border bg-surface overflow-hidden">
+                                <div className="flex gap-3 p-3">
+                                  <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 bg-surface-2 border border-border">
+                                    <Lock size={15} className="text-text-muted" />
+                                  </div>
+                                  <div className="min-w-0 flex-1">
+                                    <p className="text-xs font-semibold text-text-primary">Gemini 视频生成 · 正式版解锁</p>
+                                    <p className="mt-1 text-[11px] text-text-muted leading-relaxed">
+                                      测试版已预留 Gemini/Veo 接口，当前不接通外部视频生成服务。正式版支持接入客户自己的 Gemini Key，生成视频后再进入剪辑流程。
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
+                              <button onClick={() => void generateGeminiVideo()} disabled={videoGenerating}
+                                className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold text-white transition-all active:scale-95 disabled:opacity-70"
+                                style={{ background: 'var(--color-accent)' }}>
+                                {videoGenerating ? <Loader2 size={13} className="animate-spin" /> : <Film size={13} />}
+                                {videoGenerating ? 'Gemini 生成视频中…' : '基于脚本用 Gemini 生成视频'}
+                              </button>
+                            )}
                             {videoError && (
                               <p className="text-[11px] text-red-500 leading-relaxed">{videoError}</p>
                             )}
@@ -1169,20 +1198,38 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
             {/* Input */}
             <div className="p-4 border-t border-border flex-shrink-0">
               <div className="rounded-2xl border border-border bg-surface-2 overflow-hidden transition-colors focus-within:border-border-bright">
-                {productOptions.length > 0 && (
-                  <div className="px-3 pt-3 pb-2 border-b border-border/70">
+                <div className="px-3 pt-3 pb-2 border-b border-border/70">
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-semibold text-text-primary truncate">主推品：{getPrimaryProductLabel(productInfo)}</p>
+                      <p className="text-[10px] text-text-muted">选择企业中心里的自己的产品信息</p>
+                    </div>
+                    <button onClick={() => setProductInfoOpen(v => !v)}
+                      className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold text-text-muted hover:text-text-primary hover:bg-surface transition-colors flex-shrink-0">
+                      {productInfoOpen ? '收起' : '展开'}
+                      <ChevronDown size={11} className={`transition-transform ${productInfoOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                  </div>
+                  {productOptions.length > 0 && (
                     <select value={selectedProductId} onChange={e => handleSelectProduct(e.target.value)}
                       className="w-full px-3 py-2 rounded-lg border border-border bg-surface text-xs font-semibold text-text-primary outline-none focus:border-accent">
                       {productOptions.map(option => (
                         <option key={option.id} value={option.id}>{option.label}</option>
                       ))}
                     </select>
-                  </div>
-                )}
-                <textarea value={productInfo} onChange={e => setProductInfo(e.target.value)}
-                  placeholder="主推品信息：名称、核心功能、目标人群、价格区间..."
-                  rows={4}
-                  className="w-full px-4 pt-3 pb-1 bg-transparent text-sm text-text-primary placeholder:text-text-muted resize-none outline-none" />
+                  )}
+                </div>
+                <AnimatePresence initial={false}>
+                  {productInfoOpen && (
+                    <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.18 }} className="overflow-hidden">
+                      <textarea value={productInfo} onChange={e => setProductInfo(e.target.value)}
+                        placeholder="主推品信息：名称、核心功能、目标人群、价格区间..."
+                        rows={4}
+                        className="w-full px-4 pt-3 pb-1 bg-transparent text-sm text-text-primary placeholder:text-text-muted resize-none outline-none" />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
                 <div className="flex items-center justify-between px-3 pb-3 pt-1">
                   <p className="text-[11px] text-text-muted">{scriptType === 'voiceover' ? '口播脚本' : '分镜脚本'} · {selectedLang?.label}</p>
                   <button onClick={() => void handleGenerate()} disabled={generating || !voiceLanguageConfirmed}

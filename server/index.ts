@@ -62,7 +62,16 @@ app.use(compression({
 app.use(express.json({ limit: '50mb' }));
 
 app.get('/api/overseas/health', (_req, res) => {
-  res.json({ status: 'ok', service: 'overseas-marketing-agent', port: PORT, demoMode: isDemoMode(), demoLimits: demoLimits() });
+  res.json({
+    status: 'ok',
+    service: 'overseas-marketing-agent',
+    port: PORT,
+    demoMode: isDemoMode(),
+    demoLimits: demoLimits(),
+    featureLocks: {
+      geminiVideo: process.env.GEMINI_VIDEO_ENABLED !== 'true',
+    },
+  });
 });
 
 // Legacy routes (stub → to be implemented separately)
