@@ -162,7 +162,7 @@ enterpriseRouter.get('/context', (_req, res) => {
 });
 
 enterpriseRouter.get('/demo/templates', (_req, res) => {
-  res.json(readTemplates().map(({ id, name, description }) => ({ id, name, description })));
+  res.json(readTemplates().map(({ id, name, description, profile }) => ({ id, name, description, profile })));
 });
 
 enterpriseRouter.post('/demo/templates/:id/apply', (req, res) => {
