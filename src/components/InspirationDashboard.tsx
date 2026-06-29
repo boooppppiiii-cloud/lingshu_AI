@@ -867,7 +867,7 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
   const [videoResult, setVideoResult] = useState<GeneratedVideo | null>(null);
   const [videoError, setVideoError] = useState('');
   const [expanded, setExpanded] = useState(false);
-  const [geminiVideoLocked, setGeminiVideoLocked] = useState(true);
+  const [seedanceVideoLocked, setSeedanceVideoLocked] = useState(true);
   const [productInfoOpen, setProductInfoOpen] = useState(false);
 
   const loadEnterpriseProducts = () => {
@@ -889,10 +889,10 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
     loadEnterpriseProducts();
     fetch('/api/overseas/health')
       .then(r => r.ok ? r.json() : null)
-      .then((health: { featureLocks?: { geminiVideo?: boolean } } | null) => {
-        setGeminiVideoLocked(health?.featureLocks?.geminiVideo !== false);
+      .then((health: { featureLocks?: { seedanceVideo?: boolean } } | null) => {
+        setSeedanceVideoLocked(health?.featureLocks?.seedanceVideo !== false);
       })
-      .catch(() => setGeminiVideoLocked(true));
+      .catch(() => setSeedanceVideoLocked(true));
   }, []);
 
   useEffect(() => {
@@ -933,29 +933,29 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
     if (result) { void navigator.clipboard.writeText(result); setCopied(true); setTimeout(() => setCopied(false), 2000); }
   };
 
-  const generateGeminiVideo = async () => {
+  const generateSeedanceVideo = async () => {
     if (!result) return;
-    if (geminiVideoLocked) return;
+    if (seedanceVideoLocked) return;
     setVideoGenerating(true);
     setVideoResult(null);
     setVideoError('');
     try {
-      const duration = Math.max(5, Math.min(8, Math.round(video.duration || 8)));
-      const output = await studioApi.geminiVideo({
+      const duration = Math.max(4, Math.min(15, Math.round(video.duration || 8)));
+      const output = await studioApi.seedanceVideo({
         script: result,
         productInfo,
         language,
         ratio: '9:16',
         duration,
         resolution: '720p',
-        title: `Gemini 视频 · ${video.title}`,
+        title: `Seedance 视频 · ${video.title}`,
       });
       if (!output.ok || !output.url) {
-        throw new Error(output.error || 'Gemini 未返回可预览的视频地址');
+        throw new Error(output.error || 'Seedance 未返回可预览的视频地址');
       }
       setVideoResult({
-        id: output.id || `gemini-video-${video.id}-${Date.now()}`,
-        title: output.title || `Gemini 视频 · ${video.title}`,
+        id: output.id || `seedance-video-${video.id}-${Date.now()}`,
+        title: output.title || `Seedance 视频 · ${video.title}`,
         url: output.url,
         poster: output.poster || video.aiAnalysis?.materialPoster || video.thumbnail,
         duration: output.duration || duration,
@@ -964,7 +964,7 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
         error: output.error,
       });
     } catch (err: any) {
-      setVideoError(String(err?.message || err || 'Gemini 视频生成失败'));
+      setVideoError(String(err?.message || err || 'Seedance 视频生成失败'));
     } finally {
       setVideoGenerating(false);
     }
@@ -1133,26 +1133,26 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
                       <div className="mt-3 space-y-3">
                         {!videoResult ? (
                           <>
-                            {geminiVideoLocked ? (
+                            {seedanceVideoLocked ? (
                               <div className="rounded-2xl border border-border bg-surface overflow-hidden">
                                 <div className="flex gap-3 p-3">
                                   <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 bg-surface-2 border border-border">
                                     <Lock size={15} className="text-text-muted" />
                                   </div>
                                   <div className="min-w-0 flex-1">
-                                    <p className="text-xs font-semibold text-text-primary">Gemini 视频生成 · 正式版解锁</p>
+                                    <p className="text-xs font-semibold text-text-primary">Seedance 视频生成 · 接口待启用</p>
                                     <p className="mt-1 text-[11px] text-text-muted leading-relaxed">
-                                      测试版已预留 Gemini/Veo 接口，当前不接通外部视频生成服务。正式版支持接入客户自己的 Gemini Key，生成视频后再进入剪辑流程。
+                                      当前环境未启用 Seedance 真实生成。启用后会先生成并展示输出视频，确认效果后再进入剪辑流程。
                                     </p>
                                   </div>
                                 </div>
                               </div>
                             ) : (
-                              <button onClick={() => void generateGeminiVideo()} disabled={videoGenerating}
+                              <button onClick={() => void generateSeedanceVideo()} disabled={videoGenerating}
                                 className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold text-white transition-all active:scale-95 disabled:opacity-70"
                                 style={{ background: 'var(--color-accent)' }}>
                                 {videoGenerating ? <Loader2 size={13} className="animate-spin" /> : <Film size={13} />}
-                                {videoGenerating ? 'Gemini 生成视频中…' : '基于脚本用 Gemini 生成视频'}
+                                {videoGenerating ? 'Seedance 生成视频中…' : '基于脚本用 Seedance 生成视频'}
                               </button>
                             )}
                             {videoError && (
@@ -1168,13 +1168,13 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
                                 ) : (
                                   <img src={videoResult.poster} alt="" className="absolute inset-0 h-full w-full object-cover" />
                                 )}
-                                <span className="absolute left-1.5 top-1.5 rounded bg-black/55 px-1.5 py-0.5 text-[9px] font-bold text-white">Gemini</span>
+                                <span className="absolute left-1.5 top-1.5 rounded bg-black/55 px-1.5 py-0.5 text-[9px] font-bold text-white">Seedance</span>
                               </div>
                               <div className="min-w-0 flex-1 py-0.5">
-                                <p className="text-xs font-semibold text-text-primary line-clamp-2">Gemini 输出视频</p>
+                                <p className="text-xs font-semibold text-text-primary line-clamp-2">Seedance 输出视频</p>
                                 <p className="mt-1 text-[11px] text-text-muted">请先确认生成效果，再进入剪辑流程做字幕、封面、配乐和发布。</p>
                                 <div className="mt-3 flex flex-wrap gap-2">
-                                  <button onClick={() => void generateGeminiVideo()} disabled={videoGenerating}
+                                  <button onClick={() => void generateSeedanceVideo()} disabled={videoGenerating}
                                     className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-border text-[11px] font-semibold text-text-secondary hover:text-text-primary disabled:opacity-60">
                                     {videoGenerating ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />} 重新生成
                                   </button>

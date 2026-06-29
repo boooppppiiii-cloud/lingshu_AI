@@ -30,9 +30,9 @@ async function get<T>(path: string, fallback: T): Promise<T & { source?: string 
   }
 }
 
-async function postGeminiVideo(body: unknown): Promise<GeminiVideoResult> {
+async function postSeedanceVideo(body: unknown): Promise<SeedanceVideoResult> {
   try {
-    const r = await fetch('/api/overseas/studio/gemini-video', {
+    const r = await fetch('/api/overseas/studio/seedance-video', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeader() },
       body: JSON.stringify(body),
@@ -42,10 +42,10 @@ async function postGeminiVideo(body: unknown): Promise<GeminiVideoResult> {
       throw new Error(j.error === 'demo_expired' ? 'Demo 试用已到期，请联系团队开通正式版或延长试用。' : '今日 Demo 额度已用完，请明天再试或联系团队开通正式版。');
     }
     if (!r.ok) throw new Error(String(r.status));
-    return (await r.json()) as GeminiVideoResult;
+    return (await r.json()) as SeedanceVideoResult;
   } catch (err: any) {
     if (String(err?.message || '').includes('Demo')) throw err;
-    return { ok: false, source: 'gemini', error: String(err?.message || err || 'Gemini video request failed') };
+    return { ok: false, source: 'seedance', error: String(err?.message || err || 'Seedance video request failed') };
   }
 }
 
@@ -140,7 +140,7 @@ export interface StudioProject {
   updatedAt: string;
 }
 
-export interface GeminiVideoResult {
+export interface SeedanceVideoResult {
   ok: boolean;
   source?: string;
   id?: string;
@@ -207,8 +207,8 @@ export const studioApi = {
   translate: (b: { text: string; target?: string; source?: string }) =>
     post<{ ok: boolean; text: string }>('translate', b, { ok: false, text: '' }),
 
-  // Gemini / Veo 视频生成
-  geminiVideo: (b: {
+  // Seedance 视频生成
+  seedanceVideo: (b: {
     script: string;
     productInfo?: string;
     language: string;
@@ -217,7 +217,7 @@ export const studioApi = {
     resolution?: string;
     title?: string;
   }) =>
-    postGeminiVideo(b),
+    postSeedanceVideo(b),
 
   // 数据看板 AI 结论
   insight: (b: { scope: string; metrics: Record<string, unknown> }) =>

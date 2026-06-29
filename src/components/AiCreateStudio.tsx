@@ -530,7 +530,7 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
       setProvider('gemini');
       setMode('material');
       setActiveFolder('hot');
-      setProjectTitle(kickoff.generatedVideo?.title || (kickoff.video?.title ? `Gemini 视频 · ${kickoff.video.title}` : 'Gemini 视频生成'));
+      setProjectTitle(kickoff.generatedVideo?.title || (kickoff.video?.title ? `Seedance 视频 · ${kickoff.video.title}` : 'Seedance 视频生成'));
       setStepIdx(STEPS.findIndex(s => s.id === 'material'));
       autoGen.current = true;
     } catch { /* ignore malformed kickoff */ }
@@ -540,12 +540,12 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
     if (!videoKickoff?.generatedVideo) return;
     const generated = videoKickoff.generatedVideo;
     const clip: Clip = {
-      id: generated.id || `gemini-video-${videoKickoff.video?.title || 'output'}`,
-      name: generated.title || 'Gemini 输出视频',
+      id: generated.id || `seedance-video-${videoKickoff.video?.title || 'output'}`,
+      name: generated.title || 'Seedance 输出视频',
       folder: 'hot',
       type: 'video',
       duration: generated.duration || videoKickoff.video?.duration || duration,
-      size: 'Gemini',
+      size: 'Seedance',
       url: generated.url,
       poster: generated.poster || videoKickoff.video?.aiAnalysis?.materialPoster || videoKickoff.video?.thumbnail,
       scope: 'shared',

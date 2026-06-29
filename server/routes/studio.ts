@@ -20,8 +20,8 @@ import { consumeDemoQuota, isDemoMode } from '../lib/demo.js';
 
 /* ──────────────────────────────────────────────────────────────────────────
    Studio 路由 —— 服务于「社媒 / AI 生成内容」混剪工作台
-   负责脚本 / 文案 / 封面标题 / 智能选材 / Gemini 视频生成等工作台能力。
-   Gemini 视频生成必须真实调用 Gemini/Veo；失败时返回明确错误，不生成本地假预览。
+   负责脚本 / 文案 / 封面标题 / 智能选材 / Seedance 视频生成等工作台能力。
+   视频生成必须真实调用外部模型；失败时返回明确错误，不生成本地假预览。
 ─────────────────────────────────────────────────────────────────────────── */
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -51,6 +51,7 @@ function langName(code: string): string {
 
 const GENERATED_MEDIA_DIR = path.join(__dirname, '../../data/media/generated');
 const GEMINI_VIDEO_WORKER = path.join(__dirname, '../../scripts/gemini-video-worker.mjs');
+const SEEDANCE_BASE_URL = 'https://ark.ap-southeast.bytepluses.com/api/v3';
 
 function geminiVideoConfig() {
   const apiKey = (process.env.GEMINI_API_KEY || '').trim();
@@ -62,15 +63,111 @@ function isGeminiVideoEnabled(): boolean {
   return process.env.GEMINI_VIDEO_ENABLED === 'true';
 }
 
-function normalizeVideoDuration(raw: unknown): number {
+function seedanceVideoConfig() {
+  const apiKey = (process.env.SEEDANCE_API_KEY || '').trim();
+  const baseUrl = (process.env.SEEDANCE_BASE_URL || SEEDANCE_BASE_URL).replace(/\/+$/, '');
+  const model = (process.env.SEEDANCE_MODEL || 'seedance-2-0-260128').trim();
+  const timeoutMs = Math.max(60_000, Number(process.env.SEEDANCE_VIDEO_TIMEOUT_MS || 600_000));
+  const pollIntervalMs = Math.max(2_000, Number(process.env.SEEDANCE_VIDEO_POLL_INTERVAL_MS || 8_000));
+  return { apiKey, baseUrl, model, timeoutMs, pollIntervalMs };
+}
+
+function isSeedanceVideoEnabled(): boolean {
+  return process.env.SEEDANCE_VIDEO_ENABLED === 'true';
+}
+
+function normalizeGeminiVideoDuration(raw: unknown): number {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) return 8;
   // Current Gemini/Veo API accepts only 5-8 seconds for durationSeconds.
   return Math.max(5, Math.min(8, Math.round(n)));
 }
 
+function normalizeSeedanceVideoDuration(raw: unknown): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n <= 0) return 8;
+  // Seedance 2.0 supports integer durations from 4 to 15 seconds.
+  return Math.max(4, Math.min(15, Math.round(n)));
+}
+
 function generatedMediaUrl(file: string): string {
   return `/media/generated/${file}`;
+}
+
+async function seedanceFetchJson(url: string, apiKey: string, init?: RequestInit): Promise<any> {
+  const response = await fetch(url, {
+    ...init,
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+      ...(init?.headers || {}),
+    },
+  });
+  const text = await response.text();
+  let json: any = null;
+  try { json = text ? JSON.parse(text) : null; } catch {}
+  if (!response.ok) {
+    const detail = json?.error?.message || json?.message || json?.error || text || response.statusText;
+    throw new Error(`Seedance API ${response.status}: ${String(detail).slice(0, 500)}`);
+  }
+  return json;
+}
+
+function findUrlDeep(value: unknown): string | null {
+  if (!value) return null;
+  if (typeof value === 'string') return /^https?:\/\/.+/i.test(value) ? value : null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findUrlDeep(item);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    for (const key of ['url', 'video_url', 'videoUrl', 'content_url', 'contentUrl']) {
+      const found = findUrlDeep(obj[key]);
+      if (found) return found;
+    }
+    for (const item of Object.values(obj)) {
+      const found = findUrlDeep(item);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+function seedanceTaskStatus(task: any): string {
+  return String(task?.status || task?.data?.status || task?.task?.status || '').toLowerCase();
+}
+
+function seedanceTaskId(task: any): string {
+  return String(task?.id || task?.data?.id || task?.task?.id || '').trim();
+}
+
+async function waitForSeedanceTask(config: ReturnType<typeof seedanceVideoConfig>, taskId: string): Promise<any> {
+  const deadline = Date.now() + config.timeoutMs;
+  let lastTask: any = null;
+  while (Date.now() < deadline) {
+    lastTask = await seedanceFetchJson(`${config.baseUrl}/contents/generations/tasks/${encodeURIComponent(taskId)}`, config.apiKey);
+    const status = seedanceTaskStatus(lastTask);
+    if (['succeeded', 'success', 'completed', 'done'].includes(status)) return lastTask;
+    if (['failed', 'error', 'expired', 'cancelled', 'canceled'].includes(status)) {
+      const reason = lastTask?.error?.message || lastTask?.message || lastTask?.error || status;
+      throw new Error(`Seedance 任务失败：${String(reason).slice(0, 500)}`);
+    }
+    await new Promise(resolve => setTimeout(resolve, config.pollIntervalMs));
+  }
+  throw new Error(`Seedance 任务超时${lastTask ? `，最后状态：${seedanceTaskStatus(lastTask) || 'unknown'}` : ''}`);
+}
+
+async function downloadGeneratedVideo(url: string, filename: string): Promise<string> {
+  fs.mkdirSync(GENERATED_MEDIA_DIR, { recursive: true });
+  const response = await fetch(url);
+  if (!response.ok || !response.body) throw new Error(`视频下载失败：${response.status}`);
+  const arrayBuffer = await response.arrayBuffer();
+  fs.writeFileSync(path.join(GENERATED_MEDIA_DIR, filename), Buffer.from(arrayBuffer));
+  return generatedMediaUrl(filename);
 }
 
 function proxyEnvDefaults() {
@@ -181,6 +278,87 @@ studioRouter.get('/subscription', async (req, res) => {
 /* 收费墙：以下所有 AI / 渲染路由都需有效订阅（未启用强制时直通）。 */
 studioRouter.use(entitlementGate());
 
+/* ── Seedance 视频生成 ─────────────────────────────────────────────────── */
+// POST /studio/seedance-video  Body: { script, productInfo, language, ratio, duration, resolution, title? }
+studioRouter.post('/seedance-video', async (req, res) => {
+  if (!isSeedanceVideoEnabled()) {
+    res.status(423).json({
+      ok: false,
+      locked: true,
+      source: 'seedance',
+      error: 'Seedance 视频生成接口未启用。请配置 SEEDANCE_API_KEY 并设置 SEEDANCE_VIDEO_ENABLED=true。',
+    });
+    return;
+  }
+  const {
+    script = '',
+    productInfo = '',
+    language = 'en',
+    ratio = '9:16',
+    duration: rawDuration = 8,
+    resolution = '720p',
+    title = 'Seedance 生成视频',
+  } = req.body ?? {};
+  const duration = normalizeSeedanceVideoDuration(rawDuration);
+  const config = seedanceVideoConfig();
+  if (!config.apiKey) {
+    res.json({ ok: false, source: 'seedance', error: 'SEEDANCE_API_KEY not set' });
+    return;
+  }
+  if (!await consumeDemoQuota(req, res, 'videoGeneration')) return;
+
+  const prompt = [
+    `Create a ${duration}-second vertical commercial social video in ${langName(language)}.`,
+    `Aspect ratio: ${ratio}. Resolution: ${resolution}.`,
+    `Use this script/storyboard as the primary direction:\n${String(script).slice(0, 4000)}`,
+    productInfo ? `Product and brand context:\n${String(productInfo).slice(0, 1800)}` : '',
+    'Style: realistic UGC product video, clear product focus, clean lighting, smooth camera movement, high conversion pacing.',
+    'Generate synchronized natural audio. Dialogue or voiceover lines should follow the quoted script language.',
+    'Avoid unreadable text overlays. Keep visual actions aligned with the spoken lines.',
+  ].filter(Boolean).join('\n\n');
+
+  try {
+    const created = await seedanceFetchJson(`${config.baseUrl}/contents/generations/tasks`, config.apiKey, {
+      method: 'POST',
+      body: JSON.stringify({
+        model: config.model,
+        content: [{ type: 'text', text: prompt }],
+        ratio,
+        duration,
+        resolution,
+        generate_audio: true,
+        watermark: false,
+      }),
+    });
+    const taskId = seedanceTaskId(created);
+    if (!taskId) throw new Error('Seedance 未返回任务 ID');
+    const task = await waitForSeedanceTask(config, taskId);
+    const remoteUrl = findUrlDeep(task);
+    if (!remoteUrl) throw new Error('Seedance 未返回可下载的视频地址');
+    const filename = `seedance-${taskId.replace(/[^\w.-]+/g, '-')}-${Date.now()}.mp4`;
+    let url = remoteUrl;
+    try {
+      url = await downloadGeneratedVideo(remoteUrl, filename);
+    } catch (downloadError) {
+      console.warn('[studio] Seedance video download failed, returning remote url:', downloadError);
+    }
+    res.json({
+      ok: true,
+      source: 'seedance',
+      id: taskId,
+      title,
+      url,
+      duration,
+      model: config.model,
+      createdAt: new Date().toISOString(),
+    });
+  } catch (e: any) {
+    const reason = String(e?.message ?? e).slice(0, 500);
+    console.error('[studio] Seedance video generation failed:', e);
+    res.json({ ok: false, source: 'seedance', error: `Seedance 视频生成失败：${reason}` });
+  }
+});
+
 /* ── Gemini / Veo 视频生成 ──────────────────────────────────────────────── */
 // POST /studio/gemini-video  Body: { script, productInfo, language, ratio, duration, resolution, title? }
 studioRouter.post('/gemini-video', async (req, res) => {
@@ -202,7 +380,7 @@ studioRouter.post('/gemini-video', async (req, res) => {
     resolution = '720p',
     title = 'Gemini 生成视频',
   } = req.body ?? {};
-  const duration = normalizeVideoDuration(rawDuration);
+  const duration = normalizeGeminiVideoDuration(rawDuration);
   if (!await consumeDemoQuota(req, res, 'videoGeneration')) return;
   const { apiKey, model } = geminiVideoConfig();
   if (!apiKey) {
