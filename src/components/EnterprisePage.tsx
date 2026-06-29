@@ -31,7 +31,15 @@ const AGENTS = [
   { icon: RefreshCw, label: '留存专家', color: '#16a34a' },
 ];
 
-interface DemoTemplate { id: string; name: string; description: string }
+interface DemoTemplate { id: string; name: string; description: string; profile?: Profile }
+
+function matchTemplateId(profile: Profile, templates: DemoTemplate[]): string {
+  const matched = templates.find(t =>
+    t.profile?.company?.name === profile.company.name &&
+    t.profile?.products?.categories === profile.products.categories
+  );
+  return matched?.id ?? '';
+}
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -56,9 +64,23 @@ export default function EnterprisePage() {
   const [demoBusy, setDemoBusy] = useState(false);
 
   useEffect(() => {
+    let loadedProfile: Profile | null = null;
     fetch('/api/overseas/enterprise/profile')
       .then(r => r.json())
       .then((data: Partial<Profile>) => {
+        const next = {
+          ...DEFAULT,
+          ...data,
+          company: { ...DEFAULT.company, ...data.company },
+          products: { ...DEFAULT.products, ...data.products },
+          brand: { ...DEFAULT.brand, ...data.brand },
+          strategy: { ...DEFAULT.strategy, ...data.strategy },
+          customers: { ...DEFAULT.customers, ...data.customers },
+          operations: { ...DEFAULT.operations, ...data.operations },
+          agentLearning: { ...DEFAULT.agentLearning, ...data.agentLearning },
+          knowledge: data.knowledge ?? '',
+        };
+        loadedProfile = next;
         setProfile(prev => ({
           company: { ...prev.company, ...data.company },
           products: { ...prev.products, ...data.products },
@@ -76,7 +98,7 @@ export default function EnterprisePage() {
       .then(r => r.json())
       .then((list: DemoTemplate[]) => {
         setTemplates(Array.isArray(list) ? list : []);
-        if (Array.isArray(list) && list[0]) setTemplateId(list[0].id);
+        if (Array.isArray(list) && loadedProfile) setTemplateId(matchTemplateId(loadedProfile, list));
       })
       .catch(() => {});
   }, []);
@@ -107,6 +129,7 @@ export default function EnterprisePage() {
       const r = await fetch(`/api/overseas/enterprise/demo/templates/${templateId}/apply`, { method: 'POST' });
       const j = await r.json();
       if (j.profile) setProfile(j.profile);
+      if (j.profile) setTemplateId(matchTemplateId(j.profile, templates) || templateId);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } finally {
@@ -185,6 +208,7 @@ export default function EnterprisePage() {
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
                 <select className={inputCls} value={templateId} onChange={e => setTemplateId(e.target.value)}>
+                  <option value="">选择模板并加载</option>
                   {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                 </select>
                 <button onClick={applyTemplate} disabled={!templateId || demoBusy}
