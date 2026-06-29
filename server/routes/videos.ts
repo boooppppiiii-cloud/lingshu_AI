@@ -1138,6 +1138,53 @@ function metadataFallbackAnalysis(input: Pick<CrawledVideo, 'platform' | 'title'
       { time: '9-12s', label: '证明细节', description: input.views ? `用热度/评论/使用结果强化可信度：${input.views}` : '补充使用细节或效果证明' },
       { time: '12-15s', label: '行动引导', description: '给出购买、收藏、询盘或继续观看理由' },
     ],
+    scriptSummary15s: {
+      visualStyle: input.platform === 'youtube' ? '真人写实评测风格' : '真人社媒写实风格',
+      coreEmotion: input.platform === 'tiktok' || input.platform === 'instagram' ? '快速种草、好奇、轻松' : '信任、解释、种草',
+      competitors: [],
+    },
+    scriptDetails15s: [
+      {
+        time: '0.2s',
+        shot: '特写',
+        camera: '固定镜头',
+        visual: `基础资料推断：用标题或封面信息承接「${title}」，优先出现人物、产品或结果画面。`,
+        subtitle: `围绕「${title}」建立观看理由。`,
+        audio: '配音/BGM 待真实视频分析回填。',
+      },
+      {
+        time: '3.2s',
+        shot: '中近景',
+        camera: '轻微推近',
+        visual: tags[0] ? `基础资料推断：放大「${tags[0]}」相关场景或痛点。` : '基础资料推断：展示用户痛点或使用前后反差。',
+        subtitle: '用一句口播解释为什么继续看。',
+        audio: '轻节奏 BGM 或解释型配音。',
+      },
+      {
+        time: '6.2s-9.2s',
+        shot: '近景',
+        camera: '固定或手持跟拍',
+        visual: `基础资料推断：进入核心展示「${topic}」，突出产品、动作或效果。`,
+        subtitle: '说明核心卖点/使用结果。',
+        audio: '音效配合产品展示或字幕节奏。',
+      },
+      {
+        time: '9.2s-12.2s',
+        shot: '中景',
+        camera: '慢切或平移',
+        visual: input.views ? `基础资料推断：用热度、评论或结果画面强化可信度：${input.views}。` : '基础资料推断：补充细节证明和真实使用反馈。',
+        subtitle: '补强可信度和适用人群。',
+        audio: '配音继续解释，BGM 不抢信息。',
+      },
+      {
+        time: '12.2s-15.0s',
+        shot: '中近景',
+        camera: '收束镜头',
+        visual: '基础资料推断：以结果、产品正面或人物反应收束，引导收藏/询盘/继续观看。',
+        subtitle: '给出行动引导。',
+        audio: 'BGM 进入收束节拍。',
+      },
+    ],
     recommendedScriptType: input.duration && input.duration > 60 ? 'storyboard' : 'voiceover',
   };
 }
