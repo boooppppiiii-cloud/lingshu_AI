@@ -19,6 +19,8 @@ import { schedulerRouter, initScheduler } from './routes/scheduler.js';
 import { pluginsRouter } from './routes/plugins.js';
 import { studioRouter } from './routes/studio.js';
 import { authRouter } from './routes/auth.js';
+import { youtubeRouter } from './routes/youtube.js';
+import { socialRouter } from './routes/social.js';
 import { platformIntegrationsRouter } from './routes/platformIntegrations.js';
 import { isDemoMode, demoLimits } from './lib/demo.js';
 
@@ -89,6 +91,8 @@ app.use('/api/overseas/assets', assetsRouter);
 app.use('/api/overseas/enterprise', enterpriseRouter);
 app.use('/api/overseas/agents', agentChatRouter);
 app.use('/api/overseas/channels', channelsRouter);
+app.use('/api/overseas/youtube', youtubeRouter);
+app.use('/api/overseas/social', socialRouter);
 app.use('/api/overseas/scheduler', schedulerRouter);
 app.use('/api/overseas/plugins', pluginsRouter);
 app.use('/api/overseas/auth', authRouter);

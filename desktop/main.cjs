@@ -9,7 +9,7 @@ const path = require('node:path');
 const { composite, exportCapcutPackage } = require('./render.cjs');
 
 // express 服务（npm start）默认 8790，同时提供 UI 与 /api。也可用 DESKTOP_URL 覆盖（如 vite dev）。
-const APP_URL = process.env.DESKTOP_URL || 'http://localhost:8790';
+const APP_URL = process.env.DESKTOP_URL || 'http://localhost:8792';
 
 let win = null;
 

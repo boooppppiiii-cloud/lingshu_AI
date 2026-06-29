@@ -28,6 +28,7 @@ const SECONDARY_NAV: NavSection = {
     { id: 'plugins',    label: '插件',    icon: <Puzzle size={16} /> },
     { id: 'scheduled',  label: '定时任务', icon: <Clock size={16} /> },
     { id: 'channels',   label: '消息渠道', icon: <Radio size={16} /> },
+    { id: 'youtube',    label: '社媒账号', icon: <Radio size={16} /> },
   ],
 };
 

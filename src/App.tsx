@@ -12,6 +12,7 @@ import PluginsPage from './components/PluginsPage';
 import ScheduledPage from './components/ScheduledPage';
 import ChannelsPage from './components/ChannelsPage';
 import ComingSoon from './components/ComingSoon';
+import YouTubeIntegrationPage from './components/YouTubeIntegration';
 
 export type Page =
   | 'strategy'
@@ -21,7 +22,8 @@ export type Page =
   | 'enterprise'
   | 'plugins'
   | 'scheduled'
-  | 'channels';
+  | 'channels'
+  | 'youtube';
 
 export type AgentType = 'strategy' | 'traffic' | 'conversion' | 'retention';
 
@@ -213,6 +215,7 @@ export default function App() {
       {page === 'plugins' && <PluginsPage />}
       {page === 'scheduled' && <ScheduledPage />}
       {page === 'channels' && <ChannelsPage />}
+      {page === 'youtube' && <YouTubeIntegrationPage />}
     </Layout>
   );
 }
