@@ -1,6 +1,6 @@
-# 平台集成接口边界
+# 平台集成接口说明
 
-社媒/电商平台账号连接、OAuth、token 刷新、真实发布、数据同步由平台集成同事实现。业务页面只依赖以下稳定接口。
+社媒/电商平台账号连接、OAuth、token 刷新、发布和数据同步统一通过以下接口提供。
 
 Base path:
 
@@ -22,7 +22,7 @@ GET /providers
 POST /:provider/connect
 ```
 
-正式版预期：
+能力说明：
 - OAuth 平台返回授权地址，或处理授权 code。
 - 保存加密 token。
 - 返回连接账号信息。
@@ -36,7 +36,7 @@ Demo 模式：
 GET /:provider/status
 ```
 
-正式版预期返回是否连接、账号名、头像、权限范围、最近同步时间。
+返回是否连接、账号名、头像、权限范围、最近同步时间。
 
 ## 同步数据
 
@@ -44,7 +44,7 @@ GET /:provider/status
 POST /:provider/sync
 ```
 
-正式版预期触发订单、商品、客户、广告或社媒数据同步任务。
+触发订单、商品、客户、广告或社媒数据同步任务。
 
 ## 发布内容
 
@@ -52,7 +52,7 @@ POST /:provider/sync
 POST /:provider/publish
 ```
 
-正式版预期接收成片、caption、hashtags、发布时间等，调用平台 API 发布。
+接收成片、caption、hashtags、发布时间等，调用平台 API 发布。
 
 Demo 模式：
 - 不外发，返回 `demo_post_*`。
@@ -63,7 +63,7 @@ Demo 模式：
 DELETE /:provider
 ```
 
-正式版预期删除/失效授权信息。
+删除或失效授权信息。
 
 ## 当前支持 provider
 

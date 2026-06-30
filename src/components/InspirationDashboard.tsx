@@ -7,7 +7,7 @@ import {
   Lightbulb, Flame, BarChart2, ChevronRight, Film, Download, Plus,
   SlidersHorizontal, Bookmark, Maximize2, Minimize2, Lock,
 } from 'lucide-react';
-import { studioApi } from '../lib/studioApi';
+import { studioApi, type Material } from '../lib/studioApi';
 import { authHeader } from '../lib/auth';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -576,7 +576,7 @@ function pipelineState(video: TrendVideo): { title: string; desc: string; spinni
     return { title: '待测试用户填入真实 Gemini API Key', desc: summarizePipelineError(analysis.analysisError || analysis.downloadError || analysis.crawlerOpsLastError), spinning: false, failed: true };
   }
   if (analysis.downloadStatus === 'ops_queued') {
-    return { title: '后台增强分析中', desc: '已先生成基础分析；真实视频获取失败后已自动进入开发团队爬虫队列，成功后会升级为视频级分析。', spinning: true, failed: false };
+    return { title: '后台增强分析中', desc: '已先生成基础分析；视频获取失败后已进入后台增强队列，成功后会升级为视频级分析。', spinning: true, failed: false };
   }
   if (analysis.gemini && analysis.analysisQuality === 'video') {
     return { title: 'Gemini 分析完成', desc: '已提取前 10 秒五维拆解、脚本结构和可复用爆点。', spinning: false, failed: false };
@@ -623,7 +623,7 @@ function enhancementStatus(video: TrendVideo): { title: string; desc: string; ac
     return { title: '真实视频分析完成', desc: '已升级为视频级 Gemini 分析。', active: false };
   }
   if (analysis.downloadStatus === 'ops_queued' || analysis.videoFetchStatus === 'ops_queued') {
-    return { title: '总控爬虫增强中', desc: '自动获取失败，已进入开发团队总控爬虫队列，回填后会升级。', active: true };
+    return { title: '后台增强中', desc: '自动获取失败，已进入后台增强队列，回填后会升级。', active: true };
   }
   if (analysis.downloadStatus === 'queued' || analysis.videoFetchStatus === 'queued') {
     return { title: '视频获取队列中', desc: '后台已收到任务，等待获取真实视频。', active: true };
@@ -868,6 +868,7 @@ interface GeneratedVideo {
   duration: number;
   createdAt: string;
   source?: string;
+  material?: Material;
   error?: string;
 }
 
@@ -974,13 +975,14 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
         throw new Error(output.error || 'Seedance 未返回可预览的视频地址');
       }
       setVideoResult({
-        id: output.id || `seedance-video-${video.id}-${Date.now()}`,
-        title: output.title || `Seedance 视频 · ${video.title}`,
-        url: output.url,
-        poster: output.poster || video.aiAnalysis?.materialPoster || video.thumbnail,
+        id: output.material?.id || output.id || `seedance-video-${video.id}-${Date.now()}`,
+        title: output.material?.name || output.title || `Seedance 视频 · ${video.title}`,
+        url: output.material?.url || output.url,
+        poster: output.material?.poster || output.poster || video.aiAnalysis?.materialPoster || video.thumbnail,
         duration: output.duration || duration,
         createdAt: output.createdAt || new Date().toISOString(),
         source: output.source,
+        material: output.material,
         error: output.error,
       });
     } catch (err: any) {

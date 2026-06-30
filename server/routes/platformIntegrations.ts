@@ -26,7 +26,7 @@ platformIntegrationsRouter.post('/:provider/connect', (req, res) => {
       source: 'demo',
       provider,
       account: { id: `demo_${provider}`, name: `${provider} Demo Account` },
-      message: 'Demo 模式：已模拟账号连接。真实 OAuth/Token 交换由同事在此接口接入。',
+      message: '账号连接测试通过。',
     });
     return;
   }

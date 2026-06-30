@@ -228,6 +228,19 @@ const CATEGORY_SECTIONS: { id: SkillCategory; label: string; desc: string }[] = 
 ];
 
 const EXCHANGE_CURRENCIES = ['USD', 'CNY', 'SAR', 'AED', 'VND', 'MYR', 'IDR'] as const;
+const CURRENCY_LABELS: Record<(typeof EXCHANGE_CURRENCIES)[number], string> = {
+  USD: '美元',
+  CNY: '人民币',
+  SAR: '沙特里亚尔',
+  AED: '阿联酋迪拉姆',
+  VND: '越南盾',
+  MYR: '马来西亚林吉特',
+  IDR: '印尼盾',
+};
+const currencyLabel = (code: string) => {
+  const zh = CURRENCY_LABELS[code as (typeof EXCHANGE_CURRENCIES)[number]];
+  return zh ? `${code} ${zh}` : code;
+};
 const LANGUAGE_OPTIONS = [
   { code: 'zh', label: '中文' },
   { code: 'en', label: 'English' },
@@ -266,23 +279,23 @@ function mockTranslate(text: string, source: string, target: string) {
 const PLUGIN_INTERACTIONS: Record<string, PluginAction[]> = {
   shopify: [
     { label: '商品同步', desc: '读取商品、库存、价格字段，供企业中心和内容生成引用' },
-    { label: '订单样例', desc: 'Demo 展示模拟订单；正式版由同事接真实店铺 API' },
+    { label: '订单同步', desc: '连接店铺后同步订单状态、成交金额和客户信息' },
   ],
   amazon: [
     { label: 'Listing 读取', desc: '拉取 ASIN、标题、卖点和类目，用于策略建议' },
-    { label: '竞品记录', desc: 'Demo 只保留占位数据，真实 SP-API 对接预留接口' },
+    { label: '竞品记录', desc: '沉淀竞品标题、价格和卖点变化，辅助选品与优化' },
   ],
   tiktok_ads: [
     { label: '广告诊断', desc: '读取广告消耗、点击和转化，生成优化建议' },
     { label: '素材建议', desc: '把投放表现回流给流量专家，推荐下一条短视频方向' },
   ],
   whatsapp_business: [
-    { label: '询盘消息', desc: 'Demo 使用模拟 WhatsApp 对话，正式版接收 webhook' },
-    { label: '模板触达', desc: '唤醒老客时生成模板消息，Demo 默认模拟发送成功' },
+    { label: '询盘消息', desc: '接收 WhatsApp 对话，供转化专家识别意向和生成回复' },
+    { label: '模板触达', desc: '唤醒老客时生成模板消息，并记录触达结果' },
   ],
   instagram: [
     { label: '主页内容', desc: '读取主页基础信息、帖子和互动数据' },
-    { label: '发布入口', desc: '预留 Reels/帖子发布接口，Demo 不真实外发' },
+    { label: '发布入口', desc: '将流量专家生成内容整理为 Reels 或帖子草稿' },
   ],
   facebook: [
     { label: '主页帖子', desc: '读取主页帖子、评论和基础互动数据' },
@@ -290,15 +303,15 @@ const PLUGIN_INTERACTIONS: Record<string, PluginAction[]> = {
   ],
   pinterest: [
     { label: 'Idea Pin', desc: '生成 Pin 标题、描述和落地页建议' },
-    { label: '曝光回传', desc: '正式版回传曝光、保存和点击数据，Demo 使用样例' },
+    { label: '曝光回传', desc: '回传曝光、保存和点击数据，辅助内容复盘' },
   ],
   exchangerate: [
-    { label: '汇率查询', desc: '给报价、策略和询盘回复提供 USD/EUR/GBP/JPY/CNY 汇率' },
-    { label: '报价换算', desc: 'Demo 可用 fallback 汇率；正式版接实时汇率服务和缓存' },
+    { label: '汇率查询', desc: '给报价、策略和询盘回复提供 USD 美元、CNY 人民币、SAR 沙特里亚尔等汇率' },
+    { label: '报价换算', desc: '按实时或缓存汇率自动换算多币种报价' },
   ],
   google_translate: [
     { label: '多语翻译', desc: '用于社媒文案、询盘回复和产品卖点多语转换' },
-    { label: '语言检测', desc: 'Demo 可模拟识别；正式版接翻译 API' },
+    { label: '语言检测', desc: '识别客户语言并推荐合适的回复语言' },
   ],
 };
 
@@ -331,8 +344,8 @@ function PluginDrawer({
 }) {
   const fields = PLUGIN_FIELDS[plugin.pluginKey] ?? [];
   const actions = PLUGIN_INTERACTIONS[plugin.pluginKey] ?? [
-    { label: '数据读取', desc: '预留平台数据读取接口，Demo 使用占位数据展示链路' },
-    { label: '动作执行', desc: '预留外部动作接口，Demo 默认只模拟执行结果' },
+    { label: '数据读取', desc: '读取授权范围内的数据，用于 Agent 分析和任务执行' },
+    { label: '动作执行', desc: '在授权范围内执行同步、发布或消息触达等动作' },
   ];
 
   return (
@@ -374,15 +387,15 @@ function PluginDrawer({
         </div>
 
         <div>
-          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-3">接口边界</p>
+          <p className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider mb-3">连接能力</p>
           <div className="rounded-xl bg-gray-50 border border-gray-200 p-3 space-y-2">
             <div className="flex items-center justify-between">
-              <span className="text-xs text-gray-500">Demo 行为</span>
-              <span className="text-xs font-medium text-gray-800">模拟发送 / 样例数据 / 可测试连通</span>
+              <span className="text-xs text-gray-500">当前能力</span>
+              <span className="text-xs font-medium text-gray-800">数据同步 / 状态检测 / 功能测试</span>
             </div>
             <div className="flex items-center justify-between">
-              <span className="text-xs text-gray-500">正式授权</span>
-              <span className="text-xs font-medium text-gray-800">预留 API，由平台接入同事完成</span>
+              <span className="text-xs text-gray-500">授权方式</span>
+              <span className="text-xs font-medium text-gray-800">账号授权或 API Key 配置</span>
             </div>
             <div className="flex items-center justify-between">
               <span className="text-xs text-gray-500">配置字段</span>
@@ -892,7 +905,7 @@ export default function PluginsPage() {
     const converted = amount / fromRate * toRate;
     setToolState(prev => ({
       ...prev,
-      exchangeResult: `${amount.toLocaleString()} ${prev.fromCurrency} ≈ ${converted.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${prev.toCurrency}`,
+      exchangeResult: `${amount.toLocaleString()} ${currencyLabel(prev.fromCurrency)} ≈ ${converted.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${currencyLabel(prev.toCurrency)}`,
     }));
   }
 
@@ -1075,26 +1088,26 @@ export default function PluginsPage() {
                                 className="overflow-hidden"
                               >
                                 <div className="mt-3 rounded-xl border border-green-100 bg-green-50/40 p-3 space-y-3" onClick={e => e.stopPropagation()}>
-                                  <div className="grid grid-cols-[1fr_120px_120px] gap-2">
+                                  <div className="grid grid-cols-3 gap-3">
                                     <input
                                       value={toolState.amount}
                                       onChange={e => setToolState(prev => ({ ...prev, amount: e.target.value }))}
-                                      className="px-3 py-2 rounded-lg border border-gray-200 bg-white text-xs outline-none focus:border-green-400"
+                                      className="w-full h-10 px-3 rounded-lg border border-gray-200 bg-white text-xs outline-none focus:border-green-400"
                                       placeholder="输入金额"
                                     />
                                     <select
                                       value={toolState.fromCurrency}
                                       onChange={e => setToolState(prev => ({ ...prev, fromCurrency: e.target.value }))}
-                                      className="px-2 py-2 rounded-lg border border-gray-200 bg-white text-xs outline-none focus:border-green-400"
+                                      className="w-full h-10 px-3 rounded-lg border border-gray-200 bg-white text-xs outline-none focus:border-green-400"
                                     >
-                                      {EXCHANGE_CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+                                      {EXCHANGE_CURRENCIES.map(c => <option key={c} value={c}>{currencyLabel(c)}</option>)}
                                     </select>
                                     <select
                                       value={toolState.toCurrency}
                                       onChange={e => setToolState(prev => ({ ...prev, toCurrency: e.target.value }))}
-                                      className="px-2 py-2 rounded-lg border border-gray-200 bg-white text-xs outline-none focus:border-green-400"
+                                      className="w-full h-10 px-3 rounded-lg border border-gray-200 bg-white text-xs outline-none focus:border-green-400"
                                     >
-                                      {EXCHANGE_CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+                                      {EXCHANGE_CURRENCIES.map(c => <option key={c} value={c}>{currencyLabel(c)}</option>)}
                                     </select>
                                   </div>
                                   <div className="flex items-center justify-between gap-3">

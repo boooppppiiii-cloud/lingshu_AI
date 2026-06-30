@@ -38,7 +38,7 @@ const CHANNEL_DEFS: Record<string, {
   },
   dingtalk: {
     name: '钉钉群机器人', icon: '📌', color: '#1677FF', bg: '#e8f0ff',
-    desc: '发送业务通知到钉钉群，支持文本和 Markdown 消息，适合内部团队协作',
+    desc: '发送业务通知到钉钉群，支持文本和 Markdown 消息，适合运营通知和任务提醒',
     fields: [
       { key: 'webhookUrl', label: 'Webhook URL', placeholder: 'https://oapi.dingtalk.com/robot/send?access_token=...' },
       { key: 'secret', label: '加签密钥（可选）', placeholder: 'SEC...', secret: true },
@@ -46,7 +46,7 @@ const CHANNEL_DEFS: Record<string, {
   },
   feishu: {
     name: '飞书群机器人', icon: '🦅', color: '#3370FF', bg: '#e8edff',
-    desc: '发送卡片消息到飞书群，支持富文本格式，适合内部日报和工作汇报',
+    desc: '发送卡片消息到飞书群，支持富文本格式，适合经营日报和任务进展提醒',
     fields: [
       { key: 'webhookUrl', label: 'Webhook URL', placeholder: 'https://open.feishu.cn/open-apis/bot/v2/hook/...' },
       { key: 'secret', label: '签名校验密钥（可选）', placeholder: 'xxx', secret: true },

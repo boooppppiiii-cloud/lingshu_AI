@@ -163,7 +163,7 @@ export default function App() {
         <div className="w-full max-w-md rounded-2xl bg-white border border-border p-6 text-center shadow-sm">
           <p className="text-sm font-bold text-text-primary">Demo 试用已到期</p>
           <p className="text-sm text-text-muted mt-2 leading-relaxed">
-            当前试用账号已超过 {session.demo.trialDays} 天有效期。请联系团队开通正式版或延长试用。
+            当前试用账号已超过 {session.demo.trialDays} 天有效期。请联系管理员开通或延长试用。
           </p>
           <button onClick={handleLogout}
             className="mt-5 px-4 py-2 rounded-lg bg-text-primary text-white text-sm font-semibold">
@@ -223,7 +223,7 @@ export default function App() {
       )}
       {page === 'enterprise' && <EnterprisePage />}
       {page === 'plugins' && <PluginsPage />}
-      {page === 'scheduled' && <ScheduledPage />}
+      {page === 'scheduled' && <ScheduledPage onAction={startAgentTask} />}
       {page === 'channels' && <ChannelsPage />}
       {page === 'youtube' && <YouTubeIntegrationPage />}
     </Layout>
