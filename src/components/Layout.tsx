@@ -142,7 +142,6 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
   const suggestedVideoJobs = Math.min(demo?.totalRemaining?.videoGeneration ?? demo?.remaining.videoGeneration ?? 0, byToken(remainingTokens, 2000));
   const suggestedVideoSeconds = suggestedVideoJobs * 8;
   const suggestedAiVideoAnalyses = Math.min(suggestedGenerations, byToken(remainingTokens, 1200));
-  const suggestedApifyCrawls = Math.min(5, Math.max(0, demo?.remaining.generation ?? 0));
   const showDemoGuide = Boolean(
     activeSession?.demo?.enabled ||
     activeSession?.tenant?.subscriptionPlan === 'trial' ||
@@ -325,8 +324,8 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
                           <span className="font-bold text-text-primary">YouTube 不吃 token</span>
                         </div>
                         <div className="flex items-center justify-between gap-3">
-                          <span>TikTok/Instagram 兜底</span>
-                          <span className="font-bold text-text-primary">约 {suggestedApifyCrawls} 次/天</span>
+                          <span>爆款视频抓取</span>
+                          <span className="font-bold text-text-primary">建议轻量爬取</span>
                         </div>
                         <div className="flex items-center justify-between gap-3">
                           <span>视频 AI 分析</span>
@@ -338,7 +337,7 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
                         </div>
                       </div>
                       <p className="mt-2 text-[9px] leading-relaxed text-text-muted">
-                        估算按短对话 1.6k、普通生成 1.2k、视频生成 2k token 预留；Apify 是单独的 4 美元爬虫额度，TikTok/Instagram 兜底爬取会额外消耗。
+                        估算按短对话 1.6k、普通生成 1.2k、视频生成 2k token 预留；爆款视频抓取 token 消耗大，建议轻量爬取。
                       </p>
                     </div>
 
