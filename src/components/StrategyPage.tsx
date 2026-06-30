@@ -6,6 +6,7 @@ import StrategyDataBoard from './StrategyDataBoard';
 import AgentReply from './AgentReply';
 import { authHeader } from '../lib/auth';
 import type { ConversationContext, Message, RestoreSignal, KickoffSignal, AgentAction } from '../App';
+import { completeDemoStep } from '../lib/demoProgress';
 
 type ViewMode = 'chat' | 'workspace' | 'board';
 
@@ -103,8 +104,8 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
       });
       if (!resp.ok || !resp.body) {
         const err = await resp.json().catch(() => ({}));
-        if (resp.status === 402 || err.error === 'demo_expired') throw new Error('Demo 试用已到期，请联系团队开通正式版或延长试用。');
-        if (resp.status === 429 || err.error === 'demo_quota_exceeded') throw new Error('今日 Demo 额度已用完，请明天再试或联系团队开通正式版。');
+        if (resp.status === 402 || err.error === 'demo_expired') throw new Error('试用已到期，请联系管理员开通或延长试用。');
+        if (resp.status === 429 || err.error === 'demo_quota_exceeded') throw new Error('今日试用额度已用完，请明天再试或联系管理员开通更多额度。');
         throw new Error('API error');
       }
 
@@ -223,8 +224,14 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
                       <p className="text-sm text-text-muted mt-1">跨三侧策略编排 · 经营分析 · 多 Agent 协调</p>
                     </div>
                     <div className="grid grid-cols-2 gap-2 max-w-lg w-full">
-                      {SUGGESTIONS.map(s => (
-                        <button key={s} onClick={() => void send(s)}
+                      {SUGGESTIONS.map((s, index) => (
+                        <button
+                          key={s}
+                          data-demo-target={index === 0 ? 'strategy_prompt' : undefined}
+                          onClick={() => {
+                            completeDemoStep('strategy');
+                            void send(s);
+                          }}
                           className="text-left px-3 py-2.5 rounded-xl border border-border bg-surface text-xs text-text-secondary hover:border-border-bright hover:text-text-primary transition-all leading-relaxed">
                           {s}
                         </button>

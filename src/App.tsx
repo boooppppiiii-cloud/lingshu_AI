@@ -8,11 +8,10 @@ import TrafficPage from './components/TrafficPage';
 import ConversionPage from './components/ConversionPage';
 import RetentionPage from './components/RetentionPage';
 import EnterprisePage from './components/EnterprisePage';
-import PluginsPage from './components/PluginsPage';
+import IntegrationsPage from './components/IntegrationsPage';
 import ScheduledPage from './components/ScheduledPage';
-import ChannelsPage from './components/ChannelsPage';
 import ComingSoon from './components/ComingSoon';
-import YouTubeIntegrationPage from './components/YouTubeIntegration';
+import { completeDemoStep } from './lib/demoProgress';
 
 export type Page =
   | 'strategy'
@@ -59,6 +58,7 @@ const loadConvs = (): Conversation[] => {
 const loadPage = (): Page => {
   try {
     const saved = localStorage.getItem('ow_page') as Page | null;
+    if (saved === 'channels' || saved === 'youtube') return 'plugins';
     return saved && ALL_PAGES.includes(saved) ? saved : 'strategy';
   } catch { return 'strategy'; }
 };
@@ -93,6 +93,11 @@ export default function App() {
 
   // 每次对话推进都记录/更新近期会话
   const enterConversation = (ctx: ConversationContext) => {
+    if (ctx.messages?.some(msg => msg.role === 'assistant' && msg.content.trim().length > 12)) {
+      if (ctx.agent === 'strategy') completeDemoStep('strategy');
+      if (ctx.agent === 'conversion') completeDemoStep('conversion');
+      if (ctx.agent === 'retention') completeDemoStep('retention');
+    }
     setConversation(ctx);
     if (!ctx.messages?.length) {
       activeIdRef.current = null;
@@ -163,7 +168,7 @@ export default function App() {
         <div className="w-full max-w-md rounded-2xl bg-white border border-border p-6 text-center shadow-sm">
           <p className="text-sm font-bold text-text-primary">Demo 试用已到期</p>
           <p className="text-sm text-text-muted mt-2 leading-relaxed">
-            当前试用账号已超过 {session.demo.trialDays} 天有效期。请联系团队开通正式版或延长试用。
+            当前试用账号已超过 {session.demo.trialDays} 天有效期。请联系管理员开通或延长试用。
           </p>
           <button onClick={handleLogout}
             className="mt-5 px-4 py-2 rounded-lg bg-text-primary text-white text-sm font-semibold">
@@ -222,10 +227,9 @@ export default function App() {
         />
       )}
       {page === 'enterprise' && <EnterprisePage />}
-      {page === 'plugins' && <PluginsPage />}
-      {page === 'scheduled' && <ScheduledPage />}
-      {page === 'channels' && <ChannelsPage />}
-      {page === 'youtube' && <YouTubeIntegrationPage />}
+      {page === 'plugins' && <IntegrationsPage />}
+      {page === 'scheduled' && <ScheduledPage onAction={startAgentTask} />}
+      {(page === 'channels' || page === 'youtube') && <IntegrationsPage />}
     </Layout>
   );
 }

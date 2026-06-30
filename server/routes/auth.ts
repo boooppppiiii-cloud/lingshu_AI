@@ -73,7 +73,7 @@ authRouter.post('/register', async (req, res) => {
   if (String(password).length < 8) { res.status(400).json({ error: '密码至少 8 位' }); return; }
   const expectedInvite = process.env.DEMO_INVITE_CODE?.trim();
   if (expectedInvite && inviteCode !== expectedInvite) {
-    res.status(403).json({ error: '邀请码无效，请联系团队获取 Demo 访问码' });
+    res.status(403).json({ error: '邀请码无效，请联系管理员获取访问码' });
     return;
   }
 

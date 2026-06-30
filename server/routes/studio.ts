@@ -94,6 +94,36 @@ function generatedMediaUrl(file: string): string {
   return `/media/generated/${file}`;
 }
 
+async function createGeneratedVideoMaterial(input: {
+  title: string;
+  filename: string;
+  duration: number;
+}): Promise<Material | null> {
+  const filePath = path.join(GENERATED_MEDIA_DIR, input.filename);
+  if (!fs.existsSync(filePath)) return null;
+  const id = randomUUID();
+  const posterFile = `${id}.poster.jpg`;
+  const posterPath = path.join(GENERATED_MEDIA_DIR, posterFile);
+  const material: Material = {
+    id,
+    name: input.title || 'Seedance 生成视频',
+    folder: 'upload',
+    type: 'video',
+    duration: Number(input.duration) || 0,
+    size: humanSize(fs.statSync(filePath).size),
+    file: `generated/${input.filename}`,
+    url: generatedMediaUrl(input.filename),
+    scope: 'own',
+    createdAt: new Date().toISOString(),
+  };
+  const posterOk = await extractPoster(filePath, posterPath, material.duration > 1 ? 1 : 0);
+  if (posterOk) material.poster = generatedMediaUrl(posterFile);
+  const list = loadMaterials().filter(item => item.url !== material.url);
+  list.push(material);
+  persistMaterials(list);
+  return material;
+}
+
 async function seedanceFetchJson(url: string, apiKey: string, init?: RequestInit): Promise<any> {
   const response = await fetch(url, {
     ...init,
@@ -325,7 +355,9 @@ studioRouter.post('/seedance-video', async (req, res) => {
     productInfo ? `Product and brand context:\n${String(productInfo).slice(0, 1800)}` : '',
     'Style: realistic UGC product video, clear product focus, clean lighting, smooth camera movement, high conversion pacing.',
     'Generate synchronized natural audio. Dialogue or voiceover lines should follow the quoted script language.',
-    'Avoid unreadable text overlays. Keep visual actions aligned with the spoken lines.',
+    '固定提示词：全程不要出现任何文字、符号、标识。',
+    'No text, symbols, logos, captions, subtitles, labels, UI, watermarks, brand marks, written characters, numbers, or signage may appear at any point in the video.',
+    'Keep visual actions aligned with the spoken lines.',
   ].filter(Boolean).join('\n\n');
 
   try {
@@ -348,19 +380,24 @@ studioRouter.post('/seedance-video', async (req, res) => {
     if (!remoteUrl) throw new Error('Seedance 未返回可下载的视频地址');
     const filename = `seedance-${taskId.replace(/[^\w.-]+/g, '-')}-${Date.now()}.mp4`;
     let url = remoteUrl;
+    let material: Material | null = null;
     try {
       url = await downloadGeneratedVideo(remoteUrl, filename);
+      material = await createGeneratedVideoMaterial({ title, filename, duration });
     } catch (downloadError) {
       console.warn('[studio] Seedance video download failed, returning remote url:', downloadError);
     }
     res.json({
       ok: true,
       source: 'seedance',
-      id: taskId,
+      id: material?.id || taskId,
+      taskId,
       title,
       url,
+      poster: material?.poster,
       duration,
       model: config.model,
+      material,
       createdAt: new Date().toISOString(),
     });
   } catch (e: any) {
@@ -378,7 +415,7 @@ studioRouter.post('/gemini-video', async (req, res) => {
       ok: false,
       locked: true,
       source: 'gemini',
-      error: '测试版已预留 Gemini/Veo 视频生成接口，当前不接通外部生成服务；正式版支持接入客户自己的 Gemini Key。',
+      error: '当前视频生成服务暂未启用。请先配置可用的生成模型 Key 后重试。',
     });
     return;
   }

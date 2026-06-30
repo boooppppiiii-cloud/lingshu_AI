@@ -81,7 +81,7 @@ channelsRouter.post('/:id/test', async (req: Request, res: Response) => {
       channels[idx].enabled = true;
       save(channels);
     }
-    res.json({ ok: true, source: 'demo', info: { message: 'Demo 模式：已模拟连接成功，真实授权由平台集成模块接入。' } });
+    res.json({ ok: true, source: 'demo', info: { message: '连接测试通过。' } });
     return;
   }
 

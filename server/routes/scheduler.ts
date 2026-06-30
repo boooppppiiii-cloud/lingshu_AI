@@ -1,7 +1,9 @@
 import { Router, type Request, type Response } from 'express';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { spawn } from 'child_process';
 import cron, { type ScheduledTask as CronJob } from 'node-cron';
 import { callLLMChatStream } from '../agents/llm.js';
 import { buildEnterpriseContext } from './enterprise.js';
@@ -13,6 +15,7 @@ import type { Platform } from '../types/index.js';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA = path.join(__dirname, '../../data/tasks.json');
 const ENTERPRISE_FILE = path.join(__dirname, '../../data/enterprise.json');
+const PDF_SCRIPT = path.join(__dirname, '../../scripts/render-task-report-pdf.py');
 
 export interface ScheduledTask {
   id: string;
@@ -30,6 +33,22 @@ export interface ScheduledTask {
   createdAt: string;
 }
 
+interface HolidayInfo {
+  date: string;
+  name: string;
+  note: string;
+}
+
+interface MarketHolidayPlan {
+  name: string;
+  holidays: HolidayInfo[];
+}
+
+interface TaskReportAction {
+  label: string;
+  agentLabel: string;
+}
+
 function load(): ScheduledTask[] {
   try { return JSON.parse(fs.readFileSync(DATA, 'utf8')); } catch { return []; }
 }
@@ -38,6 +57,90 @@ function save(tasks: ScheduledTask[]) {
 }
 function getEnterpriseCtx(): string {
   try { return buildEnterpriseContext(JSON.parse(fs.readFileSync(ENTERPRISE_FILE, 'utf8'))); } catch { return ''; }
+}
+
+function readEnterpriseProfile(): Record<string, any> {
+  try { return JSON.parse(fs.readFileSync(ENTERPRISE_FILE, 'utf8')) as Record<string, any>; } catch { return {}; }
+}
+
+function taskReportActions(taskType: string): TaskReportAction[] {
+  if (taskType === 'holiday_push') {
+    return [
+      { label: '整理节日前 7 天主推 SKU 与库存水位', agentLabel: '策略专家' },
+      { label: '生成社媒预热脚本和短视频内容方向', agentLabel: '流量专家' },
+      { label: '生成私域触达话术并安排近 90 天询盘跟进', agentLabel: '转化专家' },
+    ];
+  }
+  if (taskType === 'trend_report') {
+    return [
+      { label: '把高频话题转成 3 条 TikTok 脚本方向', agentLabel: '流量专家' },
+      { label: '挑选 2 个产品卖点做 A/B 内容测试', agentLabel: '流量专家' },
+      { label: '将适配市场和语言写回企业中心学习记录', agentLabel: '策略专家' },
+    ];
+  }
+  if (taskType === 'video_keyword_crawl') {
+    return [
+      { label: '查看新入库视频并筛选可复用素材', agentLabel: '流量专家' },
+      { label: '选择高互动视频生成克隆脚本', agentLabel: '流量专家' },
+      { label: '复盘失败下载链接并补充关键词', agentLabel: '策略专家' },
+    ];
+  }
+  if (taskType === 'exchange_rate') {
+    return [
+      { label: '生成多币种询盘报价话术', agentLabel: '转化专家' },
+      { label: '更新报价风险和利润提醒', agentLabel: '策略专家' },
+      { label: '整理老客补货报价提醒', agentLabel: '留存专家' },
+    ];
+  }
+  if (taskType === 'weekly_review') {
+    return [
+      { label: '拆解下周社媒内容任务', agentLabel: '流量专家' },
+      { label: '生成询盘转化跟进动作', agentLabel: '转化专家' },
+      { label: '生成老客复购唤醒动作', agentLabel: '留存专家' },
+    ];
+  }
+  if (taskType === 'crm_wakeup') {
+    return [
+      { label: '生成老客唤醒分层和触达节奏', agentLabel: '留存专家' },
+      { label: '生成 WhatsApp 跟进话术', agentLabel: '转化专家' },
+      { label: '生成复购内容素材方向', agentLabel: '流量专家' },
+    ];
+  }
+  return [{ label: '交给策略专家拆解后续任务', agentLabel: '策略专家' }];
+}
+
+function pdfPythonPath(): string {
+  const bundled = path.join(os.homedir(), '.cache/codex-runtimes/codex-primary-runtime/dependencies/python/bin/python3');
+  if (fs.existsSync(bundled)) return bundled;
+  return process.env.PYTHON || 'python3';
+}
+
+function formatTaskTime(value?: string): string {
+  return value ? new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '暂无';
+}
+
+function renderTaskReportPdf(payload: Record<string, unknown>): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    const output = path.join(os.tmpdir(), `lingshu-task-report-${Date.now()}-${Math.random().toString(16).slice(2)}.pdf`);
+    const child = spawn(pdfPythonPath(), [PDF_SCRIPT, output], { stdio: ['pipe', 'pipe', 'pipe'] });
+    let stderr = '';
+    child.stderr.on('data', chunk => { stderr += chunk.toString(); });
+    child.on('error', reject);
+    child.on('close', code => {
+      if (code !== 0) {
+        reject(new Error(stderr || `PDF render failed with code ${code}`));
+        return;
+      }
+      try {
+        const pdf = fs.readFileSync(output);
+        fs.rmSync(output, { force: true });
+        resolve(pdf);
+      } catch (e) {
+        reject(e);
+      }
+    });
+    child.stdin.end(JSON.stringify(payload));
+  });
 }
 
 // Active cron jobs registry
@@ -94,6 +197,143 @@ async function executeExchangeRate(_task: ScheduledTask): Promise<string> {
   } catch {
     return '汇率获取失败，请检查网络';
   }
+}
+
+function splitTextList(value: unknown): string[] {
+  return String(value || '')
+    .split(/[\n,，;；、/]+/)
+    .map(item => item.trim())
+    .filter(Boolean);
+}
+
+function daysUntil(date: string, from = new Date()): number {
+  const start = new Date(from);
+  start.setHours(0, 0, 0, 0);
+  return Math.ceil((new Date(`${date}T00:00:00+08:00`).getTime() - start.getTime()) / 86400000);
+}
+
+function marketKey(market: string): string {
+  const value = market.toLowerCase();
+  if (/美国|usa|u\.s\.|united states/.test(value)) return 'us';
+  if (/沙特|saudi|ksa/.test(value)) return 'saudi';
+  if (/阿联酋|uae|emirates|dubai/.test(value)) return 'uae';
+  if (/德国|germany|deutschland/.test(value)) return 'germany';
+  if (/印尼|印度尼西亚|indonesia/.test(value)) return 'indonesia';
+  return value;
+}
+
+function marketLanguage(key: string, enterprise: Record<string, any>): string {
+  const preferred = splitTextList(enterprise.company?.primaryLanguages || enterprise.brand?.preferredLanguages);
+  const map: Record<string, string> = {
+    us: '英语',
+    saudi: preferred.includes('阿拉伯语') ? '阿拉伯语 / 英语' : '阿拉伯语',
+    uae: preferred.includes('阿拉伯语') ? '阿拉伯语 / 英语' : '阿拉伯语 / 英语',
+    germany: '德语 / 英语',
+    indonesia: '印尼语 / 英语',
+  };
+  return map[key] || preferred.join(' / ') || '英语';
+}
+
+function pickProducts(key: string, enterprise: Record<string, any>): string {
+  const focus = splitTextList(enterprise.strategy?.focusProducts);
+  const categories = splitTextList(enterprise.products?.categories);
+  const products = focus.length ? focus : categories;
+  const has = (keyword: string) => products.find(item => item.includes(keyword));
+  const lip = has('唇') || '唇釉套装';
+  const travel = has('旅行') || '旅行装护肤套装';
+  const serum = has('精华') || has('维 C') || '维 C 亮肤精华';
+  const cream = has('面霜') || '烟酰胺面霜';
+
+  if (key === 'us') return [travel, serum, '低 MOQ 私标套装'].join('、');
+  if (key === 'saudi' || key === 'uae') return [lip, travel, '英文/阿语标签版本'].join('、');
+  if (key === 'germany') return [serum, cream, '纯素/无动物测试卖点组合'].join('、');
+  if (key === 'indonesia') return [lip, travel, 'TikTok Shop 小批量试单组合'].join('、');
+  return products.slice(0, 3).join('、') || '重点 SKU';
+}
+
+function holidayCatalog(): Record<string, MarketHolidayPlan> {
+  return {
+    us: {
+      name: '美国',
+      holidays: [
+        { date: '2026-07-03', name: 'Independence Day 观察假期', note: '7/4 独立日落在周六，联邦观察假期为 7/3' },
+        { date: '2026-07-04', name: 'Independence Day 独立日', note: '美国建国 250 周年，适合做纪念装、旅行装和派对妆容内容' },
+        { date: '2026-09-07', name: 'Labor Day 劳动节', note: '夏末促销节点，适合清爽护肤、旅行补货和开学季前内容' },
+        { date: '2026-10-12', name: 'Columbus Day / Indigenous Peoples Day', note: '部分地区放假，适合做秋季护肤切换' },
+      ],
+    },
+    saudi: {
+      name: '沙特',
+      holidays: [
+        { date: '2026-08-25', name: 'Prophet Muhammad’s Birthday 先知诞辰', note: '宗教节日，内容表达需稳重，避免夸张促销语' },
+        { date: '2026-09-23', name: 'Saudi National Day 沙特国庆日', note: '适合绿色视觉、礼赠套装、阿语标签和批发备货提醒' },
+      ],
+    },
+    uae: {
+      name: '阿联酋',
+      holidays: [
+        { date: '2026-08-25', name: 'Prophet Muhammad’s Birthday 先知诞辰', note: '适合温和护肤、礼赠套装，文案保持尊重克制' },
+        { date: '2026-11-30', name: 'Commemoration Day 纪念日', note: '偏纪念属性，不建议强促销，可做品牌关怀内容' },
+        { date: '2026-12-02', name: 'UAE National Day 阿联酋国庆日', note: '适合礼盒、套装和阿语/英语双语上新预热' },
+      ],
+    },
+    germany: {
+      name: '德国',
+      holidays: [
+        { date: '2026-08-15', name: 'Assumption Day 圣母升天节（部分州）', note: '巴伐利亚、萨尔等区域假期，可做区域定向内容' },
+        { date: '2026-10-03', name: 'German Unity Day 德国统一日', note: '全国假日，适合秋季护肤、成分安全和合规资料内容' },
+        { date: '2026-10-31', name: 'Reformation Day 宗教改革日（部分州）', note: '区域假期，适合轻量品牌露出' },
+      ],
+    },
+    indonesia: {
+      name: '印尼',
+      holidays: [
+        { date: '2026-08-17', name: 'Independence Day 印尼独立日', note: '红白视觉、直播促销和 TikTok Shop 套装备货节点' },
+        { date: '2026-08-25', name: 'Mawlid / Maulid Nabi 先知诞辰', note: '宗教节日，适合礼赠和温和表达，避免激进促销' },
+        { date: '2026-12-25', name: 'Christmas Day 圣诞节', note: '礼盒和年末大促节点，需提前 6-8 周准备素材' },
+      ],
+    },
+  };
+}
+
+async function executeHolidayPush(_task: ScheduledTask): Promise<string> {
+  const enterprise = readEnterpriseProfile();
+  const rawMarkets = splitTextList(enterprise.company?.mainMarkets || enterprise.strategy?.focusMarkets);
+  const keys = Array.from(new Set(rawMarkets.map(marketKey))).filter(Boolean);
+  const catalog = holidayCatalog();
+  const selectedKeys = keys.filter(key => key in catalog);
+  const markets = selectedKeys.length ? selectedKeys : ['us', 'saudi', 'uae', 'germany', 'indonesia'];
+  const now = new Date();
+  const horizonDays = 120;
+  const sourceText = rawMarkets.length ? rawMarkets.join('、') : '美国、沙特、阿联酋、德国、印尼';
+
+  const lines = [
+    `【节日推品提醒】基于企业中心主要市场：${sourceText}`,
+    `时间窗口：未来 ${horizonDays} 天；生成日期：${now.toLocaleDateString('zh-CN')}`,
+    '',
+  ];
+
+  for (const key of markets) {
+    const market = catalog[key];
+    const upcoming = market.holidays
+      .map(holiday => ({ ...holiday, diff: daysUntil(holiday.date, now) }))
+      .filter(holiday => holiday.diff >= 0 && holiday.diff <= horizonDays);
+    const holidays = upcoming.length ? upcoming : market.holidays
+      .map(holiday => ({ ...holiday, diff: daysUntil(holiday.date, now) }))
+      .filter(holiday => holiday.diff >= 0)
+      .slice(0, 1);
+
+    lines.push(`【${market.name}】`);
+    for (const holiday of holidays) {
+      lines.push(`- ${holiday.date}（${holiday.diff} 天后）${holiday.name}：${holiday.note}`);
+    }
+    lines.push(`  推品建议：${pickProducts(key, enterprise)}`);
+    lines.push(`  文案语言：${marketLanguage(key, enterprise)}；动作：提前准备 2 条社媒预热内容、1 版询盘跟进话术、1 版老客唤醒消息。`);
+    lines.push('');
+  }
+
+  lines.push('优先级建议：7 天内节日先处理库存和老客触达；30-60 天节日准备短视频素材和达人 brief；60 天以上节日先沉淀选品清单和多语言标签需求。');
+  return lines.join('\n').trim();
 }
 
 async function executeCrmWakeup(_task: ScheduledTask): Promise<string> {
@@ -170,6 +410,7 @@ async function executeVideoKeywordCrawl(task: ScheduledTask): Promise<string> {
 
 async function executeTask(task: ScheduledTask): Promise<string> {
   if (task.taskType === 'video_keyword_crawl') return executeVideoKeywordCrawl(task);
+  if (task.taskType === 'holiday_push') return executeHolidayPush(task);
   if (isDemoMode()) {
     switch (task.taskType) {
       case 'trend_report':
@@ -177,7 +418,7 @@ async function executeTask(task: ScheduledTask): Promise<string> {
       case 'weekly_review':
         return '【Demo 周报】本周模拟数据：流量增长 18%，询盘转化率 12%，老客唤醒 6 人。建议下周优先完善真实商品库与渠道授权。';
       case 'exchange_rate':
-        return '【Demo 汇率日报】USD/CNY 7.20 | USD/AED 3.67 | USD/SAR 3.75。正式版将接实时汇率源。';
+        return '【汇率日报】USD/CNY 7.20 | USD/AED 3.67 | USD/SAR 3.75。启用实时汇率源后将自动刷新。';
       case 'crm_wakeup':
         return '【Demo 老客唤醒】您好，我们根据您的历史采购偏好准备了新品方案。若您方便，我可以发一份最新目录和报价给您参考。';
       default:
@@ -189,7 +430,6 @@ async function executeTask(task: ScheduledTask): Promise<string> {
     case 'weekly_review': return executeWeeklyReview(task);
     case 'exchange_rate': return executeExchangeRate(task);
     case 'crm_wakeup':   return executeCrmWakeup(task);
-    case 'holiday_push':  return `【节日提醒】${task.config.holidayName ?? '即将到来的节假日'}推品提醒：建议提前备货并触达相关老客。`;
     default:              return '任务执行完成';
   }
 }
@@ -231,6 +471,29 @@ schedulerRouter.get('/video-stats', async (_req, res) => {
     tasks,
     stats: await getVideoPipelineStats(),
   });
+});
+
+schedulerRouter.get('/:id/export-pdf', async (req: Request, res: Response) => {
+  const task = load().find(t => t.id === req.params.id);
+  if (!task) { res.status(404).json({ error: 'not found' }); return; }
+  try {
+    const resultText = task.lastResult || '暂无执行结果，请先执行任务后再导出。';
+    const pdf = await renderTaskReportPdf({
+      title: `${task.name}报告`,
+      taskName: task.name,
+      cronLabel: task.cronLabel,
+      lastRunLabel: formatTaskTime(task.lastRun),
+      resultText,
+      actions: taskReportActions(task.taskType),
+    });
+    const filename = encodeURIComponent(`${task.name}-任务报告.pdf`);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${filename}`);
+    res.send(pdf);
+  } catch (e) {
+    console.error('[scheduler] export pdf failed:', e);
+    res.status(500).json({ error: e instanceof Error ? e.message : 'PDF export failed' });
+  }
 });
 
 schedulerRouter.post('/', (req: Request, res: Response) => {

@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { studioApi, getDesktopRender, type StudioProject, type Material, type BgmTrack, type CoverStyle, type SubCue } from '../lib/studioApi';
 import type { Page } from '../App';
+import { completeDemoStep } from '../lib/demoProgress';
 
 /* ──────────────────────────────────────────────────────────────────────────
    AI 生成内容工作台 — 社媒（流量）页子模块
@@ -263,6 +264,7 @@ interface VideoKickoff {
     poster?: string;
     duration?: number;
     createdAt?: string;
+    material?: Material;
   };
   video?: {
     title?: string;
@@ -529,7 +531,7 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
       if (kickoff.video?.platform) setPlatform(kickoff.video.platform);
       setProvider('gemini');
       setMode('material');
-      setActiveFolder('hot');
+      setActiveFolder(kickoff.generatedVideo ? 'upload' : 'hot');
       setProjectTitle(kickoff.generatedVideo?.title || (kickoff.video?.title ? `Seedance 视频 · ${kickoff.video.title}` : 'Seedance 视频生成'));
       setStepIdx(STEPS.findIndex(s => s.id === 'material'));
       autoGen.current = true;
@@ -539,17 +541,19 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
   useEffect(() => {
     if (!videoKickoff?.generatedVideo) return;
     const generated = videoKickoff.generatedVideo;
-    const clip: Clip = {
-      id: generated.id || `seedance-video-${videoKickoff.video?.title || 'output'}`,
-      name: generated.title || 'Seedance 输出视频',
-      folder: 'hot',
-      type: 'video',
-      duration: generated.duration || videoKickoff.video?.duration || duration,
-      size: 'Seedance',
-      url: generated.url,
-      poster: generated.poster || videoKickoff.video?.aiAnalysis?.materialPoster || videoKickoff.video?.thumbnail,
-      scope: 'shared',
-    };
+    const clip: Clip = generated.material
+      ? materialToClip(generated.material)
+      : {
+          id: generated.id || `seedance-video-${videoKickoff.video?.title || 'output'}`,
+          name: generated.title || 'Seedance 输出视频',
+          folder: 'upload',
+          type: 'video',
+          duration: generated.duration || videoKickoff.video?.duration || duration,
+          size: 'Seedance',
+          url: generated.url,
+          poster: generated.poster || videoKickoff.video?.aiAnalysis?.materialPoster || videoKickoff.video?.thumbnail,
+          scope: 'own',
+        };
     setMaterials(prev => {
       if (prev.some(m => m.id === clip.id || (clip.url && m.url === clip.url))) return prev;
       return [clip, ...prev];
@@ -993,6 +997,7 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
       thumbSeed: cover,
     });
     if (project?.id) setProjectId(project.id);
+    completeDemoStep('traffic');
     setSavingProj(false);
     setSavedTick(true);
     setTimeout(() => setSavedTick(false), 1800);

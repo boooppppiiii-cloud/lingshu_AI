@@ -77,7 +77,12 @@ export default function TrafficPage({ onEnterConversation, onLeaveConversation, 
         <AnimatePresence mode="wait">
           {viewMode === 'dashboard' ? (
             <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full overflow-y-auto">
-              <InspirationDashboard onScriptPanelOpen={onScriptPanelOpen} onScriptPanelClose={onScriptPanelClose} onEnterWorkflow={handleEnterWorkflow} />
+              <InspirationDashboard
+                onScriptPanelOpen={onScriptPanelOpen}
+                onScriptPanelClose={onScriptPanelClose}
+                onNavigate={onNavigate}
+                onEnterWorkflow={handleEnterWorkflow}
+              />
             </motion.div>
           ) : viewMode === 'create' ? (
             <motion.div key="create" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">

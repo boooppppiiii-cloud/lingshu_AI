@@ -16,3 +16,7 @@ data/tts/
 data/covers/
 data/analysis-temp/
 data/crawler-ops-queue.json
+data/backups/
+logs/
+output/
+tmp/

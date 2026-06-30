@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
 import { Building2, Package, Megaphone, BookOpen, Save, CheckCircle2, Loader2, Compass, Zap, MessageSquare, RefreshCw, RotateCcw } from 'lucide-react';
+import { completeDemoStep } from '../lib/demoProgress';
 
 interface Profile {
   company: { name: string; industry: string; companyType?: string; mainMarkets: string; primaryLanguages?: string; founded: string; description: string };
@@ -117,6 +118,7 @@ export default function EnterprisePage() {
       const j = await r.json();
       if (j.profile) setProfile(j.profile);
       if (j.profile) setTemplateId(matchTemplateId(j.profile, templates) || templateId);
+      completeDemoStep('template');
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } finally {
@@ -198,7 +200,7 @@ export default function EnterprisePage() {
                   <option value="">选择模板并加载</option>
                   {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
                 </select>
-                <button onClick={applyTemplate} disabled={!templateId || demoBusy}
+                <button data-demo-target="template" onClick={applyTemplate} disabled={!templateId || demoBusy}
                   className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold text-white disabled:opacity-50"
                   style={{ background: '#0f172a' }}>
                   {demoBusy ? <Loader2 size={12} className="animate-spin" /> : <BookOpen size={12} />}加载

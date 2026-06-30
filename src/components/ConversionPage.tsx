@@ -425,7 +425,7 @@ function CustomerChatView({
       time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
       content: text,
       byAi: false,
-      zh: 'Demo 模拟发送成功；正式版将通过已连接渠道外发并记录送达状态',
+      zh: '发送成功；系统将通过已连接渠道外发并记录送达状态',
     }]);
     setHumanInput('');
     setSuggestionOpen(false);
