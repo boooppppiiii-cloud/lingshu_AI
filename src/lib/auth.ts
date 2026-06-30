@@ -28,9 +28,11 @@ export interface AuthSession {
     expiresAt: string | null;
     daysRemaining: number | null;
     expired: boolean;
-    limits: { trialDays: number; aiChatDaily: number; generationDaily: number; renderDaily: number; videoGenerationDaily: number };
-    usage: { aiChat: number; generation: number; render: number; videoGeneration: number };
-    remaining: { aiChat: number; generation: number; render: number; videoGeneration: number };
+    limits: { trialDays: number; aiChatDaily: number; generationDaily: number; renderDaily: number; videoGenerationDaily: number; tokenDaily: number; tokenTotal: number };
+    usage: { aiChat: number; generation: number; render: number; videoGeneration: number; tokens: number };
+    remaining: { aiChat: number; generation: number; render: number; videoGeneration: number; tokens: number };
+    totalUsage?: { tokens: number; videoGeneration: number };
+    totalRemaining?: { tokens: number; videoGeneration: number };
   };
 }
 

@@ -112,6 +112,11 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
   const subStatus = session?.tenant?.subscriptionStatus || session?.subscription?.status || 'none';
   const initial = (tenantName[0] || '灵').toUpperCase();
   const demo = session?.demo;
+  const remainingTokens = Math.max(0, Math.min(
+    demo?.remaining?.tokens ?? demo?.limits?.tokenDaily ?? 0,
+    demo?.totalRemaining?.tokens ?? demo?.limits?.tokenTotal ?? Number.POSITIVE_INFINITY,
+  ));
+  const tokenLabel = remainingTokens >= 1000 ? `${Math.floor(remainingTokens / 1000)}k` : String(remainingTokens);
   const showDemoGuide = Boolean(
     session?.demo?.enabled ||
     session?.tenant?.subscriptionPlan === 'trial' ||
@@ -223,7 +228,7 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
                   {demo.expired ? '已到期' : `剩余 ${demo.daysRemaining ?? '-'} 天`}
                 </span>
               </div>
-              <div className="grid grid-cols-4 gap-1 text-center">
+              <div className="grid grid-cols-5 gap-1 text-center">
                 <div className="rounded-md bg-surface-2 px-1 py-1">
                   <p className="text-[10px] font-bold text-text-primary">{demo.remaining.aiChat}</p>
                   <p className="text-[9px] text-text-muted">对话</p>
@@ -239,6 +244,10 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
                 <div className="rounded-md bg-surface-2 px-1 py-1">
                   <p className="text-[10px] font-bold text-text-primary">{demo.remaining.videoGeneration ?? 0}</p>
                   <p className="text-[9px] text-text-muted">视频</p>
+                </div>
+                <div className="rounded-md bg-surface-2 px-1 py-1">
+                  <p className="text-[10px] font-bold text-text-primary">{tokenLabel}</p>
+                  <p className="text-[9px] text-text-muted">Token</p>
                 </div>
               </div>
             </div>

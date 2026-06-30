@@ -16,6 +16,8 @@ export interface DemoLimits {
   generationDaily: number;
   renderDaily: number;
   videoGenerationDaily: number;
+  tokenDaily: number;
+  tokenTotal: number;
 }
 
 export interface DemoUsageDay {
@@ -23,6 +25,7 @@ export interface DemoUsageDay {
   generation: number;
   render: number;
   videoGeneration: number;
+  tokens: number;
 }
 
 export interface DemoStatus {
@@ -34,11 +37,13 @@ export interface DemoStatus {
   limits: DemoLimits;
   usage: DemoUsageDay;
   remaining: DemoUsageDay;
+  totalUsage: { tokens: number; videoGeneration: number };
+  totalRemaining: { tokens: number; videoGeneration: number };
 }
 
 type UsageStore = Record<string, Record<string, DemoUsageDay>>;
 
-const DEFAULT_USAGE: DemoUsageDay = { aiChat: 0, generation: 0, render: 0, videoGeneration: 0 };
+const DEFAULT_USAGE: DemoUsageDay = { aiChat: 0, generation: 0, render: 0, videoGeneration: 0, tokens: 0 };
 
 export function isDemoMode(): boolean {
   return process.env.DEMO_MODE === 'true';
@@ -56,6 +61,8 @@ export function demoLimits(): DemoLimits {
     generationDaily: intEnv('DEMO_DAILY_GENERATION_LIMIT', 10),
     renderDaily: intEnv('DEMO_DAILY_RENDER_LIMIT', 3),
     videoGenerationDaily: intEnv('DEMO_VIDEO_GENERATION_LIMIT', intEnv('DEMO_DAILY_VIDEO_GENERATION_LIMIT', 2)),
+    tokenDaily: intEnv('DEMO_DAILY_TOKEN_LIMIT', 60_000),
+    tokenTotal: intEnv('DEMO_TOTAL_TOKEN_LIMIT', 200_000),
   };
 }
 
@@ -86,6 +93,13 @@ async function identityKey(req: Request): Promise<string> {
   return `anon:${req.ip || 'local'}`;
 }
 
+async function accountKey(req: Request): Promise<string> {
+  const result = await auth.verifyToken(req.headers.authorization);
+  if (result?.userId) return `user:${result.userId}`;
+  if (result?.tenantId) return `tenant:${result.tenantId}`;
+  return `anon:${req.ip || 'local'}`;
+}
+
 function emptyUsage(): DemoUsageDay {
   return { ...DEFAULT_USAGE };
 }
@@ -94,12 +108,17 @@ function totalVideoGenerationUsage(store: UsageStore, key: string): number {
   return Object.values(store[key] ?? {}).reduce((sum, day) => sum + (day.videoGeneration ?? 0), 0);
 }
 
-function remaining(usage: DemoUsageDay, limits: DemoLimits, videoGenerationUsed = usage.videoGeneration ?? 0): DemoUsageDay {
+function totalTokenUsage(store: UsageStore, key: string): number {
+  return Object.values(store[key] ?? {}).reduce((sum, day) => sum + (day.tokens ?? 0), 0);
+}
+
+function remaining(usage: DemoUsageDay, limits: DemoLimits, videoGenerationUsed = usage.videoGeneration ?? 0, tokenUsed = usage.tokens ?? 0): DemoUsageDay {
   return {
     aiChat: Math.max(0, limits.aiChatDaily - usage.aiChat),
     generation: Math.max(0, limits.generationDaily - usage.generation),
     render: Math.max(0, limits.renderDaily - usage.render),
     videoGeneration: Math.max(0, limits.videoGenerationDaily - videoGenerationUsed),
+    tokens: Math.max(0, limits.tokenDaily - tokenUsed),
   };
 }
 
@@ -107,7 +126,7 @@ export function isExpired(expiresAt?: string | null): boolean {
   return !!expiresAt && new Date(expiresAt).getTime() < Date.now();
 }
 
-export async function buildDemoStatus(req: Request, tenantId?: string, expiresAt?: string | null): Promise<DemoStatus> {
+export async function buildDemoStatus(req: Request, tenantId?: string, expiresAt?: string | null, userId?: string): Promise<DemoStatus> {
   const limits = demoLimits();
   let resolvedExpiresAt = expiresAt ?? null;
   if (!resolvedExpiresAt && tenantId) {
@@ -116,9 +135,13 @@ export async function buildDemoStatus(req: Request, tenantId?: string, expiresAt
   }
 
   const key = tenantId ? `tenant:${tenantId}` : await identityKey(req);
+  const tokenKey = userId ? `user:${userId}` : await accountKey(req);
   const store = readUsage();
   const usage = { ...emptyUsage(), ...(store[key]?.[todayKey()] ?? {}) };
+  const tokenUsage = { ...emptyUsage(), ...(store[tokenKey]?.[todayKey()] ?? {}) };
   const videoGenerationUsed = totalVideoGenerationUsage(store, key);
+  const tokensUsedToday = tokenUsage.tokens ?? 0;
+  const tokensUsedTotal = totalTokenUsage(store, tokenKey);
   const expired = isExpired(resolvedExpiresAt);
   const daysRemaining = resolvedExpiresAt
     ? Math.max(0, Math.ceil((new Date(resolvedExpiresAt).getTime() - Date.now()) / (24 * 3600 * 1000)))
@@ -131,8 +154,13 @@ export async function buildDemoStatus(req: Request, tenantId?: string, expiresAt
     daysRemaining,
     expired,
     limits,
-    usage,
-    remaining: remaining(usage, limits, videoGenerationUsed),
+    usage: { ...usage, tokens: tokensUsedToday },
+    remaining: remaining(usage, limits, videoGenerationUsed, tokensUsedToday),
+    totalUsage: { tokens: tokensUsedTotal, videoGeneration: videoGenerationUsed },
+    totalRemaining: {
+      tokens: Math.max(0, limits.tokenTotal - tokensUsedTotal),
+      videoGeneration: Math.max(0, limits.videoGenerationDaily - videoGenerationUsed),
+    },
   };
 }
 
@@ -141,6 +169,30 @@ function limitFor(kind: DemoQuotaKind, limits: DemoLimits): number {
   if (kind === 'generation') return limits.generationDaily;
   if (kind === 'videoGeneration') return limits.videoGenerationDaily;
   return limits.renderDaily;
+}
+
+function estimateTextTokens(value: unknown): number {
+  if (value == null) return 0;
+  if (typeof value === 'string') {
+    const ascii = (value.match(/[\x00-\x7F]/g) ?? []).length;
+    const nonAscii = value.length - ascii;
+    return Math.ceil(ascii / 4 + nonAscii * 0.75);
+  }
+  if (Array.isArray(value)) return value.reduce((sum, item) => sum + estimateTextTokens(item), 0);
+  if (typeof value === 'object') return estimateTextTokens(JSON.stringify(value));
+  return estimateTextTokens(String(value));
+}
+
+function tokenReserveFor(kind: DemoQuotaKind): number {
+  if (kind === 'aiChat') return 1_600;
+  if (kind === 'generation') return 1_200;
+  if (kind === 'videoGeneration') return 2_000;
+  return 0;
+}
+
+function estimateRequestTokens(req: Request, kind: DemoQuotaKind): number {
+  const bodyTokens = estimateTextTokens(req.body ?? {});
+  return Math.max(1, Math.ceil(bodyTokens + tokenReserveFor(kind)));
 }
 
 export async function consumeDemoQuota(req: Request, res: Response, kind: DemoQuotaKind): Promise<boolean> {
@@ -154,9 +206,11 @@ export async function consumeDemoQuota(req: Request, res: Response, kind: DemoQu
   }
 
   const key = id?.tenantId ? `tenant:${id.tenantId}` : await identityKey(req);
+  const tokenKey = id?.userId ? `user:${id.userId}` : key;
   const day = todayKey();
   const store = readUsage();
   const usage = { ...emptyUsage(), ...(store[key]?.[day] ?? {}) };
+  const tokenUsage = { ...emptyUsage(), ...(store[tokenKey]?.[day] ?? {}) };
   const limits = demoLimits();
   const used = kind === 'videoGeneration' ? totalVideoGenerationUsage(store, key) : usage[kind];
   if (used >= limitFor(kind, limits)) {
@@ -164,8 +218,27 @@ export async function consumeDemoQuota(req: Request, res: Response, kind: DemoQu
     return false;
   }
 
+  const tokenCost = kind === 'render' ? 0 : estimateRequestTokens(req, kind);
+  const usedTokensToday = tokenUsage.tokens ?? 0;
+  const usedTokensTotal = totalTokenUsage(store, tokenKey);
+  if (usedTokensToday + tokenCost > limits.tokenDaily || usedTokensTotal + tokenCost > limits.tokenTotal) {
+    res.status(429).json({
+      error: 'demo_token_quota_exceeded',
+      quota: 'tokens',
+      tokenCost,
+      demo: await buildDemoStatus(req, id?.tenantId, sub?.expiresAt),
+    });
+    return false;
+  }
+
   usage[kind] += 1;
-  store[key] = { ...(store[key] ?? {}), [day]: usage };
+  tokenUsage.tokens = usedTokensToday + tokenCost;
+  if (tokenKey === key) {
+    store[key] = { ...(store[key] ?? {}), [day]: { ...usage, tokens: tokenUsage.tokens } };
+  } else {
+    store[key] = { ...(store[key] ?? {}), [day]: usage };
+    store[tokenKey] = { ...(store[tokenKey] ?? {}), [day]: tokenUsage };
+  }
   writeUsage(store);
   return true;
 }

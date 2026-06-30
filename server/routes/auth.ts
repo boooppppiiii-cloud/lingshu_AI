@@ -96,7 +96,7 @@ authRouter.post('/register', async (req, res) => {
 
   const login = await pbLogin(email, password);
   if (!login) { res.status(500).json({ error: '注册后自动登录失败' }); return; }
-  res.json({ token: login.token, user: publicUser(login.record), tenant: publicTenant(tenant), demo: await buildDemoStatus(req, String(tenant.id), String(tenant.subscriptionExpiresAt ?? expiresAt)) });
+  res.json({ token: login.token, user: publicUser(login.record), tenant: publicTenant(tenant), demo: await buildDemoStatus(req, String(tenant.id), String(tenant.subscriptionExpiresAt ?? expiresAt), String(login.record.id)) });
 });
 
 // POST /auth/login  { email, password }
@@ -107,7 +107,7 @@ authRouter.post('/login', async (req, res) => {
   if (!login) { res.status(401).json({ error: '邮箱或密码错误' }); return; }
   const tenant = login.record.tenantId ? await pbGet('tenants', login.record.tenantId) : null;
   const subscription = login.record.tenantId ? await getTenantSubscription(login.record.tenantId) : null;
-  res.json({ token: login.token, user: publicUser(login.record), tenant: publicTenant(tenant), demo: await buildDemoStatus(req, login.record.tenantId, subscription?.expiresAt) });
+  res.json({ token: login.token, user: publicUser(login.record), tenant: publicTenant(tenant), demo: await buildDemoStatus(req, login.record.tenantId, subscription?.expiresAt, login.record.id) });
 });
 
 // GET /auth/me  (Authorization: Bearer <token>)
@@ -116,7 +116,7 @@ authRouter.get('/me', async (req, res) => {
   if (!id) { res.status(401).json({ error: 'Unauthorized' }); return; }
   const [user, tenant] = await Promise.all([pbGet('users', id.userId), pbGet('tenants', id.tenantId)]);
   const subscription = await getTenantSubscription(id.tenantId);
-  const demo = await buildDemoStatus(req, id.tenantId, subscription.expiresAt);
+  const demo = await buildDemoStatus(req, id.tenantId, subscription.expiresAt, id.userId);
   res.json({
     user: user ? publicUser(user as unknown as PbUser) : { id: id.userId, email: '', name: '', tenantId: id.tenantId },
     tenant: publicTenant(tenant),
