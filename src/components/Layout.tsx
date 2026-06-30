@@ -139,7 +139,7 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
         </div>
 
         {showDemoGuide && (
-          <DemoGuide onNavigate={onNavigate} />
+          <DemoGuide page={page} onNavigate={onNavigate} />
         )}
 
         {/* Primary nav */}

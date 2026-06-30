@@ -7,6 +7,7 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import AgentChatPage from './AgentChatPage';
 import type { ConversationContext, RestoreSignal, KickoffSignal, AgentAction, Message } from '../App';
+import { completeDemoStep } from '../lib/demoProgress';
 
 type ViewMode = 'dashboard' | 'chat' | 'customer-chat';
 
@@ -287,7 +288,12 @@ function Dashboard({ onInquiryClick }: { onInquiryClick: (id: string) => void })
         <div className="card overflow-hidden">
           <div className="flex items-center justify-between px-4 py-3 border-b border-border">
             <p className="text-sm font-semibold text-text-primary">近期询盘</p>
-            <button onClick={() => onInquiryClick(topId)}
+            <button
+              data-demo-target="conversion_reply"
+              onClick={() => {
+                completeDemoStep('conversion');
+                onInquiryClick(topId);
+              }}
               className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-all text-white"
               style={{ background: '#0891b2' }}>
               <MessageSquare size={12} />让转化专家 回复

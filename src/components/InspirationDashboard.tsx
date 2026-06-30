@@ -3,9 +3,9 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Search, Play, Sparkles, FileText, Layout as LayoutIcon,
   TrendingUp, Clock, Globe, ChevronDown, X, Loader2,
-  Check, Copy, ArrowRight, Zap, LayoutGrid, List, ArrowUp,
+  Check, Copy, ArrowRight, Zap, LayoutGrid, List,
   Lightbulb, Flame, BarChart2, ChevronRight, Film, Download, Plus,
-  SlidersHorizontal, Bookmark, Maximize2, Minimize2, Lock,
+  Bookmark, Maximize2, Minimize2, Lock,
 } from 'lucide-react';
 import { studioApi, type Material } from '../lib/studioApi';
 import { authHeader } from '../lib/auth';
@@ -127,20 +127,16 @@ const PLATFORM_META: Record<Exclude<Platform, 'all'>, { label: string; color: st
 
 const PLATFORM_FILTERS: { id: Platform; label: string }[] = [
   { id: 'all',       label: '全部平台' },
-  { id: 'tiktok',    label: 'TikTok' },
-  { id: 'instagram', label: 'Instagram' },
   { id: 'youtube',   label: 'YouTube' },
+  { id: 'tiktok',    label: 'TikTok' },
+  { id: 'instagram', label: 'Ins' },
   { id: 'facebook',  label: 'Facebook' },
 ];
 
-type CrawlPlatform = 'youtube' | 'tiktok' | 'facebook' | 'instagram';
-
-const AUTO_CRAWL_PLATFORMS: { id: CrawlPlatform; label: string; enabled: boolean }[] = [
-  { id: 'youtube', label: 'YouTube', enabled: true },
-  { id: 'tiktok', label: 'TK', enabled: true },
-  { id: 'facebook', label: 'FB', enabled: true },
-  { id: 'instagram', label: 'IG', enabled: true },
-];
+const LOCKED_PLATFORM_MESSAGES: Partial<Record<Platform, string>> = {
+  facebook: '正式版解锁FB爆点推荐功能',
+  instagram: '正式版解锁IG爆点推荐功能',
+};
 
 const LANGUAGES = [
   { code: 'en', label: 'English' }, { code: 'zh', label: '中文' },
@@ -1083,47 +1079,48 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onNaviga
           <motion.div key="generate" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             className="flex flex-col flex-1 min-h-0 overflow-hidden">
 
-            {/* Script type + language */}
-            <div className="px-4 py-3 border-b border-border flex-shrink-0 flex items-center gap-2">
-              <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-surface-2 border border-border">
-                {([
-                  { type: 'voiceover' as ScriptType, icon: <FileText size={12} />, label: '口播' },
-                  { type: 'storyboard' as ScriptType, icon: <LayoutIcon size={12} />, label: '分镜' },
-                ] as const).map(({ type, icon, label }) => (
-                  <button key={type} onClick={() => setScriptType(type)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
-                      scriptType === type ? 'bg-surface text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'
-                    }`}>
-                    {icon}<span>{label}</span>
+            {/* Language selection */}
+            <div className="px-4 py-3 border-b border-border flex-shrink-0 space-y-2.5">
+              <p className="text-[11px] font-semibold text-text-primary">语言选择</p>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-surface-2 border border-border">
+                  {([
+                    { type: 'voiceover' as ScriptType, icon: <FileText size={12} />, label: '口播' },
+                    { type: 'storyboard' as ScriptType, icon: <LayoutIcon size={12} />, label: '分镜' },
+                  ] as const).map(({ type, icon, label }) => (
+                    <button key={type} onClick={() => setScriptType(type)}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition-all ${
+                        scriptType === type ? 'bg-surface text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'
+                      }`}>
+                      {icon}<span>{label}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="relative flex-1">
+                  <button onClick={() => setShowLangDropdown(v => !v)}
+                    className="w-full flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-surface text-xs text-text-secondary hover:border-border-bright transition-colors">
+                    <Globe size={11} className="text-text-muted flex-shrink-0" />
+                    <span className="flex-1 text-left">{selectedLang?.label}</span>
+                    <ChevronDown size={11} className={`text-text-muted transition-transform ${showLangDropdown ? 'rotate-180' : ''}`} />
                   </button>
-                ))}
+                  <AnimatePresence>
+                    {showLangDropdown && (
+                      <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 4 }}
+                        className="absolute top-full left-0 right-0 mt-1 rounded-xl border border-border bg-surface z-10 overflow-hidden shadow-lg">
+                        <div className="p-1 max-h-44 overflow-y-auto">
+                          {LANGUAGES.map(lang => (
+                            <button key={lang.code} onClick={() => { setLanguage(lang.code); setShowLangDropdown(false); }}
+                              className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-xs hover:bg-surface-2 transition-colors">
+                              <span className={language === lang.code ? 'text-accent font-semibold' : 'text-text-primary'}>{lang.label}</span>
+                              {language === lang.code && <Check size={11} className="text-accent" />}
+                            </button>
+                          ))}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
               </div>
-              <div className="relative flex-1">
-                <button onClick={() => setShowLangDropdown(v => !v)}
-                  className="w-full flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-surface text-xs text-text-secondary hover:border-border-bright transition-colors">
-                  <Globe size={11} className="text-text-muted flex-shrink-0" />
-                  <span className="flex-1 text-left">{selectedLang?.label}</span>
-                  <ChevronDown size={11} className={`text-text-muted transition-transform ${showLangDropdown ? 'rotate-180' : ''}`} />
-                </button>
-                <AnimatePresence>
-                  {showLangDropdown && (
-                    <motion.div initial={{ opacity: 0, y: 4 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: 4 }}
-                      className="absolute top-full left-0 right-0 mt-1 rounded-xl border border-border bg-surface z-10 overflow-hidden shadow-lg">
-                      <div className="p-1 max-h-44 overflow-y-auto">
-                        {LANGUAGES.map(lang => (
-                          <button key={lang.code} onClick={() => { setLanguage(lang.code); setShowLangDropdown(false); }}
-                            className="w-full flex items-center justify-between px-3 py-1.5 rounded-lg text-xs hover:bg-surface-2 transition-colors">
-                            <span className={language === lang.code ? 'text-accent font-semibold' : 'text-text-primary'}>{lang.label}</span>
-                            {language === lang.code && <Check size={11} className="text-accent" />}
-                          </button>
-                        ))}
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
-            </div>
-            <div className="px-4 py-2 border-b border-border bg-surface-2/60">
               <label className="flex items-start gap-2 text-xs text-text-secondary leading-relaxed cursor-pointer">
                 <input type="checkbox" checked={voiceLanguageConfirmed} onChange={e => setVoiceLanguageConfirmed(e.target.checked)}
                   className="mt-0.5 accent-green-600" />
@@ -1133,10 +1130,64 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onNaviga
               </label>
             </div>
 
-            {/* Chat area */}
+            {/* Product selection */}
+            <div className="px-4 py-3 border-b border-border flex-shrink-0 bg-surface-2/40">
+              <div className="rounded-2xl border border-border bg-surface overflow-hidden transition-colors focus-within:border-border-bright">
+                <div className="px-3 pt-3 pb-2 border-b border-border/70">
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-semibold text-text-primary truncate">产品选择：{getPrimaryProductLabel(productInfo)}</p>
+                      <p className="text-[10px] text-text-muted">选择企业中心里的自己的产品信息</p>
+                    </div>
+                    <button onClick={() => setProductInfoOpen(v => !v)}
+                      className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold text-text-muted hover:text-text-primary hover:bg-surface-2 transition-colors flex-shrink-0">
+                      {productInfoOpen ? '收起' : '展开'}
+                      <ChevronDown size={11} className={`transition-transform ${productInfoOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                  </div>
+                  {productOptions.length > 0 && (
+                    <select value={selectedProductId} onChange={e => handleSelectProduct(e.target.value)}
+                      className="w-full px-3 py-2 rounded-lg border border-border bg-surface text-xs font-semibold text-text-primary outline-none focus:border-accent">
+                      {productOptions.map(option => (
+                        <option key={option.id} value={option.id}>{option.label}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+                <AnimatePresence initial={false}>
+                  {productInfoOpen && (
+                    <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.18 }} className="overflow-hidden">
+                      <textarea value={productInfo} onChange={e => setProductInfo(e.target.value)}
+                        placeholder="主推品信息：名称、核心功能、目标人群、价格区间..."
+                        rows={4}
+                        className="w-full px-4 py-3 bg-transparent text-sm text-text-primary placeholder:text-text-muted resize-none outline-none" />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            </div>
+
+            {/* Script output */}
             <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-semibold text-text-primary">脚本输出区</p>
+                  <p className="text-[10px] text-text-muted mt-0.5">{scriptType === 'voiceover' ? '口播脚本' : '分镜脚本'} · {selectedLang?.label}</p>
+                </div>
+                <button
+                  data-demo-target="traffic_script_generate"
+                  onClick={() => void handleGenerate()}
+                  disabled={generating || !voiceLanguageConfirmed}
+                  title={voiceLanguageConfirmed ? '生成脚本' : '请先确认口播输出语言'}
+                  className="h-8 px-3 rounded-xl flex items-center gap-1.5 text-xs font-semibold text-white transition-all disabled:opacity-50"
+                  style={{ background: 'var(--color-accent)', boxShadow: '0 2px 8px rgba(22,163,74,0.2)' }}>
+                  {generating ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                  生成脚本
+                </button>
+              </div>
               {!result && !generating && (
-                <div className="flex flex-col items-center justify-center h-full text-center gap-3">
+                <div className="flex flex-col items-center justify-center min-h-[260px] text-center gap-3 rounded-2xl border border-dashed border-border bg-surface-2/50">
                   <div className="w-10 h-10 rounded-full flex items-center justify-center bg-surface-2 border border-border">
                     <Sparkles size={18} className="text-text-muted" />
                   </div>
@@ -1241,56 +1292,6 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onNaviga
                   </div>
                 </motion.div>
               )}
-            </div>
-
-            {/* Input */}
-            <div className="p-4 border-t border-border flex-shrink-0">
-              <div className="rounded-2xl border border-border bg-surface-2 overflow-hidden transition-colors focus-within:border-border-bright">
-                <div className="px-3 pt-3 pb-2 border-b border-border/70">
-                  <div className="flex items-center justify-between gap-2 mb-2">
-                    <div className="min-w-0">
-                      <p className="text-[11px] font-semibold text-text-primary truncate">主推品：{getPrimaryProductLabel(productInfo)}</p>
-                      <p className="text-[10px] text-text-muted">选择企业中心里的自己的产品信息</p>
-                    </div>
-                    <button onClick={() => setProductInfoOpen(v => !v)}
-                      className="flex items-center gap-1 px-2 py-1 rounded-md text-[11px] font-semibold text-text-muted hover:text-text-primary hover:bg-surface transition-colors flex-shrink-0">
-                      {productInfoOpen ? '收起' : '展开'}
-                      <ChevronDown size={11} className={`transition-transform ${productInfoOpen ? 'rotate-180' : ''}`} />
-                    </button>
-                  </div>
-                  {productOptions.length > 0 && (
-                    <select value={selectedProductId} onChange={e => handleSelectProduct(e.target.value)}
-                      className="w-full px-3 py-2 rounded-lg border border-border bg-surface text-xs font-semibold text-text-primary outline-none focus:border-accent">
-                      {productOptions.map(option => (
-                        <option key={option.id} value={option.id}>{option.label}</option>
-                      ))}
-                    </select>
-                  )}
-                </div>
-                <AnimatePresence initial={false}>
-                  {productInfoOpen && (
-                    <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}
-                      transition={{ duration: 0.18 }} className="overflow-hidden">
-                      <textarea value={productInfo} onChange={e => setProductInfo(e.target.value)}
-                        placeholder="主推品信息：名称、核心功能、目标人群、价格区间..."
-                        rows={4}
-                        className="w-full px-4 pt-3 pb-1 bg-transparent text-sm text-text-primary placeholder:text-text-muted resize-none outline-none" />
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-                <div className="flex items-center justify-between px-3 pb-3 pt-1">
-                  <p className="text-[11px] text-text-muted">{scriptType === 'voiceover' ? '口播脚本' : '分镜脚本'} · {selectedLang?.label}</p>
-                  <button
-                    data-demo-target="traffic_script_generate"
-                    onClick={() => void handleGenerate()}
-                    disabled={generating || !voiceLanguageConfirmed}
-                    title={voiceLanguageConfirmed ? '生成脚本' : '请先确认口播输出语言'}
-                    className="w-8 h-8 rounded-xl flex items-center justify-center transition-all disabled:opacity-50"
-                    style={{ background: 'var(--color-accent)', boxShadow: '0 2px 8px rgba(22,163,74,0.2)' }}>
-                    {generating ? <Loader2 size={13} className="text-white animate-spin" /> : <ArrowUp size={13} className="text-white" />}
-                  </button>
-                </div>
-              </div>
             </div>
           </motion.div>
         )}
@@ -1520,6 +1521,31 @@ function metadataFallbackAnalysis(
   };
 }
 
+const DEMO_TREND_VIDEO: TrendVideo = {
+  id: 'demo-tiktok-skincare',
+  platform: 'tiktok',
+  title: '@_byjessevans dropping her routine for hydrated, healthy skin.',
+  thumbnail: '',
+  duration: 18,
+  tags: ['skincare', 'hydratedskin', 'beautyroutine'],
+  views: '1.2M',
+  trend: 'hot',
+  status: 'analyzed',
+  crawledAt: new Date().toISOString(),
+  aiAnalysis: {
+    gemini: metadataFallbackAnalysis(
+      '@_byjessevans dropping her routine for hydrated, healthy skin.',
+      'tiktok',
+      ['skincare', 'hydratedskin', 'beautyroutine'],
+      '1.2M',
+      18,
+    ),
+    analysisSource: 'demo-onboarding',
+    analysisQuality: 'metadata',
+    crawlRule: '新手演示素材',
+  },
+};
+
 function heatValue(views: string): number {
   const raw = String(views || '').toLowerCase().replace(/,/g, '');
   const n = Number(raw.replace(/[^\d.]/g, ''));
@@ -1573,183 +1599,6 @@ function WatchModal({ video, onClose }: { video: TrendVideo; onClose: () => void
         </div>
       </motion.div>
     </motion.div>
-  );
-}
-
-function AutoCrawlerPanel({
-  onImported,
-  onConfigChange,
-}: {
-  onImported: (videos: TrendVideo[], autoAnalyze: boolean, keyword: string) => void;
-  onConfigChange: () => void;
-}) {
-  const [expanded, setExpanded] = useState(false);
-  const [crawlPlatform, setCrawlPlatform] = useState<CrawlPlatform>('youtube');
-  const [keyword, setKeyword] = useState('amazon gadgets product review');
-  const [limit, setLimit] = useState(5);
-  const [dateFrom, setDateFrom] = useState(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 7);
-    return d.toISOString().slice(0, 10);
-  });
-  const [dateTo, setDateTo] = useState(() => new Date().toISOString().slice(0, 10));
-  const [running, setRunning] = useState(false);
-  const [autoAnalyze, setAutoAnalyze] = useState(true);
-  const [message, setMessage] = useState('测试版开放关键词检索；画像匹配与对标账号采集待解锁');
-  const [lastImported, setLastImported] = useState(0);
-  const platformLabel = AUTO_CRAWL_PLATFORMS.find(p => p.id === crawlPlatform)?.label || 'YouTube';
-  const keywordInputLabel = '关键词';
-  const keywordPlaceholder = '产品词 / 竞品词 / 场景词；也可粘贴公开视频链接';
-  const resetPreviousResult = () => {
-    setLastImported(0);
-    setMessage('配置已更新，点击开始自动采集获取新结果');
-    onConfigChange();
-  };
-
-  const startCrawl = async () => {
-    setRunning(true);
-    setMessage('正在启动后台采集任务...');
-    setLastImported(0);
-    try {
-      const r = await fetch('/api/overseas/videos/crawl', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeader() },
-        body: JSON.stringify({ platform: crawlPlatform, keyword, limit, dateFrom, dateTo, rule: 'keyword' }),
-      });
-      const data = await r.json().catch(() => ({})) as {
-        error?: string;
-        message?: string;
-        imported?: number;
-        refreshed?: number;
-        skipped?: number;
-        skippedExisting?: number;
-        returnedExisting?: number;
-        total?: number;
-        items?: CrawlerRecord[];
-      };
-      if (!r.ok) throw new Error(data.message || data.error || '自动采集失败');
-
-      const importedVideos = recordsToVideos(data.items || []);
-      onImported(importedVideos, autoAnalyze, keyword.trim());
-      setLastImported(importedVideos.length);
-      setMessage(data.message || `采集完成：返回 ${importedVideos.length} 条（新增 ${data.imported || 0} 条，库内已有 ${data.returnedExisting || 0} 条）`);
-    } catch (e) {
-      onConfigChange();
-      setLastImported(0);
-      setMessage(e instanceof Error ? e.message : '自动采集失败');
-    } finally {
-      setRunning(false);
-    }
-  };
-
-  return (
-    <div className="mx-6 mb-4 rounded-xl border border-border bg-surface overflow-hidden">
-      <div className={`flex items-center justify-between gap-3 px-4 py-3 ${expanded ? 'border-b border-border' : ''}`}>
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <Download size={14} className="text-accent" />
-            <h3 className="text-sm font-bold text-text-primary">社媒自动采集任务</h3>
-            <span className="px-1.5 py-0.5 rounded-md text-[10px] font-mono text-green bg-green/10 border border-green/20">Auto</span>
-          </div>
-          <p className="text-xs text-text-muted mt-1 truncate">
-            {expanded ? message : `关键词：${keyword || '未填写'} · ${platformLabel} · ${dateFrom} 至 ${dateTo} · ${limit} 条`}
-          </p>
-        </div>
-        <div className="flex items-center gap-2 flex-shrink-0 text-right">
-          {lastImported > 0 && <span className="text-xs font-semibold text-green">返回 {lastImported} 条</span>}
-          <button onClick={() => setExpanded(v => !v)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-border bg-surface-2 text-text-secondary hover:text-text-primary hover:border-border-bright transition-all">
-            <SlidersHorizontal size={12} />
-            {expanded ? '收起配置' : '展开配置'}
-          </button>
-          <button onClick={() => void startCrawl()} disabled={running || !keyword.trim()}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white transition-all"
-            style={{ background: 'var(--color-accent)' }}>
-            {running ? <Loader2 size={12} className="animate-spin" /> : <Zap size={12} />}
-            {running ? '采集中' : '开始自动采集'}
-          </button>
-        </div>
-      </div>
-      {expanded && (
-        <>
-          <div className="px-4 pt-4 grid grid-cols-1 md:grid-cols-3 gap-2">
-            {[
-              { label: '关键词检索', active: true, desc: '下方「关键词」输入框：产品词 / 竞品词 / 场景词' },
-              { label: '关键用户画像', active: false, desc: '待解锁' },
-              { label: '对标账号', active: false, desc: '待解锁' },
-            ].map(item => (
-              <button key={item.label} disabled={!item.active}
-                className={`text-left px-3 py-2 rounded-xl border transition-colors ${
-                  item.active
-                    ? 'border-accent bg-accent-glow text-text-primary'
-                    : 'border-border bg-surface-2 text-text-muted cursor-not-allowed opacity-70'
-                }`}>
-                <span className="block text-xs font-bold">{item.label}</span>
-                <span className="block text-[10px] mt-0.5">{item.desc}</span>
-              </button>
-            ))}
-          </div>
-          <div className="grid grid-cols-1 lg:grid-cols-[220px_minmax(0,1fr)_140px] gap-3 p-4 items-stretch">
-            <label className="relative block h-12">
-              <Globe size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
-              <span className="absolute left-9 top-1/2 -translate-y-1/2 text-sm text-text-muted pointer-events-none">平台</span>
-              <select value={crawlPlatform} onChange={e => {
-                setCrawlPlatform(e.target.value as CrawlPlatform);
-                resetPreviousResult();
-              }}
-                className="h-12 w-full appearance-none rounded-xl border border-border bg-surface pl-20 pr-9 text-sm font-semibold text-text-primary outline-none transition-colors hover:border-border-bright focus:border-accent">
-                {AUTO_CRAWL_PLATFORMS.map(p => <option key={p.id} value={p.id} disabled={!p.enabled}>{p.label}</option>)}
-              </select>
-              <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
-            </label>
-            <label className="relative block h-12">
-              <span className="absolute left-9 top-1/2 -translate-y-1/2 text-sm text-text-muted pointer-events-none">{keywordInputLabel}</span>
-              <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
-              <input value={keyword} onChange={e => {
-                setKeyword(e.target.value);
-                resetPreviousResult();
-              }}
-                className="h-12 w-full pl-[5.25rem] pr-4 rounded-xl border border-border bg-surface text-sm font-semibold text-text-primary placeholder:text-text-muted outline-none focus:border-accent transition-colors"
-                placeholder={keywordPlaceholder} />
-            </label>
-            <label className="flex h-12 items-center gap-2 px-3 rounded-xl border border-border bg-surface text-sm text-text-muted">
-              数量
-              <input type="number" min={1} max={30} value={limit} onChange={e => {
-                setLimit(Number(e.target.value));
-                resetPreviousResult();
-              }}
-                className="w-full bg-transparent text-sm font-semibold text-text-primary outline-none" />
-            </label>
-          </div>
-          <div className="px-4 pb-3 -mt-2 grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-3 items-center text-xs text-text-muted">
-            <label className="flex items-center gap-2 px-3 py-2 rounded-xl border border-border bg-surface">
-              开始日期
-              <input type="date" value={dateFrom} onChange={e => {
-                setDateFrom(e.target.value);
-                resetPreviousResult();
-              }}
-                className="flex-1 bg-transparent text-sm text-text-primary outline-none" />
-            </label>
-            <label className="flex items-center gap-2 px-3 py-2 rounded-xl border border-border bg-surface">
-              结束日期
-              <input type="date" value={dateTo} onChange={e => {
-                setDateTo(e.target.value);
-                resetPreviousResult();
-              }}
-                className="flex-1 bg-transparent text-sm text-text-primary outline-none" />
-            </label>
-            <div className="flex items-center gap-2">
-              <button onClick={() => setAutoAnalyze(v => !v)} role="switch" aria-checked={autoAnalyze}
-                className="relative w-8 h-4 rounded-full transition-colors flex-shrink-0"
-                style={{ background: autoAnalyze ? 'var(--color-accent)' : 'var(--color-surface-2)' }}>
-                <span className="absolute top-0.5 left-0.5 w-3 h-3 rounded-full bg-white shadow transition-transform" style={{ transform: autoAnalyze ? 'translateX(16px)' : 'none' }} />
-              </button>
-              <span>采集后自动获取真实视频并提交 Gemini 分析，不存入素材库</span>
-            </div>
-          </div>
-        </>
-      )}
-    </div>
   );
 }
 
@@ -1831,7 +1680,8 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
     if (latest && latest !== selectedVideo) setSelectedVideo(latest);
   }, [crawledVideos, selectedVideo]);
 
-  const allVideos = crawledVideos;
+  const demoTrafficStep = isDemoTrafficStep();
+  const allVideos = demoTrafficStep && crawledVideos.length === 0 ? [DEMO_TREND_VIDEO] : crawledVideos;
   const filtered = useMemo(() => {
     const lastCrawlIds = new Set(lastCrawlVideoIds);
     const q = search.trim().toLowerCase();
@@ -1850,40 +1700,24 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   }, [allVideos, lastCrawlVideoIds, platform, search, sortMode]);
 
   useEffect(() => {
-    if (!isDemoTrafficStep() || selectedVideo || !filtered[0]) return;
+    if (!demoTrafficStep || selectedVideo || !filtered[0]) return;
     setSelectedVideo(filtered[0]);
-  }, [filtered, selectedVideo]);
+  }, [demoTrafficStep, filtered, selectedVideo]);
 
   const recentThreeDayUploads = allVideos.filter(v => {
     const t = v.crawledAt ? new Date(v.crawledAt).getTime() : 0;
     return t > 0 && Date.now() - t <= 3 * 24 * 60 * 60 * 1000;
   }).length;
 
-  const handleImported = (videos: TrendVideo[], autoAnalyze: boolean, activeKeyword = '') => {
-    void refreshVideos();
-    if (videos.length === 0) return;
-    setLastCrawlVideoIds(videos.map(v => v.id));
-    setCrawledVideos(prev => {
-      const byId = new Map(prev.map(v => [v.id, v]));
-      videos.forEach(v => byId.set(v.id, v));
-      return [...byId.values()];
-    });
-    setPlatform(videos[0]?.platform ?? 'youtube');
-    setSortMode('crawlTime');
-    if (activeKeyword && !/^https?:\/\//i.test(activeKeyword)) setSearch('');
-    if (autoAnalyze) {
-      const downloadable = videos.filter(v => v.sourceUrl);
-      if (downloadable.length > 0) {
-        setMaterialMessage(`已进入视频获取队列和 Gemini 分析队列：${downloadable.length} 条`);
-        setTimeout(() => setMaterialMessage(''), 3500);
-        void Promise.allSettled(downloadable.map(video => analyzeVideoOnly(video, true)));
-      }
+  const handlePlatformFilter = (nextPlatform: Platform) => {
+    const lockedMessage = LOCKED_PLATFORM_MESSAGES[nextPlatform];
+    if (lockedMessage) {
+      setMaterialMessage(lockedMessage);
+      setTimeout(() => setMaterialMessage(''), 3000);
+      return;
     }
-  };
-
-  const clearImportedResultView = () => {
     setLastCrawlVideoIds([]);
-    setSelectedVideo(null);
+    setPlatform(nextPlatform);
   };
 
   const handleWatch = (video: TrendVideo) => {
@@ -2035,15 +1869,30 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
                 className="h-11 w-full pl-9 pr-4 rounded-xl border border-border bg-surface text-sm text-text-primary placeholder:text-text-muted outline-none focus:border-accent transition-colors" />
             </div>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
-              <div className="relative h-11">
-                <Globe size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
-                <span className="absolute left-9 top-1/2 -translate-y-1/2 text-sm text-text-muted pointer-events-none">社媒平台</span>
-                <select value={platform} onChange={e => { setLastCrawlVideoIds([]); setPlatform(e.target.value as Platform); }}
-                  aria-label="社媒平台"
-                  className="h-11 w-full appearance-none rounded-xl border border-border bg-surface pl-[6.5rem] pr-9 text-sm font-semibold text-text-primary outline-none transition-colors hover:border-border-bright focus:border-accent">
-                  {PLATFORM_FILTERS.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
-                </select>
-                <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+              <div className="h-11 rounded-xl border border-border bg-surface px-2 flex items-center gap-1.5 overflow-hidden">
+                <Globe size={14} className="text-text-muted flex-shrink-0" />
+                <span className="text-sm text-text-muted flex-shrink-0">社媒平台</span>
+                <div className="flex items-center gap-1 min-w-0 overflow-x-auto">
+                  {PLATFORM_FILTERS.map(f => {
+                    const locked = f.id === 'facebook' || f.id === 'instagram';
+                    return (
+                      <button
+                        key={f.id}
+                        type="button"
+                        onClick={() => handlePlatformFilter(f.id)}
+                        className={`h-7 px-2 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
+                          platform === f.id
+                            ? 'bg-accent text-white'
+                            : locked
+                              ? 'bg-surface-2 text-text-muted hover:text-text-primary'
+                              : 'text-text-secondary hover:bg-surface-2 hover:text-text-primary'
+                        }`}
+                      >
+                        {f.label}
+                      </button>
+                    );
+                  })}
+                </div>
                 <span className="sr-only">{platformLabel}</span>
               </div>
               <div className="relative h-11">
@@ -2093,8 +1942,6 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
           ))}
         </div>
 
-        <AutoCrawlerPanel onImported={handleImported} onConfigChange={clearImportedResultView} />
-
         <div className="px-6 pb-6">
           {filtered.length === 0 ? (
             <div className="min-h-72 rounded-xl border border-dashed border-border bg-surface flex flex-col items-center justify-center gap-3 text-center px-6">
@@ -2103,7 +1950,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
               </div>
               <div>
                 <p className="text-sm font-semibold text-text-primary">暂无真实视频数据</p>
-                <p className="text-xs text-text-muted mt-1">先用上方采集任务获取公开视频；系统会临时获取真实视频并完成 Gemini 分析。</p>
+                <p className="text-xs text-text-muted mt-1">测试版请通过「定时任务」在北京时间 01:00 自动采集公开视频。</p>
               </div>
             </div>
           ) : viewMode === 'grid' ? (

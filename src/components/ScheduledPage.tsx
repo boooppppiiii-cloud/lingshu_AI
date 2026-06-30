@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Activity, BarChart3, Clock, Download, DownloadCloud, Plus, X, Play, Trash2, CheckCircle, Loader } from 'lucide-react';
+import { Activity, BarChart3, Clock, Download, DownloadCloud, Plus, X, Trash2, CheckCircle, Loader } from 'lucide-react';
 import type { AgentAction, AgentType } from '../App';
-import { completeDemoStep } from '../lib/demoProgress';
+import { completeDemoStep, readDemoProgress } from '../lib/demoProgress';
+import { authHeader } from '../lib/auth';
 
 interface ScheduledTask {
   id: string;
@@ -71,20 +72,32 @@ function taskAgentGroup(taskType: string): AgentTaskGroup {
 
 const TASK_TEMPLATES = [
   {
+    templateId: 'youtube_video_keyword_crawl',
     taskType: 'video_keyword_crawl',
-    name: 'YT/TK 关键词视频自动采集',
+    name: 'YouTube 热点视频采集',
     category: 'daily' as const,
     cronExpr: '0 1 * * *',
     cronLabel: '每天 01:00（北京时间）',
-    icon: '🎬',
-    desc: '每天凌晨自动采集 YouTube 和 TikTok 关键词视频，并排队获取真实视频 / Gemini 分析',
-    config: { platforms: 'youtube,tiktok', keywords: 'skincare', limit: '12', dateWindowDays: '7' },
+    icon: '▶️',
+    desc: '每天凌晨自动采集 YouTube 热点关键词视频，并排队获取真实视频 / Gemini 分析',
+    config: { platforms: 'youtube', keywords: 'skincare', limit: '5', dateWindowDays: '7' },
   },
-  { taskType: 'trend_report', name: 'TikTok 爆款日报', category: 'daily' as const, cronExpr: '0 8 * * *', cronLabel: '每天 08:00', icon: '🔥', desc: '每日生成 TikTok 跨境电商热门趋势简报' },
-  { taskType: 'exchange_rate', name: '汇率日报', category: 'daily' as const, cronExpr: '0 9 * * *', cronLabel: '每天 09:00', icon: '💱', desc: '实时获取 USD/SAR/AED/VND/MYR 等汇率并发送' },
-  { taskType: 'weekly_review', name: '每周经营复盘', category: 'report' as const, cronExpr: '0 18 * * 5', cronLabel: '每周五 18:00', icon: '📊', desc: 'AI 生成本周流量、询盘、转化、复购复盘报告' },
-  { taskType: 'crm_wakeup', name: '沉默客户唤醒', category: 'automation' as const, cronExpr: '0 10 * * 1', cronLabel: '每周一 10:00', icon: '💌', desc: '自动生成针对 60 天沉默老客的唤醒消息并推送' },
-  { taskType: 'holiday_push', name: '节日推品提醒', category: 'monitor' as const, cronExpr: '0 9 * * *', cronLabel: '每天 09:00', icon: '🎉', desc: '节日前 7 天自动提醒备货和推品策略' },
+  {
+    templateId: 'tiktok_video_keyword_crawl',
+    taskType: 'video_keyword_crawl',
+    name: 'TikTok 热点视频采集',
+    category: 'daily' as const,
+    cronExpr: '0 1 * * *',
+    cronLabel: '每天 01:00（北京时间）',
+    icon: '🎵',
+    desc: '每天凌晨自动采集 TikTok 热点关键词视频，并排队获取真实视频 / Gemini 分析',
+    config: { platforms: 'tiktok', keywords: 'skincare', limit: '5', dateWindowDays: '7' },
+  },
+  { templateId: 'trend_report', taskType: 'trend_report', name: 'TikTok 爆款日报', category: 'daily' as const, cronExpr: '0 8 * * *', cronLabel: '每天 08:00', icon: '🔥', desc: '每日生成 TikTok 跨境电商热门趋势简报' },
+  { templateId: 'exchange_rate', taskType: 'exchange_rate', name: '汇率日报', category: 'daily' as const, cronExpr: '0 9 * * *', cronLabel: '每天 09:00', icon: '💱', desc: '实时获取 USD/SAR/AED/VND/MYR 等汇率并发送' },
+  { templateId: 'weekly_review', taskType: 'weekly_review', name: '每周经营复盘', category: 'report' as const, cronExpr: '0 18 * * 5', cronLabel: '每周五 18:00', icon: '📊', desc: 'AI 生成本周流量、询盘、转化、复购复盘报告' },
+  { templateId: 'crm_wakeup', taskType: 'crm_wakeup', name: '沉默客户唤醒', category: 'automation' as const, cronExpr: '0 10 * * 1', cronLabel: '每周一 10:00', icon: '💌', desc: '自动生成针对 60 天沉默老客的唤醒消息并推送' },
+  { templateId: 'holiday_push', taskType: 'holiday_push', name: '节日推品提醒', category: 'monitor' as const, cronExpr: '0 9 * * *', cronLabel: '每天 09:00', icon: '🎉', desc: '节日前 7 天自动提醒备货和推品策略' },
 ];
 type TaskTemplate = (typeof TASK_TEMPLATES)[number];
 
@@ -97,6 +110,15 @@ const CRON_PRESETS = [
   { label: '每周五 18:00', expr: '0 18 * * 5' },
   { label: '每月1号 09:00', expr: '0 9 1 * *' },
 ];
+const CRAWLER_CRON_PRESET = CRON_PRESETS[0];
+const CRAWLER_LIMIT_MIN = 1;
+const CRAWLER_LIMIT_MAX = 10;
+
+function normalizeCrawlerLimit(value: string): string {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return '5';
+  return String(Math.max(CRAWLER_LIMIT_MIN, Math.min(CRAWLER_LIMIT_MAX, Math.round(numeric))));
+}
 
 export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) {
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
@@ -106,8 +128,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
   const [selectedTemplate, setSelectedTemplate] = useState<TaskTemplate | null>(null);
   const [cronPreset, setCronPreset] = useState('');
   const [customName, setCustomName] = useState('');
-  const [runningId, setRunningId] = useState<string | null>(null);
-  const [runResult, setRunResult] = useState<Record<string, string>>({});
+  const runResult: Record<string, string> = {};
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [resultTaskId, setResultTaskId] = useState<string | null>(null);
   const [workspaceMessage, setWorkspaceMessage] = useState('');
@@ -121,17 +142,27 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
     return () => window.clearInterval(timer);
   }, []);
 
+  useEffect(() => {
+    const progress = readDemoProgress();
+    if (!progress.scheduler || progress.automation_workflow || resultTaskId || tasks.length === 0) return;
+    setResultTaskId(tasks[0].id);
+  }, [resultTaskId, tasks]);
+
   async function fetchTasks() {
     setLoading(true);
     try {
-      const r = await fetch('/api/overseas/scheduler');
+      const r = await fetch('/api/overseas/scheduler', { headers: authHeader() });
+      if (!r.ok) {
+        setTasks([]);
+        return;
+      }
       setTasks(await r.json());
     } finally { setLoading(false); }
   }
 
   async function fetchVideoStats() {
     try {
-      const r = await fetch('/api/overseas/scheduler/video-stats');
+      const r = await fetch('/api/overseas/scheduler/video-stats', { headers: authHeader() });
       if (!r.ok) return;
       setVideoStats(await r.json());
     } catch {
@@ -149,15 +180,18 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
   }
 
   async function createTaskFromTemplate(template: TaskTemplate, name = '', cronExpr = '') {
+    const resolvedCronExpr = template.taskType === 'video_keyword_crawl'
+      ? CRAWLER_CRON_PRESET.expr
+      : (cronExpr || template.cronExpr);
     const body = {
       ...template,
       name: name || template.name,
-      cronExpr: cronExpr || template.cronExpr,
-      cronLabel: CRON_PRESETS.find(p => p.expr === (cronExpr || template.cronExpr))?.label ?? template.cronLabel,
+      cronExpr: resolvedCronExpr,
+      cronLabel: CRON_PRESETS.find(p => p.expr === resolvedCronExpr)?.label ?? template.cronLabel,
     };
     await fetch('/api/overseas/scheduler', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeader() },
       body: JSON.stringify(body),
     });
     completeDemoStep('scheduler');
@@ -165,27 +199,36 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
   }
 
   async function toggleTask(id: string) {
-    await fetch(`/api/overseas/scheduler/${id}/toggle`, { method: 'POST' });
+    await fetch(`/api/overseas/scheduler/${id}/toggle`, { method: 'POST', headers: authHeader() });
     await fetchTasks();
-  }
-
-  async function runNow(id: string) {
-    setRunningId(id);
-    try {
-      const r = await fetch(`/api/overseas/scheduler/${id}/run`, { method: 'POST' });
-      const data = await r.json();
-      setRunResult(prev => ({ ...prev, [id]: data.result ?? '执行完成' }));
-      setExpandedId(id);
-      completeDemoStep('scheduler');
-      await fetchTasks();
-      await fetchVideoStats();
-    } finally { setRunningId(null); }
   }
 
   async function deleteTask(id: string) {
-    await fetch(`/api/overseas/scheduler/${id}`, { method: 'DELETE' });
+    await fetch(`/api/overseas/scheduler/${id}`, { method: 'DELETE', headers: authHeader() });
     if (resultTaskId === id) setResultTaskId(null);
     await fetchTasks();
+  }
+
+  async function updateCrawlerConfig(task: ScheduledTask, patch: Record<string, string>) {
+    if (task.taskType !== 'video_keyword_crawl') return;
+    const nextConfig = {
+      ...task.config,
+      ...patch,
+      keywords: (patch.keywords ?? task.config.keywords ?? task.config.keyword ?? 'skincare').trim() || 'skincare',
+      limit: normalizeCrawlerLimit(patch.limit ?? task.config.limit ?? '5'),
+    };
+    setTasks(prev => prev.map(item => item.id === task.id ? { ...item, config: nextConfig } : item));
+    const res = await fetch(`/api/overseas/scheduler/${task.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', ...authHeader() },
+      body: JSON.stringify({ config: nextConfig }),
+    });
+    if (!res.ok) {
+      await fetchTasks();
+      return;
+    }
+    const saved = await res.json() as ScheduledTask;
+    setTasks(prev => prev.map(item => item.id === saved.id ? saved : item));
   }
 
   function selectGroup(group: AgentTaskGroup) {
@@ -211,18 +254,26 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
   const crawl = stats?.crawl ?? {};
   const fetchQueue = stats?.fetchQueue ?? {};
   const analysisQueue = stats?.analysisQueue ?? {};
-  const crawlTask = (videoStats?.tasks ?? tasks).find(t => t.taskType === 'video_keyword_crawl');
+  const crawlTasks = (videoStats?.tasks ?? tasks).filter(t => t.taskType === 'video_keyword_crawl');
   const formatTime = (value?: string) => value
     ? new Date(value).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
     : '暂无';
   const resultTask = tasks.find(task => task.id === resultTaskId) ?? null;
   const resultText = resultTask ? (runResult[resultTask.id] || resultTask.lastResult || '') : '';
-  const resultTemplate = resultTask ? TASK_TEMPLATES.find(t => t.taskType === resultTask.taskType) : null;
+  const templateForTask = (task: ScheduledTask) => TASK_TEMPLATES.find(t => {
+    if (t.taskType !== task.taskType) return false;
+    if (task.taskType !== 'video_keyword_crawl') return true;
+    return ('config' in t ? t.config?.platforms : '') === task.config.platforms;
+  }) ?? null;
+  const resultTemplate = resultTask ? templateForTask(resultTask) : null;
+  const visibleCronPresets = selectedTemplate?.taskType === 'video_keyword_crawl'
+    ? [CRAWLER_CRON_PRESET]
+    : CRON_PRESETS;
 
   const exportPdf = async (task: ScheduledTask) => {
     setExportingId(task.id);
     try {
-      const res = await fetch(`/api/overseas/scheduler/${task.id}/export-pdf`);
+      const res = await fetch(`/api/overseas/scheduler/${task.id}/export-pdf`, { headers: authHeader() });
       if (!res.ok) throw new Error('PDF 导出失败');
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -394,7 +445,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
         return {
           title: '视频采集工作台',
           cards: [
-            { label: '采集平台', value: task.config.platforms || 'youtube,tiktok', desc: '按平台拉取关键词视频' },
+            { label: '采集平台', value: task.config.platforms || 'youtube', desc: '按平台拉取关键词视频' },
             { label: '关键词', value: task.config.keywords || task.config.keyword || 'skincare', desc: '用于社媒内容采集' },
             { label: '时间窗口', value: `${task.config.dateWindowDays || '7'} 天`, desc: '只采集近期内容' },
           ],
@@ -458,7 +509,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
             { label: '执行频率', value: task.cronLabel, desc: '按计划自动运行' },
             { label: '状态', value: task.enabled ? '已启用' : '已停用', desc: '可随时调整' },
           ],
-          actions: ['查看结果', '复制产出', '重新执行'],
+          actions: ['查看结果', '复制产出', '安排下一步'],
         };
     }
   };
@@ -540,7 +591,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
             </div>
             <div className="mt-4 rounded-xl bg-green-50 border border-green-100 p-3">
               <p className="text-xs text-green-800 leading-relaxed">
-                创建任务后，可以立即执行并在右侧结果工作台查看产出、复制内容和安排下一步。
+                创建任务后，可以进入任务页面查看配置、导出说明并安排下一步。
               </p>
             </div>
           </section>
@@ -580,6 +631,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
             </div>
             <button
               type="button"
+              data-demo-target={!showAdd && activeGroup === 'social' ? 'scheduled_run' : undefined}
               onClick={() => { setSelectedTemplate(null); setCustomName(''); setCronPreset(''); setShowAdd(true); }}
               className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white"
               style={{ background: '#16a34a' }}
@@ -596,7 +648,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
               <div>
                 <h2 className="text-sm font-semibold text-gray-900">社媒爬虫定时任务 / 视频采集实时看板</h2>
                 <p className="text-xs text-gray-500 mt-0.5">
-                  {crawlTask ? `${crawlTask.name} · ${crawlTask.cronLabel}` : '自动采集任务未创建'} · 更新时间 {formatTime(stats?.updatedAt)}
+                  {crawlTasks.length > 0 ? `${crawlTasks.map(task => task.name).join(' / ')} · ${CRAWLER_CRON_PRESET.label}` : '自动采集任务未创建'} · 更新时间 {formatTime(stats?.updatedAt)}
                 </p>
               </div>
               <button
@@ -667,7 +719,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
               <h2 className="text-sm font-semibold text-gray-500 mb-3">{activeGroupMeta.label}</h2>
               <div className="grid grid-cols-3 gap-3 items-stretch">
                 {filtered.map(task => {
-                  const tmpl = TASK_TEMPLATES.find(t => t.taskType === task.taskType);
+                  const tmpl = templateForTask(task);
                   const result = runResult[task.id];
                   const isExpanded = expandedId === task.id;
                   return (
@@ -696,6 +748,40 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
                         </div>
                       </div>
 
+                      {task.taskType === 'video_keyword_crawl' && (
+                        <div className="mt-3">
+                          <div className="grid grid-cols-[minmax(0,1fr)_5.75rem] gap-2">
+                            <label className="block min-w-0">
+                              <span className="block text-[10px] text-gray-400 mb-1">检索关键词</span>
+                              <input
+                                defaultValue={task.config.keywords || task.config.keyword || 'skincare'}
+                                onBlur={e => { void updateCrawlerConfig(task, { keywords: e.currentTarget.value }); }}
+                                onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                className="h-9 w-full rounded-lg border border-gray-200 px-2.5 text-xs text-gray-700 focus:outline-none focus:border-green-400"
+                                placeholder="skincare"
+                              />
+                            </label>
+                            <label className="block">
+                              <span className="block text-[10px] text-gray-400 mb-1">目标数量</span>
+                              <input
+                                type="number"
+                                min={CRAWLER_LIMIT_MIN}
+                                max={CRAWLER_LIMIT_MAX}
+                                defaultValue={task.config.limit || '5'}
+                                onBlur={e => {
+                                  const limit = normalizeCrawlerLimit(e.currentTarget.value);
+                                  e.currentTarget.value = limit;
+                                  void updateCrawlerConfig(task, { limit });
+                                }}
+                                onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                                className="h-9 w-full rounded-lg border border-gray-200 px-2.5 text-xs text-gray-700 focus:outline-none focus:border-green-400"
+                              />
+                            </label>
+                          </div>
+                          <p className="mt-1.5 text-[10px] text-gray-400">单条任务最多爬取 10 条视频</p>
+                        </div>
+                      )}
+
                       {/* Last result */}
                       {(result || task.lastResult) && isExpanded && (
                         <div className="mt-3 p-3 bg-gray-50 rounded-lg text-xs text-gray-600 max-h-32 overflow-y-auto whitespace-pre-wrap">
@@ -704,16 +790,6 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
                       )}
 
                       <div className="flex gap-2 mt-auto pt-3">
-                        <button
-                          type="button"
-                          onClick={e => { e.preventDefault(); e.stopPropagation(); void runNow(task.id); }}
-                          disabled={runningId === task.id}
-                          className="flex-1 min-w-0 h-9 flex items-center justify-center gap-1.5 px-3 rounded-lg text-xs text-white disabled:opacity-50 transition-colors"
-                          style={{ background: '#16a34a' }}
-                        >
-                          {runningId === task.id ? <Loader size={10} className="animate-spin" /> : <Play size={10} />}
-                          {runningId === task.id ? '执行中' : '立即执行'}
-                        </button>
                         <button
                           type="button"
                           onClick={e => {
@@ -766,9 +842,13 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
                 {visibleTemplates.map(tmpl => (
                   <button
                     type="button"
-                    key={tmpl.taskType}
-                    onClick={() => setSelectedTemplate(tmpl)}
-                    className={`w-full p-3 rounded-xl border-2 text-left flex items-start gap-3 transition-all ${selectedTemplate?.taskType === tmpl.taskType ? 'border-green-500 bg-green-50' : 'border-gray-200 hover:border-gray-300'}`}
+                    key={tmpl.templateId}
+                    data-demo-target={showAdd && !selectedTemplate && tmpl.templateId === 'youtube_video_keyword_crawl' ? 'scheduled_run' : undefined}
+                    onClick={() => {
+                      setSelectedTemplate(tmpl);
+                      setCronPreset('');
+                    }}
+                    className={`w-full p-3 rounded-xl border-2 text-left flex items-start gap-3 transition-all ${selectedTemplate?.templateId === tmpl.templateId ? 'border-green-500 bg-green-50' : 'border-gray-200 hover:border-gray-300'}`}
                   >
                     <span className="text-2xl">{tmpl.icon}</span>
                     <div>
@@ -776,7 +856,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
                       <div className="text-xs text-gray-500 mt-0.5">{tmpl.desc}</div>
                       <div className="text-xs text-gray-400 mt-1 flex items-center gap-1"><Clock size={10} /> {tmpl.cronLabel}</div>
                     </div>
-                    {selectedTemplate?.taskType === tmpl.taskType && <CheckCircle size={16} className="text-green-500 ml-auto mt-0.5 flex-shrink-0" />}
+                    {selectedTemplate?.templateId === tmpl.templateId && <CheckCircle size={16} className="text-green-500 ml-auto mt-0.5 flex-shrink-0" />}
                   </button>
                 ))}
               </div>
@@ -795,7 +875,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
                   <div className="mb-5">
                     <label className="block text-xs font-medium text-gray-700 mb-1.5">执行频率</label>
                     <div className="grid grid-cols-3 gap-2">
-                      {CRON_PRESETS.map(p => (
+                      {visibleCronPresets.map(p => (
                         <button
                           type="button"
                           key={p.expr}
@@ -814,6 +894,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
                 <button type="button" onClick={closeAddModal} className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600">取消</button>
                 <button
                   type="button"
+                  data-demo-target={showAdd && selectedTemplate ? 'scheduled_run' : undefined}
                   onClick={createTask}
                   disabled={!selectedTemplate}
                   className="flex-1 py-2.5 rounded-xl text-sm text-white font-medium disabled:opacity-40"
@@ -908,6 +989,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
                         <p className="text-xs text-gray-600 leading-relaxed flex-1">{action.label}</p>
                         <button
                           type="button"
+                          data-demo-target={index === 0 ? 'automation_workflow_agent' : undefined}
                           onClick={() => goToAgent(action)}
                           className="h-7 px-2.5 rounded-lg bg-white border border-gray-200 text-[11px] text-gray-600 hover:border-green-200 hover:text-green-700 hover:bg-green-50 flex-shrink-0"
                         >
@@ -941,17 +1023,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
                 </section>
               </div>
 
-              <div className="border-t border-gray-100 p-4 flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => { void runNow(resultTask.id); }}
-                  disabled={runningId === resultTask.id}
-                  className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-xl text-xs text-white font-medium disabled:opacity-50"
-                  style={{ background: '#16a34a' }}
-                >
-                  {runningId === resultTask.id ? <Loader size={12} className="animate-spin" /> : <Play size={12} />}
-                  {runningId === resultTask.id ? '执行中' : '重新执行'}
-                </button>
+              <div className="border-t border-gray-100 p-4 flex justify-end">
                 <button type="button" onClick={() => setResultTaskId(null)} className="px-4 py-2.5 border border-gray-200 rounded-xl text-xs text-gray-600 hover:bg-gray-50">
                   关闭
                 </button>

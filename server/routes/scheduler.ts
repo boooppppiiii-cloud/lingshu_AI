@@ -11,6 +11,7 @@ import { isDemoMode } from '../lib/demo.js';
 import { store } from '../storage/index.js';
 import { crawlVideosForTenant, getVideoPipelineStats } from './videos.js';
 import type { Platform } from '../types/index.js';
+import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA = path.join(__dirname, '../../data/tasks.json');
@@ -30,6 +31,7 @@ export interface ScheduledTask {
   nextRun?: string;
   channelId?: string;    // which channel to send output to
   config: Record<string, string>;
+  tenantId?: string;
   createdAt: string;
 }
 
@@ -54,6 +56,14 @@ function load(): ScheduledTask[] {
 }
 function save(tasks: ScheduledTask[]) {
   fs.writeFileSync(DATA, JSON.stringify(tasks, null, 2));
+}
+
+function tenantTasks(tenantId: string): ScheduledTask[] {
+  return load().filter(task => task.tenantId === tenantId);
+}
+
+function findTenantTask(id: string, tenantId: string): ScheduledTask | undefined {
+  return load().find(task => task.id === id && task.tenantId === tenantId);
 }
 function getEnterpriseCtx(): string {
   try { return buildEnterpriseContext(JSON.parse(fs.readFileSync(ENTERPRISE_FILE, 'utf8'))); } catch { return ''; }
@@ -145,30 +155,6 @@ function renderTaskReportPdf(payload: Record<string, unknown>): Promise<Buffer> 
 
 // Active cron jobs registry
 const activeJobs = new Map<string, CronJob>();
-const DEFAULT_VIDEO_CRAWL_TASK_ID = 'system_video_keyword_crawl_daily_0100';
-
-function ensureDefaultVideoCrawlTask(): void {
-  const tasks = load();
-  if (tasks.some(task => task.id === DEFAULT_VIDEO_CRAWL_TASK_ID || task.taskType === 'video_keyword_crawl')) return;
-  const task: ScheduledTask = {
-    id: DEFAULT_VIDEO_CRAWL_TASK_ID,
-    name: 'YT/TK 关键词视频自动采集',
-    category: 'daily',
-    taskType: 'video_keyword_crawl',
-    cronExpr: '0 1 * * *',
-    cronLabel: '每天 01:00（北京时间）',
-    enabled: true,
-    config: {
-      platforms: 'youtube,tiktok',
-      keywords: process.env.SCHEDULED_VIDEO_KEYWORDS || 'skincare',
-      limit: process.env.SCHEDULED_VIDEO_LIMIT || '12',
-      dateWindowDays: process.env.SCHEDULED_VIDEO_DATE_WINDOW_DAYS || '7',
-      tenantId: process.env.SCHEDULED_VIDEO_TENANT_ID || '',
-    },
-    createdAt: new Date().toISOString(),
-  };
-  save([task, ...tasks]);
-}
 
 async function executeTrendReport(_task: ScheduledTask): Promise<string> {
   const messages = [{ role: 'user' as const, content: '生成今日TikTok跨境电商爆款趋势简报，包括：热门品类、热门话题标签、建议借势策略，控制在300字以内' }];
@@ -374,12 +360,29 @@ function splitConfigList(value: string | undefined, fallback: string[]): string[
   return items.length > 0 ? items : fallback;
 }
 
+function normalizeCrawlerLimit(value: unknown): string {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return '5';
+  return String(Math.max(1, Math.min(10, Math.round(numeric))));
+}
+
+function normalizeCrawlerConfig(config: Record<string, string>, fallbackPlatform = 'youtube'): Record<string, string> {
+  const platform = String(config.platforms || fallbackPlatform).toLowerCase().includes('tiktok') ? 'tiktok' : 'youtube';
+  const keywords = String(config.keywords || config.keyword || 'skincare').trim() || 'skincare';
+  return {
+    ...config,
+    platforms: platform,
+    keywords,
+    limit: normalizeCrawlerLimit(config.limit),
+  };
+}
+
 async function executeVideoKeywordCrawl(task: ScheduledTask): Promise<string> {
   const tenantId = await resolveSchedulerTenantId(task);
-  const platforms = splitConfigList(task.config.platforms, ['youtube', 'tiktok'])
+  const platforms = splitConfigList(task.config.platforms, ['youtube'])
     .filter((platform): platform is Platform => ['youtube', 'tiktok'].includes(platform));
   const keywords = splitConfigList(task.config.keywords || task.config.keyword, ['skincare']);
-  const limit = Math.max(1, Math.min(30, Number(task.config.limit || 12) || 12));
+  const limit = Math.max(1, Math.min(10, Number(task.config.limit || 5) || 5));
   const { dateFrom, dateTo } = beijingDateRange(task.config.dateWindowDays);
   const lines: string[] = [];
   let imported = 0;
@@ -456,25 +459,31 @@ function scheduleTask(task: ScheduledTask) {
 
 // Boot: restore active tasks
 export function initScheduler() {
-  ensureDefaultVideoCrawlTask();
-  load().filter(t => t.enabled).forEach(scheduleTask);
-  console.log('[scheduler] initialized with', load().filter(t => t.enabled).length, 'active tasks');
+  const tasks = load().filter(t => t.enabled && t.tenantId);
+  tasks.forEach(scheduleTask);
+  console.log('[scheduler] initialized with', tasks.length, 'active tasks');
 }
 
 export const schedulerRouter = Router();
+schedulerRouter.use(requireAuth);
 
-schedulerRouter.get('/', (_req, res) => res.json(load()));
+schedulerRouter.get('/', (_req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  res.json(tenantTasks(tenantId));
+});
 
 schedulerRouter.get('/video-stats', async (_req, res) => {
-  const tasks = load().filter(task => task.taskType === 'video_keyword_crawl');
+  const { tenantId } = res.locals as AuthLocals;
+  const tasks = tenantTasks(tenantId).filter(task => task.taskType === 'video_keyword_crawl');
   res.json({
     tasks,
-    stats: await getVideoPipelineStats(),
+    stats: await getVideoPipelineStats(tenantId),
   });
 });
 
 schedulerRouter.get('/:id/export-pdf', async (req: Request, res: Response) => {
-  const task = load().find(t => t.id === req.params.id);
+  const { tenantId } = res.locals as AuthLocals;
+  const task = findTenantTask(req.params.id, tenantId);
   if (!task) { res.status(404).json({ error: 'not found' }); return; }
   try {
     const resultText = task.lastResult || '暂无执行结果，请先执行任务后再导出。';
@@ -497,17 +506,22 @@ schedulerRouter.get('/:id/export-pdf', async (req: Request, res: Response) => {
 });
 
 schedulerRouter.post('/', (req: Request, res: Response) => {
+  const { tenantId } = res.locals as AuthLocals;
   const tasks = load();
+  const isVideoCrawler = req.body.taskType === 'video_keyword_crawl';
+  const crawlerPlatform = String(req.body.config?.platforms || '').toLowerCase().includes('tiktok') ? 'tiktok' : 'youtube';
+  const crawlerConfig = normalizeCrawlerConfig({ ...(req.body.config ?? {}), tenantId }, crawlerPlatform);
   const task: ScheduledTask = {
     id: `task_${Date.now()}`,
     name: req.body.name,
     category: req.body.category ?? 'daily',
     taskType: req.body.taskType ?? 'custom',
-    cronExpr: req.body.cronExpr ?? '0 8 * * *',
-    cronLabel: req.body.cronLabel ?? '每天 08:00',
+    cronExpr: isVideoCrawler ? '0 1 * * *' : (req.body.cronExpr ?? '0 8 * * *'),
+    cronLabel: isVideoCrawler ? '每天 01:00（北京时间）' : (req.body.cronLabel ?? '每天 08:00'),
     enabled: req.body.enabled ?? true,
     channelId: req.body.channelId,
-    config: req.body.config ?? {},
+    config: isVideoCrawler ? crawlerConfig : (req.body.config ?? {}),
+    tenantId,
     createdAt: new Date().toISOString(),
   };
   tasks.push(task);
@@ -517,37 +531,55 @@ schedulerRouter.post('/', (req: Request, res: Response) => {
 });
 
 schedulerRouter.put('/:id', (req: Request, res: Response) => {
+  const { tenantId } = res.locals as AuthLocals;
   const tasks = load();
-  const idx = tasks.findIndex(t => t.id === req.params.id);
+  const idx = tasks.findIndex(t => t.id === req.params.id && t.tenantId === tenantId);
   if (idx === -1) { res.status(404).json({ error: 'not found' }); return; }
-  tasks[idx] = { ...tasks[idx], ...req.body };
+  const current = tasks[idx];
+  const nextTaskType = req.body.taskType ?? current.taskType;
+  const nextConfig = nextTaskType === 'video_keyword_crawl'
+    ? normalizeCrawlerConfig({ ...current.config, ...(req.body.config ?? {}) }, current.config.platforms || 'youtube')
+    : (req.body.config ?? current.config);
+  tasks[idx] = {
+    ...current,
+    ...req.body,
+    tenantId,
+    cronExpr: nextTaskType === 'video_keyword_crawl' ? '0 1 * * *' : (req.body.cronExpr ?? current.cronExpr),
+    cronLabel: nextTaskType === 'video_keyword_crawl' ? '每天 01:00（北京时间）' : (req.body.cronLabel ?? current.cronLabel),
+    config: nextTaskType === 'video_keyword_crawl' ? { ...nextConfig, tenantId } : nextConfig,
+  };
   save(tasks);
   scheduleTask(tasks[idx]);
   res.json(tasks[idx]);
 });
 
 schedulerRouter.delete('/:id', (req: Request, res: Response) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const task = findTenantTask(req.params.id, tenantId);
+  if (!task) { res.status(404).json({ error: 'not found' }); return; }
   activeJobs.get(req.params.id)?.stop();
   activeJobs.delete(req.params.id);
-  save(load().filter(t => t.id !== req.params.id));
+  save(load().filter(t => !(t.id === req.params.id && t.tenantId === tenantId)));
   res.json({ ok: true });
 });
 
 // Run immediately
 schedulerRouter.post('/:id/run', async (req: Request, res: Response) => {
-  const task = load().find(t => t.id === req.params.id);
+  const { tenantId } = res.locals as AuthLocals;
+  const task = findTenantTask(req.params.id, tenantId);
   if (!task) { res.status(404).json({ error: 'not found' }); return; }
   const result = await executeTask(task).catch(e => `执行失败: ${e.message}`);
   const tasks = load();
-  const idx = tasks.findIndex(t => t.id === req.params.id);
+  const idx = tasks.findIndex(t => t.id === req.params.id && t.tenantId === tenantId);
   if (idx !== -1) { tasks[idx].lastRun = new Date().toISOString(); tasks[idx].lastResult = result; save(tasks); }
   res.json({ ok: true, result });
 });
 
 // Toggle enabled
 schedulerRouter.post('/:id/toggle', (req: Request, res: Response) => {
+  const { tenantId } = res.locals as AuthLocals;
   const tasks = load();
-  const idx = tasks.findIndex(t => t.id === req.params.id);
+  const idx = tasks.findIndex(t => t.id === req.params.id && t.tenantId === tenantId);
   if (idx === -1) { res.status(404).json({ error: 'not found' }); return; }
   tasks[idx].enabled = !tasks[idx].enabled;
   save(tasks);

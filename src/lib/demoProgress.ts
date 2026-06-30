@@ -1,4 +1,5 @@
 export const DEMO_PROGRESS_KEY = 'ow_demo_steps';
+const DEMO_PROGRESS_SCOPE_KEY = 'ow_demo_steps_scope';
 export const DEMO_PROGRESS_EVENT = 'ow_demo_progress';
 
 export type DemoStepId =
@@ -10,12 +11,23 @@ export type DemoStepId =
   | 'scheduler'
   | 'automation_workflow';
 
+function scopedKey() {
+  const scope = localStorage.getItem(DEMO_PROGRESS_SCOPE_KEY);
+  return scope ? `${DEMO_PROGRESS_KEY}:${scope}` : DEMO_PROGRESS_KEY;
+}
+
+export function setDemoProgressScope(scope: string | null | undefined) {
+  if (scope) localStorage.setItem(DEMO_PROGRESS_SCOPE_KEY, scope);
+  else localStorage.removeItem(DEMO_PROGRESS_SCOPE_KEY);
+  window.dispatchEvent(new CustomEvent(DEMO_PROGRESS_EVENT, { detail: readDemoProgress() }));
+}
+
 export function readDemoProgress(): Record<string, boolean> {
-  try { return JSON.parse(localStorage.getItem(DEMO_PROGRESS_KEY) || '{}'); } catch { return {}; }
+  try { return JSON.parse(localStorage.getItem(scopedKey()) || '{}'); } catch { return {}; }
 }
 
 export function writeDemoProgress(next: Record<string, boolean>) {
-  localStorage.setItem(DEMO_PROGRESS_KEY, JSON.stringify(next));
+  localStorage.setItem(scopedKey(), JSON.stringify(next));
   window.dispatchEvent(new CustomEvent(DEMO_PROGRESS_EVENT, { detail: next }));
 }
 

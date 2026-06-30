@@ -4,6 +4,7 @@ import { ArrowUp, Brain, Loader2, X } from 'lucide-react';
 import type { AgentType, ConversationContext, Message, KickoffSignal, AgentAction } from '../App';
 import AgentReply from './AgentReply';
 import { authHeader } from '../lib/auth';
+import { completeDemoStep } from '../lib/demoProgress';
 
 interface AgentConfig {
   type: AgentType;
@@ -199,8 +200,14 @@ export default function AgentChatPage({ config, onEnterConversation, onLeaveConv
                 <p className="text-sm text-text-muted mt-1">{config.tagline}</p>
               </div>
               <div className="grid grid-cols-2 gap-2 max-w-lg w-full">
-                {config.suggestions.map(s => (
-                  <button key={s} onClick={() => void send(s)}
+                {config.suggestions.map((s, index) => (
+                  <button
+                    key={s}
+                    data-demo-target={config.type === 'retention' && index === 0 ? 'retention_prompt' : undefined}
+                    onClick={() => {
+                      if (config.type === 'retention') completeDemoStep('retention');
+                      void send(s);
+                    }}
                     className="text-left px-3 py-2.5 rounded-xl border border-border bg-surface text-xs text-text-secondary hover:border-border-bright hover:text-text-primary transition-all leading-relaxed">
                     {s}
                   </button>

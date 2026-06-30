@@ -43,7 +43,12 @@ const TASK_OWNER: Record<string, string> = {
 
 function taskAction(task: ScheduledTask): string {
   if (task.taskType === 'video_keyword_crawl') {
-    const platforms = task.config?.platforms || 'YouTube / TikTok';
+    const platforms = (task.config?.platforms || 'youtube')
+      .split(/[\n,，;；、]+/)
+      .map(platform => platform.trim().toLowerCase())
+      .filter(Boolean)
+      .map(platform => platform === 'youtube' ? 'YouTube' : platform === 'tiktok' ? 'TikTok' : platform)
+      .join(' / ');
     const keywords = task.config?.keywords ? `关键词：${task.config.keywords}` : '关键词视频';
     return `自动采集 ${platforms} ${keywords}，同步素材库、视频级分析和脚本方向。`;
   }

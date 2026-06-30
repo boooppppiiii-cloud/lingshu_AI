@@ -11,7 +11,7 @@ import EnterprisePage from './components/EnterprisePage';
 import IntegrationsPage from './components/IntegrationsPage';
 import ScheduledPage from './components/ScheduledPage';
 import ComingSoon from './components/ComingSoon';
-import { completeDemoStep } from './lib/demoProgress';
+import { completeDemoStep, setDemoProgressScope } from './lib/demoProgress';
 
 export type Page =
   | 'strategy'
@@ -85,7 +85,11 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
 
   useEffect(() => {
-    authApi.me().then(s => { setSession(s); setAuthLoading(false); });
+    authApi.me().then(s => {
+      setDemoProgressScope(s?.user?.id || s?.tenant?.id || null);
+      setSession(s);
+      setAuthLoading(false);
+    });
   }, []);
   useEffect(() => {
     try { localStorage.setItem('ow_page', page); } catch { /* ignore */ }
@@ -152,7 +156,11 @@ export default function App() {
   const restoreFor = (a: AgentType) => (restore && restore.agent === a ? restore : undefined);
   const kickoffFor = (a: AgentType) => (kickoff && kickoff.agent === a ? { text: kickoff.text, key: kickoff.key } : undefined);
 
-  const handleLogout = () => { authApi.logout(); setSession(null); };
+  const handleAuthed = (s: AuthSession) => {
+    setDemoProgressScope(s.user?.id || s.tenant?.id || null);
+    setSession(s);
+  };
+  const handleLogout = () => { authApi.logout(); setDemoProgressScope(null); setSession(null); };
 
   if (authLoading) {
     return (
@@ -161,7 +169,7 @@ export default function App() {
       </div>
     );
   }
-  if (!session) return <AuthScreen onAuthed={setSession} />;
+  if (!session) return <AuthScreen onAuthed={handleAuthed} />;
   if (session.demo?.enabled && session.demo.expired) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-surface-2 px-6">

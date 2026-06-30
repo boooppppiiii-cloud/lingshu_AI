@@ -13,6 +13,7 @@ import { attachFile, fetchFile } from '../storage/files.js';
 import { analyzeVideo, analyzeYouTubeUrl } from '../agents/gemini.js';
 import { analyzeVideoFramesWithQwen } from '../agents/qwen.js';
 import type { Platform, VideoAiAnalysis, VideoStatus } from '../types/index.js';
+import { isDemoMode } from '../lib/demo.js';
 
 export const videosRouter = Router();
 videosRouter.use(requireAuth);
@@ -29,6 +30,7 @@ const ffmpegBin = ffmpegStatic as unknown as string | null;
 let legacyFakePurgePromise: Promise<void> | null = null;
 let activeDownloadJobs = 0;
 const MAX_DOWNLOAD_JOBS = Number(process.env.VIDEO_DOWNLOAD_CONCURRENCY || 3);
+const sharedVideoSyncPromises = new Map<string, Promise<void>>();
 
 interface CrawledVideo {
   platform: Platform;
@@ -74,6 +76,137 @@ interface CrawlerOpsTask {
   lastError?: string;
   lastStrategy?: string;
   apifyFallbackAt?: string;
+}
+
+function isTestTenantRecord(tenant: Record<string, unknown> | null): boolean {
+  if (isDemoMode()) return true;
+  const plan = String(tenant?.subscriptionPlan || '').toLowerCase();
+  const status = String(tenant?.subscriptionStatus || '').toLowerCase();
+  return plan === 'trial' || status === 'trialing';
+}
+
+function isSharedSyncedVideo(record: Record<string, unknown>): boolean {
+  return parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {}).sharedTestVideo === true;
+}
+
+function sharedVideoAnalysis(record: Record<string, unknown>): string {
+  const source = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
+  const gemini = parseJsonRecord<Record<string, unknown>>(source.gemini, {});
+  const compactGemini = Object.keys(gemini).length > 0 ? {
+    theme: gemini.theme,
+    hooks: Array.isArray(gemini.hooks) ? gemini.hooks.slice(0, 3) : undefined,
+    sellingPoints: Array.isArray(gemini.sellingPoints) ? gemini.sellingPoints.slice(0, 5) : undefined,
+    mood: gemini.mood,
+    structure: gemini.structure,
+    recommendedScriptType: gemini.recommendedScriptType,
+  } : undefined;
+
+  const compact: Record<string, unknown> = {
+    source: source.source || 'shared-test-video-pool',
+    views: source.views,
+    uploadedAt: source.uploadedAt,
+    dateEvidence: source.dateEvidence,
+    keyword: source.keyword,
+    crawlRule: source.crawlRule,
+    dateFrom: source.dateFrom,
+    dateTo: source.dateTo,
+    analysisSource: source.analysisSource || 'shared-test-video-pool',
+    analysisQuality: source.analysisQuality || 'metadata',
+    gemini: compactGemini,
+    materialUrl: source.materialUrl,
+    materialPoster: source.materialPoster,
+    downloadStatus: source.downloadStatus,
+    sharedTestVideo: true,
+    sharedFromTenantId: record.tenantId,
+    sharedFromRecordId: record.id,
+    sharedSyncedAt: new Date().toISOString(),
+  };
+
+  let text = JSON.stringify(compact);
+  if (text.length > 4800) {
+    delete compact.gemini;
+    text = JSON.stringify(compact);
+  }
+  return text;
+}
+
+function cloneSharedVideoForTenant(record: Record<string, unknown>, tenantId: string): Record<string, unknown> {
+  const {
+    id: _id,
+    collectionId: _collectionId,
+    collectionName: _collectionName,
+    expand: _expand,
+    created: _created,
+    updated: _updated,
+    createdAt: _createdAt,
+    updatedAt: _updatedAt,
+    ...rest
+  } = record;
+  return {
+    ...rest,
+    tenantId,
+    aiAnalysis: sharedVideoAnalysis(record),
+  };
+}
+
+async function listAllSharedTestVideos(): Promise<Record<string, unknown>[]> {
+  const all: Record<string, unknown>[] = [];
+  const seenSourceUrls = new Set<string>();
+  let page = 1;
+  let totalPages = 1;
+  do {
+    const result = await store.list<Record<string, unknown>>(COL, {
+      sort: '-crawledAt',
+      page,
+      perPage: 100,
+    });
+    for (const record of result.items) {
+      if (isSharedSyncedVideo(record)) continue;
+      if (record.status !== 'analyzed') continue;
+      const sourceUrl = String(record.sourceUrl || '').trim();
+      if (!sourceUrl || seenSourceUrls.has(sourceUrl)) continue;
+      seenSourceUrls.add(sourceUrl);
+      all.push(record);
+    }
+    totalPages = result.totalPages || 1;
+    page += 1;
+  } while (page <= totalPages);
+  return all;
+}
+
+async function syncSharedTestVideosForTenant(tenantId: string): Promise<void> {
+  if (!tenantId) return;
+
+  const tenant = await store.getById<Record<string, unknown>>('tenants', tenantId);
+  if (!isTestTenantRecord(tenant)) return;
+
+  const sharedVideos = await listAllSharedTestVideos();
+  for (const video of sharedVideos) {
+    const sourceUrl = String(video.sourceUrl || '').trim();
+    if (!sourceUrl) continue;
+
+    const existing = await store.list(COL, {
+      where: { tenantId, sourceUrl },
+      page: 1,
+      perPage: 1,
+    });
+    if (existing.items[0]) continue;
+
+    await store.create(COL, cloneSharedVideoForTenant(video, tenantId));
+  }
+}
+
+async function ensureSharedTestVideosForTenant(tenantId: string): Promise<void> {
+  if (!tenantId) return;
+  const existing = sharedVideoSyncPromises.get(tenantId);
+  if (existing) return existing;
+
+  const promise = syncSharedTestVideosForTenant(tenantId).catch((e) => {
+    sharedVideoSyncPromises.delete(tenantId);
+    console.warn('[videos] shared test video sync failed:', e instanceof Error ? e.message : e);
+  });
+  sharedVideoSyncPromises.set(tenantId, promise);
+  return promise;
 }
 
 const DEFAULT_CRAWL_KEYWORDS = 'amazon gadgets product review';
@@ -460,6 +593,7 @@ videosRouter.post('/ingest', async (req, res) => {
 videosRouter.get('/', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
   await purgeLegacyFakeVideos();
+  await ensureSharedTestVideosForTenant(tenantId);
   const { page = '1', perPage = '20', platform, status } = req.query as Record<string, string>;
 
   const where: Record<string, string> = { tenantId };
@@ -3338,12 +3472,13 @@ function crawlerOpsStats(): Record<string, unknown> {
   };
 }
 
-export async function getVideoPipelineStats(): Promise<Record<string, unknown>> {
+export async function getVideoPipelineStats(tenantId?: string): Promise<Record<string, unknown>> {
   const records: Record<string, unknown>[] = [];
   let page = 1;
   let totalPages = 1;
   while (page <= totalPages && page <= 50) {
     const result = await store.list<Record<string, unknown>>(COL, {
+      where: tenantId ? { tenantId } : undefined,
       page,
       perPage: 100,
       sort: '-crawledAt',

@@ -3,6 +3,7 @@ import { RefreshCw, LayoutGrid, MessageSquare, Users, TrendingUp, Sparkles, Bell
 import { motion, AnimatePresence } from 'motion/react';
 import AgentChatPage from './AgentChatPage';
 import type { ConversationContext, RestoreSignal, KickoffSignal, AgentAction } from '../App';
+import { completeDemoStep } from '../lib/demoProgress';
 
 type ViewMode = 'dashboard' | 'chat';
 
@@ -59,7 +60,12 @@ function Dashboard({ onChatClick }: { onChatClick: () => void }) {
         <div>
           <div className="flex items-center justify-between mb-3">
             <p className="text-sm font-semibold text-text-primary">客户分层</p>
-            <button onClick={onChatClick}
+            <button
+              data-demo-target="retention_prompt"
+              onClick={() => {
+                completeDemoStep('retention');
+                onChatClick();
+              }}
               className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg text-white transition-all"
               style={{ background: '#16a34a' }}>
               <RefreshCw size={12} />让 留存专家 制定策略
