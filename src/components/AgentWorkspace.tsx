@@ -1,7 +1,8 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import { Compass, Zap, MessageSquare, RefreshCw, TrendingUp, Users, BarChart2, Sparkles, ChevronRight, Activity, CalendarDays } from 'lucide-react';
 import type { AgentType, ConversationContext } from '../App';
+import { authHeader } from '../lib/auth';
 
 const AGENTS = [
   { type: 'strategy' as AgentType, name: '策略专家', desc: '跨三侧策略编排，经营分析与多 Agent 协调', icon: Compass, color: '#4f46e5', bg: 'rgba(79,70,229,0.08)', maturity: 85, status: 'active' as const, recentActivity: '生成斋月中东推广方案', stats: [{ label: '本周方案', value: '6' }, { label: '协调任务', value: '14' }, { label: '采纳率', value: '91%' }] },
@@ -10,6 +11,66 @@ const AGENTS = [
   { type: 'retention' as AgentType, name: '留存专家', desc: '老客画像沉淀、生命周期唤醒、行动建议', icon: RefreshCw, color: '#16a34a', bg: 'rgba(22,163,74,0.08)', maturity: 89, status: 'active' as const, recentActivity: '识别 2 个采购周期到期老客', stats: [{ label: '老客总数', value: '632' }, { label: '本月唤醒', value: '47' }, { label: '复购率', value: '34%' }] },
 ];
 const SM = { active: { label: '运行中', color: '#16a34a' }, running: { label: '执行中', color: '#d97706' }, idle: { label: '待机', color: '#94a3b8' } };
+
+interface ScheduledTask {
+  id: string;
+  name: string;
+  taskType: string;
+  cronLabel: string;
+  enabled: boolean;
+  lastRun?: string;
+  lastResult?: string;
+  config?: Record<string, string>;
+}
+
+interface CalendarRow {
+  id?: string;
+  date: string;
+  type: string;
+  owner: string;
+  action: string;
+  status: string;
+}
+
+const TASK_OWNER: Record<string, string> = {
+  trend_report: '流量专家',
+  video_keyword_crawl: '流量专家',
+  weekly_review: '策略专家',
+  crm_wakeup: '留存专家',
+  exchange_rate: '转化专家',
+  holiday_push: '策略专家',
+};
+
+function taskAction(task: ScheduledTask): string {
+  if (task.taskType === 'video_keyword_crawl') {
+    const platforms = task.config?.platforms || 'YouTube / TikTok';
+    const keywords = task.config?.keywords ? `关键词：${task.config.keywords}` : '关键词视频';
+    return `自动采集 ${platforms} ${keywords}，同步素材库、视频级分析和脚本方向。`;
+  }
+  if (task.taskType === 'trend_report') return '生成社媒爆款趋势日报，沉淀热门品类、标签和借势策略。';
+  if (task.taskType === 'holiday_push') return '扫描未来节日营销节点，生成推品、内容和客户触达动作。';
+  if (task.taskType === 'exchange_rate') return '更新汇率报价提醒，辅助多币种询盘和大额报价有效期设置。';
+  if (task.taskType === 'weekly_review') return '复盘本周经营数据，拆解下周流量、转化、留存行动。';
+  if (task.taskType === 'crm_wakeup') return '筛选沉默客户并生成 WhatsApp / 邮件唤醒批次。';
+  return task.name;
+}
+
+function taskStatus(task: ScheduledTask): string {
+  if (!task.enabled) return '停用';
+  if (task.lastRun) return '已同步';
+  return '循环';
+}
+
+function taskRows(tasks: ScheduledTask[]): CalendarRow[] {
+  return tasks.map(task => ({
+    id: task.id,
+    date: task.cronLabel || '定时',
+    type: '定时任务',
+    owner: TASK_OWNER[task.taskType] || '策略专家',
+    action: taskAction(task),
+    status: taskStatus(task),
+  }));
+}
 
 function getBeijingMonthPlan() {
   const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai' }));
@@ -25,21 +86,32 @@ function getBeijingMonthPlan() {
     : isNovember ? '黑五网一备战'
       : isDecember ? '圣诞季收口'
         : '本月主推市场营销节点';
+  const baseRows: CalendarRow[] = [
+    { date: `${pad(1)}-${pad(3)}`, type: '运营周期', owner: '策略专家', action: '复盘上月 GMV、询盘、复购与素材消耗，拆成本月目标。', status: now.getDate() > 3 ? '已过' : '本周' },
+    { date: `${pad(10)}-${pad(20)}`, type: '营销节点', owner: '策略专家', action: mainNode, status: now.getDate() <= 20 ? '进行中' : '已过' },
+    { date: `${pad(Math.max(1, lastDay - 2))}-${pad(lastDay)}`, type: '关键行动', owner: '全体 Agent', action: '月末经营复盘、下月选题池、素材去重与自动任务校准。', status: now.getDate() >= lastDay - 2 ? '本周' : '待办' },
+  ];
   return {
     label: `${year}年${monthNo}月`,
-    rows: [
-      { date: `${pad(1)}-${pad(3)}`, type: '运营周期', owner: '策略专家', action: '复盘上月 GMV、询盘、复购与素材消耗，拆成本月目标。', status: now.getDate() > 3 ? '已过' : '本周' },
-      { date: '每周一 10:00', type: '定时任务', owner: '流量专家', action: '采集 TikTok / Instagram / YouTube 爆款视频，更新素材库与脚本方向。', status: '循环' },
-      { date: '每周三 15:00', type: '关键行动', owner: '转化专家', action: '检查大单询盘、未报价客户和多语种跟单话术，补齐人工介入清单。', status: '循环' },
-      { date: '每周五 16:30', type: '定时任务', owner: '留存专家', action: '筛选 30/60/90 天沉默客户，生成 WhatsApp / 邮件唤醒批次。', status: '循环' },
-      { date: `${pad(10)}-${pad(20)}`, type: '营销节点', owner: '策略专家', action: mainNode, status: now.getDate() <= 20 ? '进行中' : '已过' },
-      { date: `${pad(Math.max(1, lastDay - 2))}-${pad(lastDay)}`, type: '关键行动', owner: '全体 Agent', action: '月末经营复盘、下月选题池、素材去重与自动任务校准。', status: now.getDate() >= lastDay - 2 ? '本周' : '待办' },
-    ],
+    rows: baseRows,
   };
 }
 
 export default function AgentWorkspace({ onEnterConversation }: { onEnterConversation: (ctx: ConversationContext) => void }) {
   const monthPlan = useMemo(() => getBeijingMonthPlan(), []);
+  const [tasks, setTasks] = useState<ScheduledTask[]>([]);
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/overseas/scheduler', { headers: authHeader() })
+      .then(r => r.ok ? r.json() : [])
+      .then(data => { if (alive && Array.isArray(data)) setTasks(data); })
+      .catch(() => { if (alive) setTasks([]); });
+    return () => { alive = false; };
+  }, []);
+  const calendarRows = useMemo(
+    () => [...monthPlan.rows.slice(0, 1), ...taskRows(tasks), ...monthPlan.rows.slice(1)],
+    [monthPlan.rows, tasks],
+  );
   return (
     <div className="p-6 h-full overflow-y-auto">
       <div className="mb-6">
@@ -54,7 +126,7 @@ export default function AgentWorkspace({ onEnterConversation }: { onEnterConvers
             </div>
             <div>
               <p className="text-sm font-semibold text-text-primary">工作日历</p>
-              <p className="text-[11px] text-text-muted">北京时间 · {monthPlan.label} · 定时任务 / 营销节点 / 运营周期</p>
+              <p className="text-[11px] text-text-muted">北京时间 · {monthPlan.label} · 已同步 {tasks.length} 个定时任务 / 营销节点 / 运营周期</p>
             </div>
           </div>
           <span className="text-[10px] font-semibold text-accent bg-accent-glow px-2.5 py-1 rounded-full border border-accent/20">本月视图</span>
@@ -71,8 +143,8 @@ export default function AgentWorkspace({ onEnterConversation }: { onEnterConvers
               </tr>
             </thead>
             <tbody>
-              {monthPlan.rows.map(row => (
-                <tr key={`${row.date}-${row.type}`} className="border-t border-border/70">
+              {calendarRows.map((row, index) => (
+                <tr key={row.id || `${row.date}-${row.type}-${index}`} className="border-t border-border/70">
                   <td className="px-4 py-2.5 font-medium text-text-primary whitespace-nowrap">{row.date}</td>
                   <td className="px-4 py-2.5 text-text-secondary whitespace-nowrap">{row.type}</td>
                   <td className="px-4 py-2.5 text-text-secondary whitespace-nowrap">{row.owner}</td>
