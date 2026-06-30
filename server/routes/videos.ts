@@ -91,43 +91,18 @@ function isSharedSyncedVideo(record: Record<string, unknown>): boolean {
 
 function sharedVideoAnalysis(record: Record<string, unknown>): string {
   const source = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
-  const gemini = parseJsonRecord<Record<string, unknown>>(source.gemini, {});
-  const compactGemini = Object.keys(gemini).length > 0 ? {
-    theme: gemini.theme,
-    hooks: Array.isArray(gemini.hooks) ? gemini.hooks.slice(0, 3) : undefined,
-    sellingPoints: Array.isArray(gemini.sellingPoints) ? gemini.sellingPoints.slice(0, 5) : undefined,
-    mood: gemini.mood,
-    structure: gemini.structure,
-    recommendedScriptType: gemini.recommendedScriptType,
-  } : undefined;
-
-  const compact: Record<string, unknown> = {
+  const shared: Record<string, unknown> = {
+    ...source,
     source: source.source || 'shared-test-video-pool',
-    views: source.views,
-    uploadedAt: source.uploadedAt,
-    dateEvidence: source.dateEvidence,
-    keyword: source.keyword,
-    crawlRule: source.crawlRule,
-    dateFrom: source.dateFrom,
-    dateTo: source.dateTo,
     analysisSource: source.analysisSource || 'shared-test-video-pool',
-    analysisQuality: source.analysisQuality || 'metadata',
-    gemini: compactGemini,
-    materialUrl: source.materialUrl,
-    materialPoster: source.materialPoster,
-    downloadStatus: source.downloadStatus,
+    analysisQuality: source.analysisQuality || (source.gemini ? 'video' : 'metadata'),
     sharedTestVideo: true,
     sharedFromTenantId: record.tenantId,
     sharedFromRecordId: record.id,
     sharedSyncedAt: new Date().toISOString(),
   };
 
-  let text = JSON.stringify(compact);
-  if (text.length > 4800) {
-    delete compact.gemini;
-    text = JSON.stringify(compact);
-  }
-  return text;
+  return JSON.stringify(shared);
 }
 
 function cloneSharedVideoForTenant(record: Record<string, unknown>, tenantId: string): Record<string, unknown> {
