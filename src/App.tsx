@@ -51,7 +51,7 @@ export interface KickoffSignal { text: string; key: string }
 export type AgentAction = (agent: AgentType, task: string) => void;
 
 const AGENT_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention'];
-const ALL_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention', 'enterprise', 'plugins', 'scheduled', 'channels'];
+const ALL_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention', 'enterprise', 'plugins', 'scheduled', 'channels', 'youtube'];
 const firstUserText = (msgs?: Message[]) => (msgs?.find(m => m.role === 'user')?.content ?? '新会话').slice(0, 24);
 const loadConvs = (): Conversation[] => {
   try { return JSON.parse(localStorage.getItem('ow_convs') || '[]'); } catch { return []; }
