@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { motion } from 'motion/react';
-import { Globe, Loader2, Mail, Lock, Building2, KeyRound } from 'lucide-react';
+import { Loader2, Mail, Lock, Building2, KeyRound } from 'lucide-react';
 import { authApi, setToken, type AuthSession } from '../lib/auth';
 
 export default function AuthScreen({ onAuthed }: { onAuthed: (s: AuthSession) => void }) {
@@ -37,9 +37,7 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (s: AuthSession) =>
       <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-sm">
         {/* Logo */}
         <div className="flex items-center justify-center gap-2.5 mb-6">
-          <div className="w-9 h-9 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #4ade80, #16a34a)' }}>
-            <Globe size={18} className="text-white" />
-          </div>
+          <img src="/brand-logo.png" alt="灵枢 AI" className="w-9 h-9 rounded-xl object-cover border border-border bg-white" />
           <span className="text-lg font-bold text-text-primary font-display">灵枢 AI 工作台</span>
         </div>
 

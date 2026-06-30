@@ -1,11 +1,12 @@
-import { type ReactNode } from 'react';
+import { type ReactNode, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Compass, Zap, MessageSquare, RefreshCw,
   Building2, PlugZap, Clock,
-  Globe, ChevronRight, Plus, LogOut,
+  ChevronRight, Plus, LogOut, Loader2, RefreshCcw, X,
 } from 'lucide-react';
 import type { Page, ConversationContext, Conversation, AgentAction } from '../App';
+import { authApi, type AuthSession } from '../lib/auth';
 import RightPanel from './RightPanel';
 import DemoGuide from './DemoGuide';
 
@@ -50,6 +51,7 @@ interface LayoutProps {
   onNewConversation?: () => void;
   suppressRightPanel?: boolean;
   onAction?: AgentAction;
+  onSessionUpdate?: (session: AuthSession | null) => void;
 }
 
 const relTime = (ts: number) => {
@@ -105,24 +107,63 @@ function NavItem({
   );
 }
 
-export default function Layout({ page, onNavigate, conversation, children, session, onLogout, conversations, activeConvId, onOpenConversation, onNewConversation, suppressRightPanel, onAction }: LayoutProps) {
+const formatTokens = (value?: number | null) => {
+  const n = Math.max(0, Math.floor(Number(value ?? 0)));
+  return n.toLocaleString('en-US');
+};
+
+const pct = (used?: number, limit?: number) => {
+  const cap = Math.max(0, Number(limit ?? 0));
+  if (!cap) return 0;
+  return Math.min(100, Math.max(0, (Number(used ?? 0) / cap) * 100));
+};
+
+const byToken = (tokens: number, reserve: number) => Math.max(0, Math.floor(tokens / reserve));
+
+export default function Layout({ page, onNavigate, conversation, children, session, onLogout, conversations, activeConvId, onOpenConversation, onNewConversation, suppressRightPanel, onAction, onSessionUpdate }: LayoutProps) {
   const recent = (conversations ?? []).filter(c => c.messages.length > 0);
   const isInConversation = conversation !== null && !suppressRightPanel;
-  const tenantName = session?.tenant?.name || session?.user?.name || session?.user?.email?.split('@')[0] || '未命名';
-  const subStatus = session?.tenant?.subscriptionStatus || session?.subscription?.status || 'none';
+  const [quotaOpen, setQuotaOpen] = useState(false);
+  const [quotaLoading, setQuotaLoading] = useState(false);
+  const [quotaUpdatedAt, setQuotaUpdatedAt] = useState<number | null>(null);
+  const [liveSession, setLiveSession] = useState<AuthSession | null>(null);
+  const activeSession = liveSession ?? session;
+  const tenantName = activeSession?.tenant?.name || activeSession?.user?.name || activeSession?.user?.email?.split('@')[0] || '未命名';
+  const subStatus = activeSession?.tenant?.subscriptionStatus || activeSession?.subscription?.status || 'none';
   const initial = (tenantName[0] || '灵').toUpperCase();
-  const demo = session?.demo;
+  const demo = activeSession?.demo;
   const remainingTokens = Math.max(0, Math.min(
     demo?.remaining?.tokens ?? demo?.limits?.tokenDaily ?? 0,
     demo?.totalRemaining?.tokens ?? demo?.limits?.tokenTotal ?? Number.POSITIVE_INFINITY,
   ));
   const tokenLabel = remainingTokens >= 1000 ? `${Math.floor(remainingTokens / 1000)}k` : String(remainingTokens);
+  const suggestedChats = Math.min(demo?.remaining.aiChat ?? 0, byToken(remainingTokens, 1600));
+  const suggestedGenerations = Math.min(demo?.remaining.generation ?? 0, byToken(remainingTokens, 1200));
+  const suggestedVideoJobs = Math.min(demo?.totalRemaining?.videoGeneration ?? demo?.remaining.videoGeneration ?? 0, byToken(remainingTokens, 2000));
+  const suggestedVideoSeconds = suggestedVideoJobs * 8;
+  const suggestedAiVideoAnalyses = Math.min(suggestedGenerations, byToken(remainingTokens, 1200));
+  const suggestedApifyCrawls = Math.min(5, Math.max(0, demo?.remaining.generation ?? 0));
   const showDemoGuide = Boolean(
-    session?.demo?.enabled ||
-    session?.tenant?.subscriptionPlan === 'trial' ||
-    session?.subscription?.plan === 'trial' ||
+    activeSession?.demo?.enabled ||
+    activeSession?.tenant?.subscriptionPlan === 'trial' ||
+    activeSession?.subscription?.plan === 'trial' ||
     subStatus === 'trialing'
   );
+  const refreshQuota = async () => {
+    setQuotaLoading(true);
+    try {
+      const latest = await authApi.me();
+      setLiveSession(latest);
+      onSessionUpdate?.(latest);
+      setQuotaUpdatedAt(Date.now());
+    } finally {
+      setQuotaLoading(false);
+    }
+  };
+  const openQuota = () => {
+    setQuotaOpen(true);
+    void refreshQuota();
+  };
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -134,12 +175,7 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
       >
         {/* Logo */}
         <div className="h-14 flex items-center px-4 gap-2.5 flex-shrink-0">
-          <div
-            className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
-            style={{ background: 'linear-gradient(135deg, #4ade80, #16a34a)' }}
-          >
-            <Globe size={13} className="text-white" />
-          </div>
+          <img src="/brand-logo.png" alt="灵枢 AI" className="w-7 h-7 rounded-lg object-cover border border-border bg-white flex-shrink-0" />
           <span className="text-sm font-bold text-text-primary font-display">灵枢 AI</span>
         </div>
 
@@ -219,50 +255,138 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
         </div>
 
         {/* Bottom user */}
-        <div className="px-3 py-3 border-t border-border flex-shrink-0">
-          {demo?.enabled && (
-            <div className="mb-2 rounded-lg bg-white/70 border border-border px-2.5 py-2">
-              <div className="flex items-center justify-between mb-1">
-                <span className="text-[10px] font-semibold text-text-secondary">Demo 试用</span>
-                <span className={`text-[10px] font-bold ${demo.expired ? 'text-red-600' : 'text-accent'}`}>
-                  {demo.expired ? '已到期' : `剩余 ${demo.daysRemaining ?? '-'} 天`}
-                </span>
-              </div>
-              <div className="grid grid-cols-5 gap-1 text-center">
-                <div className="rounded-md bg-surface-2 px-1 py-1">
-                  <p className="text-[10px] font-bold text-text-primary">{demo.remaining.aiChat}</p>
-                  <p className="text-[9px] text-text-muted">对话</p>
+        <div className="relative px-3 py-3 border-t border-border flex-shrink-0">
+          <AnimatePresence>
+            {quotaOpen && (
+              <motion.div
+                initial={{ opacity: 0, y: 8, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 8, scale: 0.98 }}
+                transition={{ duration: 0.16 }}
+                className="absolute left-3 bottom-[68px] w-[324px] rounded-2xl bg-white border border-border shadow-xl p-3 z-30"
+              >
+                <div className="flex items-start justify-between gap-2 mb-3">
+                  <div>
+                    <p className="text-xs font-bold text-text-primary">Token 使用</p>
+                    <p className="text-[10px] text-text-muted mt-0.5">
+                      {quotaUpdatedAt ? `${relTime(quotaUpdatedAt)}刷新` : '打开时自动刷新'}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button onClick={() => void refreshQuota()} disabled={quotaLoading} title="刷新额度"
+                      className="p-1.5 rounded-lg hover:bg-surface-2 text-text-muted hover:text-text-primary transition-colors disabled:opacity-60">
+                      {quotaLoading ? <Loader2 size={13} className="animate-spin" /> : <RefreshCcw size={13} />}
+                    </button>
+                    <button onClick={() => setQuotaOpen(false)} title="关闭"
+                      className="p-1.5 rounded-lg hover:bg-surface-2 text-text-muted hover:text-text-primary transition-colors">
+                      <X size={13} />
+                    </button>
+                  </div>
                 </div>
-                <div className="rounded-md bg-surface-2 px-1 py-1">
-                  <p className="text-[10px] font-bold text-text-primary">{demo.remaining.generation}</p>
-                  <p className="text-[9px] text-text-muted">生成</p>
-                </div>
-                <div className="rounded-md bg-surface-2 px-1 py-1">
-                  <p className="text-[10px] font-bold text-text-primary">{demo.remaining.render}</p>
-                  <p className="text-[9px] text-text-muted">预览</p>
-                </div>
-                <div className="rounded-md bg-surface-2 px-1 py-1">
-                  <p className="text-[10px] font-bold text-text-primary">{demo.remaining.videoGeneration ?? 0}</p>
-                  <p className="text-[9px] text-text-muted">视频</p>
-                </div>
-                <div className="rounded-md bg-surface-2 px-1 py-1">
-                  <p className="text-[10px] font-bold text-text-primary">{tokenLabel}</p>
-                  <p className="text-[9px] text-text-muted">Token</p>
-                </div>
-              </div>
-            </div>
-          )}
+
+                {demo?.enabled ? (
+                  <div className="space-y-3">
+                    <div className="rounded-xl bg-surface-2 border border-border px-3 py-2.5">
+                      <div className="flex items-baseline justify-between">
+                        <span className="text-[11px] font-semibold text-text-secondary">剩余 Token</span>
+                        <span className="text-lg font-bold text-text-primary">{formatTokens(remainingTokens)}</span>
+                      </div>
+                      <div className="mt-2 h-1.5 rounded-full bg-white overflow-hidden border border-border">
+                        <div
+                          className="h-full rounded-full bg-accent"
+                          style={{ width: `${pct(demo.usage.tokens, demo.limits.tokenDaily)}%` }}
+                        />
+                      </div>
+                      <div className="mt-2 grid grid-cols-2 gap-2 text-[10px]">
+                        <div>
+                          <p className="text-text-muted">今日已用</p>
+                          <p className="font-bold text-text-primary">{formatTokens(demo.usage.tokens)} / {formatTokens(demo.limits.tokenDaily)}</p>
+                        </div>
+                        <div>
+                          <p className="text-text-muted">总计已用</p>
+                          <p className="font-bold text-text-primary">{formatTokens(demo.totalUsage?.tokens)} / {formatTokens(demo.limits.tokenTotal)}</p>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl bg-white border border-border px-3 py-2.5">
+                      <p className="text-[11px] font-bold text-text-primary mb-2">建议可用量</p>
+                      <div className="space-y-1.5 text-[10px] text-text-secondary">
+                        <div className="flex items-center justify-between gap-3">
+                          <span>顾问对话</span>
+                          <span className="font-bold text-text-primary">约 {suggestedChats} 轮</span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <span>脚本/文案/选材生成</span>
+                          <span className="font-bold text-text-primary">约 {suggestedGenerations} 次</span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <span>视频爬取</span>
+                          <span className="font-bold text-text-primary">YouTube 不吃 token</span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <span>TikTok/Instagram 兜底</span>
+                          <span className="font-bold text-text-primary">约 {suggestedApifyCrawls} 次/天</span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <span>视频 AI 分析</span>
+                          <span className="font-bold text-text-primary">约 {suggestedAiVideoAnalyses} 条</span>
+                        </div>
+                        <div className="flex items-center justify-between gap-3">
+                          <span>AI 视频生成</span>
+                          <span className="font-bold text-text-primary">约 {suggestedVideoJobs} 条 / {suggestedVideoSeconds} 秒</span>
+                        </div>
+                      </div>
+                      <p className="mt-2 text-[9px] leading-relaxed text-text-muted">
+                        估算按短对话 1.6k、普通生成 1.2k、视频生成 2k token 预留；Apify 是单独的 4 美元爬虫额度，TikTok/Instagram 兜底爬取会额外消耗。
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      {[
+                        ['对话', demo.remaining.aiChat, demo.limits.aiChatDaily],
+                        ['普通生成', demo.remaining.generation, demo.limits.generationDaily],
+                        ['预览渲染', demo.remaining.render, demo.limits.renderDaily],
+                        ['视频生成', demo.totalRemaining?.videoGeneration ?? demo.remaining.videoGeneration ?? 0, demo.limits.videoGenerationDaily],
+                      ].map(([label, left, limit]) => (
+                        <div key={String(label)} className="rounded-xl border border-border bg-white px-2.5 py-2">
+                          <p className="text-[10px] text-text-muted">{label}</p>
+                          <p className="mt-0.5 text-sm font-bold text-text-primary">{left}<span className="text-[10px] font-medium text-text-muted"> / {limit}</span></p>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="flex items-center justify-between rounded-xl bg-accent-glow px-3 py-2">
+                      <span className="text-[10px] font-semibold text-text-secondary">试用状态</span>
+                      <span className={`text-[10px] font-bold ${demo.expired ? 'text-red-600' : 'text-accent'}`}>
+                        {demo.expired ? '已到期' : `剩余 ${demo.daysRemaining ?? '-'} 天`}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="rounded-xl bg-surface-2 border border-border px-3 py-3">
+                    <p className="text-xs font-semibold text-text-primary">当前不是试用账号</p>
+                    <p className="text-[10px] text-text-muted mt-1">Token 限额仅对测试版账号生效。</p>
+                  </div>
+                )}
+              </motion.div>
+            )}
+          </AnimatePresence>
           <div className="flex items-center gap-2.5">
-            <div
+            <button
+              onClick={openQuota}
+              title="查看 Token 使用"
               className="w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
               style={{ background: 'linear-gradient(135deg, #4ade80, #16a34a)' }}
             >
               {initial}
-            </div>
-            <div className="flex-1 min-w-0">
+            </button>
+            <button onClick={openQuota} className="flex-1 min-w-0 text-left rounded-lg -my-1 py-1 hover:bg-black/5 transition-colors">
               <p className="text-xs font-semibold text-text-primary truncate">{tenantName}</p>
-              <p className="text-[10px] text-text-muted truncate">{SUB_LABEL[subStatus] ?? subStatus}</p>
-            </div>
+              <p className="text-[10px] text-text-muted truncate">
+                {demo?.enabled ? `Token 剩余 ${tokenLabel}` : (SUB_LABEL[subStatus] ?? subStatus)}
+              </p>
+            </button>
             {onLogout && (
               <button onClick={onLogout} title="退出登录"
                 className="relative p-1 rounded-md hover:bg-black/5 text-text-muted hover:text-text-primary transition-colors flex-shrink-0">
