@@ -94,4 +94,6 @@ https://your-domain.example.com/api/overseas/health
 
 CloudBase Run 容器本地目录适合临时文件，不适合保存正式客户数据。当前代码里仍有一部分素材、项目草稿、音频和封面默认写入 `data/` 目录；正式商用前建议迁移到 COS 或 PocketBase 文件字段。
 
+本演示版的灵感大屏视频文件已随仓库放在 `data/media/`，CloudBase Run 必须用 Dockerfile 构建完整应用，不能只部署 `dist/` 静态前端。部署后可访问任意 `/media/<文件名>` 检查视频文件是否随镜像发布成功。
+
 如果只做小范围演示，可以先用 CloudBase Run + 外部 PocketBase 跑起来；如果要给付费客户长期使用，应优先完成文件存储迁移和定期备份。
