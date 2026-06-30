@@ -142,11 +142,14 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
   const suggestedVideoJobs = Math.min(demo?.totalRemaining?.videoGeneration ?? demo?.remaining.videoGeneration ?? 0, byToken(remainingTokens, 2000));
   const suggestedVideoSeconds = suggestedVideoJobs * 8;
   const suggestedAiVideoAnalyses = Math.min(suggestedGenerations, byToken(remainingTokens, 1200));
-  const showDemoGuide = Boolean(
-    activeSession?.demo?.enabled ||
+  const isTrialAccount = Boolean(
+    activeSession?.demo ||
     activeSession?.tenant?.subscriptionPlan === 'trial' ||
     activeSession?.subscription?.plan === 'trial' ||
     subStatus === 'trialing'
+  );
+  const showDemoGuide = Boolean(
+    activeSession?.demo?.enabled || isTrialAccount
   );
   const refreshQuota = async () => {
     setQuotaLoading(true);
@@ -283,7 +286,7 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
                   </div>
                 </div>
 
-                {demo?.enabled ? (
+                {demo && isTrialAccount ? (
                   <div className="space-y-3">
                     <div className="rounded-xl bg-surface-2 border border-border px-3 py-2.5">
                       <div className="flex items-baseline justify-between">
@@ -364,8 +367,8 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
                   </div>
                 ) : (
                   <div className="rounded-xl bg-surface-2 border border-border px-3 py-3">
-                    <p className="text-xs font-semibold text-text-primary">当前不是试用账号</p>
-                    <p className="text-[10px] text-text-muted mt-1">Token 限额仅对测试版账号生效。</p>
+                    <p className="text-xs font-semibold text-text-primary">暂未读取到额度</p>
+                    <p className="text-[10px] text-text-muted mt-1">点击刷新按钮重新读取测试版账号额度。</p>
                   </div>
                 )}
               </motion.div>
@@ -383,7 +386,7 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
             <button onClick={openQuota} className="flex-1 min-w-0 text-left rounded-lg -my-1 py-1 hover:bg-black/5 transition-colors">
               <p className="text-xs font-semibold text-text-primary truncate">{tenantName}</p>
               <p className="text-[10px] text-text-muted truncate">
-                {demo?.enabled ? `Token 剩余 ${tokenLabel}` : (SUB_LABEL[subStatus] ?? subStatus)}
+                {demo && isTrialAccount ? `Token 剩余 ${tokenLabel}` : (SUB_LABEL[subStatus] ?? subStatus)}
               </p>
             </button>
             {onLogout && (
