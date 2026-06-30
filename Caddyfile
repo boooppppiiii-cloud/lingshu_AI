@@ -1,0 +1,9 @@
+{$APP_DOMAIN} {
+	encode gzip
+	reverse_proxy app:8788
+}
+
+{$PB_DOMAIN} {
+	encode gzip
+	reverse_proxy pocketbase:8090
+}
