@@ -1292,15 +1292,15 @@ function VideoCard({ video, index, isSelected, onSelect, onWatch, onAnalyzeVideo
       transition={{ delay: index * 0.02, duration: 0.25 }}
       className={`card overflow-hidden group ${isSelected ? 'border-accent ring-1 ring-accent/20' : ''}`}>
       <button type="button" onClick={onWatch}
-        className="relative overflow-hidden w-full text-left block"
+        className="relative overflow-hidden w-full aspect-[9/16] text-left block"
         style={{ background: 'var(--color-surface-2)' }}>
-        {video.videoUrl
-          ? <video src={`${video.videoUrl}#t=0.1`} muted playsInline loop preload="metadata" className="w-full aspect-[9/16] object-cover block"
+        {video.thumbnail
+          ? <img src={video.thumbnail} alt="" className="absolute inset-0 w-full h-full object-cover" draggable={false} />
+          : video.videoUrl
+          ? <video src={`${video.videoUrl}#t=0.1`} muted playsInline loop preload="metadata" className="absolute inset-0 w-full h-full object-cover"
               onMouseEnter={e => { void e.currentTarget.play().catch(() => {}); }}
               onMouseLeave={e => { e.currentTarget.pause(); e.currentTarget.currentTime = 0.1; }} />
-          : video.thumbnail
-          ? <img src={video.thumbnail} alt="" className="w-full h-auto block" draggable={false} />
-          : <div className="aspect-video"><VideoThumbnail platform={video.platform} title={video.title} /></div>}
+          : <VideoThumbnail platform={video.platform} title={video.title} />}
         <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
           <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-white text-neutral-900">
             <Play size={11} fill="currentColor" />{video.videoUrl ? '观看' : '原站'}
@@ -1658,37 +1658,36 @@ function AutoCrawlerPanel({
               </button>
             ))}
           </div>
-          <div className="grid grid-cols-1 lg:grid-cols-[220px_1fr_140px] gap-3 p-4">
-            <div className="flex items-center gap-1.5 p-1 rounded-lg bg-surface-2 border border-border">
-              {AUTO_CRAWL_PLATFORMS.map(p => (
-                <button key={p.id} onClick={() => {
-                  setCrawlPlatform(p.id);
-                  resetPreviousResult();
-                }} disabled={!p.enabled}
-                  className={`flex-1 px-2 py-1.5 rounded-md text-xs font-semibold transition-colors disabled:opacity-45 ${
-                    crawlPlatform === p.id ? 'bg-surface text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'
-                  }`}>
-                  {p.label}
-                </button>
-              ))}
-            </div>
-            <label className="relative block">
-              <span className="absolute left-9 top-1/2 -translate-y-1/2 text-xs text-text-muted pointer-events-none">{keywordInputLabel}</span>
+          <div className="grid grid-cols-1 lg:grid-cols-[220px_minmax(0,1fr)_140px] gap-3 p-4 items-stretch">
+            <label className="relative block h-12">
+              <Globe size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+              <span className="absolute left-9 top-1/2 -translate-y-1/2 text-sm text-text-muted pointer-events-none">平台</span>
+              <select value={crawlPlatform} onChange={e => {
+                setCrawlPlatform(e.target.value as CrawlPlatform);
+                resetPreviousResult();
+              }}
+                className="h-12 w-full appearance-none rounded-xl border border-border bg-surface pl-20 pr-9 text-sm font-semibold text-text-primary outline-none transition-colors hover:border-border-bright focus:border-accent">
+                {AUTO_CRAWL_PLATFORMS.map(p => <option key={p.id} value={p.id} disabled={!p.enabled}>{p.label}</option>)}
+              </select>
+              <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+            </label>
+            <label className="relative block h-12">
+              <span className="absolute left-9 top-1/2 -translate-y-1/2 text-sm text-text-muted pointer-events-none">{keywordInputLabel}</span>
               <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
               <input value={keyword} onChange={e => {
                 setKeyword(e.target.value);
                 resetPreviousResult();
               }}
-                className="w-full pl-[5.25rem] pr-4 py-2 rounded-xl border border-border bg-surface text-sm text-text-primary placeholder:text-text-muted outline-none focus:border-accent transition-colors"
+                className="h-12 w-full pl-[5.25rem] pr-4 rounded-xl border border-border bg-surface text-sm font-semibold text-text-primary placeholder:text-text-muted outline-none focus:border-accent transition-colors"
                 placeholder={keywordPlaceholder} />
             </label>
-            <label className="flex items-center gap-2 px-3 py-2 rounded-xl border border-border bg-surface text-xs text-text-muted">
+            <label className="flex h-12 items-center gap-2 px-3 rounded-xl border border-border bg-surface text-sm text-text-muted">
               数量
               <input type="number" min={1} max={30} value={limit} onChange={e => {
                 setLimit(Number(e.target.value));
                 resetPreviousResult();
               }}
-                className="w-full bg-transparent text-sm text-text-primary outline-none" />
+                className="w-full bg-transparent text-sm font-semibold text-text-primary outline-none" />
             </label>
           </div>
           <div className="px-4 pb-3 -mt-2 grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-3 items-center text-xs text-text-muted">
@@ -1990,43 +1989,52 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
               <span>{materialMessage || `今日已推送 ${allVideos.length} 条`}</span>
             </div>
           </div>
-          <div className="grid grid-cols-1 xl:grid-cols-[minmax(260px,1fr)_160px_170px_auto] gap-2.5 items-center">
+          <div className="space-y-2.5">
             <div className="relative min-w-0">
               <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
               <input type="text" value={search} onChange={e => { setLastCrawlVideoIds([]); setSearch(e.target.value); }}
                 placeholder="搜索视频标题或标签..."
-                className="w-full pl-9 pr-4 py-2 rounded-xl border border-border bg-surface text-sm text-text-primary placeholder:text-text-muted outline-none focus:border-accent transition-colors" />
+                className="h-11 w-full pl-9 pr-4 rounded-xl border border-border bg-surface text-sm text-text-primary placeholder:text-text-muted outline-none focus:border-accent transition-colors" />
             </div>
-            <div className="relative">
-              <Globe size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
-              <select value={platform} onChange={e => { setLastCrawlVideoIds([]); setPlatform(e.target.value as Platform); }}
-                aria-label="平台筛选"
-                className="w-full appearance-none rounded-xl border border-border bg-surface py-2 pl-9 pr-9 text-sm font-semibold text-text-primary outline-none transition-colors hover:border-border-bright focus:border-accent">
-                {PLATFORM_FILTERS.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
-              </select>
-              <ChevronDown size={13} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
-              <span className="sr-only">{platformLabel}</span>
-            </div>
-            <div className="relative">
-              {sortMode === 'heat'
-                ? <Flame size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
-                : <Clock size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />}
-              <select value={sortMode} onChange={e => { setLastCrawlVideoIds([]); setSortMode(e.target.value as SortMode); }}
-                aria-label="排序方式"
-                className="w-full appearance-none rounded-xl border border-border bg-surface py-2 pl-9 pr-9 text-sm font-semibold text-text-primary outline-none transition-colors hover:border-border-bright focus:border-accent">
-                <option value="crawlTime">按爬取时间</option>
-                <option value="heat">按热度</option>
-              </select>
-              <ChevronDown size={13} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
-              <span className="sr-only">{sortLabel}</span>
-            </div>
-            <div className="flex items-center gap-0.5 p-1 rounded-lg bg-surface-2 border border-border justify-self-start xl:justify-self-end">
-              <button onClick={() => setViewMode('grid')} className={`p-1.5 rounded-md transition-colors ${viewMode === 'grid' ? 'bg-surface text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'}`}>
-                <LayoutGrid size={13} />
-              </button>
-              <button onClick={() => setViewMode('list')} className={`p-1.5 rounded-md transition-colors ${viewMode === 'list' ? 'bg-surface text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'}`}>
-                <List size={13} />
-              </button>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
+              <div className="relative h-11">
+                <Globe size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+                <span className="absolute left-9 top-1/2 -translate-y-1/2 text-sm text-text-muted pointer-events-none">社媒平台</span>
+                <select value={platform} onChange={e => { setLastCrawlVideoIds([]); setPlatform(e.target.value as Platform); }}
+                  aria-label="社媒平台"
+                  className="h-11 w-full appearance-none rounded-xl border border-border bg-surface pl-[6.5rem] pr-9 text-sm font-semibold text-text-primary outline-none transition-colors hover:border-border-bright focus:border-accent">
+                  {PLATFORM_FILTERS.map(f => <option key={f.id} value={f.id}>{f.label}</option>)}
+                </select>
+                <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+                <span className="sr-only">{platformLabel}</span>
+              </div>
+              <div className="relative h-11">
+                {sortMode === 'heat'
+                  ? <Flame size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+                  : <Clock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />}
+                <span className="absolute left-9 top-1/2 -translate-y-1/2 text-sm text-text-muted pointer-events-none">排序方法</span>
+                <select value={sortMode} onChange={e => { setLastCrawlVideoIds([]); setSortMode(e.target.value as SortMode); }}
+                  aria-label="排序方法"
+                  className="h-11 w-full appearance-none rounded-xl border border-border bg-surface pl-[6.5rem] pr-9 text-sm font-semibold text-text-primary outline-none transition-colors hover:border-border-bright focus:border-accent">
+                  <option value="crawlTime">按爬取时间</option>
+                  <option value="heat">按热度</option>
+                </select>
+                <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+                <span className="sr-only">{sortLabel}</span>
+              </div>
+              <div className="relative h-11">
+                {viewMode === 'grid'
+                  ? <LayoutGrid size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+                  : <List size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />}
+                <span className="absolute left-9 top-1/2 -translate-y-1/2 text-sm text-text-muted pointer-events-none">大屏视图</span>
+                <select value={viewMode} onChange={e => setViewMode(e.target.value as 'grid' | 'list')}
+                  aria-label="大屏视图"
+                  className="h-11 w-full appearance-none rounded-xl border border-border bg-surface pl-[6.5rem] pr-9 text-sm font-semibold text-text-primary outline-none transition-colors hover:border-border-bright focus:border-accent">
+                  <option value="grid">卡片视图</option>
+                  <option value="list">列表视图</option>
+                </select>
+                <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+              </div>
             </div>
           </div>
         </div>

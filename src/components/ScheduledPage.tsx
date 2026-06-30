@@ -47,12 +47,19 @@ interface VideoStatsPayload {
   };
 }
 
-const CATEGORY_LABELS: Record<string, string> = {
-  daily: '日常',
-  monitor: '监控',
-  report: '报告',
-  automation: '自动化',
-};
+type AgentTaskGroup = 'social' | 'conversion' | 'customer';
+
+const AGENT_GROUPS: { id: AgentTaskGroup; label: string; desc: string }[] = [
+  { id: 'social', label: '社媒 Agent 定时任务', desc: '内容采集、趋势监控、社媒素材分析' },
+  { id: 'conversion', label: '销转 Agent 定时任务', desc: '报价、询盘、经营复盘和转化动作' },
+  { id: 'customer', label: '客户管理 Agent 定时任务', desc: '老客分层、沉默唤醒、复购触达' },
+];
+
+function taskAgentGroup(taskType: string): AgentTaskGroup {
+  if (['video_keyword_crawl', 'trend_report', 'holiday_push'].includes(taskType)) return 'social';
+  if (['crm_wakeup'].includes(taskType)) return 'customer';
+  return 'conversion';
+}
 
 const TASK_TEMPLATES = [
   {
@@ -85,7 +92,7 @@ const CRON_PRESETS = [
 export default function ScheduledPage() {
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeCategory, setActiveCategory] = useState<string>('all');
+  const [activeGroup, setActiveGroup] = useState<AgentTaskGroup>('social');
   const [showAdd, setShowAdd] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState<typeof TASK_TEMPLATES[0] | null>(null);
   const [cronPreset, setCronPreset] = useState('');
@@ -162,11 +169,23 @@ export default function ScheduledPage() {
     await fetchTasks();
   }
 
-  const categories = ['all', ...Array.from(new Set(tasks.map(t => t.category)))];
-  const filtered = activeCategory === 'all' ? tasks : tasks.filter(t => t.category === activeCategory);
-  const grouped = filtered.reduce<Record<string, ScheduledTask[]>>((acc, t) => {
-    (acc[t.category] ??= []).push(t); return acc;
-  }, {});
+  function selectGroup(group: AgentTaskGroup) {
+    setActiveGroup(group);
+    setSelectedTemplate(null);
+    setCustomName('');
+    setCronPreset('');
+  }
+
+  function closeAddModal() {
+    setShowAdd(false);
+    setSelectedTemplate(null);
+    setCustomName('');
+    setCronPreset('');
+  }
+
+  const filtered = tasks.filter(t => taskAgentGroup(t.taskType) === activeGroup);
+  const activeGroupMeta = AGENT_GROUPS.find(group => group.id === activeGroup)!;
+  const visibleTemplates = TASK_TEMPLATES.filter(t => taskAgentGroup(t.taskType) === activeGroup);
   const stats = videoStats?.stats;
   const crawl = stats?.crawl ?? {};
   const fetchQueue = stats?.fetchQueue ?? {};
@@ -179,17 +198,18 @@ export default function ScheduledPage() {
   return (
     <div className="flex h-full bg-white">
       {/* Left sidebar */}
-      <div className="w-44 border-r border-gray-100 flex flex-col py-6 px-3">
-        <p className="text-xs font-medium text-gray-400 px-3 mb-3">分类筛选</p>
-        {categories.map(cat => (
+      <div className="w-64 border-r border-gray-100 flex flex-col py-6 px-3">
+        <p className="text-xs font-medium text-gray-400 px-3 mb-3">Agent 任务板块</p>
+        {AGENT_GROUPS.map(group => (
           <button
-            key={cat}
-            onClick={() => setActiveCategory(cat)}
-            className={`text-left px-3 py-2 rounded-lg text-sm mb-1 transition-colors ${activeCategory === cat ? 'bg-gray-100 text-gray-900 font-medium' : 'text-gray-500 hover:text-gray-700'}`}
+            key={group.id}
+            type="button"
+            onClick={() => selectGroup(group.id)}
+            className={`text-left px-3 py-3 rounded-lg text-sm mb-1 transition-colors ${activeGroup === group.id ? 'bg-gray-100 text-gray-900 font-medium' : 'text-gray-500 hover:text-gray-700'}`}
           >
-            {cat === 'all' ? '全部' : CATEGORY_LABELS[cat] ?? cat}
-            <span className="ml-2 text-xs text-gray-400">
-              {cat === 'all' ? tasks.length : tasks.filter(t => t.category === cat).length}
+            <span className="block">{group.label}</span>
+            <span className="block text-xs text-gray-400 mt-1">
+              {tasks.filter(t => taskAgentGroup(t.taskType) === group.id).length} 个任务
             </span>
           </button>
         ))}
@@ -201,11 +221,12 @@ export default function ScheduledPage() {
         <div className="px-8 pt-8 pb-4 border-b border-gray-100">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-xl font-semibold text-gray-900">定时任务</h1>
-              <p className="text-sm text-gray-500 mt-0.5">自动执行数据监控、报告生成和客户触达任务</p>
+              <h1 className="text-xl font-semibold text-gray-900">{activeGroupMeta.label}</h1>
+              <p className="text-sm text-gray-500 mt-0.5">{activeGroupMeta.desc}</p>
             </div>
             <button
-              onClick={() => setShowAdd(true)}
+              type="button"
+              onClick={() => { setSelectedTemplate(null); setCustomName(''); setCronPreset(''); setShowAdd(true); }}
               className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white"
               style={{ background: '#16a34a' }}
             >
@@ -215,15 +236,17 @@ export default function ScheduledPage() {
         </div>
 
         <div className="flex-1 overflow-y-auto px-8 py-6">
+          {activeGroup === 'social' && (
           <div className="mb-6">
             <div className="flex items-center justify-between mb-3">
               <div>
-                <h2 className="text-sm font-semibold text-gray-900">视频采集实时看板</h2>
+                <h2 className="text-sm font-semibold text-gray-900">社媒爬虫定时任务 / 视频采集实时看板</h2>
                 <p className="text-xs text-gray-500 mt-0.5">
                   {crawlTask ? `${crawlTask.name} · ${crawlTask.cronLabel}` : '自动采集任务未创建'} · 更新时间 {formatTime(stats?.updatedAt)}
                 </p>
               </div>
               <button
+                type="button"
                 onClick={() => { void fetchTasks(); void fetchVideoStats(); }}
                 className="px-3 py-1.5 rounded-lg border border-gray-200 text-xs text-gray-600 hover:bg-gray-50"
               >
@@ -271,10 +294,11 @@ export default function ScheduledPage() {
               </div>
             </div>
           </div>
+          )}
 
           {loading && <div className="text-sm text-gray-400 py-12 text-center">加载中...</div>}
 
-          {!loading && tasks.length === 0 && (
+          {!loading && filtered.length === 0 && (
             <div className="flex flex-col items-center justify-center h-64 text-gray-400">
               <Clock size={40} className="mb-3 opacity-40" />
               <p className="text-sm font-medium">还没有定时任务</p>
@@ -282,11 +306,11 @@ export default function ScheduledPage() {
             </div>
           )}
 
-          {Object.entries(grouped).map(([cat, catTasks]) => (
-            <div key={cat} className="mb-8">
-              <h2 className="text-sm font-semibold text-gray-500 mb-3">{CATEGORY_LABELS[cat] ?? cat}</h2>
+          {!loading && filtered.length > 0 && (
+            <div className="mb-8">
+              <h2 className="text-sm font-semibold text-gray-500 mb-3">{activeGroupMeta.label}</h2>
               <div className="grid grid-cols-2 gap-3">
-                {catTasks.map(task => {
+                {filtered.map(task => {
                   const tmpl = TASK_TEMPLATES.find(t => t.taskType === task.taskType);
                   const result = runResult[task.id];
                   const isExpanded = expandedId === task.id;
@@ -298,6 +322,7 @@ export default function ScheduledPage() {
                           <div className="flex items-center justify-between">
                             <p className="text-sm font-medium text-gray-900 truncate">{task.name}</p>
                             <button
+                              type="button"
                               onClick={() => toggleTask(task.id)}
                               className={`w-10 h-5 rounded-full transition-colors relative flex-shrink-0 ml-2 ${task.enabled ? 'bg-green-500' : 'bg-gray-200'}`}
                             >
@@ -324,6 +349,7 @@ export default function ScheduledPage() {
 
                       <div className="flex gap-2 mt-3">
                         <button
+                          type="button"
                           onClick={() => runNow(task.id)}
                           disabled={runningId === task.id}
                           className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs text-white disabled:opacity-50 transition-colors"
@@ -334,13 +360,14 @@ export default function ScheduledPage() {
                         </button>
                         {(result || task.lastResult) && (
                           <button
+                            type="button"
                             onClick={() => setExpandedId(isExpanded ? null : task.id)}
                             className="px-3 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-500 hover:bg-gray-50"
                           >
                             {isExpanded ? '收起' : '查看结果'}
                           </button>
                         )}
-                        <button onClick={() => deleteTask(task.id)} className="px-2.5 py-1.5 border border-gray-200 rounded-lg text-gray-400 hover:text-red-400 hover:border-red-200 transition-colors">
+                        <button type="button" onClick={() => deleteTask(task.id)} className="px-2.5 py-1.5 border border-gray-200 rounded-lg text-gray-400 hover:text-red-400 hover:border-red-200 transition-colors">
                           <Trash2 size={12} />
                         </button>
                       </div>
@@ -349,7 +376,7 @@ export default function ScheduledPage() {
                 })}
               </div>
             </div>
-          ))}
+          )}
         </div>
       </div>
 
@@ -359,7 +386,7 @@ export default function ScheduledPage() {
           <motion.div
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center"
-            onClick={() => { setShowAdd(false); setSelectedTemplate(null); }}
+            onClick={closeAddModal}
           >
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
@@ -367,14 +394,18 @@ export default function ScheduledPage() {
               onClick={e => e.stopPropagation()}
             >
               <div className="flex items-center justify-between mb-5">
-                <h3 className="font-semibold text-gray-900">新建定时任务</h3>
-                <button onClick={() => { setShowAdd(false); setSelectedTemplate(null); }} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
+                <div>
+                  <h3 className="font-semibold text-gray-900">新建定时任务</h3>
+                  <p className="text-xs text-gray-400 mt-0.5">{activeGroupMeta.label}</p>
+                </div>
+                <button type="button" onClick={closeAddModal} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
               </div>
 
               <p className="text-xs text-gray-500 mb-3 font-medium">选择任务模板</p>
               <div className="space-y-2 mb-5">
-                {TASK_TEMPLATES.map(tmpl => (
+                {visibleTemplates.map(tmpl => (
                   <button
+                    type="button"
                     key={tmpl.taskType}
                     onClick={() => setSelectedTemplate(tmpl)}
                     className={`w-full p-3 rounded-xl border-2 text-left flex items-start gap-3 transition-all ${selectedTemplate?.taskType === tmpl.taskType ? 'border-green-500 bg-green-50' : 'border-gray-200 hover:border-gray-300'}`}
@@ -406,6 +437,7 @@ export default function ScheduledPage() {
                     <div className="grid grid-cols-3 gap-2">
                       {CRON_PRESETS.map(p => (
                         <button
+                          type="button"
                           key={p.expr}
                           onClick={() => setCronPreset(p.expr)}
                           className={`py-2 px-3 rounded-lg border text-xs transition-all ${(cronPreset || selectedTemplate.cronExpr) === p.expr ? 'border-green-500 bg-green-50 text-green-700' : 'border-gray-200 text-gray-600 hover:border-gray-300'}`}
@@ -419,8 +451,9 @@ export default function ScheduledPage() {
               )}
 
               <div className="flex gap-3">
-                <button onClick={() => { setShowAdd(false); setSelectedTemplate(null); }} className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600">取消</button>
+                <button type="button" onClick={closeAddModal} className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600">取消</button>
                 <button
+                  type="button"
                   onClick={createTask}
                   disabled={!selectedTemplate}
                   className="flex-1 py-2.5 rounded-xl text-sm text-white font-medium disabled:opacity-40"

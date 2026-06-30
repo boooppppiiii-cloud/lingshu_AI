@@ -51,13 +51,20 @@ export interface KickoffSignal { text: string; key: string }
 export type AgentAction = (agent: AgentType, task: string) => void;
 
 const AGENT_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention'];
+const ALL_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention', 'enterprise', 'plugins', 'scheduled', 'channels'];
 const firstUserText = (msgs?: Message[]) => (msgs?.find(m => m.role === 'user')?.content ?? '新会话').slice(0, 24);
 const loadConvs = (): Conversation[] => {
   try { return JSON.parse(localStorage.getItem('ow_convs') || '[]'); } catch { return []; }
 };
+const loadPage = (): Page => {
+  try {
+    const saved = localStorage.getItem('ow_page') as Page | null;
+    return saved && ALL_PAGES.includes(saved) ? saved : 'strategy';
+  } catch { return 'strategy'; }
+};
 
 export default function App() {
-  const [page, setPage] = useState<Page>('strategy');
+  const [page, setPage] = useState<Page>(loadPage);
   const [conversation, setConversation] = useState<ConversationContext | null>(null);
   const [scriptPanelOpen, setScriptPanelOpen] = useState(false);
 
@@ -80,6 +87,9 @@ export default function App() {
   useEffect(() => {
     authApi.me().then(s => { setSession(s); setAuthLoading(false); });
   }, []);
+  useEffect(() => {
+    try { localStorage.setItem('ow_page', page); } catch { /* ignore */ }
+  }, [page]);
 
   // 每次对话推进都记录/更新近期会话
   const enterConversation = (ctx: ConversationContext) => {

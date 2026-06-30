@@ -202,7 +202,7 @@ export async function crawlVideosForTenant(input: CrawlVideosInput): Promise<Cra
   const records: unknown[] = [];
   const existingRecords: unknown[] = [];
   const seenKeys = new Set<string>();
-  const orderedItems = sortByHeat(items).filter(item => {
+  const orderedItems = sortByHeat(items.map(normalizeCrawledVideo)).filter(item => {
     const key = videoDedupeKey(item);
     if (seenKeys.has(key)) {
       skipped += 1;
@@ -223,7 +223,7 @@ export async function crawlVideosForTenant(input: CrawlVideosInput): Promise<Cra
       skipped += 1;
       skippedExisting += 1;
       const existingAnalysis = parseJsonRecord<Record<string, unknown>>(existingRecord.aiAnalysis, {});
-      existingRecords.push({
+      const refreshedRecord = {
         ...existingRecord,
         platform: item.platform,
         title: item.title,
@@ -241,7 +241,13 @@ export async function crawlVideosForTenant(input: CrawlVideosInput): Promise<Cra
           dateFrom,
           dateTo,
         }),
+      };
+      await store.update(COL, String(existingRecord.id), {
+        thumbnailUrl: item.thumbnailUrl || String(existingRecord.thumbnailUrl || ''),
+        sourceUrl: item.sourceUrl || String(existingRecord.sourceUrl || ''),
+        aiAnalysis: refreshedRecord.aiAnalysis,
       });
+      existingRecords.push(refreshedRecord);
       continue;
     }
 
@@ -470,6 +476,9 @@ videosRouter.get('/', async (req, res) => {
   void enqueueCrawledRecordsForAnalysis(result.items).catch((e) => {
     console.warn('[videos] opportunistic analysis enqueue failed:', e instanceof Error ? e.message : e);
   });
+  void backfillMissingCrawledMedia(result.items).catch((e) => {
+    console.warn('[videos] opportunistic media backfill failed:', e instanceof Error ? e.message : e);
+  });
 
   res.json(result);
 });
@@ -668,6 +677,35 @@ async function enqueueCrawledRecordsForAnalysis(records: unknown[]): Promise<voi
   }
 }
 
+async function backfillMissingCrawledMedia(records: unknown[]): Promise<void> {
+  const candidates = records
+    .map(raw => raw as Record<string, unknown>)
+    .filter(record => ['youtube', 'tiktok'].includes(String(record.platform || '')))
+    .filter(record => /^https?:\/\//i.test(String(record.sourceUrl || '')))
+    .filter(record => !normalizeThumbnailUrl(String(record.thumbnailUrl || '')) || canonicalSourceUrl(record.platform as Platform, String(record.sourceUrl || ''), '') !== String(record.sourceUrl || ''))
+    .slice(0, 5);
+
+  for (const record of candidates) {
+    try {
+      const platform = record.platform as Platform;
+      const existingSourceUrl = String(record.sourceUrl || '');
+      const canonicalUrl = canonicalSourceUrl(platform, existingSourceUrl, '');
+      let thumbnailUrl = thumbnailForPlatform(platform, canonicalUrl, String(record.thumbnailUrl || ''));
+      let sourceUrl = canonicalUrl;
+      if (!thumbnailUrl) {
+        const meta = await crawlYtDlpMetadata(platform, sourceUrl, String(record.title || platform));
+        sourceUrl = meta.sourceUrl || sourceUrl;
+        thumbnailUrl = meta.thumbnailUrl || thumbnailUrl;
+      }
+      if (sourceUrl !== existingSourceUrl || thumbnailUrl !== String(record.thumbnailUrl || '')) {
+        await store.update(COL, String(record.id), { sourceUrl, thumbnailUrl });
+      }
+    } catch (e) {
+      console.warn('[videos] media backfill skipped:', e instanceof Error ? e.message : e);
+    }
+  }
+}
+
 function shouldQueueVideoAnalysis(record: Record<string, unknown>): boolean {
   const sourceUrl = String(record.sourceUrl || '').trim();
   if (!/^https?:\/\//i.test(sourceUrl)) return false;
@@ -829,7 +867,7 @@ async function analyzeSourceVideoJobInner(input: {
   const recordId = input.record?.id ? String(input.record.id) : '';
   let tempPath = '';
   try {
-    if (input.platform === 'youtube') {
+    if (input.platform === 'youtube' && !shouldUseQwenFirst()) {
       const direct = await tryAnalyzeYouTubeUrl(input);
       if (direct) return direct;
     }
@@ -1090,7 +1128,7 @@ async function crawlTikTokWithApifyFallback(keyword: string, limit: number, date
   }
 
   const seen = new Set(items.map(item => item.sourceUrl));
-  if (items.length < limit && process.env.APIFY_TIKTOK_CRAWL_FALLBACK_ENABLED === '1' && process.env.APIFY_TOKEN) {
+  if (items.length < limit && canUseApifyTikTokCrawlFallback()) {
     try {
       const apifyItems = await crawlTikTokApify(input, Math.max(limit - items.length, limit), dateFrom, dateTo);
       for (const item of apifyItems) {
@@ -1160,14 +1198,22 @@ function buildApifyTikTokInput(keyword: string, limit: number, dateFrom = '', da
 }
 
 function apifyTikTokItemToCrawledVideo(item: Record<string, unknown>, keyword: string): CrawledVideo | null {
-  const sourceUrl = String(item.webVideoUrl || item.url || item.shareUrl || item.videoUrl || item.link || '').trim();
+  const author = apifyAuthor(item);
+  const sourceUrl = canonicalSourceUrl('tiktok', String(item.webVideoUrl || item.url || item.shareUrl || item.videoUrl || item.link || '').trim(), author);
   if (!sourceUrl || !isPlatformUrl(sourceUrl, 'tiktok')) return null;
   const text = String(item.text || item.description || item.desc || item.title || '').trim();
-  const author = apifyAuthor(item);
   const title = cleanupAnalysisTitle(text || (author ? `TikTok video by ${author}` : 'TikTok video'));
-  const thumbnailUrl = String(item.videoMeta && typeof item.videoMeta === 'object' && 'coverUrl' in item.videoMeta
-    ? (item.videoMeta as Record<string, unknown>).coverUrl
-    : item.coverUrl || item.thumbnailUrl || item.thumbnail || item.dynamicCover || '');
+  const thumbnailUrl = firstImageUrl([
+    item.videoMeta,
+    item.coverUrl,
+    item.thumbnailUrl,
+    item.thumbnail,
+    item.dynamicCover,
+    item.originCover,
+    item.covers,
+    item.images,
+    item,
+  ]);
   const duration = Number(item.videoMeta && typeof item.videoMeta === 'object' && 'duration' in item.videoMeta
     ? (item.videoMeta as Record<string, unknown>).duration
     : item.duration || 0);
@@ -1226,16 +1272,16 @@ async function crawlYtDlpMetadata(platform: Platform, url: string, keyword: stri
   const line = stdout.split('\n').find(Boolean);
   if (!line) throw new Error(`${platform} returned empty metadata`);
   const meta = JSON.parse(line) as Record<string, unknown>;
-  const webpageUrl = String(meta.webpage_url || meta.original_url || url);
+  const webpageUrl = canonicalSourceUrl(platform, String(meta.webpage_url || meta.original_url || meta.url || url), metadataUploader(meta));
   const title = metadataTitle(platform, meta);
-  const thumbnail = String(meta.thumbnail || '');
+  const thumbnail = thumbnailForPlatform(platform, webpageUrl, firstImageUrl([meta.thumbnails, meta.thumbnail, meta]));
   const duration = Number(meta.duration || 0);
   const uploadedAt = uploadedAtFromMeta(meta);
   const views = typeof meta.view_count === 'number' ? compactNumber(meta.view_count) : platform;
   const tags = Array.isArray(meta.tags)
     ? meta.tags.filter((t): t is string => typeof t === 'string').slice(0, 5)
     : [];
-  return { platform, title, sourceUrl: webpageUrl, thumbnailUrl: thumbnail, duration, views, tags, uploadedAt };
+  return normalizeCrawledVideo({ platform, title, sourceUrl: webpageUrl, thumbnailUrl: thumbnail, duration, views, tags, uploadedAt });
 }
 
 async function downloadVideoToMaterial(input: {
@@ -1331,6 +1377,14 @@ async function downloadVideoForAnalysis(input: {
     }
   }
   if (lastError) {
+    if (input.platform === 'tiktok' && canUseApifyVideoFallback()) {
+      try {
+        console.warn('[videos] TikTok yt-dlp analysis download failed, trying Apify video fallback:', lastError instanceof Error ? lastError.message : lastError);
+        return await downloadTikTokVideoViaApify(input.sourceUrl);
+      } catch (apifyError) {
+        console.warn('[videos] TikTok Apify analysis video fallback failed:', apifyError instanceof Error ? apifyError.message : apifyError);
+      }
+    }
     throw lastError instanceof Error ? lastError : new Error('yt-dlp failed for all analysis formats');
   }
   const downloaded = pickDownloadedVideoFile(id, ANALYSIS_DIR);
@@ -2138,7 +2192,7 @@ async function fetchText(url: string, timeoutMs: number): Promise<string> {
 
 function metaToCrawledVideo(platform: Platform, keyword: string): (meta: Record<string, unknown>) => CrawledVideo | null {
   return (meta) => {
-    const webpageUrl = String(meta.webpage_url || meta.original_url || meta.url || '');
+    const webpageUrl = canonicalSourceUrl(platform, String(meta.webpage_url || meta.original_url || meta.url || ''), metadataUploader(meta));
     if (!webpageUrl) return null;
     const title = metadataTitle(platform, meta);
     const duration = Number(meta.duration || 0);
@@ -2146,17 +2200,132 @@ function metaToCrawledVideo(platform: Platform, keyword: string): (meta: Record<
     const tags = Array.isArray(meta.tags)
       ? meta.tags.filter((t): t is string => typeof t === 'string').slice(0, 5)
       : [];
-    return {
+    return normalizeCrawledVideo({
       platform,
       title,
       sourceUrl: webpageUrl,
-      thumbnailUrl: extractBestThumbnail(meta.thumbnails) || String(meta.thumbnail || '') || (platform === 'youtube' ? youtubeThumbnailFromUrl(webpageUrl) : ''),
+      thumbnailUrl: thumbnailForPlatform(platform, webpageUrl, firstImageUrl([meta.thumbnails, meta.thumbnail, meta])),
       duration,
       views,
       tags,
       uploadedAt: uploadedAtFromMeta(meta),
-    };
+    });
   };
+}
+
+function normalizeCrawledVideo(item: CrawledVideo): CrawledVideo {
+  const sourceUrl = canonicalSourceUrl(item.platform, item.sourceUrl, item.author);
+  return {
+    ...item,
+    sourceUrl,
+    thumbnailUrl: thumbnailForPlatform(item.platform, sourceUrl, item.thumbnailUrl),
+  };
+}
+
+function canonicalSourceUrl(platform: Platform, rawUrl: string, author?: string): string {
+  const url = String(rawUrl || '').trim();
+  if (!url) return '';
+  if (platform === 'youtube') {
+    const id = youtubeVideoId(url);
+    return id ? `https://www.youtube.com/watch?v=${id}` : stripTrackingParams(url);
+  }
+  if (platform === 'tiktok') {
+    const id = tiktokVideoId(url);
+    if (!id) return stripTrackingParams(url);
+    const username = tiktokUsername(url) || cleanTikTokUsername(author || '');
+    return username ? `https://www.tiktok.com/@${username}/video/${id}` : stripTrackingParams(url);
+  }
+  return stripTrackingParams(url);
+}
+
+function thumbnailForPlatform(platform: Platform, sourceUrl: string, rawThumbnail: string): string {
+  const thumbnail = normalizeThumbnailUrl(rawThumbnail);
+  if (thumbnail) return thumbnail;
+  if (platform === 'youtube') return youtubeThumbnailFromUrl(sourceUrl);
+  return '';
+}
+
+function normalizeThumbnailUrl(raw: string): string {
+  const url = String(raw || '').trim().replace(/\\u0026/g, '&');
+  if (!/^https?:\/\//i.test(url) && !url.startsWith('/media/')) return '';
+  if (/\.(?:mp4|mov|webm|m3u8)(?:[?#]|$)/i.test(url)) return '';
+  return url;
+}
+
+function firstImageUrl(values: unknown[]): string {
+  for (const value of values) {
+    const found = findImageUrl(value);
+    if (found) return found;
+  }
+  return '';
+}
+
+function findImageUrl(value: unknown, depth = 0): string {
+  if (depth > 5 || value == null) return '';
+  if (typeof value === 'string') return normalizeThumbnailUrl(value);
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findImageUrl(item, depth + 1);
+      if (found) return found;
+    }
+    return '';
+  }
+  if (typeof value !== 'object') return '';
+  const record = value as Record<string, unknown>;
+  if (typeof record.url === 'string' && (record.width || record.height || Object.keys(record).length <= 3)) {
+    const found = findImageUrl(record.url, depth + 1);
+    if (found) return found;
+  }
+  const keys = [
+    'thumbnail',
+    'thumbnailUrl',
+    'thumbnail_url',
+    'coverUrl',
+    'cover_url',
+    'cover',
+    'covers',
+    'dynamicCover',
+    'originCover',
+    'displayImage',
+    'image',
+    'images',
+  ];
+  for (const key of keys) {
+    const found = findImageUrl(record[key], depth + 1);
+    if (found) return found;
+  }
+  return '';
+}
+
+function tiktokVideoId(url: string): string {
+  return String(url || '').match(/\/video\/(\d{8,})/i)?.[1]
+    || String(url || '').match(/[?&](?:item_id|video_id|aweme_id)=(\d{8,})/i)?.[1]
+    || '';
+}
+
+function tiktokUsername(url: string): string {
+  return cleanTikTokUsername(String(url || '').match(/tiktok\.com\/@([^/?#]+)/i)?.[1] || '');
+}
+
+function cleanTikTokUsername(input: string): string {
+  return String(input || '').replace(/^@/, '').trim().replace(/[^\w.-]/g, '');
+}
+
+function metadataUploader(meta: Record<string, unknown>): string {
+  return String(meta.uploader_id || meta.uploader || meta.channel_id || meta.channel || '').trim();
+}
+
+function stripTrackingParams(rawUrl: string): string {
+  try {
+    const parsed = new URL(rawUrl);
+    for (const key of [...parsed.searchParams.keys()]) {
+      if (/^utm_/i.test(key) || ['si', 'feature', 'fbclid', 'gclid'].includes(key)) parsed.searchParams.delete(key);
+    }
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return rawUrl;
+  }
 }
 
 function youtubeThumbnailFromUrl(url: string): string {
@@ -2844,6 +3013,10 @@ function canUseApifyVideoFallback(): boolean {
   return (usage[todayKey()] || 0) < limit;
 }
 
+function canUseApifyTikTokCrawlFallback(): boolean {
+  return process.env.APIFY_TIKTOK_CRAWL_FALLBACK_ENABLED === '1' && Boolean(process.env.APIFY_TOKEN?.trim());
+}
+
 function recordApifyVideoFallbackUse(): void {
   const usage = loadApifyVideoUsage();
   const key = todayKey();
@@ -3176,13 +3349,13 @@ export async function getVideoPipelineStats(): Promise<Record<string, unknown>> 
       sort: '-crawledAt',
     });
     records.push(...result.items);
-    totalPages = result.totalPages || (result.items.length < 100 ? page : page + 1);
+    totalPages = result.items.length >= 100 ? Math.max(result.totalPages || 0, page + 1) : page;
     if (result.items.length === 0) break;
     page += 1;
   }
 
   const now = Date.now();
-  const today = new Date().toISOString().slice(0, 10);
+  const today = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
   const byPlatform = records.reduce<Record<string, number>>((acc, record) => {
     const platform = String(record.platform || 'unknown');
     acc[platform] = (acc[platform] || 0) + 1;
@@ -3224,7 +3397,10 @@ export async function getVideoPipelineStats(): Promise<Record<string, unknown>> 
     updatedAt: new Date().toISOString(),
     crawl: {
       total: records.length,
-      today: records.filter(record => String(record.crawledAt || '').startsWith(today)).length,
+      today: records.filter(record => {
+        const crawledAt = Date.parse(String(record.crawledAt || ''));
+        return Number.isFinite(crawledAt) && new Date(crawledAt + 8 * 60 * 60 * 1000).toISOString().startsWith(today);
+      }).length,
       last24h: recentRecords.length,
       byPlatform,
       latestAt: String(records[0]?.crawledAt || ''),

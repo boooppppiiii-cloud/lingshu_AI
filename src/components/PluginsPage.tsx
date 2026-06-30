@@ -68,6 +68,16 @@ const PLUGIN_FIELDS: Record<string, { key: string; label: string; placeholder: s
 type SkillStatus = 'active' | 'placeholder';
 type SkillCategory = 'sales' | 'industry' | 'product';
 type PluginAction = { label: string; desc: string };
+type PluginToolState = {
+  amount: string;
+  fromCurrency: string;
+  toCurrency: string;
+  exchangeResult: string;
+  sourceLanguage: string;
+  targetLanguage: string;
+  text: string;
+  translatedText: string;
+};
 
 interface SkillVariable { name: string; desc: string; example: string }
 interface ConversationStage { id: number; label: string; desc: string }
@@ -216,6 +226,42 @@ const CATEGORY_SECTIONS: { id: SkillCategory; label: string; desc: string }[] = 
   { id: 'industry', label: '行业专家',      desc: '垂直领域知识注入，让 Agent 具备行业洞察力' },
   { id: 'product',  label: '客户产品知识库', desc: '结构化产品信息，减少幻觉，提升应答准确率' },
 ];
+
+const EXCHANGE_CURRENCIES = ['USD', 'CNY', 'SAR', 'AED', 'VND', 'MYR', 'IDR'] as const;
+const LANGUAGE_OPTIONS = [
+  { code: 'zh', label: '中文' },
+  { code: 'en', label: 'English' },
+  { code: 'ar', label: 'العربية' },
+  { code: 'ms', label: 'Bahasa Melayu' },
+  { code: 'id', label: 'Bahasa Indonesia' },
+  { code: 'vi', label: 'Tiếng Việt' },
+] as const;
+const DEFAULT_TOOL_STATE: PluginToolState = {
+  amount: '100',
+  fromCurrency: 'USD',
+  toCurrency: 'CNY',
+  exchangeResult: '',
+  sourceLanguage: 'zh',
+  targetLanguage: 'en',
+  text: '这款产品支持小批量定制，7 天内可以发货。',
+  translatedText: '',
+};
+
+function mockTranslate(text: string, source: string, target: string) {
+  const clean = text.trim();
+  if (!clean) return '';
+  const targetLabel = LANGUAGE_OPTIONS.find(l => l.code === target)?.label ?? target.toUpperCase();
+  const samples: Record<string, string> = {
+    en: 'This product supports small-batch customization and can ship within 7 days.',
+    ar: 'يدعم هذا المنتج التخصيص بكميات صغيرة ويمكن شحنه خلال 7 أيام.',
+    ms: 'Produk ini menyokong penyesuaian kuantiti kecil dan boleh dihantar dalam 7 hari.',
+    id: 'Produk ini mendukung kustomisasi dalam jumlah kecil dan dapat dikirim dalam 7 hari.',
+    vi: 'Sản phẩm này hỗ trợ tùy chỉnh số lượng nhỏ và có thể giao trong vòng 7 ngày.',
+    zh: '这款产品支持小批量定制，7 天内可以发货。',
+  };
+  if (clean === DEFAULT_TOOL_STATE.text && samples[target]) return samples[target];
+  return `[${targetLabel}] ${clean}`;
+}
 
 const PLUGIN_INTERACTIONS: Record<string, PluginAction[]> = {
   shopify: [
@@ -758,14 +804,23 @@ export default function PluginsPage() {
   const [testResult, setTestResult] = useState<Record<string, { ok: boolean; msg: string }>>({});
   const [installing, setInstalling] = useState<string | null>(null);
   const [selectedPluginKey, setSelectedPluginKey] = useState<string | null>(null);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [activeToolKey, setActiveToolKey] = useState<string | null>(null);
+  const [toolState, setToolState] = useState<PluginToolState>(DEFAULT_TOOL_STATE);
 
   useEffect(() => { void fetchPlugins(); }, []);
 
   async function fetchPlugins() {
     setLoading(true);
+    setLoadError(null);
     try {
       const r = await fetch('/api/overseas/plugins');
-      setPlugins(await r.json() as Plugin[]);
+      const text = await r.text();
+      if (!r.ok) throw new Error(text || `插件接口错误：${r.status}`);
+      if (!text.trim()) throw new Error('插件接口返回为空，请稍后重试');
+      setPlugins(JSON.parse(text) as Plugin[]);
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : '插件加载失败');
     } finally { setLoading(false); }
   }
 
@@ -793,13 +848,21 @@ export default function PluginsPage() {
   }
 
   async function testPlugin(pluginKey: string) {
+    if (pluginKey === 'exchangerate' || pluginKey === 'translate' || pluginKey === 'google_translate') {
+      setActiveToolKey(prev => prev === pluginKey ? null : pluginKey);
+      if (pluginKey === 'translate' || pluginKey === 'google_translate') {
+        setToolState(prev => ({ ...prev, translatedText: mockTranslate(prev.text, prev.sourceLanguage, prev.targetLanguage) }));
+      }
+      return;
+    }
+
     setTesting(pluginKey);
     try {
       const r = await fetch(`/api/overseas/plugins/${pluginKey}/test`, { method: 'POST' });
       const data = await r.json() as { ok: boolean; shopName?: string; message?: string; error?: string; rates?: Record<string, number>; source?: string };
       setTestResult(prev => ({
         ...prev,
-        [pluginKey]: { ok: data.ok, msg: data.ok ? (data.shopName ? `连接成功：${data.shopName}` : (data.message ?? '连接成功')) : (data.error ?? '连接失败') },
+        [pluginKey]: { ok: data.ok, msg: data.ok ? (data.shopName ? `连接成功：${data.shopName}` : (data.message ?? '连接成功')) : (data.error ?? data.message ?? '连接失败') },
       }));
       setPlugins(prev => prev.map(plugin => (
         plugin.pluginKey === pluginKey && data.ok
@@ -809,6 +872,32 @@ export default function PluginsPage() {
     } catch {
       setTestResult(prev => ({ ...prev, [pluginKey]: { ok: false, msg: '网络错误' } }));
     } finally { setTesting(null); }
+  }
+
+  async function runExchange() {
+    const amount = Number(toolState.amount);
+    if (!Number.isFinite(amount)) {
+      setToolState(prev => ({ ...prev, exchangeResult: '请输入有效金额' }));
+      return;
+    }
+    const fallbackRates: Record<string, number> = { USD: 1, CNY: 6.8, SAR: 3.75, AED: 3.67, VND: 26200, MYR: 4.1, IDR: 16200 };
+    let rates = fallbackRates;
+    try {
+      const r = await fetch('/api/overseas/plugins/exchangerate/rates');
+      const data = await r.json() as { rates?: Record<string, number> };
+      rates = { ...fallbackRates, ...(data.rates ?? {}) };
+    } catch { /* fallback rates keep demo usable */ }
+    const fromRate = rates[toolState.fromCurrency] ?? 1;
+    const toRate = rates[toolState.toCurrency] ?? 1;
+    const converted = amount / fromRate * toRate;
+    setToolState(prev => ({
+      ...prev,
+      exchangeResult: `${amount.toLocaleString()} ${prev.fromCurrency} ≈ ${converted.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${prev.toCurrency}`,
+    }));
+  }
+
+  function runTranslation() {
+    setToolState(prev => ({ ...prev, translatedText: mockTranslate(prev.text, prev.sourceLanguage, prev.targetLanguage) }));
   }
 
   const grouped = plugins.reduce<Record<string, Plugin[]>>((acc, p) => {
@@ -862,6 +951,19 @@ export default function PluginsPage() {
           <>
             {loading && <div className="text-sm text-gray-400 py-12 text-center">加载中...</div>}
 
+            {!loading && loadError && (
+              <div className="rounded-xl border border-red-100 bg-red-50 px-4 py-3 text-sm text-red-600 flex items-center justify-between">
+                <span>{loadError}</span>
+                <button
+                  type="button"
+                  onClick={e => { e.stopPropagation(); void fetchPlugins(); }}
+                  className="px-3 py-1.5 rounded-lg bg-white border border-red-100 text-xs text-red-600 hover:bg-red-50"
+                >
+                  重试
+                </button>
+              </div>
+            )}
+
             {Object.entries(grouped).map(([cat, catPlugins]) => (
               <div key={cat} className="mb-8">
                 <h2 className="text-sm font-semibold text-gray-500 mb-4">{CATEGORY_LABELS[cat] ?? cat}</h2>
@@ -869,19 +971,14 @@ export default function PluginsPage() {
                   {catPlugins.map(plugin => {
                     const tr = testResult[plugin.pluginKey];
                     const fields = PLUGIN_FIELDS[plugin.pluginKey] ?? [];
+                    const isToolOpen = activeToolKey === plugin.pluginKey;
+                    const isExchangeTool = plugin.pluginKey === 'exchangerate';
+                    const isTranslateTool = plugin.pluginKey === 'translate' || plugin.pluginKey === 'google_translate';
+                    const supportsToolPanel = isExchangeTool || isTranslateTool;
                     return (
                       <div
                         key={plugin.pluginKey}
-                        role="button"
-                        tabIndex={0}
-                        onClick={e => { e.stopPropagation(); setSelectedPluginKey(plugin.pluginKey); }}
-                        onKeyDown={e => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            e.preventDefault();
-                            setSelectedPluginKey(plugin.pluginKey);
-                          }
-                        }}
-                        className="border border-gray-200 rounded-xl p-4 flex items-start gap-4 cursor-pointer hover:border-gray-300 hover:shadow-sm transition-all"
+                        className="border border-gray-200 rounded-xl p-4 flex items-start gap-4 hover:border-gray-300 hover:shadow-sm transition-all"
                       >
                         <div className="text-3xl flex-shrink-0 mt-0.5">{plugin.icon}</div>
                         <div className="flex-1 min-w-0">
@@ -911,17 +1008,35 @@ export default function PluginsPage() {
 
                           <div className="flex gap-2 mt-3">
                             {!plugin.installed ? (
-                              <button
-                                type="button"
-                                onClick={e => { e.preventDefault(); e.stopPropagation(); void install(plugin.pluginKey); }}
-                                disabled={installing === plugin.pluginKey}
-                                className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-white font-medium disabled:opacity-50 transition-colors"
-                                style={{ background: '#16a34a' }}
-                              >
-                                <Plus size={12} /> {installing === plugin.pluginKey ? '安装中...' : '安装'}
-                              </button>
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={e => { e.preventDefault(); e.stopPropagation(); void install(plugin.pluginKey); }}
+                                  disabled={installing === plugin.pluginKey}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs text-white font-medium disabled:opacity-50 transition-colors"
+                                  style={{ background: '#16a34a' }}
+                                >
+                                  <Plus size={12} /> {installing === plugin.pluginKey ? '安装中...' : '安装'}
+                                </button>
+                                {supportsToolPanel && (
+                                  <button
+                                    type="button"
+                                    onClick={e => { e.preventDefault(); e.stopPropagation(); void testPlugin(plugin.pluginKey); }}
+                                    className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition-colors"
+                                  >
+                                    测试
+                                  </button>
+                                )}
+                              </>
                             ) : (
                               <>
+                                <button
+                                  type="button"
+                                  onClick={e => { e.preventDefault(); e.stopPropagation(); setSelectedPluginKey(plugin.pluginKey); }}
+                                  className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition-colors"
+                                >
+                                  <BookOpen size={12} /> 详情
+                                </button>
                                 {fields.length > 0 && (
                                   <button
                                     type="button"
@@ -950,6 +1065,100 @@ export default function PluginsPage() {
                               </>
                             )}
                           </div>
+
+                          <AnimatePresence>
+                            {isToolOpen && isExchangeTool && (
+                              <motion.div
+                                initial={{ opacity: 0, height: 0, y: -4 }}
+                                animate={{ opacity: 1, height: 'auto', y: 0 }}
+                                exit={{ opacity: 0, height: 0, y: -4 }}
+                                className="overflow-hidden"
+                              >
+                                <div className="mt-3 rounded-xl border border-green-100 bg-green-50/40 p-3 space-y-3" onClick={e => e.stopPropagation()}>
+                                  <div className="grid grid-cols-[1fr_120px_120px] gap-2">
+                                    <input
+                                      value={toolState.amount}
+                                      onChange={e => setToolState(prev => ({ ...prev, amount: e.target.value }))}
+                                      className="px-3 py-2 rounded-lg border border-gray-200 bg-white text-xs outline-none focus:border-green-400"
+                                      placeholder="输入金额"
+                                    />
+                                    <select
+                                      value={toolState.fromCurrency}
+                                      onChange={e => setToolState(prev => ({ ...prev, fromCurrency: e.target.value }))}
+                                      className="px-2 py-2 rounded-lg border border-gray-200 bg-white text-xs outline-none focus:border-green-400"
+                                    >
+                                      {EXCHANGE_CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+                                    </select>
+                                    <select
+                                      value={toolState.toCurrency}
+                                      onChange={e => setToolState(prev => ({ ...prev, toCurrency: e.target.value }))}
+                                      className="px-2 py-2 rounded-lg border border-gray-200 bg-white text-xs outline-none focus:border-green-400"
+                                    >
+                                      {EXCHANGE_CURRENCIES.map(c => <option key={c} value={c}>{c}</option>)}
+                                    </select>
+                                  </div>
+                                  <div className="flex items-center justify-between gap-3">
+                                    <p className="text-xs text-gray-600">{toolState.exchangeResult || '选择币种并输入金额，点击换算查看结果'}</p>
+                                    <button
+                                      type="button"
+                                      onClick={e => { e.preventDefault(); e.stopPropagation(); void runExchange(); }}
+                                      className="px-3 py-1.5 rounded-lg text-xs text-white font-medium"
+                                      style={{ background: '#16a34a' }}
+                                    >
+                                      换算
+                                    </button>
+                                  </div>
+                                </div>
+                              </motion.div>
+                            )}
+
+                            {isToolOpen && isTranslateTool && (
+                              <motion.div
+                                initial={{ opacity: 0, height: 0, y: -4 }}
+                                animate={{ opacity: 1, height: 'auto', y: 0 }}
+                                exit={{ opacity: 0, height: 0, y: -4 }}
+                                className="overflow-hidden"
+                              >
+                                <div className="mt-3 rounded-xl border border-blue-100 bg-blue-50/40 p-3 space-y-3" onClick={e => e.stopPropagation()}>
+                                  <div className="grid grid-cols-2 gap-2">
+                                    <select
+                                      value={toolState.sourceLanguage}
+                                      onChange={e => setToolState(prev => ({ ...prev, sourceLanguage: e.target.value }))}
+                                      className="px-2 py-2 rounded-lg border border-gray-200 bg-white text-xs outline-none focus:border-blue-400"
+                                    >
+                                      {LANGUAGE_OPTIONS.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
+                                    </select>
+                                    <select
+                                      value={toolState.targetLanguage}
+                                      onChange={e => setToolState(prev => ({ ...prev, targetLanguage: e.target.value }))}
+                                      className="px-2 py-2 rounded-lg border border-gray-200 bg-white text-xs outline-none focus:border-blue-400"
+                                    >
+                                      {LANGUAGE_OPTIONS.map(l => <option key={l.code} value={l.code}>{l.label}</option>)}
+                                    </select>
+                                  </div>
+                                  <textarea
+                                    value={toolState.text}
+                                    onChange={e => setToolState(prev => ({ ...prev, text: e.target.value }))}
+                                    className="w-full min-h-20 px-3 py-2 rounded-lg border border-gray-200 bg-white text-xs outline-none focus:border-blue-400 resize-none"
+                                    placeholder="输入待翻译内容"
+                                  />
+                                  <div className="rounded-lg bg-white border border-gray-200 p-2 min-h-12 text-xs text-gray-700 leading-relaxed">
+                                    {toolState.translatedText || '翻译结果会显示在这里'}
+                                  </div>
+                                  <div className="flex justify-end">
+                                    <button
+                                      type="button"
+                                      onClick={e => { e.preventDefault(); e.stopPropagation(); runTranslation(); }}
+                                      className="px-3 py-1.5 rounded-lg text-xs text-white font-medium"
+                                      style={{ background: '#16a34a' }}
+                                    >
+                                      翻译
+                                    </button>
+                                  </div>
+                                </div>
+                              </motion.div>
+                            )}
+                          </AnimatePresence>
                         </div>
                       </div>
                     );
