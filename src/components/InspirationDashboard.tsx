@@ -1507,7 +1507,7 @@ function metadataFallbackAnalysis(
 ): GeminiVideoAnalysis {
   const topic = tags.length ? tags.slice(0, 3).join(' / ') : title;
   return {
-    theme: `${PLATFORM_META[platform].label} 基础分析：${title}`,
+    theme: `${PLATFORM_META[platform]?.label ?? platform} 基础分析：${title}`,
     hooks: [
       `用标题承诺切入：${title}`,
       views && views !== 'New' ? `用热度做社会证明：${views}` : '先展示结果或冲突，再解释产品',
@@ -1546,7 +1546,7 @@ function WatchModal({ video, onClose }: { video: TrendVideo; onClose: () => void
         onClick={e => e.stopPropagation()}>
         <div className="flex items-start justify-between gap-4 px-4 py-3 border-b border-border">
           <div className="min-w-0">
-            <p className="text-[10px] font-mono uppercase tracking-widest text-text-muted">{PLATFORM_META[video.platform].label} 预览</p>
+            <p className="text-[10px] font-mono uppercase tracking-widest text-text-muted">{PLATFORM_META[video.platform]?.label ?? video.platform} 预览</p>
             <h3 className="text-sm font-semibold text-text-primary truncate mt-0.5">{video.title}</h3>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">

@@ -134,7 +134,7 @@ export default function DemoGuide({ onNavigate }: { onNavigate: (p: Page) => voi
         initial={{ opacity: 0, scale: 0.96, y: -6 }}
         animate={{ opacity: 1, scale: [0.96, 1.025, 1], y: [-6, 0, 0] }}
         transition={{ duration: 0.55, times: [0, 0.62, 1], ease: 'easeOut' }}
-        className="mx-3 mb-4 w-[318px] max-w-[calc(100vw-32px)] rounded-2xl border border-green-100 bg-white shadow-lg overflow-visible relative z-[71]"
+        className="fixed bottom-6 left-4 w-[318px] max-w-[calc(100vw-32px)] rounded-2xl border border-green-100 bg-white shadow-lg overflow-visible z-[71]"
       >
         <div className="px-4 py-4">
           <div className="flex items-start gap-3">
