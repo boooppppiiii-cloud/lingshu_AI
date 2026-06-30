@@ -124,6 +124,8 @@ const PLATFORM_META: Record<Exclude<Platform, 'all'>, { label: string; color: st
   youtube:   { label: 'YouTube',   color: '#fff', bg: '#ff0000' },
   facebook:  { label: 'Facebook',  color: '#fff', bg: '#1877f2' },
 };
+const PLATFORM_FALLBACK = { label: 'Unknown', color: '#fff', bg: '#64748b' };
+const getPlatformMeta = (p: string) => PLATFORM_META[p as Exclude<Platform, 'all'>] ?? PLATFORM_FALLBACK;
 
 const PLATFORM_FILTERS: { id: Platform; label: string }[] = [
   { id: 'all',       label: '全部平台' },
@@ -642,7 +644,7 @@ function enhancementStatus(video: TrendVideo): { title: string; desc: string; ac
 
 // ── Fallback thumbnail ────────────────────────────────────────────────────────
 function VideoThumbnail({ platform, title }: { platform: Exclude<Platform, 'all'>; title: string }) {
-  const meta = PLATFORM_META[platform];
+  const meta = getPlatformMeta(platform);
   const initials = title.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase();
   return (
     <div className="w-full h-full flex items-center justify-center relative overflow-hidden"
@@ -1314,7 +1316,7 @@ interface VideoCardProps {
 }
 
 function VideoCard({ video, index, isSelected, onSelect, onWatch, onAnalyzeVideo, onFavoriteMaterial, analyzingVideo, favoritingMaterial }: VideoCardProps) {
-  const meta = PLATFORM_META[video.platform];
+  const meta = getPlatformMeta(video.platform);
   const trendLabel = video.trend === 'hot' ? '🔥 热门' : video.trend === 'rising' ? '↑ 上升' : '— 平稳';
   const trendColor = video.trend === 'hot' ? 'text-amber' : video.trend === 'rising' ? 'text-green' : 'text-text-muted';
   const crawlRule = video.aiAnalysis?.crawlRule || '关键词检索';
@@ -1386,7 +1388,7 @@ function VideoListItem({ video, isSelected, onSelect, onWatch, onAnalyzeVideo, o
   analyzingVideo?: boolean;
   favoritingMaterial?: boolean;
 }) {
-  const meta = PLATFORM_META[video.platform];
+  const meta = getPlatformMeta(video.platform);
   const trendColor = video.trend === 'hot' ? 'text-amber' : video.trend === 'rising' ? 'text-green' : 'text-text-muted';
   const trendLabel = video.trend === 'hot' ? '热门' : video.trend === 'rising' ? '上升' : '平稳';
   const crawlRule = video.aiAnalysis?.crawlRule || '关键词检索';
@@ -1508,7 +1510,7 @@ function metadataFallbackAnalysis(
 ): GeminiVideoAnalysis {
   const topic = tags.length ? tags.slice(0, 3).join(' / ') : title;
   return {
-    theme: `${PLATFORM_META[platform].label} 基础分析：${title}`,
+    theme: `${PLATFORM_META[platform]?.label ?? platform} 基础分析：${title}`,
     hooks: [
       `用标题承诺切入：${title}`,
       views && views !== 'New' ? `用热度做社会证明：${views}` : '先展示结果或冲突，再解释产品',
@@ -1572,7 +1574,7 @@ function WatchModal({ video, onClose }: { video: TrendVideo; onClose: () => void
         onClick={e => e.stopPropagation()}>
         <div className="flex items-start justify-between gap-4 px-4 py-3 border-b border-border">
           <div className="min-w-0">
-            <p className="text-[10px] font-mono uppercase tracking-widest text-text-muted">{PLATFORM_META[video.platform].label} 预览</p>
+            <p className="text-[10px] font-mono uppercase tracking-widest text-text-muted">{PLATFORM_META[video.platform]?.label ?? video.platform} 预览</p>
             <h3 className="text-sm font-semibold text-text-primary truncate mt-0.5">{video.title}</h3>
           </div>
           <div className="flex items-center gap-2 flex-shrink-0">
