@@ -8,11 +8,10 @@ import TrafficPage from './components/TrafficPage';
 import ConversionPage from './components/ConversionPage';
 import RetentionPage from './components/RetentionPage';
 import EnterprisePage from './components/EnterprisePage';
-import PluginsPage from './components/PluginsPage';
+import IntegrationsPage from './components/IntegrationsPage';
 import ScheduledPage from './components/ScheduledPage';
-import ChannelsPage from './components/ChannelsPage';
 import ComingSoon from './components/ComingSoon';
-import YouTubeIntegrationPage from './components/YouTubeIntegration';
+import { completeDemoStep } from './lib/demoProgress';
 
 export type Page =
   | 'strategy'
@@ -59,6 +58,7 @@ const loadConvs = (): Conversation[] => {
 const loadPage = (): Page => {
   try {
     const saved = localStorage.getItem('ow_page') as Page | null;
+    if (saved === 'channels' || saved === 'youtube') return 'plugins';
     return saved && ALL_PAGES.includes(saved) ? saved : 'strategy';
   } catch { return 'strategy'; }
 };
@@ -93,6 +93,11 @@ export default function App() {
 
   // 每次对话推进都记录/更新近期会话
   const enterConversation = (ctx: ConversationContext) => {
+    if (ctx.messages?.some(msg => msg.role === 'assistant' && msg.content.trim().length > 12)) {
+      if (ctx.agent === 'strategy') completeDemoStep('strategy');
+      if (ctx.agent === 'conversion') completeDemoStep('conversion');
+      if (ctx.agent === 'retention') completeDemoStep('retention');
+    }
     setConversation(ctx);
     if (!ctx.messages?.length) {
       activeIdRef.current = null;
@@ -222,10 +227,9 @@ export default function App() {
         />
       )}
       {page === 'enterprise' && <EnterprisePage />}
-      {page === 'plugins' && <PluginsPage />}
+      {page === 'plugins' && <IntegrationsPage />}
       {page === 'scheduled' && <ScheduledPage onAction={startAgentTask} />}
-      {page === 'channels' && <ChannelsPage />}
-      {page === 'youtube' && <YouTubeIntegrationPage />}
+      {(page === 'channels' || page === 'youtube') && <IntegrationsPage />}
     </Layout>
   );
 }

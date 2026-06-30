@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { studioApi, getDesktopRender, type StudioProject, type Material, type BgmTrack, type CoverStyle, type SubCue } from '../lib/studioApi';
 import type { Page } from '../App';
+import { completeDemoStep } from '../lib/demoProgress';
 
 /* ──────────────────────────────────────────────────────────────────────────
    AI 生成内容工作台 — 社媒（流量）页子模块
@@ -996,6 +997,7 @@ export default function AiCreateStudio({ onNavigate }: { onNavigate?: (p: Page) 
       thumbSeed: cover,
     });
     if (project?.id) setProjectId(project.id);
+    completeDemoStep('traffic');
     setSavingProj(false);
     setSavedTick(true);
     setTimeout(() => setSavedTick(false), 1800);

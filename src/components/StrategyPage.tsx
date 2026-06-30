@@ -6,6 +6,7 @@ import StrategyDataBoard from './StrategyDataBoard';
 import AgentReply from './AgentReply';
 import { authHeader } from '../lib/auth';
 import type { ConversationContext, Message, RestoreSignal, KickoffSignal, AgentAction } from '../App';
+import { completeDemoStep } from '../lib/demoProgress';
 
 type ViewMode = 'chat' | 'workspace' | 'board';
 
@@ -223,8 +224,14 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
                       <p className="text-sm text-text-muted mt-1">跨三侧策略编排 · 经营分析 · 多 Agent 协调</p>
                     </div>
                     <div className="grid grid-cols-2 gap-2 max-w-lg w-full">
-                      {SUGGESTIONS.map(s => (
-                        <button key={s} onClick={() => void send(s)}
+                      {SUGGESTIONS.map((s, index) => (
+                        <button
+                          key={s}
+                          data-demo-target={index === 0 ? 'strategy_prompt' : undefined}
+                          onClick={() => {
+                            completeDemoStep('strategy');
+                            void send(s);
+                          }}
                           className="text-left px-3 py-2.5 rounded-xl border border-border bg-surface text-xs text-text-secondary hover:border-border-bright hover:text-text-primary transition-all leading-relaxed">
                           {s}
                         </button>

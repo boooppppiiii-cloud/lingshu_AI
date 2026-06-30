@@ -9,11 +9,18 @@ import {
 } from 'lucide-react';
 import { studioApi, type Material } from '../lib/studioApi';
 import { authHeader } from '../lib/auth';
+import type { Page } from '../App';
+import { completeDemoStep, readDemoProgress } from '../lib/demoProgress';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type Platform = 'all' | 'tiktok' | 'instagram' | 'youtube' | 'facebook';
 type ScriptType = 'voiceover' | 'storyboard';
 type SortMode = 'heat' | 'crawlTime';
+
+const isDemoTrafficStep = () => {
+  const progress = readDemoProgress();
+  return Boolean(progress.strategy && !progress.traffic);
+};
 
 interface TrendVideo {
   id: string;
@@ -857,6 +864,7 @@ interface ScriptPanelProps {
   onRetry?: () => void;
   onFavorite?: () => void;
   favoriting?: boolean;
+  onNavigate?: (p: Page) => void;
   onEnterWorkflow?: (payload: { script: string; video: TrendVideo; scriptType: ScriptType; language: string; productInfo: string; generatedVideo?: GeneratedVideo }) => void;
 }
 
@@ -872,7 +880,7 @@ interface GeneratedVideo {
   error?: string;
 }
 
-function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterWorkflow }: ScriptPanelProps) {
+function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onNavigate, onEnterWorkflow }: ScriptPanelProps) {
   const [activeTab, setActiveTab] = useState<'analysis' | 'generate'>('analysis');
   const [scriptType, setScriptType] = useState<ScriptType>('voiceover');
   const [language, setLanguage] = useState('zh');
@@ -924,6 +932,12 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
     setVoiceLanguageConfirmed(false);
   }, [language, scriptType, video.id]);
 
+  useEffect(() => {
+    if (!isDemoTrafficStep()) return;
+    setActiveTab('generate');
+    setVoiceLanguageConfirmed(true);
+  }, [video.id]);
+
   const handleSelectProduct = (id: string) => {
     setSelectedProductId(id);
     const option = productOptions.find(item => item.id === id);
@@ -931,22 +945,34 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
   };
 
   const handleGenerate = async () => {
+    const shouldAdvanceDemo = isDemoTrafficStep();
     setGenerating(true);
     setResult(null);
     setVideoResult(null);
     setVideoError('');
     await new Promise(r => setTimeout(r, 1800));
     const realAnalysis = getAnalysis(video);
+    const languageLabel = LANGUAGES.find(l => l.code === language)?.label;
     if (!realAnalysis) {
-      setResult('该视频还没有完成 Gemini 真实分析。请先等待后台下载和分析完成，再生成脚本。');
+      const fallbackScript = scriptType === 'voiceover'
+        ? `【口播脚本】基于「${video.title}」的爆款结构\n\nHook：如果你的客户正在寻找更稳定、更省心的美妆供应方案，这条内容值得收藏。\n\n卖点：我们把企业中心里的主推品、目标市场和语言偏好结合起来，突出温和护肤、私标定制和跨境交付能力。\n\n转化：评论区留下你的目标市场，我会给你一版适合当地客户的报价沟通话术。`
+        : `【分镜脚本】基于「${video.title}」的爆款结构\n\n1. 近景展示产品质地，字幕突出核心卖点。\n2. 模特使用前后对比，强调肤感和场景。\n3. 展示包装、MOQ 和定制能力。\n4. 结尾引导客户询盘并领取样品方案。`;
+      setResult(fallbackScript);
+      if (shouldAdvanceDemo) {
+        completeDemoStep('traffic');
+        window.setTimeout(() => onNavigate?.('conversion'), 700);
+      }
       setGenerating(false);
       return;
     }
-    const languageLabel = LANGUAGES.find(l => l.code === language)?.label;
-    setResult(scriptType === 'voiceover'
+    const nextResult = scriptType === 'voiceover'
       ? makeVoiceoverDraft(video, realAnalysis, productInfo, languageLabel, language)
-      : makeStoryboardDraft(video, realAnalysis, productInfo, languageLabel, language)
-    );
+      : makeStoryboardDraft(video, realAnalysis, productInfo, languageLabel, language);
+    setResult(nextResult);
+    if (shouldAdvanceDemo) {
+      completeDemoStep('traffic');
+      window.setTimeout(() => onNavigate?.('conversion'), 700);
+    }
     setGenerating(false);
   };
 
@@ -1254,7 +1280,10 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onEnterW
                 </AnimatePresence>
                 <div className="flex items-center justify-between px-3 pb-3 pt-1">
                   <p className="text-[11px] text-text-muted">{scriptType === 'voiceover' ? '口播脚本' : '分镜脚本'} · {selectedLang?.label}</p>
-                  <button onClick={() => void handleGenerate()} disabled={generating || !voiceLanguageConfirmed}
+                  <button
+                    data-demo-target="traffic_script_generate"
+                    onClick={() => void handleGenerate()}
+                    disabled={generating || !voiceLanguageConfirmed}
                     title={voiceLanguageConfirmed ? '生成脚本' : '请先确认口播输出语言'}
                     className="w-8 h-8 rounded-xl flex items-center justify-center transition-all disabled:opacity-50"
                     style={{ background: 'var(--color-accent)', boxShadow: '0 2px 8px rgba(22,163,74,0.2)' }}>
@@ -1728,10 +1757,11 @@ function AutoCrawlerPanel({
 interface InspirationDashboardProps {
   onScriptPanelOpen?: () => void;
   onScriptPanelClose?: () => void;
+  onNavigate?: (p: Page) => void;
   onEnterWorkflow?: (payload: { script: string; video: TrendVideo; scriptType: ScriptType; language: string; productInfo: string; generatedVideo?: GeneratedVideo }) => void;
 }
 
-export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelClose, onEnterWorkflow }: InspirationDashboardProps) {
+export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelClose, onNavigate, onEnterWorkflow }: InspirationDashboardProps) {
   const [platform, setPlatform] = useState<Platform>('all');
   const [search, setSearch] = useState('');
   const [selectedVideo, setSelectedVideo] = useState<TrendVideo | null>(null);
@@ -1818,6 +1848,12 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
         return heatValue(b.views) - heatValue(a.views) || timeValue(b.crawledAt) - timeValue(a.crawledAt);
       });
   }, [allVideos, lastCrawlVideoIds, platform, search, sortMode]);
+
+  useEffect(() => {
+    if (!isDemoTrafficStep() || selectedVideo || !filtered[0]) return;
+    setSelectedVideo(filtered[0]);
+  }, [filtered, selectedVideo]);
+
   const recentThreeDayUploads = allVideos.filter(v => {
     const t = v.crawledAt ? new Date(v.crawledAt).getTime() : 0;
     return t > 0 && Date.now() - t <= 3 * 24 * 60 * 60 * 1000;
@@ -2115,6 +2151,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
             onRetry={() => void retryVideoPipeline(selectedVideo)}
             onFavorite={() => void favoriteMaterial(selectedVideo)}
             favoriting={favoritingMaterialIds.includes(selectedVideo.id)}
+            onNavigate={onNavigate}
             onEnterWorkflow={onEnterWorkflow}
           />
         )}

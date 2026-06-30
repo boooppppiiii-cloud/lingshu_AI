@@ -2,7 +2,7 @@ import { type ReactNode } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Compass, Zap, MessageSquare, RefreshCw,
-  Building2, Puzzle, Clock, Radio,
+  Building2, PlugZap, Clock,
   Globe, ChevronRight, Plus, LogOut,
 } from 'lucide-react';
 import type { Page, ConversationContext, Conversation, AgentAction } from '../App';
@@ -25,10 +25,8 @@ const PRIMARY_NAV: NavSection = {
 const SECONDARY_NAV: NavSection = {
   items: [
     { id: 'enterprise', label: '企业中心', icon: <Building2 size={16} /> },
-    { id: 'plugins',    label: '插件',    icon: <Puzzle size={16} /> },
+    { id: 'plugins',    label: '集成中心', icon: <PlugZap size={16} /> },
     { id: 'scheduled',  label: '定时任务', icon: <Clock size={16} /> },
-    { id: 'channels',   label: '消息渠道', icon: <Radio size={16} /> },
-    { id: 'youtube',    label: '社媒账号', icon: <Radio size={16} /> },
   ],
 };
 
@@ -80,6 +78,7 @@ function NavItem({
     <motion.button
       whileTap={{ scale: 0.97 }}
       onClick={onClick}
+      data-demo-target={item.id}
       className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium transition-colors cursor-pointer relative"
       style={
         active
@@ -113,6 +112,12 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
   const subStatus = session?.tenant?.subscriptionStatus || session?.subscription?.status || 'none';
   const initial = (tenantName[0] || '灵').toUpperCase();
   const demo = session?.demo;
+  const showDemoGuide = Boolean(
+    session?.demo?.enabled ||
+    session?.tenant?.subscriptionPlan === 'trial' ||
+    session?.subscription?.plan === 'trial' ||
+    subStatus === 'trialing'
+  );
 
   return (
     <div className="flex h-screen overflow-hidden">
@@ -133,8 +138,8 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
           <span className="text-sm font-bold text-text-primary font-display">灵枢 AI</span>
         </div>
 
-        {session?.demo?.enabled && (
-          <DemoGuide onNavigate={onNavigate} onAction={onAction} />
+        {showDemoGuide && (
+          <DemoGuide onNavigate={onNavigate} />
         )}
 
         {/* Primary nav */}

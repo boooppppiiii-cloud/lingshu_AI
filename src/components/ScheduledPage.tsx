@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { Activity, BarChart3, Clock, Download, DownloadCloud, Plus, X, Play, Trash2, CheckCircle, Loader } from 'lucide-react';
 import type { AgentAction, AgentType } from '../App';
+import { completeDemoStep } from '../lib/demoProgress';
 
 interface ScheduledTask {
   id: string;
@@ -159,6 +160,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
     });
+    completeDemoStep('scheduler');
     await fetchTasks();
   }
 
@@ -174,6 +176,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
       const data = await r.json();
       setRunResult(prev => ({ ...prev, [id]: data.result ?? '执行完成' }));
       setExpandedId(id);
+      completeDemoStep('scheduler');
       await fetchTasks();
       await fetchVideoStats();
     } finally { setRunningId(null); }
@@ -381,6 +384,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
 
   const goToAgent = (action: NextAction) => {
     setResultTaskId(null);
+    completeDemoStep('automation_workflow');
     onAction?.(action.agent, action.prompt);
   };
 
