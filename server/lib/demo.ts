@@ -56,13 +56,13 @@ function intEnv(name: string, fallback: number): number {
 
 export function demoLimits(): DemoLimits {
   return {
-    trialDays: intEnv('DEMO_TRIAL_DAYS', 7),
+    trialDays: intEnv('DEMO_TRIAL_DAYS', 3),
     aiChatDaily: intEnv('DEMO_DAILY_AI_CHAT_LIMIT', 20),
     generationDaily: intEnv('DEMO_DAILY_GENERATION_LIMIT', 10),
     renderDaily: intEnv('DEMO_DAILY_RENDER_LIMIT', 3),
     videoGenerationDaily: intEnv('DEMO_VIDEO_GENERATION_LIMIT', intEnv('DEMO_DAILY_VIDEO_GENERATION_LIMIT', 2)),
-    tokenDaily: intEnv('DEMO_DAILY_TOKEN_LIMIT', 60_000),
-    tokenTotal: intEnv('DEMO_TOTAL_TOKEN_LIMIT', 200_000),
+    tokenDaily: intEnv('DEMO_DAILY_TOKEN_LIMIT', 30_000),
+    tokenTotal: intEnv('DEMO_TOTAL_TOKEN_LIMIT', 30_000),
   };
 }
 
