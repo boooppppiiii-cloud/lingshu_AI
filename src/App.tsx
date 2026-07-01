@@ -1,17 +1,18 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import Layout from './components/Layout';
 import AuthScreen from './components/AuthScreen';
 import { authApi, type AuthSession } from './lib/auth';
-import StrategyPage from './components/StrategyPage';
-import TrafficPage from './components/TrafficPage';
-import ConversionPage from './components/ConversionPage';
-import RetentionPage from './components/RetentionPage';
-import EnterprisePage from './components/EnterprisePage';
-import IntegrationsPage from './components/IntegrationsPage';
-import ScheduledPage from './components/ScheduledPage';
-import ComingSoon from './components/ComingSoon';
 import { completeDemoStep, setDemoProgressScope } from './lib/demoProgress';
+
+const StrategyPage = lazy(() => import('./components/StrategyPage'));
+const TrafficPage = lazy(() => import('./components/TrafficPage'));
+const ConversionPage = lazy(() => import('./components/ConversionPage'));
+const RetentionPage = lazy(() => import('./components/RetentionPage'));
+const EnterprisePage = lazy(() => import('./components/EnterprisePage'));
+const IntegrationsPage = lazy(() => import('./components/IntegrationsPage'));
+const ScheduledPage = lazy(() => import('./components/ScheduledPage'));
+const AdminDashboard = lazy(() => import('./components/AdminDashboard'));
 
 export type Page =
   | 'strategy'
@@ -21,6 +22,7 @@ export type Page =
   | 'enterprise'
   | 'plugins'
   | 'scheduled'
+  | 'admin'
   | 'channels'
   | 'youtube';
 
@@ -50,7 +52,7 @@ export interface KickoffSignal { text: string; key: string }
 export type AgentAction = (agent: AgentType, task: string) => void;
 
 const AGENT_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention'];
-const ALL_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention', 'enterprise', 'plugins', 'scheduled', 'channels', 'youtube'];
+const ALL_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention', 'enterprise', 'plugins', 'scheduled', 'admin', 'channels', 'youtube'];
 const firstUserText = (msgs?: Message[]) => (msgs?.find(m => m.role === 'user')?.content ?? '新会话').slice(0, 24);
 const loadConvs = (): Conversation[] => {
   try { return JSON.parse(localStorage.getItem('ow_convs') || '[]'); } catch { return []; }
@@ -62,6 +64,14 @@ const loadPage = (): Page => {
     return saved && ALL_PAGES.includes(saved) ? saved : 'strategy';
   } catch { return 'strategy'; }
 };
+
+function PageLoading() {
+  return (
+    <div className="flex-1 min-h-0 flex items-center justify-center bg-white">
+      <Loader2 size={20} className="animate-spin text-text-muted" />
+    </div>
+  );
+}
 
 export default function App() {
   const [page, setPage] = useState<Page>(loadPage);
@@ -91,6 +101,16 @@ export default function App() {
       setAuthLoading(false);
     });
   }, []);
+  useEffect(() => {
+    if (!session) return;
+    const timer = window.setInterval(() => {
+      authApi.me().then(s => {
+        setDemoProgressScope(s?.user?.id || s?.tenant?.id || null);
+        setSession(s);
+      });
+    }, 300_000);
+    return () => window.clearInterval(timer);
+  }, [session?.user?.id]);
   useEffect(() => {
     try { localStorage.setItem('ow_page', page); } catch { /* ignore */ }
   }, [page]);
@@ -160,6 +180,16 @@ export default function App() {
     setDemoProgressScope(s.user?.id || s.tenant?.id || null);
     setSession(s);
   };
+  const refreshSession = async () => {
+    const latest = await authApi.me();
+    if (!latest) {
+      setDemoProgressScope(null);
+      setSession(null);
+      return;
+    }
+    setDemoProgressScope(latest.user?.id || latest.tenant?.id || null);
+    setSession(latest);
+  };
   const handleLogout = () => { authApi.logout(); setDemoProgressScope(null); setSession(null); };
 
   if (authLoading) {
@@ -192,53 +222,60 @@ export default function App() {
       onSessionUpdate={setSession}
       conversations={conversations} activeConvId={activeConvId} onOpenConversation={openConversation} onNewConversation={newConversation}
       suppressRightPanel={scriptPanelOpen} onAction={startAgentTask}>
-      {page === 'strategy' && (
-        <StrategyPage
-          onEnterConversation={enterConversation}
-          onLeaveConversation={leaveConversation}
-          isInConversation={conversation?.agent === 'strategy'}
-          restore={restoreFor('strategy')}
-          kickoff={kickoffFor('strategy')}
-          onAction={startAgentTask}
-        />
-      )}
-      {page === 'traffic' && (
-        <TrafficPage
-          onEnterConversation={enterConversation}
-          onLeaveConversation={leaveConversation}
-          isInConversation={conversation?.agent === 'traffic'}
-          onNavigate={handleNavigate}
-          restore={restoreFor('traffic')}
-          kickoff={kickoffFor('traffic')}
-          onAction={startAgentTask}
-          onScriptPanelOpen={() => setScriptPanelOpen(true)}
-          onScriptPanelClose={() => setScriptPanelOpen(false)}
-        />
-      )}
-      {page === 'conversion' && (
-        <ConversionPage
-          onEnterConversation={enterConversation}
-          onLeaveConversation={leaveConversation}
-          isInConversation={conversation?.agent === 'conversion'}
-          restore={restoreFor('conversion')}
-          kickoff={kickoffFor('conversion')}
-          onAction={startAgentTask}
-        />
-      )}
-      {page === 'retention' && (
-        <RetentionPage
-          onEnterConversation={enterConversation}
-          onLeaveConversation={leaveConversation}
-          isInConversation={conversation?.agent === 'retention'}
-          restore={restoreFor('retention')}
-          kickoff={kickoffFor('retention')}
-          onAction={startAgentTask}
-        />
-      )}
-      {page === 'enterprise' && <EnterprisePage />}
-      {page === 'plugins' && <IntegrationsPage />}
-      {page === 'scheduled' && <ScheduledPage onAction={startAgentTask} />}
-      {(page === 'channels' || page === 'youtube') && <IntegrationsPage />}
+      <Suspense fallback={<PageLoading />}>
+        {page === 'strategy' && (
+          <StrategyPage
+            onEnterConversation={enterConversation}
+            onLeaveConversation={leaveConversation}
+            isInConversation={conversation?.agent === 'strategy'}
+            restore={restoreFor('strategy')}
+            kickoff={kickoffFor('strategy')}
+            onAction={startAgentTask}
+            onSessionRefresh={() => void refreshSession()}
+          />
+        )}
+        {page === 'traffic' && (
+          <TrafficPage
+            onEnterConversation={enterConversation}
+            onLeaveConversation={leaveConversation}
+            isInConversation={conversation?.agent === 'traffic'}
+            onNavigate={handleNavigate}
+            restore={restoreFor('traffic')}
+            kickoff={kickoffFor('traffic')}
+            onAction={startAgentTask}
+            onScriptPanelOpen={() => setScriptPanelOpen(true)}
+            onScriptPanelClose={() => setScriptPanelOpen(false)}
+            onSessionRefresh={() => void refreshSession()}
+          />
+        )}
+        {page === 'conversion' && (
+          <ConversionPage
+            onEnterConversation={enterConversation}
+            onLeaveConversation={leaveConversation}
+            isInConversation={conversation?.agent === 'conversion'}
+            restore={restoreFor('conversion')}
+            kickoff={kickoffFor('conversion')}
+            onAction={startAgentTask}
+            onSessionRefresh={() => void refreshSession()}
+          />
+        )}
+        {page === 'retention' && (
+          <RetentionPage
+            onEnterConversation={enterConversation}
+            onLeaveConversation={leaveConversation}
+            isInConversation={conversation?.agent === 'retention'}
+            restore={restoreFor('retention')}
+            kickoff={kickoffFor('retention')}
+            onAction={startAgentTask}
+            onSessionRefresh={() => void refreshSession()}
+          />
+        )}
+        {page === 'enterprise' && <EnterprisePage />}
+        {page === 'plugins' && <IntegrationsPage />}
+        {page === 'scheduled' && <ScheduledPage onAction={startAgentTask} />}
+        {page === 'admin' && <AdminDashboard />}
+        {(page === 'channels' || page === 'youtube') && <IntegrationsPage />}
+      </Suspense>
     </Layout>
   );
 }

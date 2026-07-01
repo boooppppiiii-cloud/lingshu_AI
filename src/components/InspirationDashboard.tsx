@@ -656,6 +656,22 @@ function VideoThumbnail({ platform, title }: { platform: Exclude<Platform, 'all'
   );
 }
 
+function ThumbnailImage({
+  src,
+  platform,
+  title,
+  className,
+}: {
+  src: string;
+  platform: Exclude<Platform, 'all'>;
+  title: string;
+  className: string;
+}) {
+  const [failed, setFailed] = useState(false);
+  if (failed || !src) return <VideoThumbnail platform={platform} title={title} />;
+  return <img src={src} alt="" className={className} draggable={false} loading="lazy" onError={() => setFailed(true)} />;
+}
+
 // ── Analysis Panel ────────────────────────────────────────────────────────────
 function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo; onGenerateScript: () => void; onRetry?: () => void }) {
   const [loaded, setLoaded] = useState(false);
@@ -1329,7 +1345,7 @@ function VideoCard({ video, index, isSelected, onSelect, onWatch, onAnalyzeVideo
         className="relative overflow-hidden w-full aspect-[9/16] text-left block"
         style={{ background: 'var(--color-surface-2)' }}>
         {video.thumbnail
-          ? <img src={video.thumbnail} alt="" className="absolute inset-0 w-full h-full object-cover" draggable={false} />
+          ? <ThumbnailImage src={video.thumbnail} platform={video.platform} title={video.title} className="absolute inset-0 w-full h-full object-cover" />
           : video.videoUrl
           ? <video src={`${video.videoUrl}#t=0.1`} muted playsInline loop preload="metadata" className="absolute inset-0 w-full h-full object-cover"
               onMouseEnter={e => { void e.currentTarget.play().catch(() => {}); }}
@@ -1397,7 +1413,7 @@ function VideoListItem({ video, isSelected, onSelect, onWatch, onAnalyzeVideo, o
       <button type="button" onClick={e => { e.stopPropagation(); onWatch(); }}
         className="w-16 h-10 rounded-lg overflow-hidden flex-shrink-0 border border-border bg-surface-2 relative group/thumb">
         {video.thumbnail
-          ? <img src={video.thumbnail} alt="" className="w-full h-full object-cover" draggable={false} />
+          ? <ThumbnailImage src={video.thumbnail} platform={video.platform} title={video.title} className="w-full h-full object-cover" />
           : <VideoThumbnail platform={video.platform} title={video.title} />}
         <span className="absolute inset-0 bg-black/35 opacity-0 group-hover/thumb:opacity-100 transition-opacity flex items-center justify-center text-white">
           <Play size={13} fill="currentColor" />
@@ -1620,6 +1636,9 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [sortMode, setSortMode] = useState<SortMode>('crawlTime');
   const [crawledVideos, setCrawledVideos] = useState<TrendVideo[]>([]);
+  const [videoPage, setVideoPage] = useState(1);
+  const [videoTotalPages, setVideoTotalPages] = useState(1);
+  const [videosLoading, setVideosLoading] = useState(false);
   const [lastCrawlVideoIds, setLastCrawlVideoIds] = useState<string[]>([]);
   const [analyzingVideoIds, setAnalyzingVideoIds] = useState<string[]>([]);
   const [favoritingMaterialIds, setFavoritingMaterialIds] = useState<string[]>([]);
@@ -1635,29 +1654,25 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   // Clean up on unmount
   useEffect(() => () => { onScriptPanelClose?.(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const refreshVideos = async () => {
+  const refreshVideos = async (nextPage = 1, append = false) => {
+    setVideosLoading(true);
     try {
-      const allRecords: CrawlerRecord[] = [];
-      const perPage = 100;
-      let page = 1;
-      let totalPages = 1;
-      while (page <= totalPages) {
-        const r = await fetch(`/api/overseas/videos?page=${page}&perPage=${perPage}`, { headers: authHeader() });
-        const data = await r.json().catch(() => ({})) as {
-          items?: CrawlerRecord[];
-          page?: number;
-          totalPages?: number;
-        };
-        if (!r.ok) throw new Error('视频列表加载失败');
-        const items = data.items || [];
-        allRecords.push(...items);
-        totalPages = Number(data.totalPages || (items.length < perPage ? page : page + 1));
-        if (items.length === 0) break;
-        page += 1;
-      }
-      setCrawledVideos(recordsToVideos(allRecords));
+      const perPage = 20;
+      const r = await fetch(`/api/overseas/videos?page=${nextPage}&perPage=${perPage}`, { headers: authHeader() });
+      const data = await r.json().catch(() => ({})) as {
+        items?: CrawlerRecord[];
+        page?: number;
+        totalPages?: number;
+      };
+      if (!r.ok) throw new Error('视频列表加载失败');
+      const videos = recordsToVideos(data.items || []);
+      setVideoPage(Number(data.page || nextPage));
+      setVideoTotalPages(Math.max(1, Number(data.totalPages || nextPage)));
+      setCrawledVideos(prev => append ? [...prev, ...videos.filter(v => !prev.some(old => old.id === v.id))] : videos);
     } catch {
-      setCrawledVideos([]);
+      if (!append) setCrawledVideos([]);
+    } finally {
+      setVideosLoading(false);
     }
   };
 
@@ -1672,7 +1687,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
       v.aiAnalysis?.downloadStatus === 'ops_queued'
     );
     if (!hasPending) return;
-    const timer = window.setInterval(() => { void refreshVideos(); }, 3500);
+    const timer = window.setInterval(() => { void refreshVideos(1, false); }, 3500);
     return () => window.clearInterval(timer);
   }, [crawledVideos]);
 
@@ -1980,6 +1995,18 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
                   analyzingVideo={analyzingVideoIds.includes(video.id)}
                   favoritingMaterial={favoritingMaterialIds.includes(video.id)} />
               ))}
+            </div>
+          )}
+          {filtered.length > 0 && videoPage < videoTotalPages && (
+            <div className="flex justify-center pt-2 pb-4">
+              <button
+                onClick={() => void refreshVideos(videoPage + 1, true)}
+                disabled={videosLoading}
+                className="btn-ghost !px-4 !py-2 flex items-center gap-2 disabled:opacity-60"
+              >
+                {videosLoading ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+                加载更多
+              </button>
             </div>
           )}
           {filtered.length === 0 && (
