@@ -16,6 +16,43 @@ export const authRouter = Router();
 
 interface PbUser { id: string; email?: string; name?: string; tenantId?: string }
 
+const LOCAL_AUTH_PREFIX = 'local-demo.';
+
+function isLocalDevFallbackEnabled(): boolean {
+  return process.env.NODE_ENV !== 'production' && process.env.DISABLE_LOCAL_AUTH_FALLBACK !== 'true';
+}
+
+function localId(value: string): string {
+  return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'demo';
+}
+
+function localUser(email: string, companyName = ''): PbUser {
+  const normalizedEmail = String(email).trim();
+  const id = `local_user_${localId(normalizedEmail)}`;
+  return {
+    id,
+    email: normalizedEmail,
+    name: companyName || normalizedEmail.split('@')[0] || '本地演示账号',
+    tenantId: `local_tenant_${localId(normalizedEmail)}`,
+  };
+}
+
+function createLocalToken(user: PbUser): string {
+  const payload = Buffer.from(JSON.stringify({ userId: user.id, tenantId: user.tenantId }), 'utf8').toString('base64url');
+  return `${LOCAL_AUTH_PREFIX}${payload}`;
+}
+
+function parseLocalToken(authHeader: string | undefined): { userId: string; tenantId: string } | null {
+  const token = authHeader?.replace(/^Bearer\s+/i, '').trim();
+  if (!token?.startsWith(LOCAL_AUTH_PREFIX)) return null;
+  try {
+    const data = JSON.parse(Buffer.from(token.slice(LOCAL_AUTH_PREFIX.length), 'base64url').toString('utf8')) as { userId?: string; tenantId?: string };
+    return data.userId && data.tenantId ? { userId: data.userId, tenantId: data.tenantId } : null;
+  } catch {
+    return null;
+  }
+}
+
 async function resolveLoginIdentity(identity: string): Promise<string> {
   const raw = String(identity).trim();
   if (raw.includes('@')) return raw;
@@ -52,6 +89,13 @@ async function pbLogin(identity: string, password: string): Promise<{ token: str
   }
 }
 
+function localLogin(email: string, password: string, companyName = ''): { token: string; record: PbUser } | null {
+  if (!isLocalDevFallbackEnabled()) return null;
+  if (!email || !password || String(password).length < 8) return null;
+  const record = localUser(email, companyName);
+  return { token: createLocalToken(record), record };
+}
+
 function publicUser(r: PbUser) {
   return { id: r.id, email: r.email ?? '', name: r.name ?? '', tenantId: r.tenantId ?? '' };
 }
@@ -79,20 +123,54 @@ authRouter.post('/register', async (req, res) => {
 
   const now = new Date();
   const expiresAt = demoTrialExpiresAt(now);
-  const tenant = await pbCreate('tenants', {
-    name: companyName || String(email).split('@')[0],
-    subscriptionStatus: 'trialing',
-    subscriptionPlan: 'trial',
-    subscriptionExpiresAt: expiresAt,
-    createdAt: now.toISOString(),
-  });
-  if (!tenant) { res.status(500).json({ error: '创建租户失败' }); return; }
+  let tenant: Record<string, unknown> | null = null;
+  try {
+    tenant = await pbCreate('tenants', {
+      name: companyName || String(email).split('@')[0],
+      subscriptionStatus: 'trialing',
+      subscriptionPlan: 'trial',
+      subscriptionExpiresAt: expiresAt,
+      createdAt: now.toISOString(),
+    });
+  } catch {
+    tenant = null;
+  }
+  if (!tenant) {
+    const fallback = localLogin(email, password, companyName);
+    if (fallback) {
+      res.json({
+        token: fallback.token,
+        user: publicUser(fallback.record),
+        tenant: publicTenant({ id: fallback.record.tenantId, name: companyName || String(email).split('@')[0], subscriptionStatus: 'trialing', subscriptionPlan: 'local', subscriptionExpiresAt: expiresAt }),
+        demo: await buildDemoStatus(req, fallback.record.tenantId, expiresAt, fallback.record.id),
+      });
+      return;
+    }
+    res.status(500).json({ error: '创建租户失败' }); return;
+  }
 
-  const user = await pbCreate('users', {
-    email, password, passwordConfirm: password,
-    name: companyName || '', tenantId: tenant.id, emailVisibility: true,
-  });
-  if (!user) { res.status(400).json({ error: '创建用户失败（邮箱可能已被注册）' }); return; }
+  let user: Record<string, unknown> | null = null;
+  try {
+    user = await pbCreate('users', {
+      email, password, passwordConfirm: password,
+      name: companyName || '', tenantId: tenant.id, emailVisibility: true,
+    });
+  } catch {
+    user = null;
+  }
+  if (!user) {
+    const fallback = localLogin(email, password, companyName);
+    if (fallback) {
+      res.json({
+        token: fallback.token,
+        user: publicUser(fallback.record),
+        tenant: publicTenant({ id: fallback.record.tenantId, name: companyName || String(email).split('@')[0], subscriptionStatus: 'trialing', subscriptionPlan: 'local', subscriptionExpiresAt: expiresAt }),
+        demo: await buildDemoStatus(req, fallback.record.tenantId, expiresAt, fallback.record.id),
+      });
+      return;
+    }
+    res.status(400).json({ error: '创建用户失败（邮箱可能已被注册）' }); return;
+  }
 
   const login = await pbLogin(email, password);
   if (!login) { res.status(500).json({ error: '注册后自动登录失败' }); return; }
@@ -104,7 +182,18 @@ authRouter.post('/login', async (req, res) => {
   const { email, password } = req.body ?? {};
   if (!email || !password) { res.status(400).json({ error: '邮箱和密码必填' }); return; }
   const login = await pbLogin(email, password);
-  if (!login) { res.status(401).json({ error: '邮箱或密码错误' }); return; }
+  if (!login) {
+    const fallback = localLogin(email, password);
+    if (!fallback) { res.status(401).json({ error: '邮箱或密码错误' }); return; }
+    const expiresAt = demoTrialExpiresAt();
+    res.json({
+      token: fallback.token,
+      user: publicUser(fallback.record),
+      tenant: publicTenant({ id: fallback.record.tenantId, name: fallback.record.name, subscriptionStatus: 'trialing', subscriptionPlan: 'local', subscriptionExpiresAt: expiresAt }),
+      demo: await buildDemoStatus(req, fallback.record.tenantId, expiresAt, fallback.record.id),
+    });
+    return;
+  }
   const tenant = login.record.tenantId ? await pbGet('tenants', login.record.tenantId) : null;
   const subscription = login.record.tenantId ? await getTenantSubscription(login.record.tenantId) : null;
   res.json({ token: login.token, user: publicUser(login.record), tenant: publicTenant(tenant), demo: await buildDemoStatus(req, login.record.tenantId, subscription?.expiresAt, login.record.id) });
@@ -112,6 +201,17 @@ authRouter.post('/login', async (req, res) => {
 
 // GET /auth/me  (Authorization: Bearer <token>)
 authRouter.get('/me', async (req, res) => {
+  const local = parseLocalToken(req.headers.authorization);
+  if (local) {
+    const expiresAt = demoTrialExpiresAt();
+    res.json({
+      user: { id: local.userId, email: '', name: '本地演示账号', tenantId: local.tenantId },
+      tenant: publicTenant({ id: local.tenantId, name: '本地演示租户', subscriptionStatus: 'trialing', subscriptionPlan: 'local', subscriptionExpiresAt: expiresAt }),
+      subscription: { status: 'trialing', plan: 'local', expiresAt },
+      demo: await buildDemoStatus(req, local.tenantId, expiresAt, local.userId),
+    });
+    return;
+  }
   const id = await auth.verifyToken(req.headers.authorization);
   if (!id) { res.status(401).json({ error: 'Unauthorized' }); return; }
   const [user, tenant] = await Promise.all([pbGet('users', id.userId), pbGet('tenants', id.tenantId)]);

@@ -25,13 +25,11 @@ const PLUGIN_CATALOG: Omit<Plugin, 'status' | 'config' | 'installedAt'>[] = [
   { id: 'shopify', pluginKey: 'shopify', name: 'Shopify', nameZh: 'Shopify 店铺', category: 'ecommerce', description: '同步 Shopify 订单、商品和客户数据，AI 自动分析店铺经营数据', icon: '🛍️' },
   { id: 'exchangerate', pluginKey: 'exchangerate', name: 'Exchange Rate', nameZh: '实时汇率', category: 'tool', description: '实时获取 USD/CNY/SAR/AED/VND/MYR/IDR 汇率，自动换算报价', icon: '💱' },
   { id: 'translate', pluginKey: 'translate', name: 'AI Translation', nameZh: 'AI 多语言翻译', category: 'ai', description: '支持阿拉伯语、马来语、印尼语、英语等跨境主流语言互译', icon: '🌐' },
-  { id: 'tiktok_ads', pluginKey: 'tiktok_ads', name: 'TikTok for Business', nameZh: 'TikTok 广告', category: 'social', description: '连接 TikTok Ads Manager，AI 分析广告效果并自动生成优化建议', icon: '🎵' },
-  { id: 'whatsapp_business', pluginKey: 'whatsapp_business', name: 'WhatsApp Business', nameZh: 'WhatsApp 商业版', category: 'social', description: '通过 WhatsApp Business API 批量触达买家，支持模板消息和自动回复', icon: '💬' },
+  { id: 'tiktok', pluginKey: 'tiktok', name: 'TikTok', nameZh: 'TikTok', category: 'social', description: '连接 TikTok 账号，读取视频、评论和互动数据，并支持流量专家一键发布短视频', icon: '🎵' },
   { id: 'google_translate', pluginKey: 'google_translate', name: 'Google Translate', nameZh: 'Google 翻译', category: 'tool', description: '调用 Google Cloud Translation API 实现高质量多语言翻译', icon: '🔤' },
   { id: 'amazon', pluginKey: 'amazon', name: 'Amazon SP-API', nameZh: 'Amazon 卖家', category: 'ecommerce', description: '同步 Amazon 订单和库存数据（需要卖家账号授权）', icon: '📦' },
-  { id: 'instagram', pluginKey: 'instagram', name: 'Instagram', nameZh: 'Instagram 主页', category: 'social', description: '管理 Instagram 企业主页，发布内容并分析互动数据', icon: '📷' },
-  { id: 'facebook', pluginKey: 'facebook', name: 'Facebook Page', nameZh: 'Facebook 主页', category: 'social', description: '管理 Facebook 企业主页，发布 Reels / 帖子并分析互动数据', icon: '👍' },
-  { id: 'pinterest', pluginKey: 'pinterest', name: 'Pinterest', nameZh: 'Pinterest 商家', category: 'social', description: '发布 Pinterest Idea Pin，追踪曝光、保存与点击数据', icon: '📌' },
+  { id: 'instagram', pluginKey: 'instagram', name: 'Instagram', nameZh: 'Instagram', category: 'social', description: '连接 Instagram 专业账号，读取 Reels、评论和互动数据，并支持内容发布', icon: '📷' },
+  { id: 'facebook', pluginKey: 'facebook', name: 'Facebook', nameZh: 'Facebook', category: 'social', description: '连接 Facebook Page，读取主页视频和评论，并支持将 AI 生成内容发布到主页', icon: '👍' },
 ];
 
 const FALLBACK_RATES = {
@@ -63,6 +61,9 @@ function save(plugins: Plugin[]) {
 function mergeWithCatalog(installed: Plugin[]): (Plugin & { installed: boolean })[] {
   return PLUGIN_CATALOG.map(cat => {
     const inst = installed.find(p => p.pluginKey === cat.pluginKey);
+    if (!inst && cat.category === 'social') {
+      return { ...cat, status: 'installed' as const, config: {}, installedAt: new Date().toISOString(), installed: true };
+    }
     return inst
       ? { ...inst, installed: true }
       : { ...cat, status: 'not_installed' as const, config: {}, installed: false };

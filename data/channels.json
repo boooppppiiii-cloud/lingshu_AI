@@ -1,1 +1,62 @@
-[]
+[
+  {
+    "id": "ch_1782873619146",
+    "type": "tiktok",
+    "label": "TikTok",
+    "enabled": false,
+    "config": {},
+    "status": "disconnected",
+    "stats": {
+      "sent": 0,
+      "received": 0
+    }
+  },
+  {
+    "id": "ch_1782873622489",
+    "type": "instagram",
+    "label": "Instagram",
+    "enabled": false,
+    "config": {},
+    "status": "disconnected",
+    "stats": {
+      "sent": 0,
+      "received": 0
+    }
+  },
+  {
+    "id": "ch_1782873624932",
+    "type": "facebook",
+    "label": "Facebook",
+    "enabled": false,
+    "config": {},
+    "status": "disconnected",
+    "stats": {
+      "sent": 0,
+      "received": 0
+    }
+  },
+  {
+    "id": "ch_1782875851577",
+    "type": "youtube",
+    "label": "YouTube",
+    "enabled": false,
+    "config": {},
+    "status": "disconnected",
+    "stats": {
+      "sent": 0,
+      "received": 0
+    }
+  },
+  {
+    "id": "ch_1782876765407",
+    "type": "whatsapp",
+    "label": "WhatsApp Business",
+    "enabled": false,
+    "config": {},
+    "status": "disconnected",
+    "stats": {
+      "sent": 0,
+      "received": 0
+    }
+  }
+]

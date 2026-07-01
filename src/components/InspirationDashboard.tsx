@@ -1325,7 +1325,13 @@ function VideoCard({ video, index, isSelected, onSelect, onWatch, onAnalyzeVideo
     <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
       transition={{ delay: index * 0.02, duration: 0.25 }}
       className={`card overflow-hidden group ${isSelected ? 'border-accent ring-1 ring-accent/20' : ''}`}>
-      <button type="button" onClick={onWatch}
+      <div role="button" tabIndex={0} onClick={onWatch}
+        onKeyDown={e => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onWatch();
+          }
+        }}
         className="relative overflow-hidden w-full aspect-[9/16] text-left block"
         style={{ background: 'var(--color-surface-2)' }}>
         {video.thumbnail
@@ -1362,7 +1368,7 @@ function VideoCard({ video, index, isSelected, onSelect, onWatch, onAnalyzeVideo
         <div className="absolute top-2 left-2">
           <span className="platform-badge text-[10px]" style={{ background: meta.bg, color: meta.color }}>{meta.label}</span>
         </div>
-      </button>
+      </div>
       <div className="p-3">
         <p className="text-xs font-semibold text-text-primary leading-snug line-clamp-2 mb-2">{video.title}</p>
         <div className="flex items-center justify-between mb-2">

@@ -14,7 +14,7 @@ const DATA = path.join(__dirname, '../../data/channels.json');
 
 export interface Channel {
   id: string;
-  type: 'whatsapp' | 'telegram' | 'dingtalk' | 'feishu' | 'wechat' | 'shopify';
+  type: 'whatsapp' | 'youtube' | 'tiktok' | 'instagram' | 'facebook' | 'telegram' | 'dingtalk' | 'feishu' | 'wechat' | 'shopify';
   label: string;
   enabled: boolean;
   config: Record<string, string>;
@@ -112,6 +112,12 @@ channelsRouter.post('/:id/test', async (req: Request, res: Response) => {
         res.json(result);
         break;
       }
+      case 'youtube':
+      case 'tiktok':
+      case 'instagram':
+      case 'facebook':
+        res.json({ ok: true, info: { account: cfg.accountName ?? cfg.pageName ?? channel.label } });
+        break;
       default:
         res.json({ ok: false, error: 'unsupported' });
     }

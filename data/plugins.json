@@ -31,7 +31,7 @@
     "category": "ecommerce",
     "description": "同步 Shopify 订单、商品和客户数据，AI 自动分析店铺经营数据",
     "icon": "🛍️",
-    "status": "not_installed",
+    "status": "installed",
     "config": {},
     "installedAt": "2026-06-30T03:38:43.971Z"
   },
@@ -71,8 +71,44 @@
     "category": "ecommerce",
     "description": "同步 Amazon 订单和库存数据（需要卖家账号授权）",
     "icon": "📦",
-    "status": "not_installed",
+    "status": "installed",
     "config": {},
     "installedAt": "2026-06-30T03:40:39.243Z"
+  },
+  {
+    "id": "tiktok",
+    "pluginKey": "tiktok",
+    "name": "TikTok",
+    "nameZh": "TikTok",
+    "category": "social",
+    "description": "连接 TikTok 账号，读取视频、评论和互动数据，并支持流量专家一键发布短视频",
+    "icon": "🎵",
+    "status": "installed",
+    "config": {},
+    "installedAt": "2026-07-01T02:38:45.474Z"
+  },
+  {
+    "id": "facebook",
+    "pluginKey": "facebook",
+    "name": "Facebook",
+    "nameZh": "Facebook",
+    "category": "social",
+    "description": "连接 Facebook Page，读取主页视频和评论，并支持将 AI 生成内容发布到主页",
+    "icon": "👍",
+    "status": "installed",
+    "config": {},
+    "installedAt": "2026-07-01T02:38:47.373Z"
+  },
+  {
+    "id": "instagram",
+    "pluginKey": "instagram",
+    "name": "Instagram",
+    "nameZh": "Instagram",
+    "category": "social",
+    "description": "连接 Instagram 专业账号，读取 Reels、评论和互动数据，并支持内容发布",
+    "icon": "📷",
+    "status": "installed",
+    "config": {},
+    "installedAt": "2026-07-01T02:38:48.911Z"
   }
 ]
