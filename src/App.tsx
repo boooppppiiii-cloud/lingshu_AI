@@ -60,8 +60,8 @@ const loadConvs = (): Conversation[] => {
 const loadPage = (): Page => {
   try {
     const saved = localStorage.getItem('ow_page') as Page | null;
-    if (saved === 'channels' || saved === 'youtube') return 'plugins';
-    return saved && ALL_PAGES.includes(saved) ? saved : 'strategy';
+    if (saved && !ALL_PAGES.includes(saved)) localStorage.removeItem('ow_page');
+    return 'strategy';
   } catch { return 'strategy'; }
 };
 
