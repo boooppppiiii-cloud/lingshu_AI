@@ -66,10 +66,10 @@ export default function CrmDataBoard({ windowDays = 30 }: { windowDays?: number 
   useEffect(() => {
     let cancelled = false; setInsightLoading(true);
     const t = setTimeout(async () => {
-      const r = await studioApi.insight({ scope: 'crm', metrics: { 客户总数: 3420, 复购率: '27%', LTV: '$118', 'LTV:CAC': '3.4x', 沉睡客: 412, 复购贡献GMV: '38%', 最强市场: '阿语', VIP_LTV: '$640' } });
+      const r = await studioApi.insight({ scope: 'crm', metrics: { 客户总数: 3420, 复购率: '27%', LTV: '$118', 'LTV:CAC': '3.4x', 沉睡客: 412, 老客贡献曝光: '38%', 最强市场: '阿语', VIP_LTV: '$640' } });
       if (cancelled) return;
       if (r.summary) setInsight({ summary: r.summary, actions: r.actions ?? [] });
-      else setInsight({ summary: '复购贡献 38% GMV，VIP 客户 LTV $640；412 沉睡客可唤醒，阿语市场复购最强。', actions: ['唤醒 412 沉睡客', 'VIP 专属复购权益', '阿语市场加大复购触达'] });
+      else setInsight({ summary: '老客贡献 38% 视频曝光，VIP 客户 LTV $640；412 沉睡客可唤醒，阿语市场复购最强。', actions: ['唤醒 412 沉睡客', 'VIP 专属复购权益', '阿语市场加大复购触达'] });
       setInsightLoading(false);
     }, 400);
     return () => { cancelled = true; clearTimeout(t); };
@@ -98,14 +98,14 @@ export default function CrmDataBoard({ windowDays = 30 }: { windowDays?: number 
         </div>
 
         {/* 一号位：KPI + 沉睡唤醒 */}
-        <div className="grid lg:grid-cols-3 gap-4 mb-6">
-          <div className={`${card} lg:col-span-2`}>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              {[['客户总数', '3,420', `+${newAdd} 新增`], ['复购率', '27%', '老客贡献 38% GMV'], ['LTV', '$118', 'VIP 达 $640'], ['LTV:CAC', '3.4x', '健康线 ≥3x ✓']].map(([l, v, sub]) => (
-                <div key={l} className="rounded-lg p-3" style={{ background: C.bg }}>
-                  <p className="text-[11px]" style={{ color: C.label }}>{l}</p>
-                  <p className="text-xl font-bold mt-0.5" style={{ color: C.value }}>{v}</p>
-                  <p className="text-[10px] mt-1" style={{ color: C.label }}>{sub}</p>
+        <div className="grid lg:grid-cols-3 gap-4 mb-6 items-stretch">
+          <div className={`${card} lg:col-span-2 min-h-[210px]`}>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 h-full">
+              {[['客户总数', '3,420', `+${newAdd} 新增`], ['复购率', '27%', '老客带来 38% 曝光'], ['LTV', '$118', 'VIP 达 $640'], ['LTV:CAC', '3.4x', '健康线 ≥3x ✓']].map(([l, v, sub]) => (
+                <div key={l} className="rounded-xl p-4 min-h-40 h-full flex flex-col justify-between" style={{ background: C.bg }}>
+                  <p className="text-xs font-semibold" style={{ color: C.label }}>{l}</p>
+                  <p className="text-3xl font-bold leading-none" style={{ color: C.value }}>{v}</p>
+                  <p className="text-xs leading-relaxed" style={{ color: C.label }}>{sub}</p>
                 </div>
               ))}
             </div>

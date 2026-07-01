@@ -8,7 +8,7 @@ import { studioApi } from '../lib/studioApi';
 
 /* 流量页 = 社媒内容数据（内容运营视角）。
    记录「内容基因」（选题/钩子/形式/时长/封面/平台/语言/投流），
-   重点分析 爆款率·内容基因带货·完播·内容→GMV，
+   重点分析 爆款率·内容基因曝光·完播·内容→视频曝光，
    呈现 爆款墙 + 气泡矩阵 + 趋势 + 明细。占位数据，接入后替换。 */
 
 interface Post {
@@ -36,7 +36,7 @@ const POSTS: Post[] = [
   { id: 'p14', title: 'Tutorial: pro setup',       hue: 190, platform: 'YouTube',   account: 'Yiwu Trading',   lang: '英语', postType: '自发', paid: false, spend: 0,   topic: '教程',     hook: '数字冲击', format: '真人口播', dur: '>60s',   daysAgo: 27, plays: 120000,  comp: 19, eng: 3.6, clicks: 600,  inq: 9,   orders: 21,  gmv: 560 },
 ];
 
-// 30 天 GMV / 播放 趋势（占位，确定性生成）
+// 30 天视频曝光 / 播放趋势（占位，确定性生成）
 const SERIES = Array.from({ length: 30 }, (_, i) => {
   const d = new Date(); d.setDate(d.getDate() - (29 - i));
   const wave = 1 + 0.45 * Math.sin(i / 3.2) + 0.25 * Math.sin(i / 1.7);
@@ -67,7 +67,7 @@ export default function TrafficDataBoard({ windowDays = 30 }: { windowDays?: num
   const [compare, setCompare] = useState(false);
   const [threshold, setThreshold] = useState(500000);
   const [view, setView] = useState<'reach' | 'conv'>('reach'); // 高起量 / 高转化
-  const [yMetric, setYMetric] = useState<'gmv' | 'inq' | 'roas'>('gmv'); // 气泡 y 轴
+  const [yMetric, setYMetric] = useState<'exposure' | 'inq' | 'roas'>('exposure'); // 气泡 y 轴
   const [insight, setInsight] = useState<{ summary: string; actions: string[] } | null>(null);
   const [insightLoading, setInsightLoading] = useState(false);
 
@@ -112,15 +112,15 @@ export default function TrafficDataBoard({ windowDays = 30 }: { windowDays?: num
     });
     return [...m.values()].map(e => ({
       topic: e.topic, x: Math.round(e.x / 10000), z: e.z,
-      y: yMetric === 'gmv' ? e.gmv : yMetric === 'inq' ? e.inq : (e.spend > 0 ? +(e.gmv / e.spend).toFixed(1) : null),
+      y: yMetric === 'exposure' ? Math.round(e.x / 10000) : yMetric === 'inq' ? e.inq : (e.spend > 0 ? +(e.gmv / e.spend).toFixed(1) : null),
     })).filter(e => e.y !== null) as { topic: string; x: number; y: number; z: number }[];
   }, [posts, yMetric]);
 
-  // 基因排行（按 GMV）
+  // 基因排行（按视频曝光）
   const genes = useMemo(() => {
     const rank = (key: 'hook' | 'topic' | 'format') => {
       const m = new Map<string, number>();
-      posts.forEach(p => m.set(p[key], (m.get(p[key]) ?? 0) + p.gmv));
+      posts.forEach(p => m.set(p[key], (m.get(p[key]) ?? 0) + p.plays));
       const arr = [...m.entries()].map(([k, v]) => ({ k, v })).sort((a, b) => b.v - a.v).slice(0, 4);
       const max = arr[0]?.v ?? 1;
       return arr.map(x => ({ ...x, pct: Math.round(x.v / max * 100) }));
@@ -130,8 +130,8 @@ export default function TrafficDataBoard({ windowDays = 30 }: { windowDays?: num
 
   const platBar = useMemo(() => {
     const m = new Map<string, number>();
-    posts.forEach(p => m.set(p.platform, (m.get(p.platform) ?? 0) + p.gmv));
-    return [...m.entries()].map(([platform, gmv]) => ({ platform, gmv })).sort((a, b) => b.gmv - a.gmv);
+    posts.forEach(p => m.set(p.platform, (m.get(p.platform) ?? 0) + p.plays));
+    return [...m.entries()].map(([platform, exposure]) => ({ platform, exposure })).sort((a, b) => b.exposure - a.exposure);
   }, [posts]);
 
   const trend = useMemo(() => SERIES.filter(s => s.daysAgo <= windowDays), [windowDays]);
@@ -142,19 +142,19 @@ export default function TrafficDataBoard({ windowDays = 30 }: { windowDays?: num
     setInsightLoading(true);
     const topTopic = genes.topic[0]?.k ?? '';
     const t = setTimeout(async () => {
-      const metrics = { 发布: agg.n, 爆款: agg.hits, 爆款率: `${agg.hitRate.toFixed(0)}%`, GMV: agg.gmv, 引流: agg.clicks, 询盘: agg.inq, 完播率: `${agg.comp.toFixed(0)}%`, 最佳选题: topTopic, 最佳钩子: genes.hook[0]?.k };
+      const metrics = { 发布: agg.n, 爆款: agg.hits, 爆款率: `${agg.hitRate.toFixed(0)}%`, 视频曝光: agg.plays, 引流: agg.clicks, 询盘: agg.inq, 完播率: `${agg.comp.toFixed(0)}%`, 最佳选题: topTopic, 最佳钩子: genes.hook[0]?.k };
       const r = await studioApi.insight({ scope: 'traffic', metrics });
       if (cancelled) return;
       if (r.summary) setInsight({ summary: r.summary, actions: r.actions ?? [] });
       else setInsight({
-        summary: `本期发 ${agg.n} 条爆 ${agg.hits} 条（${agg.hitRate.toFixed(0)}%），「${topTopic}」选题带货最高。`,
+        summary: `本期发 ${agg.n} 条爆 ${agg.hits} 条（${agg.hitRate.toFixed(0)}%），「${topTopic}」选题曝光最高。`,
         actions: [`放大「${genes.hook[0]?.k ?? '痛点冲击'}」开场`, '阿语 TikTok 加量', '砍掉低完播教程类'],
       });
       setInsightLoading(false);
     }, 400);
     return () => { cancelled = true; clearTimeout(t); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [agg.n, agg.hits, agg.gmv, threshold]);
+  }, [agg.n, agg.hits, agg.plays, threshold]);
 
   const seg = (active: boolean) => `px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${active ? 'bg-surface text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'}`;
   const sel = 'rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs outline-none hover:border-border-bright';
@@ -231,7 +231,7 @@ export default function TrafficDataBoard({ windowDays = 30 }: { windowDays?: num
                 <p className="text-xs" style={{ color: '#854F0B' }}>平均转化率 {delta('1.2pp')}</p>
                 <p className="text-4xl font-bold mt-1" style={{ color: '#633806' }}>{agg.conv.toFixed(1)}%</p>
                 <p className="text-xs mt-2" style={{ color: '#854F0B' }}>引流 {wan(agg.clicks)} · 下单 {Math.round(agg.orders)}</p>
-                <p className="text-[11px] mt-3" style={{ color: '#854F0B' }}>带货 GMV {usd(agg.gmv)}</p>
+                <p className="text-[11px] mt-3" style={{ color: '#854F0B' }}>视频曝光 {wan(agg.plays)}</p>
               </>
             )}
           </div>
@@ -246,7 +246,7 @@ export default function TrafficDataBoard({ windowDays = 30 }: { windowDays?: num
                       {view === 'reach' && hot && <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold text-white flex items-center gap-0.5" style={{ background: AMBER }}><Flame size={9} /> 爆款</span>}
                       <span className="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded text-[8px] font-semibold text-white bg-black/45">{p.platform}</span>
                       <span className="absolute bottom-1.5 left-1.5 right-1.5 text-[10px] font-bold text-white" style={{ textShadow: '0 1px 2px rgba(0,0,0,.7)' }}>
-                        {view === 'reach' ? `▶ ${wan(p.plays)}` : `转化 ${convOf(p).toFixed(1)}%`} · {usd(p.gmv)}
+                        {view === 'reach' ? `曝光 ${wan(p.plays)}` : `转化 ${convOf(p).toFixed(1)}% · 曝光 ${wan(p.plays)}`}
                       </span>
                     </div>
                     <div className="px-2 py-1.5">
@@ -265,7 +265,7 @@ export default function TrafficDataBoard({ windowDays = 30 }: { windowDays?: num
           <span className="text-sm font-semibold text-text-primary">内容基因分析</span>
           <span className="text-xs text-text-muted">选题 × 效果</span>
           <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-surface-2 border border-border ml-auto">
-            {([['gmv', '带货 GMV'], ['inq', '询盘'], ['roas', '投流 ROAS']] as const).map(([m, l]) => <button key={m} className={seg(yMetric === m)} onClick={() => setYMetric(m)}>{l}</button>)}
+            {([['exposure', '视频曝光'], ['inq', '询盘'], ['roas', '投流 ROAS']] as const).map(([m, l]) => <button key={m} className={seg(yMetric === m)} onClick={() => setYMetric(m)}>{l}</button>)}
           </div>
         </div>
         <div className="grid lg:grid-cols-2 gap-4 mb-6">
@@ -277,7 +277,7 @@ export default function TrafficDataBoard({ windowDays = 30 }: { windowDays?: num
                   <XAxis type="number" dataKey="x" name="曝光(万)" tick={{ fontSize: 10 }} stroke="var(--color-text-muted)" label={{ value: '曝光(万)', position: 'insideBottom', offset: -8, fontSize: 10 }} />
                   <YAxis type="number" dataKey="y" name={yMetric} tick={{ fontSize: 10 }} stroke="var(--color-text-muted)" />
                   <ZAxis type="number" dataKey="z" range={[80, 500]} />
-                  <Tooltip cursor={{ strokeDasharray: '3 3' }} contentStyle={{ fontSize: 12, borderRadius: 8 }} formatter={((v: number, n: string) => [n === 'y' ? (yMetric === 'gmv' ? usd(Number(v)) : yMetric === 'roas' ? `${v}x` : v) : `${v}万`, n === 'y' ? '效果' : '曝光']) as never} labelFormatter={() => ''} />
+                  <Tooltip cursor={{ strokeDasharray: '3 3' }} contentStyle={{ fontSize: 12, borderRadius: 8 }} formatter={((v: number, n: string) => [n === 'y' ? (yMetric === 'exposure' ? `${v}万` : yMetric === 'roas' ? `${v}x` : v) : `${v}万`, n === 'y' ? '效果' : '曝光']) as never} labelFormatter={() => ''} />
                   <Scatter data={bubble}>
                     {bubble.map((e, i) => <Cell key={i} fill={TOPIC_COLORS[e.topic] ?? '#888'} fillOpacity={0.75} />)}
                   </Scatter>
@@ -292,10 +292,10 @@ export default function TrafficDataBoard({ windowDays = 30 }: { windowDays?: num
             <div className="grid grid-cols-3 gap-3">
               {([['hook', '钩子'], ['topic', '选题'], ['format', '形式']] as const).map(([key, label]) => (
                 <div key={key}>
-                  <p className="text-[11px] text-text-secondary mb-2">{label} · 带货榜</p>
+                  <p className="text-[11px] text-text-secondary mb-2">{label} · 曝光榜</p>
                   {genes[key].map(g => (
                     <div key={g.k} className="mb-2">
-                      <div className="flex justify-between text-[11px]"><span className="truncate">{g.k}</span><span className="text-text-muted ml-1">{usd(g.v)}</span></div>
+                      <div className="flex justify-between text-[11px]"><span className="truncate">{g.k}</span><span className="text-text-muted ml-1">{wan(g.v)}</span></div>
                       <div className="h-1.5 rounded-full bg-surface-2 mt-1 overflow-hidden"><div className="h-full rounded-full" style={{ width: `${g.pct}%`, background: AMBER }} /></div>
                     </div>
                   ))}
@@ -308,7 +308,7 @@ export default function TrafficDataBoard({ windowDays = 30 }: { windowDays?: num
         {/* 趋势 + 平台对比 */}
         <div className="grid lg:grid-cols-2 gap-4 mb-6">
           <div className="card !rounded-xl p-3">
-            <p className="text-xs text-text-secondary mb-1 px-1">GMV 趋势 {delta('18%')}</p>
+            <p className="text-xs text-text-secondary mb-1 px-1">视频曝光趋势 {delta('18%')}</p>
             <div className="h-[200px]">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={trend} margin={{ top: 6, right: 10, bottom: 0, left: -10 }}>
@@ -316,22 +316,22 @@ export default function TrafficDataBoard({ windowDays = 30 }: { windowDays?: num
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
                   <XAxis dataKey="day" tick={{ fontSize: 9 }} stroke="var(--color-text-muted)" interval="preserveStartEnd" minTickGap={24} />
                   <YAxis tick={{ fontSize: 9 }} stroke="var(--color-text-muted)" />
-                  <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} formatter={((v: number) => [usd(Number(v)), 'GMV']) as never} />
-                  <Area type="monotone" dataKey="gmv" stroke={AMBER} strokeWidth={2} fill="url(#gmvFill)" />
+                  <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} formatter={((v: number) => [wan(Number(v)), '视频曝光']) as never} />
+                  <Area type="monotone" dataKey="plays" stroke={AMBER} strokeWidth={2} fill="url(#gmvFill)" />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
           </div>
           <div className="card !rounded-xl p-3">
-            <p className="text-xs text-text-secondary mb-1 px-1">各平台带货 GMV</p>
+            <p className="text-xs text-text-secondary mb-1 px-1">各平台视频曝光</p>
             <div className="h-[200px]">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={platBar} layout="vertical" margin={{ top: 6, right: 12, bottom: 0, left: 8 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" horizontal={false} />
                   <XAxis type="number" tick={{ fontSize: 9 }} stroke="var(--color-text-muted)" />
                   <YAxis type="category" dataKey="platform" tick={{ fontSize: 10 }} stroke="var(--color-text-muted)" width={62} />
-                  <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} formatter={((v: number) => [usd(Number(v)), 'GMV']) as never} cursor={{ fill: 'var(--color-surface-2)' }} />
-                  <Bar dataKey="gmv" radius={[0, 4, 4, 0]} fill={AMBER} />
+                  <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} formatter={((v: number) => [wan(Number(v)), '视频曝光']) as never} cursor={{ fill: 'var(--color-surface-2)' }} />
+                  <Bar dataKey="exposure" radius={[0, 4, 4, 0]} fill={AMBER} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -356,7 +356,7 @@ export default function TrafficDataBoard({ windowDays = 30 }: { windowDays?: num
                     </select>
                   </th>
                 ))}
-                {['播放', '完播', '引流', '询盘', '下单', 'GMV', '转化'].map(h => (
+                {['播放', '完播', '引流', '询盘', '下单', '视频曝光', '转化'].map(h => (
                   <th key={h} className="px-1.5 py-2 text-left font-semibold whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -383,7 +383,7 @@ export default function TrafficDataBoard({ windowDays = 30 }: { windowDays?: num
                   <td className="px-1.5 py-2">{p.clicks.toLocaleString()}</td>
                   <td className="px-1.5 py-2">{p.inq}</td>
                   <td className="px-1.5 py-2">{p.orders}</td>
-                  <td className="px-1.5 py-2 font-semibold" style={{ color: '#633806' }}>{usd(p.gmv)}</td>
+                  <td className="px-1.5 py-2 font-semibold" style={{ color: '#633806' }}>{wan(p.plays)}</td>
                   <td className="px-1.5 py-2">{convOf(p).toFixed(1)}%</td>
                 </tr>
               ))}
@@ -393,7 +393,7 @@ export default function TrafficDataBoard({ windowDays = 30 }: { windowDays?: num
         </div>
 
         <p className="flex items-center gap-1.5 text-[11px] text-text-muted mt-4">
-          <Info size={12} /> 数据来源：浅层取自各平台 Insights · 深层 GMV 取自 UTM→Shopify · 投流取自投放后台；爆款=播放达阈值
+          <Info size={12} /> 数据来源：浅层取自各平台 Insights · 视频曝光取自播放与触达指标 · 投流取自投放后台；爆款=播放达阈值
         </p>
       </div>
     </div>
