@@ -22,6 +22,15 @@ fi
 read -r -p "Gemini API key. Leave empty if you will use Qwen/DashScope: " gemini_key
 read -r -p "DashScope API key. Leave empty if unused: " dashscope_key
 read -r -p "Seedance API key. Leave empty if unused: " seedance_key
+read -r -p "YouTube OAuth Client ID. Leave empty if unused: " youtube_oauth_client_id
+read -r -s -p "YouTube OAuth Client Secret. Leave empty if unused: " youtube_oauth_client_secret
+echo
+read -r -p "Meta App ID. Leave empty if unused: " meta_social_app_id
+read -r -s -p "Meta App Secret. Leave empty if unused: " meta_social_app_secret
+echo
+read -r -p "TikTok Client Key. Leave empty if unused: " tiktok_client_key
+read -r -s -p "TikTok Client Secret. Leave empty if unused: " tiktok_client_secret
+echo
 
 render_secret="$(openssl rand -hex 32)"
 
@@ -51,6 +60,16 @@ SEEDANCE_BASE_URL=https://ark.ap-southeast.bytepluses.com/api/v3
 SEEDANCE_MODEL=doubao-seedance-2-0-fast-260128
 
 YOUTUBE_API_KEY=
+YOUTUBE_OAUTH_CLIENT_ID=${youtube_oauth_client_id}
+YOUTUBE_OAUTH_CLIENT_SECRET=${youtube_oauth_client_secret}
+
+META_SOCIAL_APP_ID=${meta_social_app_id}
+META_SOCIAL_APP_SECRET=${meta_social_app_secret}
+
+TIKTOK_CLIENT_KEY=${tiktok_client_key}
+TIKTOK_CLIENT_SECRET=${tiktok_client_secret}
+
+ADVANCED_MANUAL_CONNECT_ENABLED=false
 APIFY_TOKEN=
 R2_PUBLIC_URL=
 EOF

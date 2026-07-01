@@ -1,6 +1,9 @@
 node_modules/
 dist/
 .env
+.env.*
+!.env.example
+!.env.*.example
 .env.local
 *.bak.*
 pb_data/
