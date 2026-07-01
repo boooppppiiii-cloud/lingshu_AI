@@ -6,15 +6,14 @@ import StrategyDataBoard from './StrategyDataBoard';
 import AgentReply from './AgentReply';
 import { authHeader } from '../lib/auth';
 import type { ConversationContext, Message, RestoreSignal, KickoffSignal, AgentAction } from '../App';
-import { completeDemoStep } from '../lib/demoProgress';
 
 type ViewMode = 'chat' | 'workspace' | 'board';
 
 const SUGGESTIONS = [
-  '帮我分析斋月期间中东市场的推广机会',
-  '生成本周经营复盘报告',
-  '启动假发产品的行动建议流水线',
-  '我想了解哪些老客最近60天没有互动',
+  '企业中心经营复盘',
+  '主推品行动计划',
+  '判断增长优先级',
+  '整理关键决策',
 ];
 
 interface Props {
@@ -24,6 +23,7 @@ interface Props {
   restore?: RestoreSignal;
   kickoff?: KickoffSignal;
   onAction?: AgentAction;
+  onSessionRefresh?: () => void;
 }
 
 function mergeConsecutiveAssistant(list: Message[]): Message[] {
@@ -40,7 +40,7 @@ function mergeConsecutiveAssistant(list: Message[]): Message[] {
   return merged;
 }
 
-export default function StrategyPage({ onEnterConversation, onLeaveConversation, isInConversation, restore, kickoff, onAction }: Props) {
+export default function StrategyPage({ onEnterConversation, onLeaveConversation, isInConversation, restore, kickoff, onAction, onSessionRefresh }: Props) {
   const [viewMode, setViewMode] = useState<ViewMode>('chat');
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
@@ -50,8 +50,10 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
   const inFlightRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const sentKickoffKeysRef = useRef(new Set<string>());
+  const latestMessagesRef = useRef<Message[]>([]);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  useEffect(() => { latestMessagesRef.current = messages; }, [messages]);
   // 从近期会话恢复 / 新建（清空）
   useEffect(() => { if (restore) { setMessages(mergeConsecutiveAssistant(restore.messages)); setViewMode('chat'); } }, [restore?.key]); // eslint-disable-line react-hooks/exhaustive-deps
   // 一键执行：自动发起任务（新开一段对话）
@@ -68,6 +70,7 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
     const userMsg: Message = { role: 'user', content: text };
     const nextMessages = [...mergeConsecutiveAssistant(base ?? messages), userMsg];
     let assistantStarted = false;
+    latestMessagesRef.current = nextMessages;
     setMessages(nextMessages);
     setInput('');
     setLoading(true);
@@ -76,7 +79,11 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
     const ensureAssistant = () => {
       if (assistantStarted) return;
       assistantStarted = true;
-      setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
+      setMessages(prev => {
+        const next = [...prev, { role: 'assistant' as const, content: '' }];
+        latestMessagesRef.current = next;
+        return next;
+      });
       setLoading(false);
     };
     const updateAssistant = (patch: (msg: Message) => Message) => {
@@ -85,6 +92,7 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
         const copy = [...prev];
         const idx = copy.length - 1;
         copy[idx] = patch(copy[idx]);
+        latestMessagesRef.current = copy;
         return copy;
       });
     };
@@ -159,9 +167,14 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
       }
     } finally {
       if (timeout) window.clearTimeout(timeout);
+      const finalMessages = mergeConsecutiveAssistant(latestMessagesRef.current);
+      if (finalMessages.some(msg => msg.role === 'assistant' && msg.content.trim().length > 12)) {
+        onEnterConversation({ agent: 'strategy', messages: finalMessages });
+      }
       setLoading(false);
       inFlightRef.current = false;
       abortRef.current = null;
+      onSessionRefresh?.();
     }
   };
 
@@ -229,7 +242,6 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
                           key={s}
                           data-demo-target={index === 0 ? 'strategy_prompt' : undefined}
                           onClick={() => {
-                            completeDemoStep('strategy');
                             void send(s);
                           }}
                           className="text-left px-3 py-2.5 rounded-xl border border-border bg-surface text-xs text-text-secondary hover:border-border-bright hover:text-text-primary transition-all leading-relaxed">

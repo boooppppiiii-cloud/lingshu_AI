@@ -4,7 +4,6 @@ import { ArrowUp, Brain, Loader2, X } from 'lucide-react';
 import type { AgentType, ConversationContext, Message, KickoffSignal, AgentAction } from '../App';
 import AgentReply from './AgentReply';
 import { authHeader } from '../lib/auth';
-import { completeDemoStep } from '../lib/demoProgress';
 
 interface AgentConfig {
   type: AgentType;
@@ -27,6 +26,7 @@ interface Props {
   restoreMessages?: Message[];
   kickoff?: KickoffSignal;
   onAction?: AgentAction;
+  onSessionRefresh?: () => void;
 }
 
 function mergeConsecutiveAssistant(list: Message[]): Message[] {
@@ -43,7 +43,7 @@ function mergeConsecutiveAssistant(list: Message[]): Message[] {
   return merged;
 }
 
-export default function AgentChatPage({ config, onEnterConversation, onLeaveConversation, headerExtra, restoreKey, restoreMessages, kickoff, onAction }: Props) {
+export default function AgentChatPage({ config, onEnterConversation, onLeaveConversation, headerExtra, restoreKey, restoreMessages, kickoff, onAction, onSessionRefresh }: Props) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -52,8 +52,10 @@ export default function AgentChatPage({ config, onEnterConversation, onLeaveConv
   const inFlightRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const sentKickoffKeysRef = useRef(new Set<string>());
+  const latestMessagesRef = useRef<Message[]>([]);
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
+  useEffect(() => { latestMessagesRef.current = messages; }, [messages]);
   // 从近期会话恢复 / 新建（清空）
   useEffect(() => { if (restoreKey !== undefined) setMessages(mergeConsecutiveAssistant(restoreMessages ?? [])); }, [restoreKey]); // eslint-disable-line react-hooks/exhaustive-deps
   // 一键执行：从别处跳来并自动发起任务（新开一段对话）
@@ -69,6 +71,7 @@ export default function AgentChatPage({ config, onEnterConversation, onLeaveConv
     const userMsg: Message = { role: 'user', content: text };
     const next = [...mergeConsecutiveAssistant(base ?? messages), userMsg];
     let assistantStarted = false;
+    latestMessagesRef.current = next;
     setMessages(next);
     setInput('');
     setLoading(true);
@@ -77,7 +80,11 @@ export default function AgentChatPage({ config, onEnterConversation, onLeaveConv
     const ensureAssistant = () => {
       if (assistantStarted) return;
       assistantStarted = true;
-      setMessages(prev => [...prev, { role: 'assistant', content: '' }]);
+      setMessages(prev => {
+        const nextMessages = [...prev, { role: 'assistant' as const, content: '' }];
+        latestMessagesRef.current = nextMessages;
+        return nextMessages;
+      });
       setLoading(false);
     };
     const updateAssistant = (patch: (msg: Message) => Message) => {
@@ -86,6 +93,7 @@ export default function AgentChatPage({ config, onEnterConversation, onLeaveConv
         const copy = [...prev];
         const idx = copy.length - 1;
         copy[idx] = patch(copy[idx]);
+        latestMessagesRef.current = copy;
         return copy;
       });
     };
@@ -159,9 +167,14 @@ export default function AgentChatPage({ config, onEnterConversation, onLeaveConv
       }
     } finally {
       if (timeout) window.clearTimeout(timeout);
+      const finalMessages = mergeConsecutiveAssistant(latestMessagesRef.current);
+      if (finalMessages.some(msg => msg.role === 'assistant' && msg.content.trim().length > 12)) {
+        onEnterConversation({ agent: config.type, messages: finalMessages });
+      }
       setLoading(false);
       inFlightRef.current = false;
       abortRef.current = null;
+      onSessionRefresh?.();
     }
   };
 
@@ -205,7 +218,6 @@ export default function AgentChatPage({ config, onEnterConversation, onLeaveConv
                     key={s}
                     data-demo-target={config.type === 'retention' && index === 0 ? 'retention_prompt' : undefined}
                     onClick={() => {
-                      if (config.type === 'retention') completeDemoStep('retention');
                       void send(s);
                     }}
                     className="text-left px-3 py-2.5 rounded-xl border border-border bg-surface text-xs text-text-secondary hover:border-border-bright hover:text-text-primary transition-all leading-relaxed">

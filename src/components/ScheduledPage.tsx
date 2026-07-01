@@ -435,8 +435,8 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
 
   const goToAgent = (action: NextAction) => {
     setResultTaskId(null);
-    completeDemoStep('automation_workflow');
     onAction?.(action.agent, action.prompt);
+    window.setTimeout(() => completeDemoStep('automation_workflow'), 600);
   };
 
   const taskWorkspace = (task: ScheduledTask) => {

@@ -96,4 +96,13 @@ CloudBase Run 容器本地目录适合临时文件，不适合保存正式客户
 
 本演示版的灵感大屏视频文件已随仓库放在 `data/media/`，CloudBase Run 必须用 Dockerfile 构建完整应用，不能只部署 `dist/` 静态前端。部署后可访问任意 `/media/<文件名>` 检查视频文件是否随镜像发布成功。
 
+如果灵感大屏页面显示“暂无真实视频数据”，说明线上 PocketBase 还没有导入演示视频元数据。先确认 `.env.production` 里配置了线上 `PB_URL` / `PB_ADMIN_EMAIL` / `PB_ADMIN_PASSWORD`，然后执行：
+
+```bash
+npm run setup:pb
+npm run import:trend-videos
+```
+
+导入完成后，测试账号刷新灵感大屏；试用租户会自动同步共享视频池。
+
 如果只做小范围演示，可以先用 CloudBase Run + 外部 PocketBase 跑起来；如果要给付费客户长期使用，应优先完成文件存储迁移和定期备份。

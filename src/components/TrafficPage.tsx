@@ -18,9 +18,10 @@ interface Props {
   onAction?: AgentAction;
   onScriptPanelOpen?: () => void;
   onScriptPanelClose?: () => void;
+  onSessionRefresh?: () => void;
 }
 
-export default function TrafficPage({ onEnterConversation, onLeaveConversation, isInConversation, onNavigate, restore, kickoff, onAction, onScriptPanelOpen, onScriptPanelClose }: Props) {
+export default function TrafficPage({ onEnterConversation, onLeaveConversation, isInConversation, onNavigate, restore, kickoff, onAction, onScriptPanelOpen, onScriptPanelClose, onSessionRefresh }: Props) {
   const [viewMode, setViewMode] = useState<ViewMode>('dashboard');
   useEffect(() => { if (restore) setViewMode('chat'); }, [restore?.key]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (kickoff) setViewMode('chat'); }, [kickoff?.key]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -100,10 +101,10 @@ export default function TrafficPage({ onEnterConversation, onLeaveConversation, 
                   name: '流量专家',
                   tagline: '爆款拆解 · 多语言脚本 · 矩阵发布',
                   suggestions: [
-                    '拆解这条 TikTok 爆款的结构，给我克隆脚本',
-                    '给智能钱包写一条阿拉伯语 TikTok 口播脚本',
-                    '本周发什么选题能起量？给我 3 个内容方向',
-                    '帮我规划 TikTok + Instagram 一周发布节奏',
+                    '主推品脚本方向',
+                    '目标市场发布节奏',
+                    '卖点口播脚本',
+                    '产品亮点钩子',
                   ],
                 }}
                 onEnterConversation={handleEnterChat}
@@ -113,6 +114,7 @@ export default function TrafficPage({ onEnterConversation, onLeaveConversation, 
                 restoreMessages={restore?.messages}
                 kickoff={kickoff}
                 onAction={onAction}
+                onSessionRefresh={onSessionRefresh}
               />
             </motion.div>
           )}

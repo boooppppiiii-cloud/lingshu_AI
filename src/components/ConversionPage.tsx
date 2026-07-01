@@ -7,7 +7,6 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import AgentChatPage from './AgentChatPage';
 import type { ConversationContext, RestoreSignal, KickoffSignal, AgentAction, Message } from '../App';
-import { completeDemoStep } from '../lib/demoProgress';
 
 type ViewMode = 'dashboard' | 'chat' | 'customer-chat';
 
@@ -18,6 +17,7 @@ interface Props {
   restore?: RestoreSignal;
   kickoff?: KickoffSignal;
   onAction?: AgentAction;
+  onSessionRefresh?: () => void;
 }
 
 // ─── Static mock data ────────────────────────────────────────────────────────
@@ -291,7 +291,6 @@ function Dashboard({ onInquiryClick }: { onInquiryClick: (id: string) => void })
             <button
               data-demo-target="conversion_reply"
               onClick={() => {
-                completeDemoStep('conversion');
                 onInquiryClick(topId);
               }}
               className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-all text-white"
@@ -666,6 +665,7 @@ export default function ConversionPage({
   restore,
   kickoff,
   onAction,
+  onSessionRefresh,
 }: Props) {
   const [viewMode, setViewMode]                 = useState<ViewMode>('dashboard');
   const [selectedInquiryId, setSelectedInquiryId] = useState('1');
@@ -748,10 +748,10 @@ export default function ConversionPage({
                   name: '转化专家',
                   tagline: '多语种 24/7 · 大单预警 · AI+人工切换',
                   suggestions: [
-                    '帮我写一段阿拉伯语的产品询盘回复模板',
-                    '有买家问能不能做500件定制，怎么跟进？',
-                    '分析本月询盘转化率低的原因',
-                    '生成英文WhatsApp跟单话术（3天未回复）',
+                    '首响询盘模板',
+                    '大单跟进话术',
+                    '询盘优先级',
+                    '未回复跟单话术',
                   ],
                 }}
                 onEnterConversation={handleEnterChat}
@@ -761,6 +761,7 @@ export default function ConversionPage({
                 restoreMessages={restore?.messages}
                 kickoff={kickoff}
                 onAction={onAction}
+                onSessionRefresh={onSessionRefresh}
               />
             </motion.div>
           )}

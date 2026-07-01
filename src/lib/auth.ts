@@ -33,6 +33,8 @@ export interface AuthSession {
     remaining: { aiChat: number; generation: number; render: number; videoGeneration: number; tokens: number };
     totalUsage?: { tokens: number; videoGeneration: number };
     totalRemaining?: { tokens: number; videoGeneration: number };
+    guideTrigger?: boolean;
+    guideScope?: string;
   };
 }
 
@@ -56,11 +58,18 @@ export const authApi = {
     if (!getToken()) return null;
     try {
       const r = await fetch('/api/overseas/auth/me', { headers: authHeader() });
-      if (!r.ok) return null;
+      if (!r.ok) {
+        if (r.status === 401 || r.status === 402) clearToken();
+        return null;
+      }
       return (await r.json()) as AuthSession;
     } catch {
       return null;
     }
+  },
+  guideSeen: async (): Promise<void> => {
+    if (!getToken()) return;
+    await fetch('/api/overseas/auth/guide-seen', { method: 'POST', headers: authHeader() }).catch(() => {});
   },
   logout: () => clearToken(),
 };

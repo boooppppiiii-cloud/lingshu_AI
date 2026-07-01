@@ -1,86 +1,74 @@
 [
   {
-    "id": "system_video_keyword_crawl_daily_0100",
-    "name": "YT/TK 关键词视频自动采集",
+    "id": "task_1782813604615",
+    "name": "YouTube 热点视频采集",
     "category": "daily",
     "taskType": "video_keyword_crawl",
     "cronExpr": "0 1 * * *",
     "cronLabel": "每天 01:00（北京时间）",
     "enabled": true,
     "config": {
-      "platforms": "youtube,tiktok",
+      "platforms": "youtube",
       "keywords": "skincare",
-      "limit": "12",
+      "limit": "5",
       "dateWindowDays": "7",
-      "tenantId": ""
+      "tenantId": "10d9libxzuugplg"
     },
-    "createdAt": "2026-06-29T22:55:44.316Z",
-    "lastRun": "2026-06-30T04:35:23.802Z",
-    "lastResult": "【视频关键词自动采集】2026-06-24 至 2026-06-30\n平台：youtube, tiktok；关键词：skincare；每组数量：12\n汇总：返回 19 条，新增 14 条，库内已有 5 条\nyoutube / skincare: 返回 12 条，新增 12 条，库内已有 0 条\ntiktok / skincare: 返回 7 条，新增 2 条，库内已有 5 条"
+    "tenantId": "10d9libxzuugplg",
+    "createdAt": "2026-06-30T10:00:04.615Z"
   },
   {
-    "id": "task_1782791787820",
-    "name": "节日推品提醒",
-    "category": "monitor",
-    "taskType": "holiday_push",
-    "cronExpr": "0 18 * * *",
-    "cronLabel": "每天 18:00",
-    "enabled": true,
-    "config": {},
-    "createdAt": "2026-06-30T03:56:27.820Z",
-    "lastRun": "2026-06-30T04:13:28.071Z",
-    "lastResult": "【节日推品提醒】基于企业中心主要市场：美国、沙特、阿联酋、德国、印尼\n时间窗口：未来 120 天；生成日期：2026/6/30\n\n【美国】\n- 2026-07-03（3 天后）Independence Day 观察假期：7/4 独立日落在周六，联邦观察假期为 7/3\n- 2026-07-04（4 天后）Independence Day 独立日：美国建国 250 周年，适合做纪念装、旅行装和派对妆容内容\n- 2026-09-07（69 天后）Labor Day 劳动节：夏末促销节点，适合清爽护肤、旅行补货和开学季前内容\n- 2026-10-12（104 天后）Columbus Day / Indigenous Peoples Day：部分地区放假，适合做秋季护肤切换\n  推品建议：旅行装护肤套装、玻尿酸精华、低 MOQ 私标套装\n  文案语言：英语；动作：提前准备 2 条社媒预热内容、1 版询盘跟进话术、1 版老客唤醒消息。\n\n【沙特】\n- 2026-08-25（56 天后）Prophet Muhammad’s Birthday 先知诞辰：宗教节日，内容表达需稳重，避免夸张促销语\n- 2026-09-23（85 天后）Saudi National Day 沙特国庆日：适合绿色视觉、礼赠套装、阿语标签和批发备货提醒\n  推品建议：唇釉套装、旅行装护肤套装、英文/阿语标签版本\n  文案语言：阿拉伯语 / 英语；动作：提前准备 2 条社媒预热内容、1 版询盘跟进话术、1 版老客唤醒消息。\n\n【阿联酋】\n- 2026-08-25（56 天后）Prophet Muhammad’s Birthday 先知诞辰：适合温和护肤、礼赠套装，文案保持尊重克制\n  推品建议：唇釉套装、旅行装护肤套装、英文/阿语标签版本\n  文案语言：阿拉伯语 / 英语；动作：提前准备 2 条社媒预热内容、1 版询盘跟进话术、1 版老客唤醒消息。\n\n【德国】\n- 2026-08-15（46 天后）Assumption Day 圣母升天节（部分州）：巴伐利亚、萨尔等区域假期，可做区域定向内容\n- 2026-10-03（95 天后）German Unity Day 德国统一日：全国假日，适合秋季护肤、成分安全和合规资料内容\n  推品建议：玻尿酸精华、烟酰胺面霜、纯素/无动物测试卖点组合\n  文案语言：德语 / 英语；动作：提前准备 2 条社媒预热内容、1 版询盘跟进话术、1 版老客唤醒消息。\n\n【印尼】\n- 2026-08-17（48 天后）Independence Day 印尼独立日：红白视觉、直播促销和 TikTok Shop 套装备货节点\n- 2026-08-25（56 天后）Mawlid / Maulid Nabi 先知诞辰：宗教节日，适合礼赠和温和表达，避免激进促销\n  推品建议：唇釉套装、旅行装护肤套装、TikTok Shop 小批量试单组合\n  文案语言：印尼语 / 英语；动作：提前准备 2 条社媒预热内容、1 版询盘跟进话术、1 版老客唤醒消息。\n\n优先级建议：7 天内节日先处理库存和老客触达；30-60 天节日准备短视频素材和达人 brief；60 天以上节日先沉淀选品清单和多语言标签需求。"
-  },
-  {
-    "id": "task_1782791817197",
-    "name": "TikTok 爆款日报",
+    "id": "task_1782872125939",
+    "name": "YouTube 热点视频采集",
     "category": "daily",
-    "taskType": "trend_report",
-    "cronExpr": "0 9 * * *",
-    "cronLabel": "每天 09:00",
+    "taskType": "video_keyword_crawl",
+    "cronExpr": "0 1 * * *",
+    "cronLabel": "每天 01:00（北京时间）",
     "enabled": true,
-    "config": {},
-    "createdAt": "2026-06-30T03:56:57.197Z",
-    "lastRun": "2026-06-30T03:57:07.730Z",
-    "lastResult": "Today's TikTok跨境电商爆款趋势简报 for GlowNest Beauty Co., Ltd.:\n\n**热门品类 (Hot Categories):**\n\n美妆个护仍是TikTok电商中最畅销、发展最迅猛的类目，尤其在美国和东南亚市场表现强劲。其中，护肤品和彩妆是主要驱动力。具体而言，以下品类值得关注:\n\n*   **功效性护肤品:** 玻尿酸精华、维C亮肤精华、烟酰胺面霜等针对特定皮肤问题的产品，在消费者中持续受到追捧。\n*   **彩妆:** 唇釉、眉笔、化妆刷套装等，尤其是那些能通过短视频直观展示使用效果和色彩饱和度的产品。\n*   **旅行装护肤套装:** 契合消费者对便捷性和尝试新品的需求。\n*   **美妆工具:** 补剂和美妆工具大量依赖成熟制造体系，中国在OEM、ODM方面具备显著优势。\n\n**热门话题标签 (Trending Hashtags):**\n\n*   **美妆教程与技巧:** #beautytips, #makeuptutorial, #skincareroutine, #grwm (Get Ready With Me) 等，这些内容能够有效展示产品使用方法和效果。\n*   **产品测评与分享:** #productreview, #beautyhacks, #myskincarejourney, 真实的用户体验分享是TikTok上的重要推动力。\n*   **成分导向:** #cleanbeauty, #veganbeauty, #crueltyfree, #ingredientfocused, 强调产品安全、温和和特定成分功效。\n*   **时尚潮流与生活方式:** #fashiontrend, #fashionstyle, #luxurylife, #highqualityproducts, 可以将美妆产品融入整体时尚或品质生活场景。\n*   **挑战与互动:** 例如“Clean Girl”风格测试等互动滤镜，可以为产品带来趣味性的曝光和用户参与度。\n\n**建议借势策略 (Recommended Leveraging Strategies):**\n\n*   **内容为王，真人实测:** 制作高质量的短视频，通过真人试用和口播，直观展示产品质地、肤感和使用效果，强调天然温和、纯素、无动物测试等核心卖点。\n*   **达人营销，扩大声量:** 与目标市场的TikTok达人合作，通过定制化内容和创新创意，驱动产品传播和提高转化率。尤其在大促期间，达人素材能有效提升曝光和转化。\n*   **小批量试单，快速迭代:** 利用GlowNest的Low-MOQ优势，鼓励海外独立站品牌和TikTok Shop卖家进行小批量试单，通过快速打样和包装定制，满足市场对新品的快速响应需求。\n*   **合规先行，消除疑虑:** 在内容中或与客户沟通时，主动提及并协助提供GMPC、ISO22716、MSDS、COA、CPNP协助、FDA MoCRA资料协助等，强调产品合规性，提升客户信任度。\n*   **本地化策略，深耕市场:** 针对中东市场，可加强唇釉套装和旅行装护肤套装的推广，并提供英文/阿语标签合规建议。 针对印尼市场，关注当地消费者对美妆快消品的强劲需求。\n*   **组合销售，提升客单:** 推荐套装组合产品，如旅行装护肤套装和唇釉套装，满足消费者多样化需求，同时提升客单价。\n\n**待用户确认推断 (User Confirmation Needed):**\n\n近30天中东买家对唇釉套装和阿语标签更敏感，建议提高这两个品类和市场在内容投放中的优先级，以验证其有效性。"
+    "config": {
+      "platforms": "youtube",
+      "keywords": "skincare",
+      "limit": "5",
+      "dateWindowDays": "7",
+      "tenantId": "hi6t0m59qdwpdsv"
+    },
+    "tenantId": "hi6t0m59qdwpdsv",
+    "createdAt": "2026-07-01T02:15:25.939Z"
   },
   {
-    "id": "task_conversion_exchange_rate_daily",
-    "name": "汇率日报",
+    "id": "task_1782875940365",
+    "name": "YouTube 热点视频采集",
     "category": "daily",
-    "taskType": "exchange_rate",
-    "cronExpr": "0 9 * * *",
-    "cronLabel": "每天 09:00",
+    "taskType": "video_keyword_crawl",
+    "cronExpr": "0 1 * * *",
+    "cronLabel": "每天 01:00（北京时间）",
     "enabled": true,
-    "config": {},
-    "createdAt": "2026-06-30T04:05:00.000Z",
-    "lastRun": "2026-06-30T04:05:00.000Z",
-    "lastResult": "【汇率日报】\n1 USD = CNY 7.2000 | SAR 3.7500 | AED 3.6700 | VND 26200 | MYR 4.1000 | IDR 16200\n\n建议：报价给中东客户时同步显示 USD/SAR/AED，减少客户二次换算；大额报价保留 24 小时有效期。"
+    "config": {
+      "platforms": "youtube",
+      "keywords": "skincare",
+      "limit": "5",
+      "dateWindowDays": "7",
+      "tenantId": "xg240al06sn03e8"
+    },
+    "tenantId": "xg240al06sn03e8",
+    "createdAt": "2026-07-01T03:19:00.365Z"
   },
   {
-    "id": "task_conversion_weekly_review",
-    "name": "每周经营复盘",
-    "category": "report",
-    "taskType": "weekly_review",
-    "cronExpr": "0 18 * * 5",
-    "cronLabel": "每周五 18:00",
+    "id": "task_1782881945535",
+    "name": "YouTube 热点视频采集",
+    "category": "daily",
+    "taskType": "video_keyword_crawl",
+    "cronExpr": "0 1 * * *",
+    "cronLabel": "每天 01:00（北京时间）",
     "enabled": true,
-    "config": {},
-    "createdAt": "2026-06-30T04:05:00.000Z",
-    "lastRun": "2026-06-30T04:05:00.000Z",
-    "lastResult": "【每周经营复盘】\n本周重点关注私标美妆询盘质量、样品单转大货率和多语言内容带来的询盘变化。\n\n建议动作：\n1. 将高意向询盘优先分配给转化专家生成报价跟进话术。\n2. 对样品单客户增加第 2 天和第 5 天自动跟进。\n3. 将中东客户对阿语标签的反馈写回企业中心。"
-  },
-  {
-    "id": "task_customer_crm_wakeup_weekly",
-    "name": "沉默客户唤醒",
-    "category": "automation",
-    "taskType": "crm_wakeup",
-    "cronExpr": "0 10 * * 1",
-    "cronLabel": "每周一 10:00",
-    "enabled": true,
-    "config": {},
-    "createdAt": "2026-06-30T04:05:00.000Z",
-    "lastRun": "2026-06-30T04:05:00.000Z",
-    "lastResult": "【沉默客户唤醒】\nHi, we prepared a few updated private-label beauty options based on your previous interest. The new serum and lip set samples can be arranged this week, with English/Arabic label support available.\n\n建议：优先触达 60-90 天未回复且曾询问私标包装、样品费或标签语言的客户。"
+    "config": {
+      "platforms": "youtube",
+      "keywords": "skincare",
+      "limit": "5",
+      "dateWindowDays": "7",
+      "tenantId": "cq75i1kx30oks75"
+    },
+    "tenantId": "cq75i1kx30oks75",
+    "createdAt": "2026-07-01T04:59:05.535Z"
   }
 ]

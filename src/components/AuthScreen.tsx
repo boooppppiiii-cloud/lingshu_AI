@@ -1,26 +1,20 @@
 import { useState } from 'react';
 import { motion } from 'motion/react';
-import { Loader2, Mail, Lock, Building2, KeyRound } from 'lucide-react';
+import { Loader2, Mail, Lock } from 'lucide-react';
 import { authApi, setToken, type AuthSession } from '../lib/auth';
 
 export default function AuthScreen({ onAuthed }: { onAuthed: (s: AuthSession) => void }) {
-  const [mode, setMode] = useState<'login' | 'register'>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [company, setCompany] = useState('');
-  const [inviteCode, setInviteCode] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const submit = async () => {
     setError(null);
     if (!email || !password) { setError('请填写邮箱和密码'); return; }
-    if (mode === 'register' && password.length < 8) { setError('密码至少 8 位'); return; }
     setLoading(true);
     try {
-      const r = mode === 'login'
-        ? await authApi.login(email, password)
-        : await authApi.register(email, password, company, inviteCode);
+      const r = await authApi.login(email, password);
       setToken(r.token);
       onAuthed({ user: r.user, tenant: r.tenant, demo: r.demo });
     } catch (e: unknown) {
@@ -37,28 +31,15 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (s: AuthSession) =>
       <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} className="w-full max-w-sm">
         {/* Logo */}
         <div className="flex items-center justify-center gap-2.5 mb-6">
-          <img src="/brand-logo.png" alt="灵枢 AI" className="w-9 h-9 rounded-xl object-cover border border-border bg-white" />
+          <img src="/brand-logo.png" alt="灵枢 AI" className="w-9 h-9 object-contain" />
           <span className="text-lg font-bold text-text-primary font-display">灵枢 AI 工作台</span>
         </div>
 
         <div className="card !rounded-2xl p-6">
-          <h1 className="text-base font-bold text-text-primary mb-1">{mode === 'login' ? '登录' : '注册'}</h1>
-          <p className="text-xs text-text-muted mb-5">{mode === 'login' ? '欢迎回来，继续你的出海营销' : '创建账号，开始 Demo 试用'}</p>
+          <h1 className="text-base font-bold text-text-primary mb-1">登录</h1>
+          <p className="text-xs text-text-muted mb-5">使用管理员分配的账号密码开始 5 天试用</p>
 
           <div className="space-y-3">
-            {mode === 'register' && (
-              <>
-                <div className="relative">
-                  <Building2 size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
-                  <input value={company} onChange={e => setCompany(e.target.value)} placeholder="公司名称（选填）" className={inputCls} />
-                </div>
-                <div className="relative">
-                  <KeyRound size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
-                  <input value={inviteCode} onChange={e => setInviteCode(e.target.value)} placeholder="Demo 邀请码（如已启用）" className={inputCls}
-                    onKeyDown={e => e.key === 'Enter' && void submit()} />
-                </div>
-              </>
-            )}
             <div className="relative">
               <Mail size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
               <input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="邮箱" className={inputCls}
@@ -66,7 +47,7 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (s: AuthSession) =>
             </div>
             <div className="relative">
               <Lock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
-              <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder={mode === 'register' ? '密码（至少 8 位）' : '密码'} className={inputCls}
+              <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="密码" className={inputCls}
                 onKeyDown={e => e.key === 'Enter' && void submit()} />
             </div>
           </div>
@@ -76,15 +57,11 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (s: AuthSession) =>
           <button onClick={() => void submit()} disabled={loading}
             className="btn-primary w-full mt-5 flex items-center justify-center gap-2 disabled:opacity-60">
             {loading ? <Loader2 size={15} className="animate-spin" /> : null}
-            {mode === 'login' ? '登录' : '注册并开始试用'}
+            登录并开始试用
           </button>
 
           <div className="text-center mt-4 text-xs text-text-muted">
-            {mode === 'login' ? '还没有账号？' : '已有账号？'}
-            <button onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError(null); }}
-              className="font-semibold ml-1" style={{ color: 'var(--color-accent)' }}>
-              {mode === 'login' ? '注册' : '去登录'}
-            </button>
+            没有账号？请联系管理员分配测试账号
           </div>
         </div>
       </motion.div>

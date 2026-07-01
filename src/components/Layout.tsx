@@ -1,9 +1,9 @@
-import { type ReactNode, useState } from 'react';
+import { type ReactNode, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Compass, Zap, MessageSquare, RefreshCw,
   Building2, PlugZap, Clock,
-  ChevronRight, Plus, LogOut, Loader2, RefreshCcw, X,
+  ChevronRight, Plus, LogOut, Loader2, RefreshCcw, X, ShieldCheck,
 } from 'lucide-react';
 import type { Page, ConversationContext, Conversation, AgentAction } from '../App';
 import { authApi, type AuthSession } from '../lib/auth';
@@ -52,6 +52,8 @@ interface LayoutProps {
   suppressRightPanel?: boolean;
   onAction?: AgentAction;
   onSessionUpdate?: (session: AuthSession | null) => void;
+  demoGuideActive?: boolean;
+  onDemoGuideShown?: () => void;
 }
 
 const relTime = (ts: number) => {
@@ -119,15 +121,26 @@ const pct = (used?: number, limit?: number) => {
 };
 
 const byToken = (tokens: number, reserve: number) => Math.max(0, Math.floor(tokens / reserve));
+const isAdminSession = (session?: AuthSession | null) => session?.user?.email === 'lingshu-admin@local.test';
 
-export default function Layout({ page, onNavigate, conversation, children, session, onLogout, conversations, activeConvId, onOpenConversation, onNewConversation, suppressRightPanel, onAction, onSessionUpdate }: LayoutProps) {
+export default function Layout({ page, onNavigate, conversation, children, session, onLogout, conversations, activeConvId, onOpenConversation, onNewConversation, suppressRightPanel, onAction, onSessionUpdate, demoGuideActive, onDemoGuideShown }: LayoutProps) {
   const recent = (conversations ?? []).filter(c => c.messages.length > 0);
   const isInConversation = conversation !== null && !suppressRightPanel;
   const [quotaOpen, setQuotaOpen] = useState(false);
   const [quotaLoading, setQuotaLoading] = useState(false);
   const [quotaUpdatedAt, setQuotaUpdatedAt] = useState<number | null>(null);
   const [liveSession, setLiveSession] = useState<AuthSession | null>(null);
-  const activeSession = liveSession ?? session;
+  const sessionScope = session?.demo?.guideScope || session?.demo?.expiresAt || null;
+  const liveSessionScope = liveSession?.demo?.guideScope || liveSession?.demo?.expiresAt || null;
+  const activeSession = liveSession?.user?.id === session?.user?.id && liveSessionScope === sessionScope ? liveSession : session;
+  const guideScope = activeSession?.demo?.guideScope || (activeSession?.demo?.expiresAt ? `${activeSession.user.id}:${activeSession.demo.expiresAt}` : activeSession?.user?.id || 'demo-guide');
+
+  useEffect(() => {
+    setLiveSession(null);
+  }, [session?.user?.id, sessionScope]);
+  const secondaryItems = isAdminSession(activeSession)
+    ? [...SECONDARY_NAV.items, { id: 'admin' as Page, label: '账号总控', icon: <ShieldCheck size={16} /> }]
+    : SECONDARY_NAV.items;
   const tenantName = activeSession?.tenant?.name || activeSession?.user?.name || activeSession?.user?.email?.split('@')[0] || '未命名';
   const subStatus = activeSession?.tenant?.subscriptionStatus || activeSession?.subscription?.status || 'none';
   const initial = (tenantName[0] || '灵').toUpperCase();
@@ -148,9 +161,7 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
     activeSession?.subscription?.plan === 'trial' ||
     subStatus === 'trialing'
   );
-  const showDemoGuide = Boolean(
-    activeSession?.demo?.enabled || isTrialAccount
-  );
+  const showDemoGuide = Boolean(demoGuideActive && (activeSession?.demo?.enabled || isTrialAccount));
   const refreshQuota = async () => {
     setQuotaLoading(true);
     try {
@@ -177,12 +188,18 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
       >
         {/* Logo */}
         <div className="h-14 flex items-center px-4 gap-2.5 flex-shrink-0">
-          <img src="/brand-logo.png" alt="灵枢 AI" className="w-7 h-7 rounded-lg object-cover border border-border bg-white flex-shrink-0" />
+          <img src="/brand-logo.png" alt="灵枢 AI" className="w-7 h-7 object-contain flex-shrink-0" />
           <span className="text-sm font-bold text-text-primary font-display">灵枢 AI</span>
         </div>
 
         {showDemoGuide && (
-          <DemoGuide page={page} onNavigate={onNavigate} />
+          <DemoGuide
+            key={guideScope}
+            page={page}
+            onNavigate={onNavigate}
+            onShown={onDemoGuideShown}
+            forceStart={Boolean(activeSession?.demo?.guideTrigger)}
+          />
         )}
 
         {/* Primary nav */}
@@ -208,7 +225,7 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
           <p className="px-3 pb-1.5 text-[10px] font-semibold text-text-muted uppercase tracking-wider">
             系统设置
           </p>
-          {SECONDARY_NAV.items.map(item => (
+          {secondaryItems.map(item => (
             <NavItem
               key={item.id}
               item={item}
