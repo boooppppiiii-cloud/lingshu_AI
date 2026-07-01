@@ -3,7 +3,6 @@ import { RefreshCw, LayoutGrid, MessageSquare, Users, TrendingUp, Sparkles, Bell
 import { motion, AnimatePresence } from 'motion/react';
 import AgentChatPage from './AgentChatPage';
 import type { ConversationContext, RestoreSignal, KickoffSignal, AgentAction } from '../App';
-import { completeDemoStep } from '../lib/demoProgress';
 
 type ViewMode = 'dashboard' | 'chat';
 
@@ -14,6 +13,7 @@ interface Props {
   restore?: RestoreSignal;
   kickoff?: KickoffSignal;
   onAction?: AgentAction;
+  onSessionRefresh?: () => void;
 }
 
 const SEGMENTS = [
@@ -63,7 +63,6 @@ function Dashboard({ onChatClick }: { onChatClick: () => void }) {
             <button
               data-demo-target="retention_prompt"
               onClick={() => {
-                completeDemoStep('retention');
                 onChatClick();
               }}
               className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg text-white transition-all"
@@ -141,7 +140,7 @@ function Dashboard({ onChatClick }: { onChatClick: () => void }) {
   );
 }
 
-export default function RetentionPage({ onEnterConversation, onLeaveConversation, isInConversation, restore, kickoff, onAction }: Props) {
+export default function RetentionPage({ onEnterConversation, onLeaveConversation, isInConversation, restore, kickoff, onAction, onSessionRefresh }: Props) {
   const [viewMode, setViewMode] = useState<ViewMode>('dashboard');
   useEffect(() => { if (restore) setViewMode('chat'); }, [restore?.key]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => { if (kickoff) setViewMode('chat'); }, [kickoff?.key]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -201,10 +200,10 @@ export default function RetentionPage({ onEnterConversation, onLeaveConversation
                   name: '留存专家',
                   tagline: '老客画像 · 生命周期唤醒 · 行动建议',
                   suggestions: [
-                    '找出过去60天没有复购的中东老客',
-                    '斋月前我应该怎么唤醒沉默客户？',
-                    '根据老客偏好推荐适合加推的新品',
-                    '帮我写一条越南老客复购提醒消息',
+                    '老客唤醒策略',
+                    '复购加推组合',
+                    '节前触达节奏',
+                    '复购消息模板',
                   ],
                 }}
                 onEnterConversation={handleEnterChat}
@@ -214,6 +213,7 @@ export default function RetentionPage({ onEnterConversation, onLeaveConversation
                 restoreMessages={restore?.messages}
                 kickoff={kickoff}
                 onAction={onAction}
+                onSessionRefresh={onSessionRefresh}
               />
             </motion.div>
           )}

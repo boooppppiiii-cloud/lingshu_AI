@@ -972,22 +972,22 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onNaviga
         ? `【口播脚本】基于「${video.title}」的爆款结构\n\nHook：如果你的客户正在寻找更稳定、更省心的美妆供应方案，这条内容值得收藏。\n\n卖点：我们把企业中心里的主推品、目标市场和语言偏好结合起来，突出温和护肤、私标定制和跨境交付能力。\n\n转化：评论区留下你的目标市场，我会给你一版适合当地客户的报价沟通话术。`
         : `【分镜脚本】基于「${video.title}」的爆款结构\n\n1. 近景展示产品质地，字幕突出核心卖点。\n2. 模特使用前后对比，强调肤感和场景。\n3. 展示包装、MOQ 和定制能力。\n4. 结尾引导客户询盘并领取样品方案。`;
       setResult(fallbackScript);
+      setGenerating(false);
       if (shouldAdvanceDemo) {
         completeDemoStep('traffic');
         window.setTimeout(() => onNavigate?.('conversion'), 700);
       }
-      setGenerating(false);
       return;
     }
     const nextResult = scriptType === 'voiceover'
       ? makeVoiceoverDraft(video, realAnalysis, productInfo, languageLabel, language)
       : makeStoryboardDraft(video, realAnalysis, productInfo, languageLabel, language);
     setResult(nextResult);
+    setGenerating(false);
     if (shouldAdvanceDemo) {
       completeDemoStep('traffic');
       window.setTimeout(() => onNavigate?.('conversion'), 700);
     }
-    setGenerating(false);
   };
 
   const handleCopy = () => {
@@ -1657,7 +1657,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   const refreshVideos = async (nextPage = 1, append = false) => {
     setVideosLoading(true);
     try {
-      const perPage = 20;
+      const perPage = 100;
       const r = await fetch(`/api/overseas/videos?page=${nextPage}&perPage=${perPage}`, { headers: authHeader() });
       const data = await r.json().catch(() => ({})) as {
         items?: CrawlerRecord[];

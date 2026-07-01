@@ -2,7 +2,16 @@ import { Router } from 'express';
 import { getPbUrl, getPbAdminToken, pbCreate, pbGet } from '../storage/pb.js';
 import { auth } from '../storage/index.js';
 import { getTenantSubscription } from '../middleware/subscription.js';
-import { buildDemoStatus, demoTrialExpiresAt } from '../lib/demo.js';
+import { buildDemoStatus, isExpired } from '../lib/demo.js';
+import {
+  activateTrialAccount,
+  consumeDemoGuide,
+  isAllowedDemoAccount,
+  isTrialAccount,
+  rotateExpiredTrialPassword,
+  trialExpiresAt,
+  upsertDemoAccountRegistry,
+} from '../lib/demoAccounts.js';
 
 /* ──────────────────────────────────────────────────────────────────────────
    账号 / 登录（基于 PocketBase）
@@ -71,6 +80,10 @@ authRouter.post('/register', async (req, res) => {
   const { email, password, companyName, inviteCode } = req.body ?? {};
   if (!email || !password) { res.status(400).json({ error: '邮箱和密码必填' }); return; }
   if (String(password).length < 8) { res.status(400).json({ error: '密码至少 8 位' }); return; }
+  if (!isAllowedDemoAccount(String(email))) {
+    res.status(403).json({ error: '该账号不在试用名单中，请使用管理员分配的账号。' });
+    return;
+  }
   const expectedInvite = process.env.DEMO_INVITE_CODE?.trim();
   if (expectedInvite && inviteCode !== expectedInvite) {
     res.status(403).json({ error: '邀请码无效，请联系管理员获取访问码' });
@@ -78,7 +91,7 @@ authRouter.post('/register', async (req, res) => {
   }
 
   const now = new Date();
-  const expiresAt = demoTrialExpiresAt(now);
+  const expiresAt = trialExpiresAt(now);
   const tenant = await pbCreate('tenants', {
     name: companyName || String(email).split('@')[0],
     subscriptionStatus: 'trialing',
@@ -96,7 +109,21 @@ authRouter.post('/register', async (req, res) => {
 
   const login = await pbLogin(email, password);
   if (!login) { res.status(500).json({ error: '注册后自动登录失败' }); return; }
-  res.json({ token: login.token, user: publicUser(login.record), tenant: publicTenant(tenant), demo: await buildDemoStatus(req, String(tenant.id), String(tenant.subscriptionExpiresAt ?? expiresAt), String(login.record.id)) });
+  const demoStatus = await buildDemoStatus(req, String(tenant.id), String(tenant.subscriptionExpiresAt ?? expiresAt), String(login.record.id));
+  upsertDemoAccountRegistry(String(email), {
+    password: String(password),
+    userId: String(login.record.id),
+    tenantId: String(tenant.id),
+    activatedAt: now.toISOString(),
+    expiresAt,
+    status: 'trialing',
+  });
+  res.json({
+    token: login.token,
+    user: publicUser(login.record),
+    tenant: publicTenant(tenant),
+    demo: { ...demoStatus, guideTrigger: true, guideScope: `${login.record.id}:${expiresAt}` },
+  });
 });
 
 // POST /auth/login  { email, password }
@@ -105,9 +132,45 @@ authRouter.post('/login', async (req, res) => {
   if (!email || !password) { res.status(400).json({ error: '邮箱和密码必填' }); return; }
   const login = await pbLogin(email, password);
   if (!login) { res.status(401).json({ error: '邮箱或密码错误' }); return; }
-  const tenant = login.record.tenantId ? await pbGet('tenants', login.record.tenantId) : null;
-  const subscription = login.record.tenantId ? await getTenantSubscription(login.record.tenantId) : null;
-  res.json({ token: login.token, user: publicUser(login.record), tenant: publicTenant(tenant), demo: await buildDemoStatus(req, login.record.tenantId, subscription?.expiresAt, login.record.id) });
+  let tenant = login.record.tenantId ? await pbGet('tenants', login.record.tenantId) : null;
+  let subscription = login.record.tenantId ? await getTenantSubscription(login.record.tenantId) : null;
+  if (isTrialAccount(subscription) && !isAllowedDemoAccount(login.record.email ?? email)) {
+    res.status(403).json({ error: '该账号不在试用名单中，请使用管理员分配的账号。' });
+    return;
+  }
+  if (isTrialAccount(subscription) && login.record.tenantId && !subscription?.expiresAt) {
+    const activated = await activateTrialAccount(login.record.email ?? email, login.record.id, login.record.tenantId);
+    tenant = await pbGet('tenants', login.record.tenantId);
+    subscription = { status: 'trialing', plan: 'trial', expiresAt: activated.expiresAt };
+    const demoStatus = await buildDemoStatus(req, login.record.tenantId, activated.expiresAt, login.record.id);
+    res.json({
+      token: login.token,
+      user: publicUser(login.record),
+      tenant: publicTenant(tenant),
+      demo: {
+        ...demoStatus,
+        guideTrigger: activated.activatedNow,
+        guideScope: `${login.record.id}:${activated.expiresAt}`,
+      },
+    });
+    return;
+  }
+  if (subscription?.expiresAt && isExpired(subscription.expiresAt)) {
+    await rotateExpiredTrialPassword(login.record, 'login_trial_expired');
+    res.status(402).json({ error: '试用账号已到期，请联系管理员开通或延长试用。' });
+    return;
+  }
+  const demoStatus = await buildDemoStatus(req, login.record.tenantId, subscription?.expiresAt, login.record.id);
+  res.json({
+    token: login.token,
+    user: publicUser(login.record),
+    tenant: publicTenant(tenant),
+    demo: {
+      ...demoStatus,
+      guideTrigger: false,
+      guideScope: subscription?.expiresAt ? `${login.record.id}:${subscription.expiresAt}` : undefined,
+    },
+  });
 });
 
 // GET /auth/me  (Authorization: Bearer <token>)
@@ -116,11 +179,29 @@ authRouter.get('/me', async (req, res) => {
   if (!id) { res.status(401).json({ error: 'Unauthorized' }); return; }
   const [user, tenant] = await Promise.all([pbGet('users', id.userId), pbGet('tenants', id.tenantId)]);
   const subscription = await getTenantSubscription(id.tenantId);
+  if (subscription?.expiresAt && isExpired(subscription.expiresAt)) {
+    await rotateExpiredTrialPassword(user as unknown as PbUser | null, 'session_trial_expired');
+    res.status(402).json({ error: '试用账号已到期，请重新登录或联系管理员开通。' });
+    return;
+  }
   const demo = await buildDemoStatus(req, id.tenantId, subscription.expiresAt, id.userId);
   res.json({
     user: user ? publicUser(user as unknown as PbUser) : { id: id.userId, email: '', name: '', tenantId: id.tenantId },
     tenant: publicTenant(tenant),
     subscription,
-    demo,
+    demo: {
+      ...demo,
+      guideTrigger: false,
+      guideScope: subscription.expiresAt ? `${id.userId}:${subscription.expiresAt}` : undefined,
+    },
   });
+});
+
+authRouter.post('/guide-seen', async (req, res) => {
+  const id = await auth.verifyToken(req.headers.authorization);
+  if (!id) { res.status(401).json({ error: 'Unauthorized' }); return; }
+  const user = await pbGet('users', id.userId);
+  const email = String(user?.email ?? '').trim().toLowerCase();
+  if (email) consumeDemoGuide(email);
+  res.json({ ok: true });
 });

@@ -82,7 +82,7 @@ function isTestTenantRecord(tenant: Record<string, unknown> | null): boolean {
   if (isDemoMode()) return true;
   const plan = String(tenant?.subscriptionPlan || '').toLowerCase();
   const status = String(tenant?.subscriptionStatus || '').toLowerCase();
-  return plan === 'trial' || status === 'trialing';
+  return plan === 'trial' || plan === 'admin' || status === 'trialing';
 }
 
 function isSharedSyncedVideo(record: Record<string, unknown>): boolean {
@@ -1443,6 +1443,7 @@ async function downloadVideoForAnalysis(input: {
   sourceUrl: string;
   title: string;
   platform: Platform;
+  record?: Record<string, unknown> | null;
 }): Promise<{ filePath: string; fileName: string; mimeType: string; size: number }> {
   fs.mkdirSync(ANALYSIS_DIR, { recursive: true });
   const id = randomUUID();
@@ -1486,10 +1487,11 @@ async function downloadVideoForAnalysis(input: {
     }
   }
   if (lastError) {
-    if (input.platform === 'tiktok' && canUseApifyVideoFallback()) {
+    const tenantId = apifyTenantIdFromRecord(input.record);
+    if (input.platform === 'tiktok' && canUseApifyVideoFallback(tenantId)) {
       try {
         console.warn('[videos] TikTok yt-dlp analysis download failed, trying Apify video fallback:', lastError instanceof Error ? lastError.message : lastError);
-        return await downloadTikTokVideoViaApify(input.sourceUrl);
+        return await downloadTikTokVideoViaApify(input.sourceUrl, tenantId);
       } catch (apifyError) {
         console.warn('[videos] TikTok Apify analysis video fallback failed:', apifyError instanceof Error ? apifyError.message : apifyError);
       }
@@ -1514,10 +1516,10 @@ function pickDownloadedVideoFile(id: string, dir = MEDIA_DIR): string | undefine
   return files.find(file => /\.(mp4|webm|mov|mkv)$/i.test(file)) || files[0];
 }
 
-async function downloadTikTokVideoViaApify(sourceUrl: string): Promise<{ filePath: string; fileName: string; mimeType: string; size: number }> {
+async function downloadTikTokVideoViaApify(sourceUrl: string, tenantId?: string): Promise<{ filePath: string; fileName: string; mimeType: string; size: number }> {
   const token = process.env.APIFY_TOKEN?.trim();
   if (!token) throw new Error('APIFY_TOKEN is not configured');
-  if (!canUseApifyVideoFallback()) throw new Error('Apify video fallback daily limit reached');
+  if (!canUseApifyVideoFallback(tenantId)) throw new Error('Apify video fallback daily limit reached for this account or server');
   const actor = process.env.APIFY_TIKTOK_ACTOR?.trim() || 'clockworks/tiktok-scraper';
   const input = {
     postURLs: [sourceUrl],
@@ -1554,7 +1556,7 @@ async function downloadTikTokVideoViaApify(sourceUrl: string): Promise<{ filePat
     const fileName = `${randomUUID()}.mp4`;
     const filePath = path.join(ANALYSIS_DIR, fileName);
     fs.writeFileSync(filePath, buf);
-    recordApifyVideoFallbackUse();
+    recordApifyVideoFallbackUse(tenantId);
     return {
       filePath,
       fileName,
@@ -3102,34 +3104,81 @@ function todayKey(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-function loadApifyVideoUsage(): Record<string, number> {
+type ApifyVideoUsageDay = {
+  total: number;
+  tenants: Record<string, number>;
+};
+
+type ApifyVideoUsageStore = Record<string, number | ApifyVideoUsageDay>;
+
+function loadApifyVideoUsage(): ApifyVideoUsageStore {
   try {
-    return JSON.parse(fs.readFileSync(APIFY_USAGE_FILE, 'utf8')) as Record<string, number>;
+    return JSON.parse(fs.readFileSync(APIFY_USAGE_FILE, 'utf8')) as ApifyVideoUsageStore;
   } catch {
     return {};
   }
 }
 
 function apifyVideoDailyLimit(): number {
-  return Math.max(0, Number(process.env.APIFY_TIKTOK_VIDEO_DAILY_LIMIT || 5));
+  return Math.max(0, Number(process.env.APIFY_TIKTOK_VIDEO_DAILY_LIMIT || 25));
 }
 
-function canUseApifyVideoFallback(): boolean {
-  if (process.env.APIFY_TIKTOK_VIDEO_FALLBACK_ENABLED === '0') return false;
-  const limit = apifyVideoDailyLimit();
-  if (limit <= 0) return false;
+function apifyVideoTenantDailyLimit(): number {
+  return Math.max(0, Number(process.env.APIFY_TIKTOK_VIDEO_TENANT_DAILY_LIMIT || 3));
+}
+
+function normalizeApifyUsageDay(raw: number | ApifyVideoUsageDay | undefined): ApifyVideoUsageDay {
+  if (typeof raw === 'number') {
+    return { total: raw, tenants: {} };
+  }
+  if (raw && typeof raw === 'object') {
+    return {
+      total: Math.max(0, Number(raw.total || 0)),
+      tenants: raw.tenants && typeof raw.tenants === 'object' ? raw.tenants : {},
+    };
+  }
+  return { total: 0, tenants: {} };
+}
+
+function apifyTenantKey(tenantId?: string): string {
+  return tenantId?.trim() || '__unknown__';
+}
+
+function apifyTenantIdFromRecord(record?: Record<string, unknown> | null): string | undefined {
+  const tenantId = String(record?.tenantId || '').trim();
+  return tenantId || undefined;
+}
+
+function apifyVideoUsageToday(tenantId?: string): { total: number; tenant: number } {
   const usage = loadApifyVideoUsage();
-  return (usage[todayKey()] || 0) < limit;
+  const day = normalizeApifyUsageDay(usage[todayKey()]);
+  return {
+    total: day.total,
+    tenant: day.tenants[apifyTenantKey(tenantId)] || 0,
+  };
+}
+
+function canUseApifyVideoFallback(tenantId?: string): boolean {
+  if (process.env.APIFY_TIKTOK_VIDEO_FALLBACK_ENABLED === '0') return false;
+  const globalLimit = apifyVideoDailyLimit();
+  const tenantLimit = apifyVideoTenantDailyLimit();
+  if (globalLimit <= 0 || tenantLimit <= 0) return false;
+  const usage = apifyVideoUsageToday(tenantId);
+  return usage.total < globalLimit && usage.tenant < tenantLimit;
 }
 
 function canUseApifyTikTokCrawlFallback(): boolean {
-  return process.env.APIFY_TIKTOK_CRAWL_FALLBACK_ENABLED === '1' && Boolean(process.env.APIFY_TOKEN?.trim());
+  return process.env.APIFY_TIKTOK_CRAWL_FALLBACK_ENABLED !== '0' && Boolean(process.env.APIFY_TOKEN?.trim());
 }
 
-function recordApifyVideoFallbackUse(): void {
+function recordApifyVideoFallbackUse(tenantId?: string): void {
   const usage = loadApifyVideoUsage();
   const key = todayKey();
-  usage[key] = (usage[key] || 0) + 1;
+  const day = normalizeApifyUsageDay(usage[key]);
+  const tenantKey = apifyTenantKey(tenantId);
+  day.total += 1;
+  day.tenants[tenantKey] = (day.tenants[tenantKey] || 0) + 1;
+  usage[key] = day;
   fs.mkdirSync(path.dirname(APIFY_USAGE_FILE), { recursive: true });
   fs.writeFileSync(APIFY_USAGE_FILE, JSON.stringify(usage, null, 2), 'utf8');
 }
@@ -3298,10 +3347,10 @@ export async function runCrawlerOpsWorkerOnce(): Promise<{
         const errorMessage = e instanceof Error ? e.message : String(e);
         const shouldTryApify = task.platform === 'tiktok'
           && attemptNo >= Math.max(1, Number(process.env.APIFY_TIKTOK_VIDEO_AFTER_ATTEMPTS || 2))
-          && canUseApifyVideoFallback();
+          && canUseApifyVideoFallback(apifyTenantIdFromRecord(record));
         if (shouldTryApify) {
           try {
-            const downloaded = await downloadTikTokVideoViaApify(task.sourceUrl);
+            const downloaded = await downloadTikTokVideoViaApify(task.sourceUrl, apifyTenantIdFromRecord(record));
             const videoAnalysis = await analyzeDownloadedVideoWithFallback({
               filePath: downloaded.filePath,
               mimeType: downloaded.mimeType,
@@ -3418,7 +3467,7 @@ async function enqueueOpsTasksFromRecords(): Promise<void> {
   }
 }
 
-function crawlerOpsStats(): Record<string, unknown> {
+function crawlerOpsStats(tenantId?: string): Record<string, unknown> {
   const tasks = loadCrawlerOpsTasks();
   const byStatus = tasks.reduce<Record<string, number>>((acc, task) => {
     acc[task.status] = (acc[task.status] || 0) + 1;
@@ -3428,6 +3477,7 @@ function crawlerOpsStats(): Record<string, unknown> {
     acc[task.platform] = (acc[task.platform] || 0) + 1;
     return acc;
   }, {});
+  const apifyUsage = apifyVideoUsageToday(tenantId);
   return {
     total: tasks.length,
     byStatus,
@@ -3440,8 +3490,12 @@ function crawlerOpsStats(): Record<string, unknown> {
     cookieBrowserCount: cookieBrowsers().length,
     apifyVideoFallback: {
       enabled: process.env.APIFY_TIKTOK_VIDEO_FALLBACK_ENABLED !== '0',
-      usedToday: loadApifyVideoUsage()[todayKey()] || 0,
+      usedToday: apifyUsage.total,
       dailyLimit: apifyVideoDailyLimit(),
+      globalUsedToday: apifyUsage.total,
+      globalDailyLimit: apifyVideoDailyLimit(),
+      tenantUsedToday: apifyUsage.tenant,
+      tenantDailyLimit: apifyVideoTenantDailyLimit(),
       afterAttempts: Math.max(1, Number(process.env.APIFY_TIKTOK_VIDEO_AFTER_ATTEMPTS || 2)),
     },
   };
@@ -3519,7 +3573,7 @@ export async function getVideoPipelineStats(tenantId?: string): Promise<Record<s
     fetchQueue: {
       queued: fetchQueueCount,
       byStatus: downloadStatus,
-      ops: crawlerOpsStats(),
+      ops: crawlerOpsStats(tenantId),
     },
     analysisQueue: {
       queued: analysisQueueCount,

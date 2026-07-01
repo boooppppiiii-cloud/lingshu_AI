@@ -91,10 +91,11 @@ function useTargetRect(target: string, tick: number) {
   return rect;
 }
 
-export default function DemoGuide({ page, onNavigate }: { page: Page; onNavigate: (p: Page) => void }) {
-  const [done, setDone] = useState<Record<string, boolean>>(readDemoProgress);
+export default function DemoGuide({ page, onNavigate, onShown, forceStart }: { page: Page; onNavigate: (p: Page) => void; onShown?: () => void; forceStart?: boolean }) {
+  const [done, setDone] = useState<Record<string, boolean>>(() => forceStart ? {} : readDemoProgress());
   const [showCelebration, setShowCelebration] = useState(false);
   const wasCompleteRef = useRef(STEPS.every(step => readDemoProgress()[step.id]));
+  const didNotifyShownRef = useRef(false);
   const [tick, setTick] = useState(0);
   const current = useMemo(() => STEPS.find(step => !done[step.id]) ?? STEPS[STEPS.length - 1], [done]);
   const currentStepIndex = STEPS.findIndex(step => step.id === current.id);
@@ -113,6 +114,10 @@ export default function DemoGuide({ page, onNavigate }: { page: Page; onNavigate
   })), []);
 
   useEffect(() => {
+    if (!didNotifyShownRef.current) {
+      didNotifyShownRef.current = true;
+      onShown?.();
+    }
     const applyProgress = (next: Record<string, boolean>) => {
       const nextComplete = STEPS.every(step => next[step.id]);
       if (nextComplete && !wasCompleteRef.current) {
@@ -135,7 +140,7 @@ export default function DemoGuide({ page, onNavigate }: { page: Page; onNavigate
       window.removeEventListener('storage', sync);
       window.removeEventListener(DEMO_PROGRESS_EVENT, onCustom);
     };
-  }, []);
+  }, [onShown]);
 
   useEffect(() => {
     if (isComplete || current.page === page) return;

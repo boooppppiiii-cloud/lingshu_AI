@@ -25,14 +25,14 @@ npm run start
 
 ```bash
 DEMO_MODE=true
-DEMO_TRIAL_DAYS=7
+DEMO_ALLOWED_ACCOUNTS=test1@example.com,test2@example.com
 DEMO_DAILY_AI_CHAT_LIMIT=20
 DEMO_DAILY_GENERATION_LIMIT=10
 DEMO_DAILY_RENDER_LIMIT=3
 DEMO_INVITE_CODE=your-demo-code
 ```
 
-`DEMO_INVITE_CODE` 可留空；留空时注册不校验邀请码，设置后注册必须填写一致的邀请码。
+试用时长固定为 5 天。`DEMO_ALLOWED_ACCOUNTS` 必须配置，注册接口只允许名单内账号激活；未配置时默认拒绝注册。`DEMO_INVITE_CODE` 可留空；设置后注册还必须填写一致的邀请码。
 
 ## PM2 示例
 

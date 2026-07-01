@@ -3,7 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import type { Request, Response } from 'express';
 import { auth } from '../storage/index.js';
-import { getTenantSubscription } from '../middleware/subscription.js';
+import { getTenantSubscription, type Subscription } from '../middleware/subscription.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const USAGE_FILE = path.join(__dirname, '../../data/demo-usage.json');
@@ -49,6 +49,15 @@ export function isDemoMode(): boolean {
   return process.env.DEMO_MODE === 'true';
 }
 
+function isTrialSubscription(sub: Subscription | null | undefined): boolean {
+  const plan = String(sub?.plan ?? '').toLowerCase();
+  return sub?.status === 'trialing' || plan === 'trial';
+}
+
+function isAdminSubscription(sub: Subscription | null | undefined): boolean {
+  return String(sub?.plan ?? '').toLowerCase() === 'admin';
+}
+
 function intEnv(name: string, fallback: number): number {
   const n = Number(process.env[name]);
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback;
@@ -56,7 +65,7 @@ function intEnv(name: string, fallback: number): number {
 
 export function demoLimits(): DemoLimits {
   return {
-    trialDays: intEnv('DEMO_TRIAL_DAYS', 3),
+    trialDays: 5,
     aiChatDaily: intEnv('DEMO_DAILY_AI_CHAT_LIMIT', 20),
     generationDaily: intEnv('DEMO_DAILY_GENERATION_LIMIT', 10),
     renderDaily: intEnv('DEMO_DAILY_RENDER_LIMIT', 3),
@@ -129,9 +138,12 @@ export function isExpired(expiresAt?: string | null): boolean {
 export async function buildDemoStatus(req: Request, tenantId?: string, expiresAt?: string | null, userId?: string): Promise<DemoStatus> {
   const limits = demoLimits();
   let resolvedExpiresAt = expiresAt ?? null;
+  let subscription: Subscription | null = null;
   if (!resolvedExpiresAt && tenantId) {
-    const sub = await getTenantSubscription(tenantId);
-    resolvedExpiresAt = sub.expiresAt;
+    subscription = await getTenantSubscription(tenantId);
+    resolvedExpiresAt = subscription.expiresAt;
+  } else if (tenantId) {
+    subscription = await getTenantSubscription(tenantId);
   }
 
   const key = tenantId ? `tenant:${tenantId}` : await identityKey(req);
@@ -148,7 +160,7 @@ export async function buildDemoStatus(req: Request, tenantId?: string, expiresAt
     : null;
 
   return {
-    enabled: isDemoMode(),
+    enabled: isDemoMode() || isTrialSubscription(subscription),
     trialDays: limits.trialDays,
     expiresAt: resolvedExpiresAt,
     daysRemaining,
@@ -196,10 +208,11 @@ function estimateRequestTokens(req: Request, kind: DemoQuotaKind): number {
 }
 
 export async function consumeDemoQuota(req: Request, res: Response, kind: DemoQuotaKind): Promise<boolean> {
-  if (!isDemoMode()) return true;
-
   const id = await auth.verifyToken(req.headers.authorization);
   const sub = id?.tenantId ? await getTenantSubscription(id.tenantId) : null;
+  if (isAdminSubscription(sub)) return true;
+  if (!isDemoMode() && !isTrialSubscription(sub)) return true;
+
   if (sub?.expiresAt && isExpired(sub.expiresAt)) {
     res.status(402).json({ error: 'demo_expired', demo: await buildDemoStatus(req, id?.tenantId, sub.expiresAt) });
     return false;

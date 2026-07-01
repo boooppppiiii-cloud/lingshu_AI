@@ -23,6 +23,7 @@ import { authRouter } from './routes/auth.js';
 import { youtubeRouter } from './routes/youtube.js';
 import { socialRouter } from './routes/social.js';
 import { platformIntegrationsRouter } from './routes/platformIntegrations.js';
+import { adminRouter } from './routes/admin.js';
 import { isDemoMode, demoLimits } from './lib/demo.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -98,6 +99,7 @@ app.use('/api/overseas/social', socialRouter);
 app.use('/api/overseas/scheduler', schedulerRouter);
 app.use('/api/overseas/plugins', pluginsRouter);
 app.use('/api/overseas/auth', authRouter);
+app.use('/api/overseas/admin', adminRouter);
 app.use('/api/overseas/studio', studioRouter);
 app.use('/api/overseas/platform-integrations', platformIntegrationsRouter);
 
@@ -106,24 +108,36 @@ initCrawlerOpsWorker();
 
 // 素材库本地文件托管（POST /studio/materials 上传到 data/media/）
 const mediaDir = path.join(__dirname, '..', 'data', 'media');
-app.use('/media', express.static(mediaDir));
+app.use('/media', express.static(mediaDir, {
+  maxAge: '7d',
+  immutable: true,
+}));
 
 // BGM 曲库本地文件托管（内置种子曲 + POST /studio/bgm 上传）
 const bgmDir = path.join(__dirname, '..', 'data', 'bgm');
-app.use('/bgm', express.static(bgmDir));
+app.use('/bgm', express.static(bgmDir, { maxAge: '7d', immutable: true }));
 
 // TTS 配音音频托管（POST /studio/tts 生成到 data/tts/）
 const ttsDir = path.join(__dirname, '..', 'data', 'tts');
-app.use('/tts', express.static(ttsDir));
+app.use('/tts', express.static(ttsDir, { maxAge: '1d' }));
 
 // 封面 SVG 托管（POST /studio/cover 生成到 data/covers/）
 const coversDir = path.join(__dirname, '..', 'data', 'covers');
-app.use('/covers', express.static(coversDir));
+app.use('/covers', express.static(coversDir, { maxAge: '7d', immutable: true }));
 
 // Serve built frontend
 const distDir = path.join(__dirname, '..', 'dist');
-app.use(express.static(distDir));
+app.use(express.static(distDir, {
+  setHeaders: (res, filePath) => {
+    if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+      res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      return;
+    }
+    res.setHeader('Cache-Control', 'no-cache');
+  },
+}));
 app.get('*', (_req, res) => {
+  res.setHeader('Cache-Control', 'no-cache');
   res.sendFile(path.join(distDir, 'index.html'));
 });
 

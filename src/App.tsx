@@ -1,9 +1,9 @@
-import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { Loader2 } from 'lucide-react';
 import Layout from './components/Layout';
 import AuthScreen from './components/AuthScreen';
 import { authApi, type AuthSession } from './lib/auth';
-import { completeDemoStep, setDemoProgressScope } from './lib/demoProgress';
+import { completeDemoStep, resetDemoProgress, setDemoProgressScope } from './lib/demoProgress';
 
 const StrategyPage = lazy(() => import('./components/StrategyPage'));
 const TrafficPage = lazy(() => import('./components/TrafficPage'));
@@ -27,6 +27,7 @@ export type Page =
   | 'youtube';
 
 export type AgentType = 'strategy' | 'traffic' | 'conversion' | 'retention';
+const DEMO_GUIDE_ACTIVE_SCOPE_KEY = 'ow_demo_guide_active_scope';
 
 export interface Source { title: string; uri: string }
 export interface Message {
@@ -93,10 +94,32 @@ export default function App() {
   // 账号会话
   const [session, setSession] = useState<AuthSession | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [demoGuideActive, setDemoGuideActive] = useState(false);
+
+  const progressScopeFor = (s: AuthSession | null) => s?.demo?.guideScope || (s?.demo?.expiresAt ? `${s.user.id}:${s.demo.expiresAt}` : s?.user?.id || s?.tenant?.id || null);
+  const shouldShowGuide = (s: AuthSession | null) => {
+    if (!s?.demo?.enabled) return false;
+    return Boolean(s.demo.guideTrigger && progressScopeFor(s));
+  };
+  const hasActiveGuideScope = (s: AuthSession | null) => {
+    const scope = progressScopeFor(s);
+    if (!s?.demo?.enabled || !scope) return false;
+    try { return sessionStorage.getItem(DEMO_GUIDE_ACTIVE_SCOPE_KEY) === scope; } catch { return false; }
+  };
+  const showGuideFor = (s: AuthSession) => {
+    const scope = progressScopeFor(s);
+    if (scope) {
+      try { sessionStorage.setItem(DEMO_GUIDE_ACTIVE_SCOPE_KEY, scope); } catch { /* ignore */ }
+    }
+    resetDemoProgress();
+    setDemoGuideActive(true);
+  };
 
   useEffect(() => {
     authApi.me().then(s => {
-      setDemoProgressScope(s?.user?.id || s?.tenant?.id || null);
+      setDemoProgressScope(progressScopeFor(s));
+      if (s && shouldShowGuide(s)) showGuideFor(s);
+      else setDemoGuideActive(hasActiveGuideScope(s));
       setSession(s);
       setAuthLoading(false);
     });
@@ -105,8 +128,11 @@ export default function App() {
     if (!session) return;
     const timer = window.setInterval(() => {
       authApi.me().then(s => {
-        setDemoProgressScope(s?.user?.id || s?.tenant?.id || null);
+        setDemoProgressScope(progressScopeFor(s));
+        if (s && shouldShowGuide(s)) showGuideFor(s);
+        else if (s) setDemoGuideActive(hasActiveGuideScope(s));
         setSession(s);
+        if (!s) setDemoGuideActive(false);
       });
     }, 300_000);
     return () => window.clearInterval(timer);
@@ -168,16 +194,21 @@ export default function App() {
     setPage(agent);
   };
 
-  const handleNavigate = (p: Page) => {
+  const handleNavigate = useCallback((p: Page) => {
     setConversation(null); setRestore(null); setKickoff(null);
     activeIdRef.current = null; setActiveConvId(null);
     setPage(p);
-  };
+  }, []);
   const restoreFor = (a: AgentType) => (restore && restore.agent === a ? restore : undefined);
   const kickoffFor = (a: AgentType) => (kickoff && kickoff.agent === a ? { text: kickoff.text, key: kickoff.key } : undefined);
 
   const handleAuthed = (s: AuthSession) => {
-    setDemoProgressScope(s.user?.id || s.tenant?.id || null);
+    setDemoProgressScope(progressScopeFor(s));
+    if (shouldShowGuide(s)) {
+      showGuideFor(s);
+    } else {
+      setDemoGuideActive(hasActiveGuideScope(s));
+    }
     setSession(s);
   };
   const refreshSession = async () => {
@@ -185,12 +216,23 @@ export default function App() {
     if (!latest) {
       setDemoProgressScope(null);
       setSession(null);
+      setDemoGuideActive(false);
       return;
     }
-    setDemoProgressScope(latest.user?.id || latest.tenant?.id || null);
+    setDemoProgressScope(progressScopeFor(latest));
+    setDemoGuideActive(hasActiveGuideScope(latest));
     setSession(latest);
   };
-  const handleLogout = () => { authApi.logout(); setDemoProgressScope(null); setSession(null); };
+  const handleLogout = () => {
+    authApi.logout();
+    try { sessionStorage.removeItem(DEMO_GUIDE_ACTIVE_SCOPE_KEY); } catch { /* ignore */ }
+    setDemoProgressScope(null);
+    setDemoGuideActive(false);
+    setSession(null);
+  };
+  const handleDemoGuideShown = useCallback(() => {
+    void authApi.guideSeen();
+  }, []);
 
   if (authLoading) {
     return (
@@ -220,6 +262,8 @@ export default function App() {
   return (
     <Layout page={page} onNavigate={handleNavigate} conversation={conversation} session={session} onLogout={handleLogout}
       onSessionUpdate={setSession}
+      demoGuideActive={demoGuideActive}
+      onDemoGuideShown={handleDemoGuideShown}
       conversations={conversations} activeConvId={activeConvId} onOpenConversation={openConversation} onNewConversation={newConversation}
       suppressRightPanel={scriptPanelOpen} onAction={startAgentTask}>
       <Suspense fallback={<PageLoading />}>
