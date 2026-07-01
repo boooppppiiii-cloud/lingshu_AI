@@ -57,7 +57,9 @@ export function allowedDemoAccounts(): string[] {
 }
 
 export function isAllowedDemoAccount(email: string): boolean {
-  return allowedDemoAccounts().includes(norm(email));
+  const allowed = allowedDemoAccounts();
+  if (!allowed.length) return true; // no whitelist configured → open to all
+  return allowed.includes(norm(email));
 }
 
 export function readDemoAccountRegistry(): DemoAccountRegistry {
