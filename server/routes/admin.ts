@@ -2,6 +2,13 @@ import { Router } from 'express';
 import { pbGet } from '../storage/pb.js';
 import { demoLimits } from '../lib/demo.js';
 import {
+  effectiveOAuthConfig,
+  oauthCallbackUrls,
+  readOAuthConfig,
+  writeOAuthConfig,
+  type StoredOAuthConfig,
+} from '../lib/oauthConfig.js';
+import {
   demoUsageForUser,
   readDemoAccountRegistry,
   requireAdminUser,
@@ -31,6 +38,31 @@ async function safePbGet(collection: string, id?: string | null) {
   } catch {
     return null;
   }
+}
+
+function bodyText(value: unknown): string {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function publicOAuthConfig(req: Parameters<typeof oauthCallbackUrls>[0], adminEmail: string) {
+  const stored = readOAuthConfig();
+  const effective = effectiveOAuthConfig();
+  return {
+    admin: adminEmail,
+    updatedAt: stored.updatedAt ?? null,
+    callbacks: oauthCallbackUrls(req),
+    values: {
+      youtubeOAuthClientId: effective.youtubeOAuthClientId,
+      metaSocialAppId: effective.metaSocialAppId,
+      tiktokClientKey: effective.tiktokClientKey,
+      advancedManualConnectEnabled: effective.advancedManualConnectEnabled,
+    },
+    secretSet: {
+      youtubeOAuthClientSecret: Boolean(effective.youtubeOAuthClientSecret),
+      metaSocialAppSecret: Boolean(effective.metaSocialAppSecret),
+      tiktokClientSecret: Boolean(effective.tiktokClientSecret),
+    },
+  };
 }
 
 adminRouter.get('/demo-accounts', async (req, res) => {
@@ -72,4 +104,39 @@ adminRouter.get('/demo-accounts', async (req, res) => {
     }));
 
   res.json({ admin: admin.email, accounts });
+});
+
+adminRouter.get('/oauth-config', async (req, res) => {
+  const admin = await requireAdminUser(req);
+  if (!admin) {
+    res.status(403).json({ error: 'admin_required' });
+    return;
+  }
+  res.json(publicOAuthConfig(req, admin.email));
+});
+
+adminRouter.put('/oauth-config', async (req, res) => {
+  const admin = await requireAdminUser(req);
+  if (!admin) {
+    res.status(403).json({ error: 'admin_required' });
+    return;
+  }
+
+  const body = req.body ?? {};
+  const patch: Partial<StoredOAuthConfig> = {
+    youtubeOAuthClientId: bodyText(body.youtubeOAuthClientId),
+    metaSocialAppId: bodyText(body.metaSocialAppId),
+    tiktokClientKey: bodyText(body.tiktokClientKey),
+    advancedManualConnectEnabled: body.advancedManualConnectEnabled === true,
+  };
+
+  const youtubeSecret = bodyText(body.youtubeOAuthClientSecret);
+  const metaSecret = bodyText(body.metaSocialAppSecret);
+  const tiktokSecret = bodyText(body.tiktokClientSecret);
+  if (youtubeSecret) patch.youtubeOAuthClientSecret = youtubeSecret;
+  if (metaSecret) patch.metaSocialAppSecret = metaSecret;
+  if (tiktokSecret) patch.tiktokClientSecret = tiktokSecret;
+
+  writeOAuthConfig(patch);
+  res.json(publicOAuthConfig(req, admin.email));
 });

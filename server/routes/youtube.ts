@@ -20,6 +20,10 @@ import {
   exchangeYouTubeOAuthCode,
   type YouTubeConfig,
 } from '../integrations/youtube.js';
+import {
+  advancedManualConnectEnabled as readAdvancedManualConnectEnabled,
+  getYouTubeOAuthClient,
+} from '../lib/oauthConfig.js';
 
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || '';
 const GOOGLE_OAUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -73,14 +77,11 @@ function youtubeConfig(record: YouTubeAccountRecord): YouTubeConfig {
 }
 
 function getOAuthClient() {
-  const clientId = process.env.YOUTUBE_OAUTH_CLIENT_ID?.trim();
-  const clientSecret = process.env.YOUTUBE_OAUTH_CLIENT_SECRET?.trim();
-  if (!clientId || !clientSecret) return null;
-  return { clientId, clientSecret };
+  return getYouTubeOAuthClient();
 }
 
 function advancedManualConnectEnabled() {
-  return process.env.ADVANCED_MANUAL_CONNECT_ENABLED === 'true';
+  return readAdvancedManualConnectEnabled();
 }
 
 function getPublicOrigin(req: Request) {
@@ -357,7 +358,7 @@ youtubeRouter.get('/oauth/callback', async (req, res) => {
     res.status(503).type('html').send(callbackHtml({
       ok: false,
       title: '管理员尚未配置 YouTube OAuth',
-      message: '请先在服务器环境变量里填写 YOUTUBE_OAUTH_CLIENT_ID 和 YOUTUBE_OAUTH_CLIENT_SECRET。',
+      message: '请管理员先在「账号配置 - 授权应用配置」里保存 YouTube Client ID 和 Client Secret。',
       returnTo,
     }));
     return;
@@ -422,7 +423,7 @@ youtubeRouter.post('/oauth/start', (req, res) => {
   const client = getOAuthClient();
   if (!client) {
     res.status(503).json({
-      error: '管理员尚未配置 YouTube OAuth，请先填写 YOUTUBE_OAUTH_CLIENT_ID 和 YOUTUBE_OAUTH_CLIENT_SECRET',
+      error: '管理员尚未配置 YouTube OAuth，请先在「账号配置 - 授权应用配置」里保存 YouTube Client ID 和 Client Secret',
     });
     return;
   }
@@ -473,7 +474,7 @@ youtubeRouter.post('/connect', async (req, res) => {
   const accessToken = typeof req.body?.accessToken === 'string' ? req.body.accessToken.trim() : undefined;
 
   if (!clientId || !clientSecret || !refreshToken) {
-    res.status(400).json({ error: 'YOUTUBE_OAUTH_CLIENT_ID, YOUTUBE_OAUTH_CLIENT_SECRET, and refreshToken are required' });
+    res.status(400).json({ error: 'YouTube Client ID, Client Secret, and refreshToken are required' });
     return;
   }
 

@@ -328,7 +328,7 @@ export function YouTubeConnectionPanel({ compact = false }: { compact?: boolean 
       {oauthStatus && !oauthStatus.configured && (
         <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-800">
           <p className="font-semibold mb-1">管理员还没有开启 YouTube 一键授权</p>
-          <p className="leading-relaxed">请先在服务器环境变量中填写 `YOUTUBE_OAUTH_CLIENT_ID` 和 `YOUTUBE_OAUTH_CLIENT_SECRET`，并在 Google Cloud OAuth Client 里加入下面这个回调地址：</p>
+          <p className="leading-relaxed">请管理员进入「账号配置 - 授权应用配置」保存 YouTube Client ID / Client Secret，并在 Google Cloud OAuth Client 里加入下面这个回调地址：</p>
           <code className="mt-2 block break-all rounded-md bg-white/70 px-2 py-1 text-[11px] text-amber-900">{oauthStatus.redirectUri}</code>
         </div>
       )}
@@ -697,7 +697,7 @@ export function SocialConnectionPanel({ platform }: { platform: SocialPlatform }
       ) : status && !status.configured && (
         <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-800">
           <p className="font-semibold mb-1">管理员还没有开启 {meta.label} 授权</p>
-          <p className="leading-relaxed">请先在服务器环境变量中填写 {meta.envHint}，并在平台开发者后台加入下面这个回调地址：</p>
+          <p className="leading-relaxed">请管理员进入「账号配置 - 授权应用配置」保存 {meta.label} 应用凭据，并在平台开发者后台加入下面这个回调地址：</p>
           <code className="mt-2 block break-all rounded-md bg-white/70 px-2 py-1 text-[11px] text-amber-900">{status.redirectUri}</code>
         </div>
       )}

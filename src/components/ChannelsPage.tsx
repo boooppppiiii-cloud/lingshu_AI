@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Share2, Plus, X, CheckCircle, AlertCircle, Wifi, WifiOff, Send, Trash2, Settings, ShieldCheck } from 'lucide-react';
+import { Share2, Plus, X, CheckCircle, AlertCircle, Wifi, WifiOff, Send, Trash2, Settings, ShieldCheck, KeyRound, Save, RefreshCw, Copy } from 'lucide-react';
 import { YouTubeConnectionPanel, SocialConnectionPanel } from './YouTubeIntegration';
+import { authHeader } from '../lib/auth';
 
 interface Channel {
   id: string;
@@ -13,6 +14,38 @@ interface Channel {
   connectedAt?: string;
   lastActivity?: string;
   stats: { sent: number; received: number };
+}
+
+interface AdminOAuthConfig {
+  admin: string;
+  updatedAt: string | null;
+  callbacks: {
+    youtube: string;
+    instagram: string;
+    facebook: string;
+    tiktok: string;
+  };
+  values: {
+    youtubeOAuthClientId: string;
+    metaSocialAppId: string;
+    tiktokClientKey: string;
+    advancedManualConnectEnabled: boolean;
+  };
+  secretSet: {
+    youtubeOAuthClientSecret: boolean;
+    metaSocialAppSecret: boolean;
+    tiktokClientSecret: boolean;
+  };
+}
+
+interface AdminOAuthForm {
+  youtubeOAuthClientId: string;
+  youtubeOAuthClientSecret: string;
+  metaSocialAppId: string;
+  metaSocialAppSecret: string;
+  tiktokClientKey: string;
+  tiktokClientSecret: string;
+  advancedManualConnectEnabled: boolean;
 }
 
 const CHANNEL_DEFS: Record<string, {
@@ -88,6 +121,260 @@ const CHANNEL_DEFS: Record<string, {
 
 const ADD_ACCOUNT_TYPES = ['whatsapp', 'youtube', 'instagram', 'facebook', 'tiktok'] as const;
 const OAUTH_ACCOUNT_TYPES = ['youtube', 'instagram', 'facebook', 'tiktok'] as const;
+const OAUTH_CONFIG_SECTIONS = [
+  {
+    id: 'youtube',
+    title: 'YouTube / Google',
+    idKey: 'youtubeOAuthClientId',
+    secretKey: 'youtubeOAuthClientSecret',
+    secretSetKey: 'youtubeOAuthClientSecret',
+    idLabel: 'Client ID',
+    secretLabel: 'Client Secret',
+    callbacks: ['youtube'],
+  },
+  {
+    id: 'meta',
+    title: 'Meta / Instagram / Facebook',
+    idKey: 'metaSocialAppId',
+    secretKey: 'metaSocialAppSecret',
+    secretSetKey: 'metaSocialAppSecret',
+    idLabel: 'App ID',
+    secretLabel: 'App Secret',
+    callbacks: ['instagram', 'facebook'],
+  },
+  {
+    id: 'tiktok',
+    title: 'TikTok',
+    idKey: 'tiktokClientKey',
+    secretKey: 'tiktokClientSecret',
+    secretSetKey: 'tiktokClientSecret',
+    idLabel: 'Client Key',
+    secretLabel: 'Client Secret',
+    callbacks: ['tiktok'],
+  },
+] as const;
+
+function oauthFormFromConfig(config: AdminOAuthConfig): AdminOAuthForm {
+  return {
+    youtubeOAuthClientId: config.values.youtubeOAuthClientId,
+    youtubeOAuthClientSecret: '',
+    metaSocialAppId: config.values.metaSocialAppId,
+    metaSocialAppSecret: '',
+    tiktokClientKey: config.values.tiktokClientKey,
+    tiktokClientSecret: '',
+    advancedManualConnectEnabled: config.values.advancedManualConnectEnabled,
+  };
+}
+
+function AdminOAuthConfigPanel({
+  initialConfig,
+  onSaved,
+}: {
+  initialConfig: AdminOAuthConfig;
+  onSaved: (config: AdminOAuthConfig) => void;
+}) {
+  const [config, setConfig] = useState(initialConfig);
+  const [form, setForm] = useState<AdminOAuthForm>(() => oauthFormFromConfig(initialConfig));
+  const [saving, setSaving] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [notice, setNotice] = useState('');
+  const [error, setError] = useState('');
+  const [copied, setCopied] = useState('');
+
+  useEffect(() => {
+    setConfig(initialConfig);
+    setForm(oauthFormFromConfig(initialConfig));
+  }, [initialConfig]);
+
+  function setField<K extends keyof AdminOAuthForm>(key: K, value: AdminOAuthForm[K]) {
+    setForm(prev => ({ ...prev, [key]: value }));
+  }
+
+  async function reloadConfig() {
+    setLoading(true);
+    setError('');
+    try {
+      const r = await fetch('/api/overseas/admin/oauth-config', { headers: authHeader() });
+      const data = await r.json().catch(() => ({})) as AdminOAuthConfig & { error?: string };
+      if (!r.ok) throw new Error(data.error || '无法读取授权应用配置');
+      setConfig(data);
+      setForm(oauthFormFromConfig(data));
+      onSaved(data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '无法读取授权应用配置');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveConfig() {
+    setSaving(true);
+    setError('');
+    setNotice('');
+    try {
+      const r = await fetch('/api/overseas/admin/oauth-config', {
+        method: 'PUT',
+        headers: { ...authHeader(), 'Content-Type': 'application/json' },
+        body: JSON.stringify(form),
+      });
+      const data = await r.json().catch(() => ({})) as AdminOAuthConfig & { error?: string };
+      if (!r.ok) throw new Error(data.error || '保存授权应用配置失败');
+      setConfig(data);
+      setForm(oauthFormFromConfig(data));
+      onSaved(data);
+      setNotice('已保存到服务器，客户现在可以使用一键授权。');
+    } catch (e) {
+      setError(e instanceof Error ? e.message : '保存授权应用配置失败');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function copyCallback(label: string, value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(label);
+      window.setTimeout(() => setCopied(''), 1500);
+    } catch {
+      setCopied('');
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <section className="rounded-xl border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-900">
+        <div className="flex items-start gap-3">
+          <ShieldCheck size={18} className="mt-0.5 flex-shrink-0" />
+          <div className="min-w-0">
+            <p className="font-semibold">管理员授权应用配置</p>
+            <p className="mt-1 text-xs leading-relaxed text-emerald-800">
+              这里保存的是平台级 OAuth 应用凭据，数据写入服务器 data/oauth-config.json，不会写入浏览器本地存储或 GitHub 仓库。
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void reloadConfig()}
+            disabled={loading}
+            title="刷新配置"
+            className="ml-auto inline-flex h-8 w-8 items-center justify-center rounded-lg border border-emerald-200 bg-white text-emerald-700 disabled:opacity-50"
+          >
+            <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+          </button>
+        </div>
+      </section>
+
+      {notice && (
+        <div className="flex items-start gap-2 rounded-lg bg-green-50 px-3 py-2 text-xs text-green-700">
+          <CheckCircle size={14} className="mt-0.5 flex-shrink-0" />
+          <span>{notice}</span>
+        </div>
+      )}
+      {error && (
+        <div className="flex items-start gap-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">
+          <AlertCircle size={14} className="mt-0.5 flex-shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
+
+      <div className="grid gap-4 xl:grid-cols-3">
+        {OAUTH_CONFIG_SECTIONS.map(section => (
+          <section key={section.id} className="rounded-xl border border-gray-200 bg-white p-5">
+            <div className="mb-4 flex items-start gap-3">
+              <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-lg bg-gray-50 text-gray-700">
+                <KeyRound size={18} />
+              </div>
+              <div className="min-w-0">
+                <h2 className="text-sm font-semibold text-gray-900">{section.title}</h2>
+                <p className="mt-1 text-xs text-gray-500">
+                  {config.secretSet[section.secretSetKey] ? '密钥已保存在服务器。' : '尚未保存密钥。'}
+                </p>
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              <label className="grid gap-1 text-xs font-semibold text-gray-600">
+                {section.idLabel}
+                <input
+                  type="text"
+                  value={form[section.idKey]}
+                  onChange={e => setField(section.idKey, e.target.value)}
+                  placeholder={section.idLabel}
+                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-normal text-gray-900 outline-none focus:border-green-400"
+                />
+              </label>
+              <label className="grid gap-1 text-xs font-semibold text-gray-600">
+                {section.secretLabel}
+                <input
+                  type="password"
+                  value={form[section.secretKey]}
+                  onChange={e => setField(section.secretKey, e.target.value)}
+                  placeholder={config.secretSet[section.secretSetKey] ? '已保存，留空不修改' : section.secretLabel}
+                  className="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-normal text-gray-900 outline-none focus:border-green-400"
+                />
+              </label>
+            </div>
+
+            <div className="mt-4 space-y-2">
+              {section.callbacks.map(key => {
+                const value = config.callbacks[key];
+                const label = key === 'youtube' ? 'YouTube 回调地址' : key === 'instagram' ? 'Instagram 回调地址' : key === 'facebook' ? 'Facebook 回调地址' : 'TikTok 回调地址';
+                return (
+                  <div key={key} className="rounded-lg border border-gray-100 bg-gray-50 px-3 py-2">
+                    <div className="mb-1 flex items-center justify-between gap-2">
+                      <span className="text-[11px] font-semibold text-gray-500">{label}</span>
+                      <button
+                        type="button"
+                        onClick={() => void copyCallback(label, value)}
+                        title="复制回调地址"
+                        className="inline-flex h-6 w-6 items-center justify-center rounded-md text-gray-400 hover:bg-white hover:text-gray-700"
+                      >
+                        <Copy size={12} />
+                      </button>
+                    </div>
+                    <code className="block break-all text-[11px] text-gray-700">{value}</code>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        ))}
+      </div>
+
+      {copied && <p className="text-xs text-green-700">{copied}已复制。</p>}
+
+      <section className="rounded-xl border border-gray-200 bg-white p-5">
+        <label className="flex items-center justify-between gap-4">
+          <span>
+            <span className="block text-sm font-semibold text-gray-900">高级手动 token 接入</span>
+            <span className="mt-1 block text-xs text-gray-500">仅实施排障时开启；默认关闭，客户侧只使用一键授权。</span>
+          </span>
+          <input
+            type="checkbox"
+            checked={form.advancedManualConnectEnabled}
+            onChange={e => setField('advancedManualConnectEnabled', e.target.checked)}
+            className="h-4 w-4 rounded border-gray-300 text-green-600"
+          />
+        </label>
+      </section>
+
+      <div className="flex justify-end">
+        <button
+          type="button"
+          onClick={() => void saveConfig()}
+          disabled={saving}
+          className="inline-flex items-center gap-2 rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+        >
+          {saving ? <RefreshCw size={15} className="animate-spin" /> : <Save size={15} />}
+          保存到服务器
+        </button>
+      </div>
+
+      {config.updatedAt && (
+        <p className="text-right text-xs text-gray-400">上次保存：{new Date(config.updatedAt).toLocaleString('zh-CN')}</p>
+      )}
+    </div>
+  );
+}
 
 export default function ChannelsPage() {
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -98,17 +385,30 @@ export default function ChannelsPage() {
   const [testing, setTesting] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<Record<string, { ok: boolean; msg: string }>>({});
   const [loading, setLoading] = useState(true);
+  const [adminLoading, setAdminLoading] = useState(true);
+  const [adminOAuthConfig, setAdminOAuthConfig] = useState<AdminOAuthConfig | null>(null);
   const [activeTab, setActiveTab] = useState<'auth' | 'advanced'>('auth');
 
   useEffect(() => { void fetchInitialData(); }, []);
+  useEffect(() => {
+    if (!adminLoading && !adminOAuthConfig && activeTab === 'advanced') setActiveTab('auth');
+  }, [activeTab, adminLoading, adminOAuthConfig]);
 
   async function fetchInitialData() {
     setLoading(true);
+    setAdminLoading(true);
     try {
       const channelsRes = await fetch('/api/overseas/channels');
       setChannels(await channelsRes.json());
+      const adminRes = await fetch('/api/overseas/admin/oauth-config', { headers: authHeader() });
+      if (adminRes.ok) {
+        setAdminOAuthConfig(await adminRes.json() as AdminOAuthConfig);
+      } else {
+        setAdminOAuthConfig(null);
+      }
     } finally {
       setLoading(false);
+      setAdminLoading(false);
     }
   }
 
@@ -182,19 +482,17 @@ export default function ChannelsPage() {
             <h1 className="text-xl font-semibold text-gray-900">账号配置</h1>
             <p className="text-sm text-gray-500 mt-0.5">客户登录自己的平台账号完成授权；手动 token 只作为高级接入方式</p>
           </div>
-          <button
-            onClick={() => setShowAdd(true)}
-            className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white"
-            style={{ background: '#16a34a' }}
-          >
-            <Plus size={16} /> 添加账号
-          </button>
+          {adminOAuthConfig && (
+            <span className="inline-flex items-center gap-2 rounded-lg border border-green-100 bg-green-50 px-3 py-2 text-xs font-semibold text-green-700">
+              <ShieldCheck size={14} /> 管理员
+            </span>
+          )}
         </div>
 
         <div className="flex gap-1 mt-5">
           {([
             ['auth', '一键授权'],
-            ['advanced', `高级配置 ${channels.length > 0 ? channels.length : ''}`],
+            ...(adminOAuthConfig ? [['advanced', '授权应用配置'] as const] : []),
           ] as const).map(([tab, label]) => (
             <button
               key={tab}
@@ -250,100 +548,11 @@ export default function ChannelsPage() {
           </div>
         )}
 
-        {activeTab === 'advanced' && (
-          <>
-            {loading && <div className="text-sm text-gray-400 py-12 text-center">加载中...</div>}
-
-            {!loading && channels.length === 0 && (
-              <div className="flex flex-col items-center justify-center h-64 text-gray-400">
-                <Share2 size={40} className="mb-3 opacity-40" />
-                <p className="text-sm font-medium">还没有手动配置的账号</p>
-                <p className="text-xs mt-1">推荐优先使用「一键授权」连接账号</p>
-              </div>
-            )}
-
-            {channels.length > 0 && (
-              <div className="flex gap-3 mb-6">
-                <div className="flex items-center gap-2 px-3 py-1.5 bg-green-50 rounded-lg text-xs text-green-700">
-                  <Wifi size={12} /> {connectedCount} 个已连接
-                </div>
-                <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 rounded-lg text-xs text-gray-500">
-                  <WifiOff size={12} /> {channels.length - connectedCount} 个未连接
-                </div>
-              </div>
-            )}
-
-            <div className="grid grid-cols-2 gap-4">
-              {channels.map(ch => {
-                const def = CHANNEL_DEFS[ch.type];
-                const tr = testResult[ch.id];
-                return (
-                  <div key={ch.id} className="border border-gray-200 rounded-xl p-5">
-                    <div className="flex items-start justify-between mb-4">
-                      <div className="flex items-center gap-3">
-                        <div className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl" style={{ background: def?.bg ?? '#f3f4f6' }}>
-                          {def?.icon ?? '📣'}
-                        </div>
-                        <div>
-                          <div className="font-medium text-gray-900 text-sm">{ch.label}</div>
-                          <div className={`text-xs mt-0.5 flex items-center gap-1 ${ch.status === 'connected' ? 'text-green-600' : ch.status === 'error' ? 'text-red-500' : 'text-gray-400'}`}>
-                            {ch.status === 'connected' && <><CheckCircle size={10} /> 已连接</>}
-                            {ch.status === 'error' && <><AlertCircle size={10} /> 连接错误</>}
-                            {ch.status === 'disconnected' && '未连接'}
-                          </div>
-                        </div>
-                      </div>
-                      <button onClick={() => deleteChannel(ch.id)} className="text-gray-300 hover:text-red-400 transition-colors">
-                        <Trash2 size={14} />
-                      </button>
-                    </div>
-
-                    <div className="flex gap-3 mb-4">
-                      {[
-                        { label: '已发送', val: ch.stats.sent },
-                        { label: '已接收', val: ch.stats.received },
-                      ].map(s => (
-                        <div key={s.label} className="flex-1 bg-gray-50 rounded-lg px-3 py-2 text-center">
-                          <div className="text-base font-semibold text-gray-800">{s.val}</div>
-                          <div className="text-xs text-gray-400">{s.label}</div>
-                        </div>
-                      ))}
-                      <div className="flex-1 bg-gray-50 rounded-lg px-3 py-2 text-center">
-                        <div className="text-xs font-medium text-gray-800 truncate">
-                          {ch.lastActivity ? new Date(ch.lastActivity).toLocaleDateString('zh-CN') : '-'}
-                        </div>
-                        <div className="text-xs text-gray-400">最近活动</div>
-                      </div>
-                    </div>
-
-                    {tr && (
-                      <div className={`text-xs px-3 py-2 rounded-lg mb-3 flex items-center gap-2 ${tr.ok ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-600'}`}>
-                        {tr.ok ? <CheckCircle size={12} /> : <AlertCircle size={12} />}
-                        {tr.msg}
-                      </div>
-                    )}
-
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => { setConfigTarget(ch); setConfigValues(ch.config); }}
-                        className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 border border-gray-200 rounded-lg text-xs text-gray-600 hover:bg-gray-50 transition-colors"
-                      >
-                        <Settings size={12} /> 配置
-                      </button>
-                      <button
-                        onClick={() => testChannel(ch.id)}
-                        disabled={testing === ch.id}
-                        className="flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs text-white transition-colors disabled:opacity-50"
-                        style={{ background: testing === ch.id ? '#9ca3af' : (def?.color ?? '#16a34a') }}
-                      >
-                        <Send size={12} /> {testing === ch.id ? '测试中...' : '测试连接'}
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </>
+        {activeTab === 'advanced' && adminOAuthConfig && (
+          <AdminOAuthConfigPanel
+            initialConfig={adminOAuthConfig}
+            onSaved={setAdminOAuthConfig}
+          />
         )}
       </div>
 

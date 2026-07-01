@@ -26,6 +26,11 @@ import {
   type SocialPlatform,
   type SocialUploadInput,
 } from '../integrations/social.js';
+import {
+  advancedManualConnectEnabled as readAdvancedManualConnectEnabled,
+  getMetaOAuthClient,
+  getTikTokOAuthClient,
+} from '../lib/oauthConfig.js';
 
 const COL = 'social_accounts';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -87,21 +92,15 @@ function graphVersion() {
 }
 
 function getTikTokClient() {
-  const clientKey = process.env.TIKTOK_CLIENT_KEY?.trim();
-  const clientSecret = process.env.TIKTOK_CLIENT_SECRET?.trim();
-  if (!clientKey || !clientSecret) return null;
-  return { clientKey, clientSecret };
+  return getTikTokOAuthClient();
 }
 
 function getMetaClient() {
-  const appId = process.env.META_SOCIAL_APP_ID?.trim() || process.env.WHATSAPP_EMBEDDED_SIGNUP_APP_ID?.trim();
-  const appSecret = process.env.META_SOCIAL_APP_SECRET?.trim() || process.env.WHATSAPP_EMBEDDED_SIGNUP_APP_SECRET?.trim();
-  if (!appId || !appSecret) return null;
-  return { appId, appSecret };
+  return getMetaOAuthClient();
 }
 
 function advancedManualConnectEnabled() {
-  return process.env.ADVANCED_MANUAL_CONNECT_ENABLED === 'true';
+  return readAdvancedManualConnectEnabled();
 }
 
 function isPlatform(value: string): value is SocialPlatform {
