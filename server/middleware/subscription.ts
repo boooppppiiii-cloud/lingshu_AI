@@ -40,7 +40,15 @@ export function isSubscriptionEnforced(): boolean {
 
 /** 读取租户当前订阅；记录缺失时返回 none */
 export async function getTenantSubscription(tenantId: string): Promise<Subscription> {
-  const record = await pbGet(TENANT_COL, tenantId);
+  if (tenantId.startsWith('local_tenant_')) {
+    return { status: 'trialing', plan: 'local', expiresAt: null };
+  }
+  let record: Record<string, unknown> | null = null;
+  try {
+    record = await pbGet(TENANT_COL, tenantId);
+  } catch {
+    return { status: 'none', plan: null, expiresAt: null };
+  }
   if (!record) return { status: 'none', plan: null, expiresAt: null };
   return {
     status: (record.subscriptionStatus as SubscriptionStatus) ?? 'none',

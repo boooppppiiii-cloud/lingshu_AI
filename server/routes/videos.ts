@@ -85,6 +85,10 @@ function isTestTenantRecord(tenant: Record<string, unknown> | null): boolean {
   return plan === 'trial' || plan === 'admin' || status === 'trialing';
 }
 
+function isLocalTenant(tenantId: string): boolean {
+  return tenantId.startsWith('local_tenant_');
+}
+
 function isSharedSyncedVideo(record: Record<string, unknown>): boolean {
   return parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {}).sharedTestVideo === true;
 }
@@ -151,6 +155,7 @@ async function listAllSharedTestVideos(): Promise<Record<string, unknown>[]> {
 
 async function syncSharedTestVideosForTenant(tenantId: string): Promise<void> {
   if (!tenantId) return;
+  if (isLocalTenant(tenantId)) return;
 
   const tenant = await store.getById<Record<string, unknown>>('tenants', tenantId);
   if (!isTestTenantRecord(tenant)) return;
@@ -2488,6 +2493,7 @@ function softDownloadFailure(platform: Platform, error: unknown): { status: stri
 }
 
 async function purgeLegacyFakeVideos(): Promise<void> {
+  if (process.env.NODE_ENV !== 'production' && process.env.PB_URL === undefined) return;
   if (!legacyFakePurgePromise) {
     legacyFakePurgePromise = (async () => {
       let page = 1;
@@ -3244,7 +3250,8 @@ function enqueueCrawlerOpsTask(input: {
 }
 
 export function initCrawlerOpsWorker(): void {
-  if (crawlerOpsWorkerTimer || process.env.CRAWLER_OPS_WORKER_ENABLED === '0') return;
+  const workerFlag = process.env.CRAWLER_OPS_WORKER_ENABLED;
+  if (crawlerOpsWorkerTimer || workerFlag === '0' || (process.env.NODE_ENV !== 'production' && workerFlag !== '1')) return;
   const intervalMs = Math.max(5_000, Number(process.env.CRAWLER_OPS_WORKER_INTERVAL_MS || 30_000));
   crawlerOpsWorkerTimer = setInterval(() => {
     void runCrawlerOpsWorkerOnce().then(logCrawlerOpsWorkerResult).catch((e) => {

@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Share2, Plus, X, CheckCircle, AlertCircle, Wifi, WifiOff, Send, Trash2, Settings } from 'lucide-react';
+import { Share2, Plus, X, CheckCircle, AlertCircle, Wifi, WifiOff, Send, Trash2, Settings, ShieldCheck } from 'lucide-react';
+import { YouTubeConnectionPanel, SocialConnectionPanel } from './YouTubeIntegration';
 
 interface Channel {
   id: string;
-  type: 'whatsapp' | 'telegram' | 'dingtalk' | 'feishu' | 'wechat' | 'shopify';
+  type: 'whatsapp' | 'youtube' | 'tiktok' | 'instagram' | 'facebook' | 'telegram' | 'dingtalk' | 'feishu' | 'wechat' | 'shopify';
   label: string;
   enabled: boolean;
   config: Record<string, string>;
@@ -15,61 +16,78 @@ interface Channel {
 }
 
 const CHANNEL_DEFS: Record<string, {
-  name: string; icon: string; color: string; bg: string;
-  fields: { key: string; label: string; placeholder: string; secret?: boolean }[];
+  name: string;
+  icon: string;
+  color: string;
+  bg: string;
   desc: string;
+  oauth?: boolean;
+  fields: { key: string; label: string; placeholder: string; secret?: boolean }[];
 }> = {
   whatsapp: {
-    name: 'WhatsApp Business', icon: '💬', color: '#25D366', bg: '#e8fdf0',
-    desc: '通过 Meta Cloud API 与买家 WhatsApp 互动，支持消息接收与模板消息群发',
+    name: 'WhatsApp Business',
+    icon: '💬',
+    color: '#25D366',
+    bg: '#e8fdf0',
+    desc: '连接 WhatsApp Cloud API，接收买家消息并发送模板消息',
     fields: [
       { key: 'phoneNumberId', label: 'Phone Number ID', placeholder: '123456789012345' },
       { key: 'accessToken', label: 'Access Token', placeholder: 'EAABxxxxx...', secret: true },
-      { key: 'verifyToken', label: 'Verify Token', placeholder: '自定义字符串，用于 Webhook 验证' },
+      { key: 'verifyToken', label: 'Verify Token（可选）', placeholder: '用于 Webhook 验证的自定义字符串' },
     ],
   },
-  telegram: {
-    name: 'Telegram Bot', icon: '✈️', color: '#2AABEE', bg: '#e8f5fd',
-    desc: '通过 Telegram Bot API 接收买家消息并自动回复，配置简单，无需审核',
+  youtube: {
+    name: 'YouTube',
+    icon: '▶️',
+    color: '#FF0000',
+    bg: '#fff1f2',
+    desc: '推荐使用 Google 登录授权，系统自动保存频道授权',
+    oauth: true,
     fields: [
-      { key: 'botToken', label: 'Bot Token', placeholder: '123456:ABCxxxxx...', secret: true },
-      { key: 'defaultChatId', label: '默认 Chat ID（可选）', placeholder: '-100123456789' },
+      { key: 'refreshToken', label: 'Refresh Token', placeholder: '建议通过 Google 授权自动生成', secret: true },
+      { key: 'channelId', label: 'Channel ID（可选）', placeholder: '系统可通过授权自动识别' },
     ],
   },
-  dingtalk: {
-    name: '钉钉群机器人', icon: '📌', color: '#1677FF', bg: '#e8f0ff',
-    desc: '发送业务通知到钉钉群，支持文本和 Markdown 消息，适合运营通知和任务提醒',
+  tiktok: {
+    name: 'TikTok',
+    icon: '🎵',
+    color: '#111827',
+    bg: '#f3f4f6',
+    desc: '推荐使用 TikTok 登录授权，系统自动保存账号授权',
+    oauth: true,
     fields: [
-      { key: 'webhookUrl', label: 'Webhook URL', placeholder: 'https://oapi.dingtalk.com/robot/send?access_token=...' },
-      { key: 'secret', label: '加签密钥（可选）', placeholder: 'SEC...', secret: true },
+      { key: 'accessToken', label: 'Access Token', placeholder: 'act.xxx...', secret: true },
+      { key: 'openId', label: 'Open ID（可选）', placeholder: 'TikTok Open ID' },
     ],
   },
-  feishu: {
-    name: '飞书群机器人', icon: '🦅', color: '#3370FF', bg: '#e8edff',
-    desc: '发送卡片消息到飞书群，支持富文本格式，适合经营日报和任务进展提醒',
+  instagram: {
+    name: 'Instagram',
+    icon: '📷',
+    color: '#C13584',
+    bg: '#fdf2f8',
+    desc: '推荐使用 Meta 登录授权，系统自动识别已绑定的 Instagram 专业账号',
+    oauth: true,
     fields: [
-      { key: 'webhookUrl', label: 'Webhook URL', placeholder: 'https://open.feishu.cn/open-apis/bot/v2/hook/...' },
-      { key: 'secret', label: '签名校验密钥（可选）', placeholder: 'xxx', secret: true },
+      { key: 'accessToken', label: 'Meta Access Token', placeholder: 'EAABxxxxx...', secret: true },
+      { key: 'igUserId', label: 'Instagram User ID（可选）', placeholder: '系统可通过 Token 自动发现' },
     ],
   },
-  wechat: {
-    name: '微信公众号', icon: '💚', color: '#07C160', bg: '#e8fdf0',
-    desc: '通过微信公众号向粉丝发送模板消息，需要已认证公众号',
+  facebook: {
+    name: 'Facebook',
+    icon: '👍',
+    color: '#1877F2',
+    bg: '#eff6ff',
+    desc: '推荐使用 Meta 登录授权，系统自动识别可管理的 Facebook Page',
+    oauth: true,
     fields: [
-      { key: 'appId', label: 'AppID', placeholder: 'wx123...' },
-      { key: 'appSecret', label: 'AppSecret', placeholder: '...', secret: true },
-      { key: 'token', label: 'Token', placeholder: '服务器验证 Token' },
-    ],
-  },
-  shopify: {
-    name: 'Shopify', icon: '🛍️', color: '#96BF48', bg: '#f3f9e8',
-    desc: '连接 Shopify 店铺，同步订单、商品和客户数据',
-    fields: [
-      { key: 'storeDomain', label: '店铺域名', placeholder: 'mystore.myshopify.com' },
-      { key: 'accessToken', label: 'Admin API Token', placeholder: 'shpat_...', secret: true },
+      { key: 'accessToken', label: 'Page Access Token', placeholder: 'EAABxxxxx...', secret: true },
+      { key: 'pageId', label: 'Page ID（可选）', placeholder: '系统可通过 Token 自动发现' },
     ],
   },
 };
+
+const ADD_ACCOUNT_TYPES = ['whatsapp', 'youtube', 'instagram', 'facebook', 'tiktok'] as const;
+const OAUTH_ACCOUNT_TYPES = ['youtube', 'instagram', 'facebook', 'tiktok'] as const;
 
 export default function ChannelsPage() {
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -80,28 +98,49 @@ export default function ChannelsPage() {
   const [testing, setTesting] = useState<string | null>(null);
   const [testResult, setTestResult] = useState<Record<string, { ok: boolean; msg: string }>>({});
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'config' | 'auth'>('config');
+  const [activeTab, setActiveTab] = useState<'auth' | 'advanced'>('auth');
 
-  useEffect(() => { fetchChannels(); }, []);
+  useEffect(() => { void fetchInitialData(); }, []);
+
+  async function fetchInitialData() {
+    setLoading(true);
+    try {
+      const channelsRes = await fetch('/api/overseas/channels');
+      setChannels(await channelsRes.json());
+    } finally {
+      setLoading(false);
+    }
+  }
 
   async function fetchChannels() {
-    setLoading(true);
     try {
       const r = await fetch('/api/overseas/channels');
       setChannels(await r.json());
-    } finally { setLoading(false); }
+    } catch {
+      // Keep the current screen stable when a refresh fails.
+    }
   }
 
   async function addChannel(type: string) {
     const def = CHANNEL_DEFS[type];
+    if (def?.oauth) {
+      setShowAdd(false);
+      setAddType('');
+      setActiveTab('auth');
+      return;
+    }
+
+    const sameTypeCount = channels.filter(channel => channel.type === type).length;
+    const label = sameTypeCount > 0 ? `${def.name} ${sameTypeCount + 1}` : def.name;
     await fetch('/api/overseas/channels', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type, label: def.name }),
+      body: JSON.stringify({ type, label }),
     });
     await fetchChannels();
     setShowAdd(false);
     setAddType('');
+    setActiveTab('advanced');
   }
 
   async function saveConfig(channel: Channel) {
@@ -123,7 +162,9 @@ export default function ChannelsPage() {
       await fetchChannels();
     } catch {
       setTestResult(prev => ({ ...prev, [id]: { ok: false, msg: '网络错误' } }));
-    } finally { setTesting(null); }
+    } finally {
+      setTesting(null);
+    }
   }
 
   async function deleteChannel(id: string) {
@@ -135,31 +176,32 @@ export default function ChannelsPage() {
 
   return (
     <div className="flex flex-col h-full bg-white">
-      {/* Header */}
       <div className="px-8 pt-8 pb-4 border-b border-gray-100">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-semibold text-gray-900">消息渠道</h1>
-            <p className="text-sm text-gray-500 mt-0.5">配置 AI 智能体与买家交互的消息平台，客户填写自己的账号信息完成接入</p>
+            <h1 className="text-xl font-semibold text-gray-900">账号配置</h1>
+            <p className="text-sm text-gray-500 mt-0.5">客户登录自己的平台账号完成授权；手动 token 只作为高级接入方式</p>
           </div>
           <button
             onClick={() => setShowAdd(true)}
             className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white"
             style={{ background: '#16a34a' }}
           >
-            <Plus size={16} /> 添加渠道
+            <Plus size={16} /> 添加账号
           </button>
         </div>
 
-        {/* Tabs */}
         <div className="flex gap-1 mt-5">
-          {(['config', 'auth'] as const).map(tab => (
+          {([
+            ['auth', '一键授权'],
+            ['advanced', `高级配置 ${channels.length > 0 ? channels.length : ''}`],
+          ] as const).map(([tab, label]) => (
             <button
               key={tab}
               onClick={() => setActiveTab(tab)}
               className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${activeTab === tab ? 'bg-gray-100 text-gray-900' : 'text-gray-500 hover:text-gray-700'}`}
             >
-              {tab === 'config' ? `渠道配置 ${channels.length > 0 ? channels.length : ''}` : '配对授权'}
+              {label}
             </button>
           ))}
         </div>
@@ -167,26 +209,59 @@ export default function ChannelsPage() {
 
       <div className="flex-1 overflow-y-auto px-8 py-6">
         {activeTab === 'auth' && (
-          <div className="flex flex-col items-center justify-center h-64 text-gray-400">
-            <Share2 size={40} className="mb-3 opacity-40" />
-            <p className="text-sm">配对授权功能开发中</p>
-            <p className="text-xs mt-1">用于将渠道与特定 AI 智能体绑定</p>
+          <div className="space-y-5">
+            <div className="flex items-start gap-3 rounded-xl border border-green-100 bg-green-50 px-4 py-3 text-sm text-green-800">
+              <ShieldCheck size={18} className="mt-0.5 flex-shrink-0" />
+              <div>
+                <p className="font-semibold">推荐客户使用一键授权</p>
+                <p className="mt-1 text-xs leading-relaxed text-green-700">你只需要在系统部署时配置一次平台应用和回调地址。之后客户添加多个频道、主页或社媒账号时，自己登录并授权即可。</p>
+              </div>
+            </div>
+
+            <YouTubeConnectionPanel compact />
+
+            <div className="grid gap-5 xl:grid-cols-3">
+              {OAUTH_ACCOUNT_TYPES.filter(platform => platform !== 'youtube').map(platform => (
+                <SocialConnectionPanel key={platform} platform={platform} />
+              ))}
+            </div>
+
+            <section className="border border-gray-200 rounded-xl bg-white p-5">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-lg bg-green-50 text-green-600 flex items-center justify-center text-xl">💬</div>
+                  <div>
+                    <h2 className="text-sm font-semibold text-gray-900">WhatsApp Business</h2>
+                    <p className="text-xs text-gray-500 mt-1 leading-relaxed">WhatsApp 一键授权需要接入 Meta Embedded Signup。审核通过前暂不开放客户自助连接。</p>
+                  </div>
+                </div>
+                <button
+                  disabled
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-white bg-gray-900 opacity-70 cursor-not-allowed"
+                >
+                  审核中
+                </button>
+              </div>
+              <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-800">
+                <p className="font-semibold mb-1">WhatsApp 自助授权正在审核中</p>
+                <p className="leading-relaxed">审核完成后，客户可以在这里登录 Meta 并选择自己的 WhatsApp Business 账号。当前如需接入，可在「高级配置」里由实施人员填写 Cloud API 信息。</p>
+              </div>
+            </section>
           </div>
         )}
 
-        {activeTab === 'config' && (
+        {activeTab === 'advanced' && (
           <>
             {loading && <div className="text-sm text-gray-400 py-12 text-center">加载中...</div>}
 
             {!loading && channels.length === 0 && (
               <div className="flex flex-col items-center justify-center h-64 text-gray-400">
                 <Share2 size={40} className="mb-3 opacity-40" />
-                <p className="text-sm font-medium">还没有配置任何渠道</p>
-                <p className="text-xs mt-1">点击右上角"添加渠道"开始配置</p>
+                <p className="text-sm font-medium">还没有手动配置的账号</p>
+                <p className="text-xs mt-1">推荐优先使用「一键授权」连接账号</p>
               </div>
             )}
 
-            {/* Stats */}
             {channels.length > 0 && (
               <div className="flex gap-3 mb-6">
                 <div className="flex items-center gap-2 px-3 py-1.5 bg-green-50 rounded-lg text-xs text-green-700">
@@ -198,7 +273,6 @@ export default function ChannelsPage() {
               </div>
             )}
 
-            {/* Channel grid */}
             <div className="grid grid-cols-2 gap-4">
               {channels.map(ch => {
                 const def = CHANNEL_DEFS[ch.type];
@@ -208,7 +282,7 @@ export default function ChannelsPage() {
                     <div className="flex items-start justify-between mb-4">
                       <div className="flex items-center gap-3">
                         <div className="w-12 h-12 rounded-xl flex items-center justify-center text-2xl" style={{ background: def?.bg ?? '#f3f4f6' }}>
-                          {def?.icon ?? '📡'}
+                          {def?.icon ?? '📣'}
                         </div>
                         <div>
                           <div className="font-medium text-gray-900 text-sm">{ch.label}</div>
@@ -224,7 +298,6 @@ export default function ChannelsPage() {
                       </button>
                     </div>
 
-                    {/* Stats */}
                     <div className="flex gap-3 mb-4">
                       {[
                         { label: '已发送', val: ch.stats.sent },
@@ -237,7 +310,7 @@ export default function ChannelsPage() {
                       ))}
                       <div className="flex-1 bg-gray-50 rounded-lg px-3 py-2 text-center">
                         <div className="text-xs font-medium text-gray-800 truncate">
-                          {ch.lastActivity ? new Date(ch.lastActivity).toLocaleDateString('zh-CN') : '—'}
+                          {ch.lastActivity ? new Date(ch.lastActivity).toLocaleDateString('zh-CN') : '-'}
                         </div>
                         <div className="text-xs text-gray-400">最近活动</div>
                       </div>
@@ -274,7 +347,6 @@ export default function ChannelsPage() {
         )}
       </div>
 
-      {/* Add Channel Modal */}
       <AnimatePresence>
         {showAdd && (
           <motion.div
@@ -284,26 +356,30 @@ export default function ChannelsPage() {
           >
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white rounded-2xl w-[520px] p-6"
+              className="bg-white rounded-2xl w-[560px] p-6"
               onClick={e => e.stopPropagation()}
             >
               <div className="flex items-center justify-between mb-5">
-                <h3 className="font-semibold text-gray-900">选择渠道类型</h3>
+                <h3 className="font-semibold text-gray-900">选择账号类型</h3>
                 <button onClick={() => { setShowAdd(false); setAddType(''); }} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>
               </div>
               <div className="grid grid-cols-2 gap-3">
-                {Object.entries(CHANNEL_DEFS).map(([key, def]) => (
-                  <button
-                    key={key}
-                    onClick={() => setAddType(key)}
-                    className={`p-4 rounded-xl border-2 text-left transition-all ${addType === key ? 'border-green-500 bg-green-50' : 'border-gray-200 hover:border-gray-300'}`}
-                  >
-                    <div className="text-2xl mb-2">{def.icon}</div>
-                    <div className="text-sm font-medium text-gray-900">{def.name}</div>
-                    <div className="text-xs text-gray-500 mt-0.5 line-clamp-2">{def.desc}</div>
-                  </button>
-                ))}
+                {ADD_ACCOUNT_TYPES.map(key => {
+                  const def = CHANNEL_DEFS[key];
+                  return (
+                    <button
+                      key={key}
+                      onClick={() => setAddType(key)}
+                      className={`p-4 rounded-xl border-2 text-left transition-all ${addType === key ? 'border-green-500 bg-green-50' : 'border-gray-200 hover:border-gray-300'}`}
+                    >
+                      <div className="text-2xl mb-2">{def.icon}</div>
+                      <div className="text-sm font-medium text-gray-900">{def.name}</div>
+                      <div className="text-xs text-gray-500 mt-0.5 line-clamp-2">{def.desc}</div>
+                    </button>
+                  );
+                })}
               </div>
+              <p className="mt-3 text-xs text-gray-400">YouTube、Instagram、Facebook、TikTok 会跳转到一键授权区；WhatsApp 当前进入高级配置。</p>
               <div className="flex gap-3 mt-5">
                 <button onClick={() => { setShowAdd(false); setAddType(''); }} className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600">取消</button>
                 <button
@@ -312,7 +388,7 @@ export default function ChannelsPage() {
                   className="flex-1 py-2.5 rounded-xl text-sm text-white font-medium disabled:opacity-40 transition-colors"
                   style={{ background: '#16a34a' }}
                 >
-                  添加 {addType ? CHANNEL_DEFS[addType]?.name : ''}
+                  {addType && CHANNEL_DEFS[addType]?.oauth ? '去授权连接' : `添加 ${addType ? CHANNEL_DEFS[addType]?.name : ''}`}
                 </button>
               </div>
             </motion.div>
@@ -320,7 +396,6 @@ export default function ChannelsPage() {
         )}
       </AnimatePresence>
 
-      {/* Config Modal */}
       <AnimatePresence>
         {configTarget && (
           <motion.div
@@ -359,11 +434,6 @@ export default function ChannelsPage() {
               {configTarget.type === 'whatsapp' && (
                 <div className="mt-4 p-3 bg-blue-50 rounded-xl text-xs text-blue-700">
                   Webhook 地址：<code className="font-mono">https://your-domain/api/overseas/channels/webhook/whatsapp/{configTarget.id}</code>
-                </div>
-              )}
-              {configTarget.type === 'telegram' && (
-                <div className="mt-4 p-3 bg-blue-50 rounded-xl text-xs text-blue-700">
-                  Webhook 地址：<code className="font-mono">https://your-domain/api/overseas/channels/webhook/telegram/{configTarget.id}</code>
                 </div>
               )}
 

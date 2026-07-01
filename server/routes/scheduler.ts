@@ -475,9 +475,16 @@ schedulerRouter.get('/', (_req, res) => {
 schedulerRouter.get('/video-stats', async (_req, res) => {
   const { tenantId } = res.locals as AuthLocals;
   const tasks = tenantTasks(tenantId).filter(task => task.taskType === 'video_keyword_crawl');
+  let stats: Record<string, unknown>;
+  try {
+    stats = await getVideoPipelineStats(tenantId);
+  } catch (e) {
+    console.warn('[scheduler] video stats unavailable:', e instanceof Error ? e.message : e);
+    stats = { total: 0, byPlatform: {}, byStatus: {}, ops: { workerEnabled: false } };
+  }
   res.json({
     tasks,
-    stats: await getVideoPipelineStats(tenantId),
+    stats,
   });
 });
 

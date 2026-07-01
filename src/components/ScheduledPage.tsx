@@ -189,11 +189,12 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
       cronExpr: resolvedCronExpr,
       cronLabel: CRON_PRESETS.find(p => p.expr === resolvedCronExpr)?.label ?? template.cronLabel,
     };
-    await fetch('/api/overseas/scheduler', {
+    const response = await fetch('/api/overseas/scheduler', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeader() },
       body: JSON.stringify(body),
     });
+    if (!response.ok) throw new Error('定时任务创建失败');
     completeDemoStep('scheduler');
     await fetchTasks();
   }

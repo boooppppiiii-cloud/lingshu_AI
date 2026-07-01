@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { motion } from 'motion/react';
 import { Sparkles } from 'lucide-react';
 import type { Page } from '../App';
-import { DEMO_PROGRESS_EVENT, readDemoProgress, type DemoStepId } from '../lib/demoProgress';
+import { DEMO_PROGRESS_EVENT, readDemoProgress, writeDemoProgress, type DemoStepId } from '../lib/demoProgress';
 
 interface GuideStep {
   id: DemoStepId;
@@ -58,7 +58,7 @@ const STEPS: GuideStep[] = [
   {
     id: 'automation_workflow',
     title: '第七步 体验自动化工作流',
-    body: '在定时任务详情里点击一条“去某某专家”，我会带着任务上下文自动跳到对应 Agent。',
+    body: '右侧会打开任务详情抽屉。找到“建议下一步”区域，点击高亮的“去流量专家/去策略专家”按钮，我会带着任务上下文自动跳到对应 Agent。',
     target: 'automation_workflow_agent',
     page: 'scheduled',
   },
@@ -156,6 +156,13 @@ export default function DemoGuide({ page, onNavigate, onShown, forceStart }: { p
     window.setTimeout(() => setTick(value => value + 1), 120);
   };
 
+  const skipGuide = () => {
+    const skipped = Object.fromEntries(STEPS.map(step => [step.id, true]));
+    wasCompleteRef.current = true;
+    setShowCelebration(false);
+    writeDemoProgress(skipped);
+  };
+
   if (isComplete) {
     return showCelebration ? (
       <div className="fixed inset-0 z-[90] pointer-events-none overflow-hidden bg-slate-950/18 backdrop-blur-[1px]">
@@ -223,6 +230,15 @@ export default function DemoGuide({ page, onNavigate, onShown, forceStart }: { p
         className="fixed bottom-6 left-4 w-[318px] max-w-[calc(100vw-32px)] rounded-2xl border border-green-100 bg-white shadow-lg overflow-visible z-[71]"
       >
         <div className="px-4 py-4">
+          <div className="mb-2 flex justify-end">
+            <button
+              type="button"
+              onClick={skipGuide}
+              className="rounded-md px-2 py-1 text-[11px] font-semibold text-slate-400 hover:bg-slate-50 hover:text-slate-600"
+            >
+              跳过引导
+            </button>
+          </div>
           <div className="flex items-start gap-3">
             <span className="w-8 h-8 rounded-xl bg-green-50 text-green-600 flex items-center justify-center flex-shrink-0">
               <Sparkles size={14} />

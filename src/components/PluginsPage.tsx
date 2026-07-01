@@ -34,9 +34,9 @@ const PLUGIN_FIELDS: Record<string, { key: string; label: string; placeholder: s
     { key: 'storeDomain', label: '店铺域名', placeholder: 'mystore.myshopify.com' },
     { key: 'accessToken', label: 'Admin API Token', placeholder: 'shpat_...', secret: true },
   ],
-  tiktok_ads: [
-    { key: 'advertiserId', label: 'Advertiser ID', placeholder: '6123456789' },
-    { key: 'accessToken', label: 'Access Token', placeholder: 'xxx...', secret: true },
+  tiktok: [
+    { key: 'openId', label: 'Open ID', placeholder: 'TikTok Open ID' },
+    { key: 'accessToken', label: 'Access Token', placeholder: 'act.xxx...', secret: true },
   ],
   whatsapp_business: [
     { key: 'phoneNumberId', label: 'Phone Number ID', placeholder: '123456789012345' },
@@ -285,9 +285,9 @@ const PLUGIN_INTERACTIONS: Record<string, PluginAction[]> = {
     { label: 'Listing 读取', desc: '拉取 ASIN、标题、卖点和类目，用于策略建议' },
     { label: '竞品记录', desc: '沉淀竞品标题、价格和卖点变化，辅助选品与优化' },
   ],
-  tiktok_ads: [
-    { label: '广告诊断', desc: '读取广告消耗、点击和转化，生成优化建议' },
-    { label: '素材建议', desc: '把投放表现回流给流量专家，推荐下一条短视频方向' },
+  tiktok: [
+    { label: '视频数据', desc: '读取账号视频、播放和互动数据，供社媒账号页展示' },
+    { label: '一键发布', desc: '流量专家生成视频后，可发布到已连接的 TikTok 账号' },
   ],
   whatsapp_business: [
     { label: '询盘消息', desc: '接收 WhatsApp 对话，供转化专家识别意向和生成回复' },
@@ -913,11 +913,12 @@ export default function PluginsPage() {
     setToolState(prev => ({ ...prev, translatedText: mockTranslate(prev.text, prev.sourceLanguage, prev.targetLanguage) }));
   }
 
-  const grouped = plugins.reduce<Record<string, Plugin[]>>((acc, p) => {
+  const visiblePlugins = plugins.filter(plugin => plugin.category !== 'social');
+  const grouped = visiblePlugins.reduce<Record<string, Plugin[]>>((acc, p) => {
     (acc[p.category] ??= []).push(p); return acc;
   }, {});
 
-  const installedCount = plugins.filter(p => p.installed && p.status === 'installed').length;
+  const installedCount = visiblePlugins.filter(p => p.installed && p.status === 'installed').length;
   const selectedPlugin = plugins.find(p => p.pluginKey === selectedPluginKey) ?? null;
 
   return (
@@ -927,7 +928,7 @@ export default function PluginsPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-semibold text-gray-900">插件市场</h1>
-            <p className="text-sm text-gray-500 mt-0.5">连接电商平台、社交媒体和工具，扩展 AI 智能体能力</p>
+            <p className="text-sm text-gray-500 mt-0.5">连接电商平台、翻译、汇率和 AI 工具，扩展 AI 智能体能力</p>
           </div>
           {installedCount > 0 && (
             <div className="flex items-center gap-2 px-3 py-1.5 bg-green-50 rounded-lg text-xs text-green-700">

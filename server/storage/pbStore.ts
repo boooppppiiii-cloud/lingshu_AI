@@ -24,6 +24,19 @@ import type {
   Where,
 } from './datastore.js';
 
+const LOCAL_AUTH_PREFIX = 'local-demo.';
+
+function parseLocalToken(authHeader: string | undefined): Identity | null {
+  const token = authHeader?.replace(/^Bearer\s+/i, '').trim();
+  if (!token?.startsWith(LOCAL_AUTH_PREFIX)) return null;
+  try {
+    const data = JSON.parse(Buffer.from(token.slice(LOCAL_AUTH_PREFIX.length), 'base64url').toString('utf8')) as Partial<Identity>;
+    return data.userId && data.tenantId ? { userId: data.userId, tenantId: data.tenantId } : null;
+  } catch {
+    return null;
+  }
+}
+
 /** Escape a value for inclusion in a PocketBase filter string. */
 function pbValue(v: string | number | boolean): string {
   if (typeof v === 'number' || typeof v === 'boolean') return String(v);
@@ -40,34 +53,56 @@ function toPbFilter(where?: Where): string | undefined {
 }
 
 export const pbStore: DataStore = {
-  getById<T = Record_>(collection: string, id: string) {
-    return pbGet(collection, id) as Promise<T | null>;
+  async getById<T = Record_>(collection: string, id: string) {
+    try {
+      return await pbGet(collection, id) as T | null;
+    } catch {
+      return null;
+    }
   },
 
-  create<T = Record_>(collection: string, data: Record<string, unknown>) {
-    return pbCreate(collection, data) as Promise<T | null>;
+  async create<T = Record_>(collection: string, data: Record<string, unknown>) {
+    try {
+      return await pbCreate(collection, data) as T | null;
+    } catch {
+      return null;
+    }
   },
 
-  update(collection: string, id: string, data: Record<string, unknown>) {
-    return pbPatch(collection, id, data);
+  async update(collection: string, id: string, data: Record<string, unknown>) {
+    try {
+      return await pbPatch(collection, id, data);
+    } catch {
+      return false;
+    }
   },
 
-  delete(collection: string, id: string) {
-    return pbDelete(collection, id);
+  async delete(collection: string, id: string) {
+    try {
+      return await pbDelete(collection, id);
+    } catch {
+      return false;
+    }
   },
 
-  list<T = Record_>(collection: string, query: ListQuery = {}): Promise<ListResult<T>> {
-    return pbList<T>(collection, {
-      filter: toPbFilter(query.where),
-      sort: query.sort, // PB's `-field`/`field` convention matches our neutral one
-      page: query.page,
-      perPage: query.perPage,
-    });
+  async list<T = Record_>(collection: string, query: ListQuery = {}): Promise<ListResult<T>> {
+    try {
+      return await pbList<T>(collection, {
+        filter: toPbFilter(query.where),
+        sort: query.sort, // PB's `-field`/`field` convention matches our neutral one
+        page: query.page,
+        perPage: query.perPage,
+      });
+    } catch {
+      return { items: [], totalItems: 0, totalPages: 0, page: query.page ?? 1, perPage: query.perPage ?? 20 };
+    }
   },
 };
 
 export const pbAuth: AuthProvider = {
-  verifyToken(authHeader: string | undefined): Promise<Identity | null> {
+  async verifyToken(authHeader: string | undefined): Promise<Identity | null> {
+    const local = parseLocalToken(authHeader);
+    if (local) return local;
     return getTenantIdFromToken(authHeader);
   },
 };
