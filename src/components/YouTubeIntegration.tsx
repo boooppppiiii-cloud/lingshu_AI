@@ -1024,7 +1024,7 @@ export function ChannelOverview() {
           <div className="text-center">
             <TvMinimalPlay size={34} className="mx-auto mb-2 text-gray-300" />
             <p className="text-sm font-semibold text-gray-800">还没有已授权的 {platforms.find(p => p.id === currentPlatform)?.label} 账号</p>
-            <p className="mt-1 text-xs text-gray-400">请先在「配对授权」连接账号。</p>
+            <p className="mt-1 text-xs text-gray-400">请先在「账号配置 - 一键授权」连接账号。</p>
           </div>
         </div>
       ) : (

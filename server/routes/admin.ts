@@ -24,6 +24,15 @@ function accountStage(entry: { status?: string; activatedAt?: string | null; exp
   return '试用中';
 }
 
+async function safePbGet(collection: string, id?: string | null) {
+  if (!id) return null;
+  try {
+    return await pbGet(collection, id);
+  } catch {
+    return null;
+  }
+}
+
 adminRouter.get('/demo-accounts', async (req, res) => {
   const admin = await requireAdminUser(req);
   if (!admin) {
@@ -36,7 +45,7 @@ adminRouter.get('/demo-accounts', async (req, res) => {
   const accounts = await Promise.all(Object.values(registry)
     .sort((a, b) => a.email.localeCompare(b.email))
     .map(async entry => {
-      const tenant = entry.tenantId ? await pbGet('tenants', entry.tenantId) : null;
+      const tenant = await safePbGet('tenants', entry.tenantId);
       const expiresAt = String(tenant?.subscriptionExpiresAt ?? entry.expiresAt ?? '') || null;
       const activatedAt = entry.activatedAt ?? null;
       const usage = demoUsageForUser(entry.userId);

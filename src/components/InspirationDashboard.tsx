@@ -895,7 +895,7 @@ interface GeneratedVideo {
 }
 
 function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onNavigate, onEnterWorkflow }: ScriptPanelProps) {
-  const [activeTab, setActiveTab] = useState<'analysis' | 'generate'>('analysis');
+  const [activeTab, setActiveTab] = useState<'analysis' | 'generate'>('generate');
   const [scriptType, setScriptType] = useState<ScriptType>('voiceover');
   const [language, setLanguage] = useState('zh');
   const [productInfo, setProductInfo] = useState('');
@@ -1721,11 +1721,6 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
         return heatValue(b.views) - heatValue(a.views) || timeValue(b.crawledAt) - timeValue(a.crawledAt);
       });
   }, [allVideos, lastCrawlVideoIds, platform, search, sortMode]);
-
-  useEffect(() => {
-    if (!demoTrafficStep || selectedVideo || !filtered[0]) return;
-    setSelectedVideo(filtered[0]);
-  }, [demoTrafficStep, filtered, selectedVideo]);
 
   const recentThreeDayUploads = allVideos.filter(v => {
     const t = v.crawledAt ? new Date(v.crawledAt).getTime() : 0;

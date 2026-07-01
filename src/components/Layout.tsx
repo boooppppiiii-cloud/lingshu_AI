@@ -121,7 +121,11 @@ const pct = (used?: number, limit?: number) => {
 };
 
 const byToken = (tokens: number, reserve: number) => Math.max(0, Math.floor(tokens / reserve));
-const isAdminSession = (session?: AuthSession | null) => session?.user?.email === 'lingshu-admin@local.test';
+const isAdminSession = (session?: AuthSession | null) => (
+  session?.user?.email === 'lingshu-admin@local.test' ||
+  session?.tenant?.subscriptionPlan === 'admin' ||
+  session?.subscription?.plan === 'admin'
+);
 
 export default function Layout({ page, onNavigate, conversation, children, session, onLogout, conversations, activeConvId, onOpenConversation, onNewConversation, suppressRightPanel, onAction, onSessionUpdate, demoGuideActive, onDemoGuideShown }: LayoutProps) {
   const recent = (conversations ?? []).filter(c => c.messages.length > 0);

@@ -30,6 +30,10 @@ function norm(email: string): string {
   return String(email || '').trim().toLowerCase();
 }
 
+function localId(value: string): string {
+  return norm(value).replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'demo';
+}
+
 function readJson<T>(file: string, fallback: T): T {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8')) as T;
@@ -138,18 +142,34 @@ export async function rotateExpiredTrialPassword(user: { id?: string; email?: st
 }
 
 export function isAdminEmail(email?: string): boolean {
+  const normalized = norm(email ?? '');
+  if (!normalized) return false;
+  const registry = readDemoAccountRegistry();
+  if (registry[normalized]?.status === 'admin') return true;
   const allowed = String(process.env.ADMIN_DASHBOARD_EMAILS ?? '')
     .split(/[\s,;]+/)
     .map(norm)
     .filter(Boolean);
-  return !!email && allowed.includes(norm(email));
+  return allowed.includes(normalized);
 }
 
 export async function requireAdminUser(req: Request): Promise<{ userId: string; tenantId: string; email: string } | null> {
   const id = await auth.verifyToken(req.headers.authorization);
   if (!id) return null;
-  const user = await pbGet('users', id.userId);
-  const email = norm(String(user?.email ?? ''));
+  let user: Record<string, unknown> | null = null;
+  try {
+    user = await pbGet('users', id.userId);
+  } catch {
+    user = null;
+  }
+  const registry = readDemoAccountRegistry();
+  const registryEntry = Object.values(registry).find(entry =>
+    entry.userId === id.userId ||
+    entry.tenantId === id.tenantId ||
+    `local_user_${localId(entry.email)}` === id.userId ||
+    `local_tenant_${localId(entry.email)}` === id.tenantId
+  );
+  const email = norm(String(user?.email ?? registryEntry?.email ?? ''));
   if (!isAdminEmail(email)) return null;
   return { ...id, email };
 }
