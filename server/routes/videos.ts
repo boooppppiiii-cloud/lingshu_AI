@@ -1041,17 +1041,18 @@ async function listPublicVideosForTenant(input: {
   };
 
   await scanTenantVideos();
-  if (visible.length === 0) {
+  const desiredVisibleCount = Math.max(input.page * input.perPage, 20);
+  if (visible.length < desiredVisibleCount) {
     await seedTestTenantWithSharedVideoSamples({
       tenantId: input.tenantId,
       platform: input.platform,
       status: input.status,
-      target: Math.max(input.perPage, 12),
+      target: desiredVisibleCount - visible.length,
     });
     await scanTenantVideos();
   }
 
-  if (visible.length === 0) {
+  if (visible.length < desiredVisibleCount) {
     let scanPage = 1;
     let totalPages = 1;
     do {
