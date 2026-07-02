@@ -172,8 +172,8 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
       });
       if (!resp.ok || !resp.body) {
         const err = await resp.json().catch(() => ({}));
-        if (resp.status === 402 || err.error === 'demo_expired') throw new Error('试用已到期，请联系管理员开通或延长试用。');
-        if (resp.status === 429 || err.error === 'demo_quota_exceeded') throw new Error('今日试用额度已用完，请明天再试或联系管理员开通更多额度。');
+        if (resp.status === 402 || err.error === 'demo_expired') throw new Error('试用已到期，请联系服务顾问开通或延长试用。');
+        if (resp.status === 429 || err.error === 'demo_quota_exceeded') throw new Error('今日试用额度已用完，请明天再试或联系服务顾问开通更多额度。');
         throw new Error('API error');
       }
 

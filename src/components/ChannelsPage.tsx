@@ -222,7 +222,7 @@ function AdminOAuthConfigPanel({
       setConfig(data);
       setForm(oauthFormFromConfig(data));
       onSaved(data);
-      setNotice('已保存到服务器，客户现在可以使用一键授权。');
+      setNotice('已保存配置，一键授权已开启。');
     } catch (e) {
       setError(e instanceof Error ? e.message : '保存授权应用配置失败');
     } finally {
@@ -246,9 +246,9 @@ function AdminOAuthConfigPanel({
         <div className="flex items-start gap-3">
           <ShieldCheck size={18} className="mt-0.5 flex-shrink-0" />
           <div className="min-w-0">
-            <p className="font-semibold">管理员授权应用配置</p>
+            <p className="font-semibold">平台授权应用配置</p>
             <p className="mt-1 text-xs leading-relaxed text-emerald-800">
-              这里保存的是平台级 OAuth 应用凭据，数据写入服务器 data/oauth-config.json，不会写入浏览器本地存储或 GitHub 仓库。
+              这里保存的是平台级 OAuth 应用凭据，用于开启多个频道、主页和账号的一键授权。
             </p>
           </div>
           <button
@@ -345,8 +345,8 @@ function AdminOAuthConfigPanel({
       <section className="rounded-xl border border-gray-200 bg-white p-5">
         <label className="flex items-center justify-between gap-4">
           <span>
-            <span className="block text-sm font-semibold text-gray-900">高级手动 token 接入</span>
-            <span className="mt-1 block text-xs text-gray-500">仅实施排障时开启；默认关闭，客户侧只使用一键授权。</span>
+            <span className="block text-sm font-semibold text-gray-900">手动凭据接入</span>
+            <span className="mt-1 block text-xs text-gray-500">仅在需要协助排障时开启；日常推荐使用一键授权。</span>
           </span>
           <input
             type="checkbox"
@@ -480,11 +480,11 @@ export default function ChannelsPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-xl font-semibold text-gray-900">账号配置</h1>
-            <p className="text-sm text-gray-500 mt-0.5">客户登录自己的平台账号完成授权；手动 token 只作为高级接入方式</p>
+            <p className="text-sm text-gray-500 mt-0.5">登录自己的平台账号完成授权，系统将自动保存可用频道、主页或账号</p>
           </div>
           {adminOAuthConfig && (
             <span className="inline-flex items-center gap-2 rounded-lg border border-green-100 bg-green-50 px-3 py-2 text-xs font-semibold text-green-700">
-              <ShieldCheck size={14} /> 管理员
+              <ShieldCheck size={14} /> 已配置
             </span>
           )}
         </div>
@@ -511,14 +511,14 @@ export default function ChannelsPage() {
             <div className="flex items-start gap-3 rounded-xl border border-green-100 bg-green-50 px-4 py-3 text-sm text-green-800">
               <ShieldCheck size={18} className="mt-0.5 flex-shrink-0" />
               <div>
-                <p className="font-semibold">推荐客户使用一键授权</p>
-                <p className="mt-1 text-xs leading-relaxed text-green-700">你只需要在系统部署时配置一次平台应用和回调地址。之后客户添加多个频道、主页或社媒账号时，自己登录并授权即可。</p>
+                <p className="font-semibold">推荐使用一键授权</p>
+                <p className="mt-1 text-xs leading-relaxed text-green-700">联系服务顾问配置您的平台应用和回调地址，即可正常进行多个频道、主页、账号的登录授权</p>
               </div>
             </div>
 
             <YouTubeConnectionPanel compact />
 
-            <div className="grid gap-5 xl:grid-cols-3">
+            <div className="grid grid-cols-1 gap-5 xl:grid-cols-3 [grid-auto-rows:1fr]">
               {OAUTH_ACCOUNT_TYPES.filter(platform => platform !== 'youtube').map(platform => (
                 <SocialConnectionPanel key={platform} platform={platform} />
               ))}
@@ -530,7 +530,7 @@ export default function ChannelsPage() {
                   <div className="w-10 h-10 rounded-lg bg-green-50 text-green-600 flex items-center justify-center text-xl">💬</div>
                   <div>
                     <h2 className="text-sm font-semibold text-gray-900">WhatsApp Business</h2>
-                    <p className="text-xs text-gray-500 mt-1 leading-relaxed">WhatsApp 一键授权需要接入 Meta Embedded Signup。审核通过前暂不开放客户自助连接。</p>
+                    <p className="text-xs text-gray-500 mt-1 leading-relaxed">WhatsApp 一键授权正在审核中，开放后可直接登录 Meta 完成连接。</p>
                   </div>
                 </div>
                 <button
@@ -542,7 +542,7 @@ export default function ChannelsPage() {
               </div>
               <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-800">
                 <p className="font-semibold mb-1">WhatsApp 自助授权正在审核中</p>
-                <p className="leading-relaxed">审核完成后，客户可以在这里登录 Meta 并选择自己的 WhatsApp Business 账号。当前如需接入，可在「高级配置」里由实施人员填写 Cloud API 信息。</p>
+                <p className="leading-relaxed">审核完成后，即可在这里登录 Meta 并选择自己的 WhatsApp Business 账号。</p>
               </div>
             </section>
           </div>

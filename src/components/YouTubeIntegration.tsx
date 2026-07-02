@@ -287,7 +287,7 @@ export function YouTubeConnectionPanel({ compact = false }: { compact?: boolean 
           <div className="min-w-0">
             <h2 className="text-sm font-semibold text-gray-900">YouTube 一键授权</h2>
             <p className="text-xs text-gray-500 mt-1 leading-relaxed">
-              客户只需要登录自己的 YouTube 账号并允许授权，AI 生成的视频就可以直接发布到该频道。
+              登录您的 YouTube 账号并允许授权后，AI 生成的视频即可直接发布到该频道。
             </p>
           </div>
         </div>
@@ -327,8 +327,8 @@ export function YouTubeConnectionPanel({ compact = false }: { compact?: boolean 
 
       {oauthStatus && !oauthStatus.configured && (
         <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-800">
-          <p className="font-semibold mb-1">管理员还没有开启 YouTube 一键授权</p>
-          <p className="leading-relaxed">请管理员进入「账号配置 - 授权应用配置」保存 YouTube Client ID / Client Secret，并在 Google Cloud OAuth Client 里加入下面这个回调地址：</p>
+          <p className="font-semibold mb-1">YouTube 一键授权暂未开启</p>
+          <p className="leading-relaxed">请联系服务顾问配置平台应用和回调地址，完成后即可登录 YouTube 账号进行授权。</p>
           <code className="mt-2 block break-all rounded-md bg-white/70 px-2 py-1 text-[11px] text-amber-900">{oauthStatus.redirectUri}</code>
         </div>
       )}
@@ -339,13 +339,13 @@ export function YouTubeConnectionPanel({ compact = false }: { compact?: boolean 
           onClick={() => setManualOpen(v => !v)}
           className="text-xs font-semibold text-gray-500 hover:text-gray-900"
         >
-          {manualOpen ? '收起高级手动接入' : '高级手动接入'}
+          {manualOpen ? '收起手动接入' : '手动接入'}
         </button>
 
         {manualOpen && (
           <div className="mt-3 grid gap-3 rounded-xl border border-gray-200 bg-gray-50 p-3">
             <p className="text-xs leading-relaxed text-gray-500">
-              仅供实施人员兜底使用。Google Client ID / Client Secret 会从服务器 .env 读取，这里只需要填该频道的 Refresh Token。
+              适用于已完成授权但需要手动补充频道凭据的场景。请按服务顾问提供的信息填写。
             </p>
             <div className="grid gap-2 md:grid-cols-1">
               <label className="grid gap-1 text-xs font-semibold text-gray-600">
@@ -499,7 +499,7 @@ const SOCIAL_MANUAL_COPY: Record<SocialPlatform, {
     accountPlaceholder: '系统会自动识别，可不填',
     pageLabel: 'Refresh Token（可选）',
     pagePlaceholder: '用于后续刷新授权',
-    helper: '适合实施人员把已经获得的 TikTok 长期授权填进来；系统会先读取账号资料，成功后才保存。',
+    helper: '适用于已完成 TikTok 授权但需要手动补充账号凭据的场景。系统会先读取账号资料，成功后才保存。',
   },
   instagram: {
     tokenLabel: 'Meta Access Token',
@@ -652,24 +652,24 @@ export function SocialConnectionPanel({ platform }: { platform: SocialPlatform }
   };
 
   return (
-    <section className="border border-gray-200 rounded-xl bg-white p-5">
-      <div className="flex items-start justify-between gap-4">
+    <section className="flex h-full min-h-[360px] flex-col rounded-xl border border-gray-200 bg-white p-5">
+      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-4">
         <div className="flex items-start gap-3 min-w-0">
           <div className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: meta.bg, color: meta.color }}>
             <TvMinimalPlay size={20} />
           </div>
           <div className="min-w-0">
-            <h2 className="text-sm font-semibold text-gray-900">{meta.label} 授权</h2>
-            <p className="text-xs text-gray-500 mt-1 leading-relaxed">{meta.description}</p>
+            <h2 className="truncate whitespace-nowrap text-sm font-semibold text-gray-900">{meta.label} 授权</h2>
+            <p className="mt-1 min-h-[72px] text-xs leading-relaxed text-gray-500">{meta.description}</p>
           </div>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           <button onClick={() => void loadState()} disabled={loading} title="刷新"
-            className="p-2 rounded-lg border border-gray-200 text-gray-500 hover:text-gray-800 hover:border-gray-300 disabled:opacity-50">
+            className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-gray-200 text-gray-500 hover:text-gray-800 hover:border-gray-300 disabled:opacity-50">
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           </button>
           <button onClick={() => void startOAuth()} disabled={connecting || loading || status?.configured === false}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-white disabled:opacity-50 disabled:cursor-not-allowed"
+            className="inline-flex h-10 w-[156px] items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
             style={{ background: meta.color }}>
             {connecting ? <Loader2 size={15} className="animate-spin" /> : <TvMinimalPlay size={15} />}
             {isTikTokReviewPending ? '审核中' : accounts.length > 0 ? '重新连接' : `连接 ${meta.label}`}
@@ -677,30 +677,32 @@ export function SocialConnectionPanel({ platform }: { platform: SocialPlatform }
         </div>
       </div>
 
-      {notice && (
-        <div className="mt-4 flex items-start gap-2 rounded-lg bg-green-50 px-3 py-2 text-xs text-green-700">
-          <CheckCircle size={14} className="mt-0.5 flex-shrink-0" />
-          <span>{notice}</span>
-        </div>
-      )}
-      {error && (
-        <div className="mt-4 flex items-start gap-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">
-          <AlertCircle size={14} className="mt-0.5 flex-shrink-0" />
-          <span>{error}</span>
-        </div>
-      )}
-      {isTikTokReviewPending ? (
-        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-800">
-          <p className="font-semibold mb-1">TikTok 账号正在审核中</p>
-          <p className="leading-relaxed">TikTok 发布权限需要平台审核，当前暂时不能连接账号或发布视频。审核通过后，系统会自动开放 TikTok 授权入口。</p>
-        </div>
-      ) : status && !status.configured && (
-        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-800">
-          <p className="font-semibold mb-1">管理员还没有开启 {meta.label} 授权</p>
-          <p className="leading-relaxed">请管理员进入「账号配置 - 授权应用配置」保存 {meta.label} 应用凭据，并在平台开发者后台加入下面这个回调地址：</p>
-          <code className="mt-2 block break-all rounded-md bg-white/70 px-2 py-1 text-[11px] text-amber-900">{status.redirectUri}</code>
-        </div>
-      )}
+      <div className="mt-4 min-h-[132px]">
+        {notice && (
+          <div className="mb-3 flex items-start gap-2 rounded-lg bg-green-50 px-3 py-2 text-xs text-green-700">
+            <CheckCircle size={14} className="mt-0.5 flex-shrink-0" />
+            <span>{notice}</span>
+          </div>
+        )}
+        {error && (
+          <div className="mb-3 flex items-start gap-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">
+            <AlertCircle size={14} className="mt-0.5 flex-shrink-0" />
+            <span>{error}</span>
+          </div>
+        )}
+        {isTikTokReviewPending ? (
+          <div className="flex min-h-[132px] flex-col justify-center rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-800">
+            <p className="font-semibold mb-1">TikTok 账号正在审核中</p>
+            <p className="leading-relaxed">TikTok 发布权限需要平台审核，当前暂时不能连接账号或发布视频。审核通过后，系统会自动开放 TikTok 授权入口。</p>
+          </div>
+        ) : status && !status.configured ? (
+          <div className="flex min-h-[132px] flex-col justify-center rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-800">
+            <p className="font-semibold mb-1">{meta.label} 授权暂未开启</p>
+            <p className="leading-relaxed">请联系服务顾问配置平台应用和回调地址，完成后即可登录账号进行授权。</p>
+            <code className="mt-2 block break-all rounded-md bg-white/70 px-2 py-1 text-[11px] text-amber-900">{status.redirectUri}</code>
+          </div>
+        ) : null}
+      </div>
 
       {status?.manualConnectEnabled && !isTikTokReviewPending && (
       <div className="mt-4 border-t border-gray-100 pt-4">
@@ -708,7 +710,7 @@ export function SocialConnectionPanel({ platform }: { platform: SocialPlatform }
           onClick={() => setManualOpen(v => !v)}
           className="text-xs font-semibold text-gray-500 hover:text-gray-900"
         >
-          {manualOpen ? '收起高级手动接入' : '高级手动接入'}
+          {manualOpen ? '收起手动接入' : '手动接入'}
         </button>
 
         {manualOpen && (
@@ -765,11 +767,11 @@ export function SocialConnectionPanel({ platform }: { platform: SocialPlatform }
       )}
 
       {loading ? (
-        <div className="mt-5 flex items-center gap-2 text-sm text-gray-400">
+        <div className="mt-auto flex min-h-[104px] items-center gap-2 text-sm text-gray-400">
           <Loader2 size={16} className="animate-spin" /> 正在读取 {meta.label} 连接状态...
         </div>
       ) : accounts.length > 0 ? (
-        <div className="mt-5 grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
+        <div className="mt-auto grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))' }}>
           {accounts.map(account => (
             <div key={account.id} className="border border-gray-200 rounded-xl p-4">
               <div className="flex items-start gap-3">
@@ -812,7 +814,7 @@ export function SocialConnectionPanel({ platform }: { platform: SocialPlatform }
           ))}
         </div>
       ) : (
-        <div className="mt-5 rounded-xl border border-dashed border-gray-200 px-4 py-5 text-center">
+        <div className="mt-auto rounded-xl border border-dashed border-gray-200 px-4 py-5 text-center">
           <TvMinimalPlay size={28} className="mx-auto text-gray-300 mb-2" />
           <p className="text-sm font-medium text-gray-700">还没有连接 {meta.label} 账号</p>
           <p className="text-xs text-gray-400 mt-1">连接后会出现在「频道总览」和「一键发布」里。</p>

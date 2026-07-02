@@ -10,7 +10,7 @@ async function post<T>(path: string, body: unknown, fallback: T): Promise<T & { 
     });
     if (r.status === 402 || r.status === 429) {
       const j = await r.json().catch(() => ({}));
-      throw new Error(j.error === 'demo_expired' ? '试用已到期，请联系管理员开通或延长试用。' : '今日试用额度已用完，请明天再试或联系管理员开通更多额度。');
+      throw new Error(j.error === 'demo_expired' ? '试用已到期，请联系服务顾问开通或延长试用。' : '今日试用额度已用完，请明天再试或联系服务顾问开通更多额度。');
     }
     if (!r.ok) throw new Error(String(r.status));
     return (await r.json()) as T & { source?: string };
@@ -39,7 +39,7 @@ async function postSeedanceVideo(body: unknown): Promise<SeedanceVideoResult> {
     });
     if (r.status === 402 || r.status === 429) {
       const j = await r.json().catch(() => ({}));
-      throw new Error(j.error === 'demo_expired' ? '试用已到期，请联系管理员开通或延长试用。' : '今日试用额度已用完，请明天再试或联系管理员开通更多额度。');
+      throw new Error(j.error === 'demo_expired' ? '试用已到期，请联系服务顾问开通或延长试用。' : '今日试用额度已用完，请明天再试或联系服务顾问开通更多额度。');
     }
     if (!r.ok) throw new Error(String(r.status));
     return (await r.json()) as SeedanceVideoResult;
@@ -235,7 +235,7 @@ export const studioApi = {
       });
       if (r.status === 402 || r.status === 429) {
         const j = await r.json().catch(() => ({}));
-        throw new Error(j.error === 'demo_expired' ? '试用已到期，请联系管理员开通或延长试用。' : '今日视频预览额度已用完，请明天再试或联系管理员开通更多额度。');
+        throw new Error(j.error === 'demo_expired' ? '试用已到期，请联系服务顾问开通或延长试用。' : '今日视频预览额度已用完，请明天再试或联系服务顾问开通更多额度。');
       }
       if (!r.ok) throw new Error(String(r.status));
       return (await r.json()) as RenderAuthorization;

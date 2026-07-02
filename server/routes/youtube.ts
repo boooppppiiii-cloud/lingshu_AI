@@ -281,13 +281,13 @@ function readableYouTubeError(error: any) {
   const apiMessage = error?.response?.data?.error?.message;
   const reason = error?.response?.data?.error?.errors?.[0]?.reason;
   if (oauthError === 'invalid_grant') {
-    return 'Refresh Token 无效或已过期。请用同一个 Client ID/Client Secret 在 OAuth Playground 重新授权，并确认 Access type 是 Offline。';
+    return '授权凭据无效或已过期。请重新登录 YouTube 授权，或联系服务顾问协助处理。';
   }
   if (oauthError === 'invalid_client') {
-    return 'Client ID 或 Client Secret 不匹配。请确认这三个值来自同一个 Google OAuth Client。';
+    return '授权应用配置不匹配。请联系服务顾问确认平台应用配置。';
   }
   if (String(oauthDescription ?? '').toLowerCase().includes('bad request')) {
-    return 'Google 拒绝了这组 OAuth 参数，请检查 Client ID、Client Secret 和 Refresh Token 是否完整。';
+    return 'Google 拒绝了本次授权参数。请重新授权，或联系服务顾问协助处理。';
   }
   if (reason === 'insufficientPermissions') {
     return '当前 YouTube 授权缺少上传权限，请重新连接账号并勾选 youtube.upload 权限';
@@ -357,8 +357,8 @@ youtubeRouter.get('/oauth/callback', async (req, res) => {
   if (!client) {
     res.status(503).type('html').send(callbackHtml({
       ok: false,
-      title: '管理员尚未配置 YouTube OAuth',
-      message: '请管理员先在「账号配置 - 授权应用配置」里保存 YouTube Client ID 和 Client Secret。',
+      title: 'YouTube 一键授权暂未开启',
+      message: '请联系服务顾问配置平台应用和回调地址。',
       returnTo,
     }));
     return;
@@ -423,7 +423,7 @@ youtubeRouter.post('/oauth/start', (req, res) => {
   const client = getOAuthClient();
   if (!client) {
     res.status(503).json({
-      error: '管理员尚未配置 YouTube OAuth，请先在「账号配置 - 授权应用配置」里保存 YouTube Client ID 和 Client Secret',
+      error: 'YouTube 一键授权暂未开启，请联系服务顾问配置平台应用和回调地址。',
     });
     return;
   }
@@ -474,7 +474,7 @@ youtubeRouter.post('/connect', async (req, res) => {
   const accessToken = typeof req.body?.accessToken === 'string' ? req.body.accessToken.trim() : undefined;
 
   if (!clientId || !clientSecret || !refreshToken) {
-    res.status(400).json({ error: 'YouTube Client ID, Client Secret, and refreshToken are required' });
+    res.status(400).json({ error: 'YouTube 授权信息不完整，请重新授权或联系服务顾问协助处理。' });
     return;
   }
 

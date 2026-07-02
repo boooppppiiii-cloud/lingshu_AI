@@ -209,7 +209,7 @@ function readableSocialError(error: any) {
   }
   if (lower.includes('permission') || lower.includes('permissions') || lower.includes('scope')) {
     if (lower.includes('tiktok') || lower.includes('video.publish') || lower.includes('content posting')) {
-      return 'TikTok 发布权限不可用。请确认 TikTok 开发者应用已配置 Client Key/Secret，并已通过 Content Posting API / video.publish 审核，然后重新连接账号。';
+      return 'TikTok 发布权限暂不可用。请联系服务顾问确认平台应用审核状态，然后重新连接账号。';
     }
     return '平台授权权限不足。请重新连接账号，并确认 Meta 应用已开通 pages_manage_posts / instagram_content_publish 等发布权限。';
   }
@@ -344,7 +344,7 @@ async function saveInstagramFromMeta(input: {
 
 async function connectTikTok(pending: PendingOAuthState, code: string, req: Request) {
   const client = getTikTokClient();
-  if (!client) throw new Error('管理员尚未配置 TikTok OAuth');
+  if (!client) throw new Error('TikTok 一键授权暂未开启，请联系服务顾问配置平台应用和回调地址。');
   const tokens = await exchangeTikTokCode({ ...client, code, redirectUri: redirectUri(req, 'tiktok') });
   const user = await getTikTokUser(tokens.accessToken);
   await upsertSocialAccount({
@@ -370,7 +370,7 @@ async function connectTikTok(pending: PendingOAuthState, code: string, req: Requ
 
 async function connectMeta(pending: PendingOAuthState, code: string, req: Request) {
   const client = getMetaClient();
-  if (!client) throw new Error('管理员尚未配置 Meta OAuth');
+  if (!client) throw new Error('Meta 一键授权暂未开启，请联系服务顾问配置平台应用和回调地址。');
   const userToken = await exchangeMetaCode({
     appId: client.appId,
     appSecret: client.appSecret,
@@ -491,7 +491,7 @@ socialRouter.post('/oauth/:platform/start', (req, res) => {
   }
   const configured = platform === 'tiktok' ? getTikTokClient() : getMetaClient();
   if (!configured) {
-    res.status(503).json({ error: `管理员尚未配置 ${platform} OAuth` });
+    res.status(503).json({ error: `${platform} 一键授权暂未开启，请联系服务顾问配置平台应用和回调地址。` });
     return;
   }
   const { userId, tenantId } = res.locals as AuthLocals;

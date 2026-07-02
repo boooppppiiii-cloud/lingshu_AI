@@ -37,7 +37,7 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (s: AuthSession) =>
 
         <div className="card !rounded-2xl p-6">
           <h1 className="text-base font-bold text-text-primary mb-1">登录</h1>
-          <p className="text-xs text-text-muted mb-5">使用管理员分配的账号密码开始 5 天试用</p>
+          <p className="text-xs text-text-muted mb-5">使用服务顾问分配的账号密码开始 5 天试用</p>
 
           <div className="space-y-3">
             <div className="relative">
@@ -61,7 +61,7 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (s: AuthSession) =>
           </button>
 
           <div className="text-center mt-4 text-xs text-text-muted">
-            没有账号？请联系管理员分配测试账号
+            没有账号？请联系服务顾问获取试用账号
           </div>
         </div>
       </motion.div>

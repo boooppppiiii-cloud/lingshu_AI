@@ -125,12 +125,12 @@ authRouter.post('/register', async (req, res) => {
   if (!email || !password) { res.status(400).json({ error: '邮箱和密码必填' }); return; }
   if (String(password).length < 8) { res.status(400).json({ error: '密码至少 8 位' }); return; }
   if (!isAllowedDemoAccount(String(email))) {
-    res.status(403).json({ error: '该账号不在试用名单中，请使用管理员分配的账号。' });
+    res.status(403).json({ error: '该账号不在试用名单中，请使用服务顾问分配的账号。' });
     return;
   }
   const expectedInvite = process.env.DEMO_INVITE_CODE?.trim();
   if (expectedInvite && inviteCode !== expectedInvite) {
-    res.status(403).json({ error: '邀请码无效，请联系管理员获取访问码' });
+    res.status(403).json({ error: '邀请码无效，请联系服务顾问获取访问码' });
     return;
   }
 
@@ -224,7 +224,7 @@ authRouter.post('/login', async (req, res) => {
   let tenant = login.record.tenantId ? await pbGet('tenants', login.record.tenantId) : null;
   let subscription = login.record.tenantId ? await getTenantSubscription(login.record.tenantId) : null;
   if (isTrialAccount(subscription) && !isAllowedDemoAccount(login.record.email ?? email)) {
-    res.status(403).json({ error: '该账号不在试用名单中，请使用管理员分配的账号。' });
+    res.status(403).json({ error: '该账号不在试用名单中，请使用服务顾问分配的账号。' });
     return;
   }
   if (isTrialAccount(subscription) && login.record.tenantId && !subscription?.expiresAt) {
@@ -246,7 +246,7 @@ authRouter.post('/login', async (req, res) => {
   }
   if (subscription?.expiresAt && isExpired(subscription.expiresAt)) {
     await rotateExpiredTrialPassword(login.record, 'login_trial_expired');
-    res.status(402).json({ error: '试用账号已到期，请联系管理员开通或延长试用。' });
+    res.status(402).json({ error: '试用账号已到期，请联系服务顾问开通或延长试用。' });
     return;
   }
   const demoStatus = await buildDemoStatus(req, login.record.tenantId, subscription?.expiresAt, login.record.id);
@@ -281,7 +281,7 @@ authRouter.get('/me', async (req, res) => {
   const subscription = await getTenantSubscription(id.tenantId);
   if (subscription?.expiresAt && isExpired(subscription.expiresAt)) {
     await rotateExpiredTrialPassword(user as unknown as PbUser | null, 'session_trial_expired');
-    res.status(402).json({ error: '试用账号已到期，请重新登录或联系管理员开通。' });
+    res.status(402).json({ error: '试用账号已到期，请重新登录或联系服务顾问开通。' });
     return;
   }
   const demo = await buildDemoStatus(req, id.tenantId, subscription.expiresAt, id.userId);

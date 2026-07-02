@@ -676,7 +676,7 @@ export async function crawlVideosForTenant(input: CrawlVideosInput): Promise<Cra
 
   const message = testTenant
     ? (crawlerMessage || (resultRecords.length === 0
-      ? `采集完成：本次新增 ${imported} 条候选，跳过已入库 ${skippedExisting} 条；暂无新增视频级可用结果，后台继续按同关键词补位，失败/不可分析结果已隐藏并进入管理员处理。`
+      ? `采集完成：本次新增 ${imported} 条候选，跳过已入库 ${skippedExisting} 条；暂无新增视频级可用结果，后台继续按同关键词补位，失败/不可分析结果已隐藏并进入人工处理。`
       : resultRecords.length < target
         ? `采集完成：本次返回 ${resultRecords.length} 条新增视频级结果（新增候选 ${imported} 条，跳过已入库 ${skippedExisting} 条），未达到用户输入数量 ${target}；后台继续按同关键词补位。`
         : `采集完成：本次返回 ${resultRecords.length} 条新增视频级结果（新增候选 ${imported} 条，跳过已入库 ${skippedExisting} 条）${crawlerTopUpMessage}`))
@@ -1120,7 +1120,7 @@ async function triggerVideoAnalysis(
     updateVideoAdminAlertByRecordId(recordId, {
       statusLabel: '已上传/分析中',
       manualUploadStatus: 'analyzing',
-      error: '管理员已上传缺失视频，Gemini 视频级分析处理中。',
+      error: '缺失视频已补充，Gemini 视频级分析处理中。',
     });
     const result = await analyzeDownloadedVideoWithFallback({
       filePath: tempPath,
@@ -1154,7 +1154,7 @@ async function triggerVideoAnalysis(
     updateVideoAdminAlertByRecordId(recordId, {
       statusLabel: '已上传/分析完成',
       manualUploadStatus: 'analyzed',
-      error: '管理员上传的视频已完成 Gemini 视频级分析，已可进入灵感大屏展示。',
+      error: '补充视频已完成 Gemini 视频级分析，已可进入灵感大屏展示。',
     });
     console.log(`[videos] analyzed ${recordId}`);
   } catch (e) {
@@ -1237,7 +1237,7 @@ export async function attachManualVideoUploadAndQueue(input: {
     manualUploadStatus: 'queued',
     manualUploadedAt: new Date().toISOString(),
     manualUploadRecordId: input.recordId,
-    error: '管理员已上传缺失视频，等待 Gemini 视频级分析。',
+    error: '缺失视频已补充，等待 Gemini 视频级分析。',
   });
 
   void triggerVideoAnalysis(input.recordId, storedFilename, mimeType, input.uploadedBy || 'admin').catch((e) => {
