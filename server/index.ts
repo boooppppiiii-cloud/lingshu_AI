@@ -63,8 +63,8 @@ function detectLocalProxy(): string {
 app.use(compression({
   filter: (req, res) => res.getHeader('Content-Type') === 'text/event-stream' ? false : compression.filter(req, res),
 }));
-// 50mb to support base64-encoded video uploads (≈37MB raw video)
-app.use(express.json({ limit: '50mb' }));
+// Supports base64-encoded admin/manual video uploads (≈90MB raw video).
+app.use(express.json({ limit: '120mb' }));
 
 app.get('/api/overseas/health', (_req, res) => {
   res.json({

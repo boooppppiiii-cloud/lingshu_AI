@@ -1,11 +1,31 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { Building2, Package, Megaphone, BookOpen, Save, CheckCircle2, Loader2, Compass, Zap, MessageSquare, RefreshCw, RotateCcw } from 'lucide-react';
+import { Building2, Package, Megaphone, BookOpen, Save, CheckCircle2, Loader2, Compass, Zap, MessageSquare, RefreshCw, RotateCcw, Plus, Upload, X, Image, Video, FileText } from 'lucide-react';
 import { completeDemoStep } from '../lib/demoProgress';
+
+interface ProductAsset {
+  name: string;
+  type: string;
+  size: number;
+  updatedAt: string;
+  url?: string;
+}
+
+interface ProductItem {
+  name: string;
+  category?: string;
+  priceRange?: string;
+  moq?: string;
+  certifications?: string;
+  highlights?: string;
+  images?: ProductAsset[];
+  videos?: ProductAsset[];
+  documents?: ProductAsset[];
+}
 
 interface Profile {
   company: { name: string; industry: string; companyType?: string; mainMarkets: string; primaryLanguages?: string; founded: string; description: string };
-  products: { categories: string; priceRange: string; moq: string; certifications: string; highlights: string };
+  products: { categories: string; priceRange: string; moq: string; certifications: string; highlights: string; items?: ProductItem[] };
   brand: { tone: string; style: string; taboos: string; usp: string; preferredLanguages?: string };
   strategy?: { currentGoal?: string; focusProducts?: string; focusMarkets?: string; excludedMarkets?: string; pricingStrategy?: string; minMargin?: string; agentAutonomy?: string };
   customers?: { targetProfiles?: string; highValueSignals?: string; lowQualitySignals?: string; commonQuestions?: string; followupStyle?: string };
@@ -16,7 +36,18 @@ interface Profile {
 
 const DEFAULT: Profile = {
   company: { name: '', industry: '', companyType: '', mainMarkets: '', primaryLanguages: '英语、阿拉伯语', founded: '', description: '' },
-  products: { categories: '', priceRange: '', moq: '', certifications: '', highlights: '' },
+  products: {
+    categories: '',
+    priceRange: '',
+    moq: '',
+    certifications: '',
+    highlights: '',
+    items: [
+      { name: '产品1', images: [], videos: [], documents: [] },
+      { name: '产品2', images: [], videos: [], documents: [] },
+      { name: '产品3', images: [], videos: [], documents: [] },
+    ],
+  },
   brand: { tone: '', style: '专业', taboos: '', usp: '', preferredLanguages: '英语、阿拉伯语' },
   strategy: { currentGoal: '', focusProducts: '', focusMarkets: '', excludedMarkets: '', pricingStrategy: '', minMargin: '', agentAutonomy: '建议优先，关键动作需确认' },
   customers: { targetProfiles: '', highValueSignals: '', lowQualitySignals: '', commonQuestions: '', followupStyle: '' },
@@ -55,6 +86,62 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 const inputCls = 'w-full px-3 py-2 text-sm bg-white border border-border rounded-lg outline-none focus:border-accent focus:ring-2 focus:ring-accent/10 transition-all placeholder:text-text-muted text-text-primary';
 const textareaCls = `${inputCls} resize-none`;
 
+const MAX_PRODUCT_ASSETS = { images: 5, videos: 2, documents: 3 } as const;
+
+function emptyProduct(index: number): ProductItem {
+  return { name: `产品${index + 1}`, images: [], videos: [], documents: [] };
+}
+
+function normalizeProductItems(products: Profile['products']): ProductItem[] {
+  const existing = Array.isArray(products.items) ? products.items : [];
+  if (existing.length) {
+    return existing.map((item, index) => ({
+      ...emptyProduct(index),
+      ...item,
+      name: item.name || `产品${index + 1}`,
+      images: Array.isArray(item.images) ? item.images : [],
+      videos: Array.isArray(item.videos) ? item.videos : [],
+      documents: Array.isArray(item.documents) ? item.documents : [],
+    }));
+  }
+  const names = products.categories.split(/[、,，\n]/).map(s => s.trim()).filter(Boolean).slice(0, 3);
+  return Array.from({ length: Math.max(3, names.length) }, (_, index) => ({
+    ...emptyProduct(index),
+    name: names[index] || `产品${index + 1}`,
+    category: products.categories,
+    priceRange: products.priceRange,
+    moq: products.moq,
+    certifications: products.certifications,
+    highlights: products.highlights,
+  }));
+}
+
+function formatSize(size: number): string {
+  if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)}MB`;
+  if (size >= 1024) return `${Math.round(size / 1024)}KB`;
+  return `${size}B`;
+}
+
+function fileToDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(file);
+  });
+}
+
+async function uploadEnterpriseAsset(file: File): Promise<ProductAsset> {
+  const dataUrl = await fileToDataUrl(file);
+  const response = await fetch('/api/overseas/enterprise/assets', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: file.name, type: file.type, dataUrl }),
+  });
+  if (!response.ok) throw new Error('asset upload failed');
+  return response.json();
+}
+
 export default function EnterprisePage() {
   const [profile, setProfile] = useState<Profile>(DEFAULT);
   const [saving, setSaving] = useState(false);
@@ -74,7 +161,7 @@ export default function EnterprisePage() {
           ...DEFAULT,
           ...data,
           company: { ...DEFAULT.company, ...data.company },
-          products: { ...DEFAULT.products, ...data.products },
+          products: { ...DEFAULT.products, ...data.products, items: normalizeProductItems({ ...DEFAULT.products, ...data.products }) },
           brand: { ...DEFAULT.brand, ...data.brand },
           strategy: { ...DEFAULT.strategy, ...data.strategy },
           customers: { ...DEFAULT.customers, ...data.customers },
@@ -116,8 +203,11 @@ export default function EnterprisePage() {
     try {
       const r = await fetch(`/api/overseas/enterprise/demo/templates/${templateId}/apply`, { method: 'POST' });
       const j = await r.json();
-      if (j.profile) setProfile(j.profile);
-      if (j.profile) setTemplateId(matchTemplateId(j.profile, templates) || templateId);
+      if (j.profile) {
+        const next = { ...j.profile, products: { ...DEFAULT.products, ...j.profile.products, items: normalizeProductItems({ ...DEFAULT.products, ...j.profile.products }) } };
+        setProfile(next);
+        setTemplateId(matchTemplateId(next, templates) || templateId);
+      }
       completeDemoStep('template');
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
@@ -131,12 +221,59 @@ export default function EnterprisePage() {
     try {
       const r = await fetch('/api/overseas/enterprise/demo/reset', { method: 'POST' });
       const j = await r.json();
-      if (j.profile) setProfile(j.profile);
+      if (j.profile) setProfile({ ...j.profile, products: { ...DEFAULT.products, ...j.profile.products, items: normalizeProductItems({ ...DEFAULT.products, ...j.profile.products }) } });
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } finally {
       setDemoBusy(false);
     }
+  };
+
+  const updateProduct = (index: number, patch: Partial<ProductItem>) => {
+    setProfile(prev => {
+      const items = normalizeProductItems(prev.products).map((item, i) => i === index ? { ...item, ...patch } : item);
+      return { ...prev, products: { ...prev.products, items } };
+    });
+  };
+
+  const addProduct = () => {
+    setProfile(prev => {
+      const items = normalizeProductItems(prev.products);
+      return { ...prev, products: { ...prev.products, items: [...items, emptyProduct(items.length)] } };
+    });
+  };
+
+  const removeProduct = (index: number) => {
+    setProfile(prev => {
+      const items = normalizeProductItems(prev.products)
+        .filter((_, i) => i !== index)
+        .map((item, i) => ({ ...item, name: item.name || `产品${i + 1}` }));
+      return { ...prev, products: { ...prev.products, items: items.length ? items : [emptyProduct(0)] } };
+    });
+  };
+
+  const addProductAssets = async (index: number, key: 'images' | 'videos' | 'documents', files: FileList | null) => {
+    if (!files?.length) return;
+    const picked = await Promise.all(Array.from(files).map(file => uploadEnterpriseAsset(file).catch(() => ({
+      name: file.name,
+      type: file.type || 'application/octet-stream',
+      size: file.size,
+      updatedAt: new Date().toISOString(),
+    }))));
+    setProfile(prev => {
+      const items = normalizeProductItems(prev.products);
+      const current = items[index]?.[key] ?? [];
+      items[index] = { ...items[index], [key]: [...current, ...picked].slice(0, MAX_PRODUCT_ASSETS[key]) };
+      return { ...prev, products: { ...prev.products, items } };
+    });
+  };
+
+  const removeProductAsset = (index: number, key: 'images' | 'videos' | 'documents', assetIndex: number) => {
+    setProfile(prev => {
+      const items = normalizeProductItems(prev.products);
+      items[index] = { ...items[index], [key]: (items[index]?.[key] ?? []).filter((_, i) => i !== assetIndex) };
+      return { ...prev, products: { ...prev.products, items } };
+    });
   };
 
   if (loading) {
@@ -350,9 +487,15 @@ export default function EnterprisePage() {
 
           {/* Products */}
           <section className="card p-5 space-y-4">
-            <div className="flex items-center gap-2 mb-1">
-              <Package size={14} className="text-text-secondary" />
-              <h3 className="text-sm font-semibold text-text-primary">产品目录</h3>
+            <div className="flex items-center justify-between gap-3 mb-1">
+              <div className="flex items-center gap-2">
+                <Package size={14} className="text-text-secondary" />
+                <h3 className="text-sm font-semibold text-text-primary">产品目录</h3>
+              </div>
+              <button type="button" onClick={addProduct}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs font-semibold text-text-secondary hover:text-text-primary hover:bg-surface-2">
+                <Plus size={12} />添加产品
+              </button>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <Field label="主营品类">
@@ -376,6 +519,97 @@ export default function EnterprisePage() {
               <textarea className={textareaCls} rows={2} placeholder="工厂直供，7天发货；核心系列支持多规格/多色号定制，支持 OEM/ODM"
                 value={profile.products.highlights} onChange={e => set('products')('highlights', e.target.value)} />
             </Field>
+            <div className="space-y-3 pt-1">
+              {normalizeProductItems(profile.products).map((product, index) => {
+                const assetGroups = [
+                  { key: 'images' as const, label: '图片', limit: MAX_PRODUCT_ASSETS.images, accept: 'image/*', icon: Image, assets: product.images ?? [] },
+                  { key: 'videos' as const, label: '视频', limit: MAX_PRODUCT_ASSETS.videos, accept: 'video/*', icon: Video, assets: product.videos ?? [] },
+                  { key: 'documents' as const, label: '资质文书', limit: MAX_PRODUCT_ASSETS.documents, accept: '.pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg', icon: FileText, assets: product.documents ?? [] },
+                ];
+                return (
+                  <div key={index} className="rounded-lg border border-border bg-surface-2/40 p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-xs font-semibold text-text-primary">产品{index + 1}</p>
+                      <button type="button" onClick={() => removeProduct(index)}
+                        className="p-1 rounded-md text-text-muted hover:text-red hover:bg-white" title="删除产品">
+                        <X size={13} />
+                      </button>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <Field label="产品名称">
+                        <input className={inputCls} placeholder={`产品${index + 1}`} value={product.name}
+                          onChange={e => updateProduct(index, { name: e.target.value })} />
+                      </Field>
+                      <Field label="产品类目">
+                        <input className={inputCls} placeholder="所属品类 / 系列" value={product.category ?? ''}
+                          onChange={e => updateProduct(index, { category: e.target.value })} />
+                      </Field>
+                      <Field label="价格区间">
+                        <input className={inputCls} placeholder="$5 - $500 USD" value={product.priceRange ?? ''}
+                          onChange={e => updateProduct(index, { priceRange: e.target.value })} />
+                      </Field>
+                      <Field label="起订量">
+                        <input className={inputCls} placeholder="50件起，支持混批" value={product.moq ?? ''}
+                          onChange={e => updateProduct(index, { moq: e.target.value })} />
+                      </Field>
+                    </div>
+                    <Field label="认证资质">
+                      <input className={inputCls} placeholder="CE、FDA、SGS、MSDS…" value={product.certifications ?? ''}
+                        onChange={e => updateProduct(index, { certifications: e.target.value })} />
+                    </Field>
+                    <Field label="产品卖点">
+                      <textarea className={textareaCls} rows={2} placeholder="核心卖点、适用场景、可定制项、交付优势"
+                        value={product.highlights ?? ''} onChange={e => updateProduct(index, { highlights: e.target.value })} />
+                    </Field>
+                    <div className="grid grid-cols-3 gap-3">
+                      {assetGroups.map(({ key, label, limit, accept, icon: Icon, assets }) => (
+                        <div key={key} className="rounded-lg border border-border bg-white p-3 min-w-0">
+                          <div className="flex items-center justify-between gap-2 mb-2">
+                            <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-text-secondary">
+                              <Icon size={12} />{label}
+                            </span>
+                            <span className="text-[10px] text-text-muted">{assets.length}/{limit}</span>
+                          </div>
+                          <label className={`flex items-center justify-center gap-1.5 h-8 rounded-md border border-dashed text-[11px] font-semibold transition-colors ${assets.length >= limit ? 'text-text-muted bg-surface-2 cursor-not-allowed' : 'text-text-secondary hover:text-text-primary hover:border-border-bright cursor-pointer'}`}>
+                            <Upload size={12} />上传
+                            <input
+                              className="hidden"
+                              type="file"
+                              multiple
+                              accept={accept}
+                              disabled={assets.length >= limit}
+                              onChange={e => {
+                                addProductAssets(index, key, e.currentTarget.files);
+                                e.currentTarget.value = '';
+                              }}
+                            />
+                          </label>
+                          <div className="mt-2 space-y-1">
+                            {assets.map((asset, assetIndex) => (
+                              <div key={`${asset.name}-${assetIndex}`} className="flex items-center gap-1.5 text-[10px] text-text-secondary min-w-0">
+                                {asset.url ? (
+                                  <a href={asset.url} target="_blank" rel="noreferrer" className="truncate flex-1 hover:text-text-primary">
+                                    {asset.name}
+                                  </a>
+                                ) : (
+                                  <span className="truncate flex-1">{asset.name}</span>
+                                )}
+                                <span className="text-text-muted flex-shrink-0">{formatSize(asset.size)}</span>
+                                <button type="button" onClick={() => removeProductAsset(index, key, assetIndex)}
+                                  className="p-0.5 rounded text-text-muted hover:text-red flex-shrink-0" title="移除附件">
+                                  <X size={10} />
+                                </button>
+                              </div>
+                            ))}
+                            {!assets.length && <p className="text-[10px] text-text-muted">最多{limit}{label === '图片' ? '张' : label === '视频' ? '个' : '份'}</p>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </section>
 
           {/* Brand */}

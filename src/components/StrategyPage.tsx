@@ -9,12 +9,65 @@ import type { ConversationContext, Message, RestoreSignal, KickoffSignal, AgentA
 
 type ViewMode = 'chat' | 'workspace' | 'board';
 
-const SUGGESTIONS = [
-  '企业中心经营复盘',
-  '主推品行动计划',
-  '判断增长优先级',
-  '整理关键决策',
+interface EnterpriseProfileLite {
+  company?: { mainMarkets?: string };
+  products?: {
+    categories?: string;
+    items?: Array<{ name?: string; category?: string }>;
+  };
+  strategy?: {
+    currentGoal?: string;
+    focusProducts?: string;
+    focusMarkets?: string;
+  };
+}
+
+const FALLBACK_SUGGESTIONS = [
+  '复盘重点市场转化机会',
+  '规划本季主推品动作',
+  '判断目标市场优先级',
+  '整理旺季备货决策',
 ];
+
+function splitProfileList(value?: string): string[] {
+  return (value || '')
+    .split(/[、,，;；\n]/)
+    .map(item => item.trim())
+    .filter(Boolean);
+}
+
+function compactText(value: string, maxLength: number): string {
+  const text = value.replace(/\s+/g, '').trim();
+  return text.length > maxLength ? text.slice(0, maxLength) : text;
+}
+
+function currentQuarter(): string {
+  return `Q${Math.floor(new Date().getMonth() / 3) + 1}`;
+}
+
+function buildSuggestions(profile?: EnterpriseProfileLite | null): string[] {
+  if (!profile) return FALLBACK_SUGGESTIONS;
+  const markets = [
+    ...splitProfileList(profile.strategy?.focusMarkets),
+    ...splitProfileList(profile.company?.mainMarkets),
+  ];
+  const products = [
+    ...splitProfileList(profile.strategy?.focusProducts),
+    ...(profile.products?.items || []).map(item => item.name || item.category || '').filter(Boolean),
+    ...splitProfileList(profile.products?.categories),
+  ];
+  const primaryMarket = compactText(markets[0] || '重点市场', 9);
+  const growthMarket = compactText(markets[1] || markets[0] || '目标市场', 9);
+  const primaryProduct = compactText(products[0] || '主推品', 8);
+  const backupProduct = compactText(products[1] || products[0] || '核心品类', 8);
+
+  return [
+    `复盘${primaryMarket}转化机会`,
+    `规划${currentQuarter()}${primaryProduct}主推`,
+    `判断${growthMarket}增长优先级`,
+    `整理${backupProduct}备货决策`,
+  ];
+}
 
 interface Props {
   onEnterConversation: (ctx: ConversationContext) => void;
@@ -44,6 +97,7 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
   const [viewMode, setViewMode] = useState<ViewMode>('chat');
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
+  const [suggestions, setSuggestions] = useState(FALLBACK_SUGGESTIONS);
   const [loading, setLoading] = useState(false);
   const [deepThinking, setDeepThinking] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -54,6 +108,12 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
 
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages]);
   useEffect(() => { latestMessagesRef.current = messages; }, [messages]);
+  useEffect(() => {
+    fetch('/api/overseas/enterprise/profile', { headers: authHeader() })
+      .then(response => response.ok ? response.json() : null)
+      .then((profile: EnterpriseProfileLite | null) => setSuggestions(buildSuggestions(profile)))
+      .catch(() => setSuggestions(FALLBACK_SUGGESTIONS));
+  }, []);
   // 从近期会话恢复 / 新建（清空）
   useEffect(() => { if (restore) { setMessages(mergeConsecutiveAssistant(restore.messages)); setViewMode('chat'); } }, [restore?.key]); // eslint-disable-line react-hooks/exhaustive-deps
   // 一键执行：自动发起任务（新开一段对话）
@@ -237,7 +297,7 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
                       <p className="text-sm text-text-muted mt-1">跨三侧策略编排 · 经营分析 · 多 Agent 协调</p>
                     </div>
                     <div className="grid grid-cols-2 gap-2 max-w-lg w-full">
-                      {SUGGESTIONS.map((s, index) => (
+                      {suggestions.map((s, index) => (
                         <button
                           key={s}
                           data-demo-target={index === 0 ? 'strategy_prompt' : undefined}

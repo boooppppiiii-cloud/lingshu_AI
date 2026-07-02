@@ -13,6 +13,8 @@ import {
   readDemoAccountRegistry,
   requireAdminUser,
 } from '../lib/demoAccounts.js';
+import { getVideoAdminAlert, listVideoAdminAlerts } from '../lib/videoAdminAlerts.js';
+import { attachManualVideoUploadAndQueue } from './videos.js';
 
 export const adminRouter = Router();
 
@@ -104,6 +106,57 @@ adminRouter.get('/demo-accounts', async (req, res) => {
     }));
 
   res.json({ admin: admin.email, accounts });
+});
+
+adminRouter.get('/video-alerts', async (req, res) => {
+  const admin = await requireAdminUser(req);
+  if (!admin) {
+    res.status(403).json({ error: 'admin_required' });
+    return;
+  }
+
+  const limit = Math.max(1, Math.min(100, Number(req.query.limit || 50) || 50));
+  res.json({ admin: admin.email, items: listVideoAdminAlerts(limit) });
+});
+
+adminRouter.post('/video-alerts/:id/upload', async (req, res) => {
+  const admin = await requireAdminUser(req);
+  if (!admin) {
+    res.status(403).json({ error: 'admin_required' });
+    return;
+  }
+
+  const alert = getVideoAdminAlert(req.params.id);
+  if (!alert) {
+    res.status(404).json({ error: 'video_alert_not_found' });
+    return;
+  }
+
+  const body = req.body ?? {};
+  const recordId = bodyText(body.recordId) || alert.recordId;
+  if (recordId !== alert.recordId) {
+    res.status(400).json({ error: 'record_id_mismatch' });
+    return;
+  }
+
+  const videoBase64 = bodyText(body.videoBase64);
+  if (!videoBase64) {
+    res.status(400).json({ error: 'videoBase64_required' });
+    return;
+  }
+
+  try {
+    const result = await attachManualVideoUploadAndQueue({
+      recordId: alert.recordId,
+      videoBase64,
+      mimeType: bodyText(body.mimeType) || 'video/mp4',
+      filename: bodyText(body.filename) || 'manual-video.mp4',
+      uploadedBy: admin.userId,
+    });
+    res.json({ ok: true, ...result });
+  } catch (e) {
+    res.status(502).json({ error: e instanceof Error ? e.message : 'manual_video_upload_failed' });
+  }
 });
 
 adminRouter.get('/oauth-config', async (req, res) => {

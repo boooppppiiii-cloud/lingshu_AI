@@ -684,7 +684,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
                   <span className="text-xs text-gray-500 pb-1">等待/处理中</span>
                 </div>
                 <p className="text-xs text-gray-500 mt-2">Ops 队列 {fetchQueue.ops?.total ?? 0} · Worker {fetchQueue.ops?.workerActive ? '运行中' : fetchQueue.ops?.workerEnabled ? '待命' : '关闭'}</p>
-                <p className="text-xs text-gray-400 mt-1">queued {fetchQueue.byStatus?.queued ?? 0} / downloading {fetchQueue.byStatus?.downloading ?? 0} / ops {fetchQueue.byStatus?.ops_queued ?? 0}</p>
+                <p className="text-xs text-gray-400 mt-1">queued {fetchQueue.byStatus?.queued ?? 0} / downloading {fetchQueue.byStatus?.downloading ?? 0} / retrying {fetchQueue.byStatus?.download_retrying ?? 0} / metadata {fetchQueue.byStatus?.metadata_only ?? 0}</p>
               </div>
 
               <div className="rounded-xl border border-gray-200 p-4 bg-white">
@@ -697,7 +697,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
                   <span className="text-xs text-gray-500 pb-1">Gemini 队列</span>
                 </div>
                 <p className="text-xs text-gray-500 mt-2">已分析 {analysisQueue.analyzedRecords ?? 0} · 待处理 {analysisQueue.pendingRecords ?? 0} · 失败 {analysisQueue.failedRecords ?? 0}</p>
-                <p className="text-xs text-gray-400 mt-1">queued {analysisQueue.byStatus?.queued ?? 0} / analyzing {analysisQueue.byStatus?.analyzing ?? 0} / video {analysisQueue.byStatus?.analyzed ?? 0}</p>
+                <p className="text-xs text-gray-400 mt-1">queued {analysisQueue.byStatus?.queued ?? 0} / analyzing {analysisQueue.byStatus?.analyzing ?? 0} / video {analysisQueue.byStatus?.analyzed ?? 0} / metadata {analysisQueue.byStatus?.metadata_fallback ?? 0}</p>
               </div>
             </div>
           </div>

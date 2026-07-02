@@ -20,6 +20,7 @@ data/tts/
 data/covers/
 data/analysis-temp/
 data/crawler-ops-queue.json
+data/video-admin-alerts.json
 data/backups/
 logs/
 output/

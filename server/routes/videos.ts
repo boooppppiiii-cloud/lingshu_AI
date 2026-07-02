@@ -14,6 +14,7 @@ import { analyzeVideo, analyzeYouTubeUrl } from '../agents/gemini.js';
 import { analyzeVideoFramesWithQwen } from '../agents/qwen.js';
 import type { Platform, VideoAiAnalysis, VideoStatus } from '../types/index.js';
 import { isDemoMode } from '../lib/demo.js';
+import { recordVideoAdminAlert, updateVideoAdminAlertByRecordId } from '../lib/videoAdminAlerts.js';
 
 export const videosRouter = Router();
 videosRouter.use(requireAuth);
@@ -27,10 +28,11 @@ const MATERIALS_FILE = path.join(__dirname, '../../data/materials.json');
 const CRAWLER_OPS_FILE = path.join(__dirname, '../../data/crawler-ops-queue.json');
 const APIFY_USAGE_FILE = path.join(__dirname, '../../data/apify-video-usage.json');
 const ffmpegBin = ffmpegStatic as unknown as string | null;
+const MANUAL_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 let legacyFakePurgePromise: Promise<void> | null = null;
 let activeDownloadJobs = 0;
 const MAX_DOWNLOAD_JOBS = Number(process.env.VIDEO_DOWNLOAD_CONCURRENCY || 3);
-const sharedVideoSyncPromises = new Map<string, Promise<void>>();
+const pendingVisibleBackfillJobs = new Set<string>();
 
 interface CrawledVideo {
   platform: Platform;
@@ -89,104 +91,345 @@ function isLocalTenant(tenantId: string): boolean {
   return tenantId.startsWith('local_tenant_');
 }
 
-function isSharedSyncedVideo(record: Record<string, unknown>): boolean {
-  return parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {}).sharedTestVideo === true;
+async function isTestTenantId(tenantId: string): Promise<boolean> {
+  if (!tenantId) return false;
+  if (isLocalTenant(tenantId)) return isDemoMode();
+  const tenant = await store.getById<Record<string, unknown>>('tenants', tenantId);
+  return isTestTenantRecord(tenant);
 }
 
-function sharedVideoAnalysis(record: Record<string, unknown>): string {
-  const source = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
-  const shared: Record<string, unknown> = {
-    ...source,
-    source: source.source || 'shared-test-video-pool',
-    analysisSource: source.analysisSource || 'shared-test-video-pool',
-    analysisQuality: source.analysisQuality || (source.gemini ? 'video' : 'metadata'),
-    sharedTestVideo: true,
-    sharedFromTenantId: record.tenantId,
-    sharedFromRecordId: record.id,
-    sharedSyncedAt: new Date().toISOString(),
-  };
-
-  return JSON.stringify(shared);
+function videoAnalysisOf(record: Record<string, unknown>): Record<string, unknown> {
+  return parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
 }
 
-function cloneSharedVideoForTenant(record: Record<string, unknown>, tenantId: string): Record<string, unknown> {
-  const {
-    id: _id,
-    collectionId: _collectionId,
-    collectionName: _collectionName,
-    expand: _expand,
-    created: _created,
-    updated: _updated,
-    createdAt: _createdAt,
-    updatedAt: _updatedAt,
-    ...rest
-  } = record;
+function isVideoLevelAnalysis(analysis: Record<string, unknown>): boolean {
+  const geminiStatus = String(analysis.geminiStatus || '');
+  const downloadStatus = String(analysis.downloadStatus || '');
+  const videoFetchStatus = String(analysis.videoFetchStatus || '');
+  return analysis.analysisQuality === 'video'
+    && (!geminiStatus || geminiStatus === 'analyzed')
+    && (!downloadStatus || downloadStatus === 'analyzed' || videoFetchStatus === 'direct_url' || videoFetchStatus === 'fetched')
+    && Boolean(analysis.gemini);
+}
+
+function isPublicTestTenantVideo(record: Record<string, unknown>): boolean {
+  const analysis = videoAnalysisOf(record);
+  if (analysis.userVisible === false) return false;
+  return isVideoLevelAnalysis(analysis);
+}
+
+function videoSuccessVisibilityPatch(): Record<string, unknown> {
   return {
-    ...rest,
-    tenantId,
-    aiAnalysis: sharedVideoAnalysis(record),
+    userVisible: true,
+    adminOnlyVideoFailure: undefined,
+    videoLevelFailureStatus: undefined,
+    manualRequiredReason: undefined,
   };
 }
 
-async function listAllSharedTestVideos(): Promise<Record<string, unknown>[]> {
-  const all: Record<string, unknown>[] = [];
+function publicVideoRecord<T extends Record<string, unknown>>(record: T): T {
+  const analysis = videoAnalysisOf(record);
+  if (!Object.keys(analysis).length) return record;
+  const scrubbed = { ...analysis };
+  for (const key of [
+    'adminOnlyVideoFailure',
+    'userVisible',
+    'videoLevelFailureStatus',
+    'manualRequiredReason',
+    'replacementForRecordId',
+    'backfillReason',
+    'downloadError',
+    'analysisError',
+    'crawlerOpsLastError',
+    'youtubeDirectError',
+  ]) {
+    delete scrubbed[key];
+  }
+  return { ...record, aiAnalysis: JSON.stringify(scrubbed) };
+}
+
+function compactVideoPipelineError(message: unknown, max = 900): string {
+  return String(message || '')
+    .replace(/(token=)[^&\s]+/gi, '$1***')
+    .replace(/(api[_-]?key=)[^&\s]+/gi, '$1***')
+    .replace(/Bearer\s+[A-Za-z0-9._~+/-]+/g, 'Bearer ***')
+    .replace(/\/\/([^:\s/@]+):([^@\s]+)@/g, '//***:***@')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max);
+}
+
+function recordKeywordText(record: Record<string, unknown>): string {
+  const analysis = videoAnalysisOf(record);
+  const tags = parseJsonRecord<string[]>(record.tags, []);
+  const gemini = typeof analysis.gemini === 'object' && analysis.gemini
+    ? analysis.gemini as Record<string, unknown>
+    : {};
+  return [
+    record.title,
+    tags.join(' '),
+    analysis.keyword,
+    gemini.theme,
+    Array.isArray(gemini.hooks) ? gemini.hooks.join(' ') : '',
+    Array.isArray(gemini.sellingPoints) ? gemini.sellingPoints.join(' ') : '',
+  ].join(' ').toLowerCase();
+}
+
+function recordMatchesKeyword(record: Record<string, unknown>, keyword: string): boolean {
+  const normalized = keyword.trim().toLowerCase();
+  if (!normalized || /^https?:\/\//i.test(normalized)) return true;
+  const tokens = normalized
+    .split(/[\s,;，；、]+/)
+    .map(token => token.replace(/[^\p{L}\p{N}]+/gu, ''))
+    .filter(token => token.length >= 2);
+  if (tokens.length === 0) return true;
+  const text = recordKeywordText(record);
+  return tokens.some(token => text.includes(token));
+}
+
+async function listVisibleTestTenantVideos(input: {
+  tenantId: string;
+  platform?: Platform;
+  keyword?: string;
+  limit: number;
+}): Promise<Record<string, unknown>[]> {
+  const out: Record<string, unknown>[] = [];
   const seenSourceUrls = new Set<string>();
   let page = 1;
   let totalPages = 1;
   do {
     const result = await store.list<Record<string, unknown>>(COL, {
+      where: input.platform ? { tenantId: input.tenantId, platform: input.platform } : { tenantId: input.tenantId },
       sort: '-crawledAt',
       page,
       perPage: 100,
     });
     for (const record of result.items) {
-      if (isSharedSyncedVideo(record)) continue;
-      if (record.status !== 'analyzed') continue;
+      if (!isPublicTestTenantVideo(record)) continue;
+      if (input.keyword && !recordMatchesKeyword(record, input.keyword)) continue;
       const sourceUrl = String(record.sourceUrl || '').trim();
-      if (!sourceUrl || seenSourceUrls.has(sourceUrl)) continue;
-      seenSourceUrls.add(sourceUrl);
-      all.push(record);
+      if (sourceUrl && seenSourceUrls.has(sourceUrl)) continue;
+      if (sourceUrl) seenSourceUrls.add(sourceUrl);
+      out.push(publicVideoRecord(record));
+      if (out.length >= input.limit) return out;
     }
     totalPages = result.totalPages || 1;
     page += 1;
-  } while (page <= totalPages);
-  return all;
+  } while (page <= totalPages && page <= 50);
+  return out;
 }
 
-async function syncSharedTestVideosForTenant(tenantId: string): Promise<void> {
-  if (!tenantId) return;
-  if (isLocalTenant(tenantId)) return;
-
-  const tenant = await store.getById<Record<string, unknown>>('tenants', tenantId);
-  if (!isTestTenantRecord(tenant)) return;
-
-  const sharedVideos = await listAllSharedTestVideos();
-  for (const video of sharedVideos) {
-    const sourceUrl = String(video.sourceUrl || '').trim();
-    if (!sourceUrl) continue;
-
-    const existing = await store.list(COL, {
-      where: { tenantId, sourceUrl },
-      page: 1,
-      perPage: 1,
+async function existingTenantSourceUrls(tenantId: string): Promise<Set<string>> {
+  const urls = new Set<string>();
+  let page = 1;
+  let totalPages = 1;
+  do {
+    const result = await store.list<Record<string, unknown>>(COL, {
+      where: { tenantId },
+      page,
+      perPage: 100,
     });
-    if (existing.items[0]) continue;
-
-    await store.create(COL, cloneSharedVideoForTenant(video, tenantId));
-  }
+    for (const record of result.items) {
+      const sourceUrl = String(record.sourceUrl || '').trim();
+      if (sourceUrl) urls.add(sourceUrl);
+    }
+    totalPages = result.totalPages || 1;
+    page += 1;
+  } while (page <= totalPages && page <= 50);
+  return urls;
 }
 
-async function ensureSharedTestVideosForTenant(tenantId: string): Promise<void> {
-  if (!tenantId) return;
-  const existing = sharedVideoSyncPromises.get(tenantId);
-  if (existing) return existing;
+interface TestTenantVideoBackfillInput {
+  tenantId: string;
+  platform: Platform;
+  keyword?: string;
+  target: number;
+  replacementForRecordId?: string;
+  reason?: string;
+  forceCreate?: boolean;
+  dateFrom?: string;
+  dateTo?: string;
+}
 
-  const promise = syncSharedTestVideosForTenant(tenantId).catch((e) => {
-    sharedVideoSyncPromises.delete(tenantId);
-    console.warn('[videos] shared test video sync failed:', e instanceof Error ? e.message : e);
+function scheduleTestTenantVideoBackfill(input: TestTenantVideoBackfillInput): void {
+  const key = [
+    input.tenantId,
+    input.platform,
+    input.keyword || '',
+    input.dateFrom || '',
+    input.dateTo || '',
+    input.replacementForRecordId || '',
+  ].join('|');
+  if (pendingVisibleBackfillJobs.has(key)) return;
+
+  pendingVisibleBackfillJobs.add(key);
+  void ensureTestTenantVideoBackfill(input)
+    .catch((e) => {
+      const error = compactVideoPipelineError(e instanceof Error ? e.message : e);
+      console.warn('[videos] test tenant video backfill failed:', error);
+      recordVideoAdminAlert({
+        recordId: input.replacementForRecordId || '',
+        tenantId: input.tenantId,
+        platform: input.platform,
+        title: `${input.platform} ${input.keyword || ''}`.trim(),
+        sourceUrl: '',
+        reason: input.reason || 'fresh_video_level_backfill_failed',
+        error,
+      });
+    })
+    .finally(() => {
+      pendingVisibleBackfillJobs.delete(key);
+    });
+}
+
+async function ensureTestTenantVideoBackfill(input: TestTenantVideoBackfillInput): Promise<Record<string, unknown>[]> {
+  if (!await isTestTenantId(input.tenantId)) return [];
+
+  const keyword = input.keyword || '';
+  const target = Math.max(1, Math.min(10, input.target));
+  const existingVisible = await listVisibleTestTenantVideos({
+    tenantId: input.tenantId,
+    platform: input.platform,
+    keyword,
+    limit: target,
   });
-  sharedVideoSyncPromises.set(tenantId, promise);
-  return promise;
+  if (!input.forceCreate && existingVisible.length >= target) return existingVisible;
+
+  const sourceUrls = await existingTenantSourceUrls(input.tenantId);
+  const created: Record<string, unknown>[] = [];
+  const needed = input.forceCreate ? target : Math.max(0, target - existingVisible.length);
+  const candidates = await discoverFreshBackfillCandidates({
+    platform: input.platform,
+    keyword,
+    limit: Math.max(needed * 40, 80),
+    excludedSourceUrls: sourceUrls,
+    dateFrom: input.dateFrom || '',
+    dateTo: input.dateTo || '',
+  });
+
+  const maxAnalysisAttempts = Math.max(1, Math.min(10, Number(process.env.VIDEO_BACKFILL_MAX_ANALYSIS_ATTEMPTS || 3)));
+  let attempted = 0;
+  for (const item of candidates) {
+    if (created.length >= needed) break;
+    if (attempted >= maxAnalysisAttempts) break;
+    attempted += 1;
+    const record = await createAndAnalyzeFreshBackfillVideo({
+      tenantId: input.tenantId,
+      item,
+      keyword,
+      replacementForRecordId: input.replacementForRecordId,
+      reason: input.reason || 'fresh_video_level_backfill',
+      dateFrom: input.dateFrom || '',
+      dateTo: input.dateTo || '',
+    });
+    if (!record) continue;
+    sourceUrls.add(String(record.sourceUrl || ''));
+    created.push(record);
+  }
+
+  return [...created, ...existingVisible].slice(0, target);
+}
+
+async function discoverFreshBackfillCandidates(input: {
+  platform: Platform;
+  keyword: string;
+  limit: number;
+  excludedSourceUrls: Set<string>;
+  dateFrom: string;
+  dateTo: string;
+}): Promise<CrawledVideo[]> {
+  const limit = Math.max(1, Math.min(120, input.limit));
+  const keyword = input.keyword || DEFAULT_CRAWL_KEYWORDS;
+  const candidates: CrawledVideo[] = [];
+
+  try {
+    if (input.platform === 'youtube') {
+      candidates.push(...await crawlYouTubeSearch(keyword, limit, input.dateFrom, input.dateTo));
+    } else if (input.platform === 'tiktok') {
+      candidates.push(...await crawlTikTokWithApifyFallback(keyword, limit, input.dateFrom, input.dateTo));
+    } else if (input.platform === 'facebook' || input.platform === 'instagram') {
+      candidates.push(...await crawlSocialUrlOrFallback(input.platform, keyword, limit, input.dateFrom, input.dateTo));
+    }
+  } catch (e) {
+    console.warn(`[videos] fresh ${input.platform} backfill search failed:`, e instanceof Error ? e.message : e);
+  }
+
+  const seen = new Set<string>();
+  return sortByHeat(candidates.map(normalizeCrawledVideo))
+    .filter(item => item.platform === input.platform && isPlatformUrl(item.sourceUrl, input.platform))
+    .filter(item => !input.excludedSourceUrls.has(item.sourceUrl))
+    .filter(item => !seen.has(item.sourceUrl) && seen.add(item.sourceUrl))
+    .filter(item => isKeywordRelevant(item, keyword))
+    .filter(item => item.dateEvidence === 'youtube-upload-filter' || isWithinDateRange(item.uploadedAt, input.dateFrom, input.dateTo))
+    .filter(hasRealThumbnail)
+    .slice(0, limit);
+}
+
+async function createAndAnalyzeFreshBackfillVideo(input: {
+  tenantId: string;
+  item: CrawledVideo;
+  keyword: string;
+  replacementForRecordId?: string;
+  reason: string;
+  dateFrom?: string;
+  dateTo?: string;
+}): Promise<Record<string, unknown> | null> {
+  const existing = await store.list(COL, {
+    where: { tenantId: input.tenantId, sourceUrl: input.item.sourceUrl },
+    page: 1,
+    perPage: 1,
+  });
+  if (existing.items[0]) return null;
+
+  const record = await store.create<Record<string, unknown>>(COL, {
+    tenantId: input.tenantId,
+    platform: input.item.platform,
+    title: input.item.title,
+    thumbnailUrl: input.item.thumbnailUrl,
+    videoFileId: '',
+    duration: input.item.duration,
+    sourceUrl: input.item.sourceUrl,
+    tags: JSON.stringify(input.item.tags),
+    aiAnalysis: JSON.stringify({
+      source: input.item.source || `${input.item.platform}-search`,
+      views: input.item.views,
+      uploadedAt: input.item.uploadedAt,
+      dateEvidence: input.item.dateEvidence,
+      gemini: metadataFallbackAnalysis(input.item),
+      analysisSource: 'metadata-fallback',
+      analysisQuality: 'metadata',
+      keyword: input.keyword,
+      crawlRule: '关键词检索',
+      dateFrom: input.dateFrom,
+      dateTo: input.dateTo,
+      replacementForRecordId: input.replacementForRecordId,
+      backfillReason: input.reason,
+      importedAt: new Date().toISOString(),
+      userVisible: false,
+    }),
+    status: 'analyzed' as VideoStatus,
+    crawledAt: new Date().toISOString(),
+  });
+  if (!record) return null;
+
+  try {
+    await analyzeSourceVideoJob({
+      record,
+      sourceUrl: input.item.sourceUrl,
+      title: input.item.title,
+      platform: input.item.platform,
+      suppressVisibleBackfill: true,
+      forceManualFailure: true,
+    });
+  } catch {
+    // The record itself is marked for admin review by the analysis path.
+  }
+
+  const recordId = String((record as Record<string, unknown>).id || '');
+  if (!recordId) return null;
+  const latest = await store.getById<Record<string, unknown>>(COL, recordId);
+  if (!latest || !isPublicTestTenantVideo(latest)) return null;
+  return publicVideoRecord(latest);
 }
 
 const DEFAULT_CRAWL_KEYWORDS = 'amazon gadgets product review';
@@ -237,10 +480,6 @@ videosRouter.post('/crawl', async (req, res) => {
 
   try {
     const result = await crawlVideosForTenant({ tenantId, platform, keyword, limit, dateFrom, dateTo });
-    if (result.items.length === 0) {
-      res.status(409).json(result);
-      return;
-    }
     res.json(result);
   } catch (e) {
     console.error('[videos] crawl failed:', e);
@@ -257,9 +496,11 @@ export async function crawlVideosForTenant(input: CrawlVideosInput): Promise<Cra
   const dateTo = input.dateTo ?? '';
 
   await purgeLegacyFakeVideos();
+  const testTenant = await isTestTenantId(tenantId);
   const target = Math.min(30, Math.max(1, Number(limit) || 5));
   let crawlerSource = `${platform}-search`;
   let crawlerMessage = '';
+  let crawlerTopUpMessage = '';
   let items: CrawledVideo[];
   const directUrlInput = isPlatformUrl(keyword, platform);
   try {
@@ -300,6 +541,14 @@ export async function crawlVideosForTenant(input: CrawlVideosInput): Promise<Cra
         throw new Error(`没有找到与关键词「${keyword}」相关的公开视频（候选 ${beforeFilter} 条已过滤）`);
       }
     }
+    if (!directUrlInput && items.length < target) {
+      const beforeTopUp = items.length;
+      items = await topUpCrawledItems({ platform, keyword, target, items, dateFrom, dateTo });
+      const topUpCount = Math.max(0, items.length - beforeTopUp);
+      if (topUpCount > 0) {
+        crawlerTopUpMessage = `；过滤后补齐 ${topUpCount} 条`;
+      }
+    }
   } catch (e) {
     crawlerMessage = e instanceof Error
       ? `${platform} 公开采集未找到可入库的真实视频：${e.message}`
@@ -315,7 +564,9 @@ export async function crawlVideosForTenant(input: CrawlVideosInput): Promise<Cra
   const records: unknown[] = [];
   const existingRecords: unknown[] = [];
   const seenKeys = new Set<string>();
-  const orderedItems = sortByHeat(items.map(normalizeCrawledVideo)).filter(item => {
+  const orderedItems = sortByHeat(items.map(normalizeCrawledVideo))
+    .filter(item => item.platform === platform && isPlatformUrl(item.sourceUrl, platform))
+    .filter(item => {
     const key = videoDedupeKey(item);
     if (seenKeys.has(key)) {
       skipped += 1;
@@ -335,6 +586,7 @@ export async function crawlVideosForTenant(input: CrawlVideosInput): Promise<Cra
     if (existingRecord) {
       skipped += 1;
       skippedExisting += 1;
+      if (testTenant) continue;
       const existingAnalysis = parseJsonRecord<Record<string, unknown>>(existingRecord.aiAnalysis, {});
       const refreshedRecord = {
         ...existingRecord,
@@ -386,6 +638,7 @@ export async function crawlVideosForTenant(input: CrawlVideosInput): Promise<Cra
         dateFrom,
         dateTo,
         importedAt: new Date().toISOString(),
+        userVisible: testTenant ? false : undefined,
       }),
       status: 'analyzed' as VideoStatus,
       crawledAt: new Date().toISOString(),
@@ -397,17 +650,42 @@ export async function crawlVideosForTenant(input: CrawlVideosInput): Promise<Cra
     if (imported >= target) break;
   }
 
-  const resultRecords = [...records, ...existingRecords].slice(0, target);
+  let resultRecords = [...records, ...existingRecords].slice(0, target);
   const returnedNew = Math.min(records.length, resultRecords.length);
-  const returnedExisting = Math.max(0, resultRecords.length - returnedNew);
-  if (resultRecords.length > 0) await enqueueCrawledRecordsForAnalysis(resultRecords);
+  let returnedExisting = Math.max(0, resultRecords.length - returnedNew);
+  let visibleNewCount = 0;
+  if (testTenant) {
+    resultRecords = await analyzeFreshCrawledRecordsForTestTenant(records, target);
+    visibleNewCount = resultRecords.length;
+    returnedExisting = 0;
+    if (visibleNewCount < target) {
+      scheduleTestTenantVideoBackfill({
+        tenantId,
+        platform,
+        keyword,
+        target: target - visibleNewCount,
+        reason: 'crawl_result_visible_backfill',
+        dateFrom,
+        dateTo,
+        forceCreate: true,
+      });
+    }
+  } else if (resultRecords.length > 0) {
+    await enqueueCrawledRecordsForAnalysis(resultRecords);
+  }
 
-  const message = crawlerMessage
-    || (resultRecords.length === 0
-      ? `有效去重后没有新增视频，返回库内已有匹配 ${returnedExisting} 条；请换关键词、放宽日期范围或降低数量。`
+  const message = testTenant
+    ? (crawlerMessage || (resultRecords.length === 0
+      ? `采集完成：本次新增 ${imported} 条候选，跳过已入库 ${skippedExisting} 条；暂无新增视频级可用结果，后台继续按同关键词补位，失败/不可分析结果已隐藏并进入管理员处理。`
       : resultRecords.length < target
-        ? `采集完成：返回 ${resultRecords.length} 条（新增 ${imported} 条，库内已有 ${returnedExisting} 条），未达到用户输入数量 ${target}；可换关键词或放宽日期范围。`
-        : `采集完成：返回 ${resultRecords.length} 条（新增 ${imported} 条，库内已有 ${returnedExisting} 条）`);
+        ? `采集完成：本次返回 ${resultRecords.length} 条新增视频级结果（新增候选 ${imported} 条，跳过已入库 ${skippedExisting} 条），未达到用户输入数量 ${target}；后台继续按同关键词补位。`
+        : `采集完成：本次返回 ${resultRecords.length} 条新增视频级结果（新增候选 ${imported} 条，跳过已入库 ${skippedExisting} 条）${crawlerTopUpMessage}`))
+    : crawlerMessage
+      || (resultRecords.length === 0
+        ? `有效去重后没有新增视频，返回库内已有匹配 ${returnedExisting} 条；请换关键词、放宽日期范围或降低数量。`
+        : resultRecords.length < target
+          ? `采集完成：返回 ${resultRecords.length} 条（新增 ${imported} 条，库内已有 ${returnedExisting} 条），未达到用户输入数量 ${target}；可换关键词或放宽日期范围。`
+          : `采集完成：返回 ${resultRecords.length} 条（新增 ${imported} 条，库内已有 ${returnedExisting} 条）${crawlerTopUpMessage}${visibleNewCount > 0 ? `；已返回 ${visibleNewCount} 条视频级可用结果` : ''}`);
 
   return {
     platform,
@@ -423,6 +701,83 @@ export async function crawlVideosForTenant(input: CrawlVideosInput): Promise<Cra
     message,
     items: resultRecords,
   };
+}
+
+async function analyzeFreshCrawledRecordsForTestTenant(records: unknown[], target: number): Promise<Record<string, unknown>[]> {
+  const out: Record<string, unknown>[] = [];
+  const seenSourceUrls = new Set<string>();
+  const syncYouTubeAttempts = Math.max(0, Math.min(10, Number(process.env.VIDEO_CRAWL_SYNC_URL_ANALYSIS_ATTEMPTS || 0)));
+  let attemptedYouTube = 0;
+
+  for (const raw of records) {
+    const record = raw as Record<string, unknown>;
+    const id = String(record.id || '');
+    const sourceUrl = String(record.sourceUrl || '').trim();
+    if (!id || !sourceUrl) continue;
+
+    const platform = (record.platform || inferPlatformFromUrl(sourceUrl)) as Platform;
+    if (platform === 'youtube' && attemptedYouTube < syncYouTubeAttempts) {
+      attemptedYouTube += 1;
+      try {
+        await analyzeSourceVideoJob({
+          record,
+          sourceUrl,
+          title: String(record.title || 'youtube-video'),
+          platform,
+          suppressVisibleBackfill: true,
+          forceManualFailure: true,
+        });
+      } catch (e) {
+        console.warn('[videos] test tenant crawl URL analysis failed:', e instanceof Error ? e.message : e);
+      }
+    } else {
+      await queueTestTenantVideoLevelAnalysis(record);
+    }
+
+    const latest = await store.getById<Record<string, unknown>>(COL, id);
+    if (!latest || !isPublicTestTenantVideo(latest)) continue;
+    const latestSourceUrl = String(latest.sourceUrl || '').trim();
+    if (latestSourceUrl && seenSourceUrls.has(latestSourceUrl)) continue;
+    if (latestSourceUrl) seenSourceUrls.add(latestSourceUrl);
+    out.push(publicVideoRecord(latest));
+    if (out.length >= target) break;
+  }
+
+  return out;
+}
+
+async function queueTestTenantVideoLevelAnalysis(record: Record<string, unknown>): Promise<void> {
+  const id = String(record.id || '');
+  if (!id) return;
+  const latest = await store.getById<Record<string, unknown>>(COL, id);
+  if (!latest || isPublicTestTenantVideo(latest) || !shouldQueueVideoAnalysis(latest)) return;
+
+  const sourceUrl = String(latest.sourceUrl || '').trim();
+  if (!sourceUrl) return;
+  const platform = (latest.platform || inferPlatformFromUrl(sourceUrl)) as Platform;
+  const analysis = parseJsonRecord<Record<string, unknown>>(latest.aiAnalysis, {});
+  await store.update(COL, id, {
+    status: 'pending' as VideoStatus,
+    aiAnalysis: JSON.stringify({
+      ...analysis,
+      userVisible: false,
+      downloadStatus: 'queued',
+      videoFetchStatus: 'queued',
+      geminiStatus: 'waiting_for_video',
+      analysisQueuedAt: new Date().toISOString(),
+    }),
+  });
+
+  void analyzeSourceVideoJob({
+    record: latest,
+    sourceUrl,
+    title: String(latest.title || `${platform}-video`),
+    platform,
+    suppressVisibleBackfill: true,
+    forceManualFailure: true,
+  }).catch((e) => {
+    console.warn('[videos] test tenant async video-level analysis failed:', e instanceof Error ? e.message : e);
+  });
 }
 
 // ─── POST /videos/download-material ─────────────────────────────────────────
@@ -568,23 +923,87 @@ videosRouter.post('/ingest', async (req, res) => {
   res.status(201).json({ id: record.id, status: 'pending' });
 });
 
+function videoListWhere(tenantId: string, platform?: string, status?: string): Record<string, string> {
+  const where: Record<string, string> = { tenantId };
+  if (platform) where.platform = platform;
+  if (status) where.status = status;
+  return where;
+}
+
+async function listPublicVideosForTenant(input: {
+  tenantId: string;
+  page: number;
+  perPage: number;
+  platform?: string;
+  status?: string;
+}): Promise<{
+  items: Record<string, unknown>[];
+  totalItems: number;
+  totalPages: number;
+  page: number;
+  perPage: number;
+}> {
+  const where = videoListWhere(input.tenantId, input.platform, input.status);
+  const testTenant = await isTestTenantId(input.tenantId);
+  if (!testTenant) {
+    const result = await store.list<Record<string, unknown>>(COL, {
+      where,
+      sort: '-crawledAt',
+      page: input.page,
+      perPage: input.perPage,
+    });
+    return { ...result, items: result.items.map(publicVideoRecord) };
+  }
+
+  const visible: Record<string, unknown>[] = [];
+  const seenSourceUrls = new Set<string>();
+  let scanPage = 1;
+  let totalPages = 1;
+  do {
+    const result = await store.list<Record<string, unknown>>(COL, {
+      where,
+      sort: '-crawledAt',
+      page: scanPage,
+      perPage: 100,
+    });
+    for (const record of result.items) {
+      if (!isPublicTestTenantVideo(record)) continue;
+      const sourceUrl = String(record.sourceUrl || '').trim();
+      if (sourceUrl && seenSourceUrls.has(sourceUrl)) continue;
+      if (sourceUrl) seenSourceUrls.add(sourceUrl);
+      visible.push(publicVideoRecord(record));
+    }
+    totalPages = result.totalPages || 1;
+    scanPage += 1;
+  } while (scanPage <= totalPages && scanPage <= 50);
+
+  const totalItems = visible.length;
+  const totalVisiblePages = Math.max(1, Math.ceil(totalItems / input.perPage));
+  const start = (input.page - 1) * input.perPage;
+  return {
+    items: visible.slice(start, start + input.perPage),
+    totalItems,
+    totalPages: totalVisiblePages,
+    page: input.page,
+    perPage: input.perPage,
+  };
+}
+
 // ─── GET /videos ──────────────────────────────────────────────────────────────
 // Query: page, perPage, platform, status
 videosRouter.get('/', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
   await purgeLegacyFakeVideos();
-  await ensureSharedTestVideosForTenant(tenantId);
   const { page = '1', perPage = '20', platform, status } = req.query as Record<string, string>;
+  const pageNumber = Math.max(1, Number(page) || 1);
+  const perPageNumber = Math.min(100, Math.max(1, Number(perPage) || 20));
 
-  const where: Record<string, string> = { tenantId };
-  if (platform) where.platform = platform;
-  if (status) where.status = status;
-
-  const result = await store.list(COL, {
-    where,
-    sort: '-crawledAt',
-    page: Number(page),
-    perPage: Math.min(100, Number(perPage)),
+  const result = await listPublicVideosForTenant({
+    tenantId,
+    platform,
+    status,
+    page: pageNumber,
+    perPage: perPageNumber,
   });
 
   void enqueueCrawledRecordsForAnalysis(result.items).catch((e) => {
@@ -607,7 +1026,12 @@ videosRouter.get('/:id', async (req, res) => {
     return;
   }
 
-  res.json(record);
+  if (await isTestTenantId(tenantId) && !isPublicTestTenantVideo(record)) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
+
+  res.json(publicVideoRecord(record));
 });
 
 // ─── PATCH /videos/:id/reanalyze ─────────────────────────────────────────────
@@ -671,35 +1095,156 @@ async function triggerVideoAnalysis(
     return;
   }
 
+  let tempPath = '';
   try {
+    const record = await store.getById<Record<string, unknown>>(COL, recordId);
     const dl = await fetchFile(COL, recordId, filename);
     if (!dl) throw new Error('video file fetch failed');
 
     if (!fs.existsSync(ANALYSIS_DIR)) fs.mkdirSync(ANALYSIS_DIR, { recursive: true });
-    const tempPath = path.join(ANALYSIS_DIR, `upload-${recordId}-${Date.now()}.${mimeFromPath(filename).split('/').pop() || 'mp4'}`);
+    tempPath = path.join(ANALYSIS_DIR, `upload-${recordId}-${Date.now()}.${mimeFromPath(filename).split('/').pop() || 'mp4'}`);
     fs.writeFileSync(tempPath, dl.buf);
+    const previous = parseJsonRecord<Record<string, unknown>>(record?.aiAnalysis, {});
+    await store.update(COL, recordId, {
+      status: 'pending' as VideoStatus,
+      aiAnalysis: JSON.stringify({
+        ...previous,
+        manualVideoUploadStatus: 'analyzing',
+        downloadStatus: 'uploaded',
+        videoFetchStatus: 'manual_upload',
+        geminiStatus: 'analyzing',
+        analysisSource: 'gemini-upload-video',
+        geminiStartedAt: new Date().toISOString(),
+      }),
+    });
+    updateVideoAdminAlertByRecordId(recordId, {
+      statusLabel: '已上传/分析中',
+      manualUploadStatus: 'analyzing',
+      error: '管理员已上传缺失视频，Gemini 视频级分析处理中。',
+    });
     const result = await analyzeDownloadedVideoWithFallback({
       filePath: tempPath,
       mimeType: mimeType ?? dl.contentType,
+      title: String(record?.title || ''),
+      platform: record?.platform as Platform | undefined,
+      duration: Number(record?.duration || 0),
+      tags: parseJsonRecord<string[]>(record?.tags, []),
       sourceLabel: 'gemini-upload-video',
     });
     cleanupTempVideo(tempPath);
+    tempPath = '';
+    const latest = await store.getById<Record<string, unknown>>(COL, recordId);
+    const latestAnalysis = parseJsonRecord<Record<string, unknown>>(latest?.aiAnalysis ?? record?.aiAnalysis, {});
 
     await store.update(COL, recordId, {
       aiAnalysis: JSON.stringify({
+        ...latestAnalysis,
         gemini: result.analysis,
         analysisSource: result.source,
         analysisQuality: 'video',
+        downloadStatus: 'analyzed',
+        videoFetchStatus: 'manual_upload',
         geminiStatus: 'analyzed',
+        manualVideoUploadStatus: 'analyzed',
+        ...videoSuccessVisibilityPatch(),
         analyzedAt: new Date().toISOString(),
       }),
       status: 'analyzed',
     });
+    updateVideoAdminAlertByRecordId(recordId, {
+      statusLabel: '已上传/分析完成',
+      manualUploadStatus: 'analyzed',
+      error: '管理员上传的视频已完成 Gemini 视频级分析，已可进入灵感大屏展示。',
+    });
     console.log(`[videos] analyzed ${recordId}`);
   } catch (e) {
     console.error(`[videos] analysis failed for ${recordId}:`, e);
-    await store.update(COL, recordId, { status: 'failed' });
+    if (tempPath) cleanupTempVideo(tempPath);
+    const record = await store.getById<Record<string, unknown>>(COL, recordId);
+    const previous = parseJsonRecord<Record<string, unknown>>(record?.aiAnalysis, {});
+    const compactError = compactVideoPipelineError(e instanceof Error ? e.message : e);
+    await store.update(COL, recordId, {
+      status: 'analyzed' as VideoStatus,
+      aiAnalysis: JSON.stringify({
+        ...previous,
+        manualVideoUploadStatus: 'failed',
+        downloadStatus: 'manual_upload_analyze_failed',
+        videoFetchStatus: 'manual_upload',
+        geminiStatus: 'video_failed',
+        analysisError: compactError,
+        videoLevelFailureStatus: '视频级失败/需人工处理',
+        manualRequiredReason: 'manual_upload_analysis_failed',
+        userVisible: false,
+      }),
+    });
+    updateVideoAdminAlertByRecordId(recordId, {
+      statusLabel: '上传后分析失败',
+      manualUploadStatus: 'failed',
+      error: compactError,
+    });
   }
+}
+
+export async function attachManualVideoUploadAndQueue(input: {
+  recordId: string;
+  videoBase64: string;
+  mimeType?: string;
+  filename?: string;
+  uploadedBy?: string;
+}): Promise<{ recordId: string; filename: string; status: 'queued' }> {
+  const record = await store.getById<Record<string, unknown>>(COL, input.recordId);
+  if (!record) throw new Error('Video record not found');
+
+  const mimeType = input.mimeType?.trim() || mimeFromPath(input.filename || 'video.mp4');
+  if (!/^video\//i.test(mimeType)) throw new Error('Only video files can be uploaded');
+  const raw = input.videoBase64.replace(/^data:[^,]+,/, '');
+  const buf = Buffer.from(raw, 'base64');
+  if (!buf.length) throw new Error('Video file is empty');
+  if (buf.length > MANUAL_UPLOAD_MAX_BYTES) throw new Error('视频压缩后仍超过 10MB，请换更短的视频或降低清晰度后再上传。');
+
+  const ext = safeVideoExtension(input.filename, mimeType);
+  const storedFilename = await attachFile(COL, input.recordId, 'videoFile', {
+    name: `manual-${Date.now()}-${randomUUID()}.${ext}`,
+    buf,
+    contentType: mimeType,
+  });
+  if (!storedFilename) throw new Error('Video upload failed');
+
+  const previous = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
+  await store.update(COL, input.recordId, {
+    videoFileId: storedFilename,
+    status: 'pending' as VideoStatus,
+    aiAnalysis: JSON.stringify({
+      ...previous,
+      manualVideoUploadedAt: new Date().toISOString(),
+      manualVideoUploadedBy: input.uploadedBy,
+      manualVideoUploadStatus: 'queued',
+      downloadStatus: 'uploaded',
+      videoFetchStatus: 'manual_upload',
+      geminiStatus: 'queued',
+      analysisSource: 'gemini-upload-video',
+      userVisible: false,
+      adminOnlyVideoFailure: undefined,
+      videoLevelFailureStatus: undefined,
+      manualRequiredReason: undefined,
+      downloadError: undefined,
+      analysisError: undefined,
+    }),
+  });
+
+  updateVideoAdminAlertByRecordId(input.recordId, {
+    statusLabel: '已上传/分析排队',
+    manualUploadStatus: 'queued',
+    manualUploadedAt: new Date().toISOString(),
+    manualUploadRecordId: input.recordId,
+    error: '管理员已上传缺失视频，等待 Gemini 视频级分析。',
+  });
+
+  void triggerVideoAnalysis(input.recordId, storedFilename, mimeType, input.uploadedBy || 'admin').catch((e) => {
+    console.warn('[videos] manual upload analysis failed:', e instanceof Error ? e.message : e);
+  });
+
+  return { recordId: input.recordId, filename: storedFilename, status: 'queued' };
 }
 
 async function handleAnalyzeSource(
@@ -825,6 +1370,9 @@ function shouldQueueVideoAnalysis(record: Record<string, unknown>): boolean {
   if (!/^https?:\/\//i.test(sourceUrl)) return false;
   const analysis = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
   const status = String(analysis.downloadStatus || '');
+  const videoFetchStatus = String(analysis.videoFetchStatus || '');
+  const geminiStatus = String(analysis.geminiStatus || '');
+  if (['metadata_only', 'analyzed'].includes(status) || ['unavailable', 'url_failed', 'ops_failed'].includes(videoFetchStatus) || geminiStatus === 'metadata_fallback') return false;
   if (['queued', 'downloading', 'analyzing'].includes(status)) return false;
   if (analysis.analysisQuality === 'video' && status === 'analyzed') return false;
   const queuedAt = Date.parse(String(analysis.analysisQueuedAt || analysis.videoAnalysisAttemptedAt || ''));
@@ -966,6 +1514,9 @@ export async function analyzeSourceVideoJob(input: {
   platform: Platform;
   opsTaskId?: string;
   suppressOpsRequeue?: boolean;
+  skipYoutubeUrlAnalysis?: boolean;
+  suppressVisibleBackfill?: boolean;
+  forceManualFailure?: boolean;
 }): Promise<unknown> {
   return withDownloadSlot(() => analyzeSourceVideoJobInner(input));
 }
@@ -977,13 +1528,33 @@ async function analyzeSourceVideoJobInner(input: {
   platform: Platform;
   opsTaskId?: string;
   suppressOpsRequeue?: boolean;
+  skipYoutubeUrlAnalysis?: boolean;
+  suppressVisibleBackfill?: boolean;
+  forceManualFailure?: boolean;
 }): Promise<unknown> {
   const recordId = input.record?.id ? String(input.record.id) : '';
   let tempPath = '';
   try {
-    if (input.platform === 'youtube' && !shouldUseQwenFirst()) {
+    if (input.platform === 'youtube' && !input.skipYoutubeUrlAnalysis && (input.forceManualFailure || !shouldUseQwenFirst())) {
       const direct = await tryAnalyzeYouTubeUrl(input);
       if (direct) return direct;
+      if (input.forceManualFailure) {
+        return persistMetadataFallbackAnalysis(input, 'youtube_url_failed', {
+          downloadStatus: 'metadata_only',
+          videoFetchStatus: 'url_failed',
+          geminiStatus: 'metadata_fallback',
+          crawlerOpsStatus: 'skipped',
+        });
+      }
+      if (!youtubeDownloadFallbackSyncEnabled()) {
+        if (youtubeDownloadFallbackEnabled()) scheduleYouTubeDownloadFallback(input);
+        return persistMetadataFallbackAnalysis(input, 'youtube_url_failed', {
+          downloadStatus: youtubeDownloadFallbackEnabled() ? 'download_retrying' : 'metadata_only',
+          videoFetchStatus: youtubeDownloadFallbackEnabled() ? 'download_retrying' : 'url_failed',
+          geminiStatus: 'metadata_fallback',
+          crawlerOpsStatus: youtubeDownloadFallbackEnabled() ? 'background_downloading' : 'skipped',
+        });
+      }
     }
 
     if (recordId) {
@@ -1060,6 +1631,7 @@ async function analyzeSourceVideoJobInner(input: {
           downloadStatus: 'analyzed',
           videoFetchStatus: 'fetched',
           geminiStatus: 'analyzed',
+          ...videoSuccessVisibilityPatch(),
           analyzedAt: new Date().toISOString(),
           tempVideoDeleted: true,
         }),
@@ -1068,22 +1640,32 @@ async function analyzeSourceVideoJobInner(input: {
     return videoAnalysis.analysis;
   } catch (e) {
     const soft = softDownloadFailure(input.platform, e);
+    const errorMessage = e instanceof Error ? e.message : 'Video download failed';
+    const nonRetryableFetch = isNonRetryableVideoFetch(input.platform, errorMessage)
+      || isTikTokUnusableWithoutVideoFallback(input.platform, errorMessage, input.record);
+    const forceManualFailure = input.forceManualFailure === true;
+    const fallback = metadataFallbackAnalysis({
+      platform: input.platform,
+      title: String(input.record?.title || input.title),
+      duration: Number(input.record?.duration || 0),
+      views: String(parseJsonRecord<Record<string, unknown>>(input.record?.aiAnalysis, {}).views || input.platform),
+      tags: parseJsonRecord<string[]>(input.record?.tags, []),
+    });
     if (recordId) {
+      const failureReason = soft?.status || classifyCrawlerFailure(errorMessage);
+      if (nonRetryableFetch || forceManualFailure) {
+        await persistManualVideoFailure(input, errorMessage, failureReason, fallback);
+        return fallback;
+      }
       const latest = await store.getById(COL, recordId);
       const previous = parseJsonRecord<Record<string, unknown>>(latest?.aiAnalysis ?? input.record?.aiAnalysis, {});
-      const errorMessage = e instanceof Error ? e.message : 'Video download failed';
-      const fallback = metadataFallbackAnalysis({
-        platform: input.platform,
-        title: String(input.record?.title || input.title),
-        duration: Number(input.record?.duration || 0),
-        views: String(previous.views || input.platform),
-        tags: parseJsonRecord<string[]>(input.record?.tags, []),
-      });
+      const compactError = compactVideoPipelineError(errorMessage);
+      const compactReason = compactVideoPipelineError(failureReason, 360);
       const opsTask = input.suppressOpsRequeue
         ? updateCrawlerOpsTask(input.opsTaskId || '', {
           status: 'failed',
-          reason: errorMessage,
-          lastError: errorMessage,
+          reason: compactReason,
+          lastError: compactError,
           updatedAt: new Date().toISOString(),
         })
         : enqueueCrawlerOpsTask({
@@ -1091,7 +1673,7 @@ async function analyzeSourceVideoJobInner(input: {
           platform: input.platform,
           sourceUrl: input.sourceUrl,
           title: String(input.record?.title || input.title),
-          reason: errorMessage,
+          reason: compactReason,
         });
       if (opsTask && !input.suppressOpsRequeue) {
         void pushCrawlerOpsTask(opsTask).catch((pushError) => {
@@ -1111,11 +1693,11 @@ async function analyzeSourceVideoJobInner(input: {
           geminiStatus: 'waiting_for_video',
           crawlerOpsTaskId: opsTask?.id || input.opsTaskId || previous.crawlerOpsTaskId,
           crawlerOpsStatus: opsTask?.status || 'failed',
-          crawlerOpsReason: soft?.status || 'download_failed',
+          crawlerOpsReason: compactReason,
           analysisError: /fetch failed|GEMINI_API_KEY|Gemini/i.test(e instanceof Error ? e.message : String(e))
-            ? (e instanceof Error ? e.message : 'Gemini analysis failed')
+            ? compactError
             : previous.analysisError,
-          downloadError: errorMessage,
+          downloadError: compactError,
         }),
       });
     }
@@ -1123,6 +1705,166 @@ async function analyzeSourceVideoJobInner(input: {
   } finally {
     if (tempPath) cleanupTempVideo(tempPath);
   }
+}
+
+async function persistManualVideoFailure(input: {
+  record: Record<string, unknown> | null;
+  sourceUrl: string;
+  title: string;
+  platform: Platform;
+  suppressVisibleBackfill?: boolean;
+}, errorMessage: string, reason: string, fallback: VideoAiAnalysis): Promise<void> {
+  const recordId = input.record?.id ? String(input.record.id) : '';
+  if (!recordId) return;
+
+  const latest = await store.getById(COL, recordId);
+  const record = latest ?? input.record;
+  const previous = parseJsonRecord<Record<string, unknown>>(record?.aiAnalysis, {});
+  const tenantId = String(record?.tenantId || '');
+  const title = String(record?.title || input.title || `${input.platform}-video`);
+  const now = new Date().toISOString();
+  const hadVideoAnalysis = isVideoLevelAnalysis(previous);
+  const compactError = compactVideoPipelineError(errorMessage);
+  const compactReason = compactVideoPipelineError(reason, 360);
+  const failure = {
+    statusLabel: '视频级失败/需人工处理',
+    reason: compactReason,
+    error: compactError,
+    platform: input.platform,
+    sourceUrl: input.sourceUrl,
+    recordedAt: now,
+  };
+
+  await store.update(COL, recordId, {
+    status: 'analyzed' as VideoStatus,
+    aiAnalysis: JSON.stringify({
+      ...previous,
+      gemini: previous.gemini || fallback,
+      analysisSource: hadVideoAnalysis ? previous.analysisSource : previous.gemini ? previous.analysisSource || 'metadata-fallback' : 'metadata-fallback',
+      analysisQuality: hadVideoAnalysis ? 'video' : 'metadata',
+      videoAnalysisAttemptedAt: now,
+      downloadStatus: hadVideoAnalysis ? previous.downloadStatus || 'analyzed' : 'manual_required',
+      videoFetchStatus: hadVideoAnalysis ? previous.videoFetchStatus || 'fetched' : 'manual_required',
+      geminiStatus: hadVideoAnalysis ? previous.geminiStatus || 'analyzed' : 'video_failed',
+      crawlerOpsStatus: 'needs_manual',
+      crawlerOpsReason: compactReason,
+      videoLevelFailureStatus: '视频级失败/需人工处理',
+      manualRequiredReason: compactReason,
+      userVisible: hadVideoAnalysis ? previous.userVisible : false,
+      adminOnlyVideoFailure: failure,
+      downloadError: compactError,
+    }),
+  });
+
+  recordVideoAdminAlert({
+    recordId,
+    tenantId,
+    platform: input.platform,
+    title,
+    sourceUrl: input.sourceUrl,
+    reason: compactReason,
+    error: compactError,
+  });
+
+  if (!hadVideoAnalysis && tenantId && !input.suppressVisibleBackfill) {
+    const keyword = String(previous.keyword || '');
+    scheduleTestTenantVideoBackfill({
+      tenantId,
+      platform: input.platform,
+      keyword,
+      target: 1,
+      replacementForRecordId: recordId,
+      reason,
+      forceCreate: true,
+      dateFrom: String(previous.dateFrom || ''),
+      dateTo: String(previous.dateTo || ''),
+    });
+  }
+}
+
+async function persistMetadataFallbackAnalysis(input: {
+  record: Record<string, unknown> | null;
+  sourceUrl: string;
+  title: string;
+  platform: Platform;
+}, reason: string, status: {
+  downloadStatus?: string;
+  videoFetchStatus?: string;
+  geminiStatus?: string;
+  crawlerOpsStatus?: string;
+} = {}): Promise<VideoAiAnalysis> {
+  const fallback = metadataFallbackAnalysis({
+    platform: input.platform,
+    title: String(input.record?.title || input.title),
+    duration: Number(input.record?.duration || 0),
+    views: String(parseJsonRecord<Record<string, unknown>>(input.record?.aiAnalysis, {}).views || input.platform),
+    tags: parseJsonRecord<string[]>(input.record?.tags, []),
+  });
+  const recordId = input.record?.id ? String(input.record.id) : '';
+  const finalManualFailure = (status.downloadStatus || 'metadata_only') === 'metadata_only'
+    || (status.videoFetchStatus || 'url_failed') === 'url_failed';
+  if (recordId && finalManualFailure) {
+    await persistManualVideoFailure(input, reason, reason, fallback);
+    return fallback;
+  }
+  if (recordId) {
+    const latest = await store.getById(COL, recordId);
+    const previous = parseJsonRecord<Record<string, unknown>>(latest?.aiAnalysis ?? input.record?.aiAnalysis, {});
+    await store.update(COL, recordId, {
+      status: 'analyzed' as VideoStatus,
+      aiAnalysis: JSON.stringify({
+        ...previous,
+        gemini: previous.gemini || fallback,
+        analysisSource: previous.gemini ? previous.analysisSource || 'metadata-fallback' : 'metadata-fallback',
+        analysisQuality: previous.gemini ? previous.analysisQuality || 'metadata' : 'metadata',
+        downloadStatus: status.downloadStatus || 'metadata_only',
+        videoFetchStatus: status.videoFetchStatus || 'url_failed',
+        geminiStatus: status.geminiStatus || 'metadata_fallback',
+        crawlerOpsStatus: status.crawlerOpsStatus || 'skipped',
+        crawlerOpsReason: reason,
+        videoAnalysisAttemptedAt: new Date().toISOString(),
+      }),
+    });
+  }
+  return fallback;
+}
+
+function scheduleYouTubeDownloadFallback(input: {
+  record: Record<string, unknown> | null;
+  sourceUrl: string;
+  title: string;
+  platform: Platform;
+  suppressVisibleBackfill?: boolean;
+  forceManualFailure?: boolean;
+}): void {
+  if (input.platform !== 'youtube') return;
+  const recordId = input.record?.id ? String(input.record.id) : '';
+  if (!recordId) return;
+  void (async () => {
+    const latest = await store.getById(COL, recordId);
+    if (!latest) return;
+    const analysis = parseJsonRecord<Record<string, unknown>>(latest.aiAnalysis, {});
+    if (analysis.analysisQuality === 'video') return;
+    await analyzeSourceVideoJob({
+      record: latest,
+      sourceUrl: input.sourceUrl,
+      title: input.title,
+      platform: input.platform,
+      skipYoutubeUrlAnalysis: true,
+      suppressVisibleBackfill: input.suppressVisibleBackfill,
+      forceManualFailure: input.forceManualFailure,
+    });
+  })().catch((e) => {
+    console.warn('[videos] YouTube background download fallback failed:', e instanceof Error ? e.message : e);
+  });
+}
+
+function youtubeDownloadFallbackEnabled(): boolean {
+  return process.env.YOUTUBE_DOWNLOAD_FALLBACK_ENABLED !== '0';
+}
+
+function youtubeDownloadFallbackSyncEnabled(): boolean {
+  return process.env.YOUTUBE_DOWNLOAD_FALLBACK_MODE === 'sync';
 }
 
 async function tryAnalyzeYouTubeUrl(input: {
@@ -1162,6 +1904,7 @@ async function tryAnalyzeYouTubeUrl(input: {
           downloadStatus: 'analyzed',
           videoFetchStatus: 'direct_url',
           geminiStatus: 'analyzed',
+          ...videoSuccessVisibilityPatch(),
           analyzedAt: new Date().toISOString(),
         }),
       });
@@ -1175,9 +1918,10 @@ async function tryAnalyzeYouTubeUrl(input: {
         status: 'pending' as VideoStatus,
         aiAnalysis: JSON.stringify({
           ...previous,
-          youtubeDirectError: e instanceof Error ? e.message : 'YouTube direct Gemini analysis failed',
-          videoFetchStatus: 'queued',
-          geminiStatus: 'waiting_for_video',
+          youtubeDirectError: compactVideoPipelineError(e instanceof Error ? e.message : 'YouTube direct Gemini analysis failed'),
+          downloadStatus: 'metadata_only',
+          videoFetchStatus: youtubeDownloadFallbackEnabled() ? 'queued' : 'url_failed',
+          geminiStatus: youtubeDownloadFallbackEnabled() ? 'waiting_for_video' : 'metadata_fallback',
         }),
       });
     }
@@ -1218,7 +1962,7 @@ async function analyzeDownloadedMaterial(recordId: string, filePath: string, mat
       aiAnalysis: JSON.stringify({
         ...previous,
         analysisSource: 'gemini-video',
-        analysisError: e instanceof Error ? e.message : 'Gemini analysis failed',
+        analysisError: compactVideoPipelineError(e instanceof Error ? e.message : 'Gemini analysis failed'),
       }),
     });
   }
@@ -1460,20 +2204,24 @@ async function downloadVideoForAnalysis(input: {
     '--merge-output-format', 'mp4',
     '--max-filesize', process.env.VIDEO_ANALYSIS_MAX_FILESIZE || '80m',
     ...(ffmpegBin ? ['--ffmpeg-location', ffmpegBin] : []),
-    ...(ffmpegBin ? ['--download-sections', `*0-${clipSeconds}`] : []),
     '-o', outTpl,
   ];
-  const formatCandidates = [
-    'bv*[height<=360]+ba/b[height<=360]/worst/best[height<=360]/best',
-    'bv*[height<=480]+ba/b[height<=480]/best[height<=480]/worst/best',
-    'bv*+ba/best/worst',
-    'best',
-    'worst',
+  const formatCandidates: Array<{ format?: string; section?: boolean; label: string }> = [
+    { format: 'bv*[height<=360]+ba/bv*[height<=360]/b[height<=360][vcodec!=none]/best[height<=360][vcodec!=none]/best[vcodec!=none]', section: true, label: '360-section' },
+    { format: 'bv*[height<=480]+ba/bv*[height<=480]/b[height<=480][vcodec!=none]/best[height<=480][vcodec!=none]/best[vcodec!=none]', section: true, label: '480-section' },
+    { format: 'bv*+ba/bv*/b[vcodec!=none]/best[vcodec!=none]', section: true, label: 'best-section' },
+    { format: 'bv*[height<=480]+ba/bv*[height<=480]/b[height<=480][vcodec!=none]/best[height<=480][vcodec!=none]/best[vcodec!=none]', section: false, label: '480-full' },
+    { format: 'bv*+ba/bv*/b[vcodec!=none]/best[vcodec!=none]', section: false, label: 'best-full' },
+    { section: false, label: 'auto-full' },
   ];
 
   let lastError: unknown = null;
-  for (const format of formatCandidates) {
-    const downloadArgs = [...baseDownloadArgs, '-f', format];
+  for (const candidate of formatCandidates) {
+    const downloadArgs = [
+      ...baseDownloadArgs,
+      ...(candidate.section && ffmpegBin ? ['--download-sections', `*0-${clipSeconds}`] : []),
+      ...(candidate.format ? ['-f', candidate.format] : []),
+    ];
     try {
       await execFileAsync('python3', buildYtDlpArgs(downloadArgs, input.sourceUrl, false), { maxBuffer: 4 * 1024 * 1024, timeout: downloadTimeoutMs, env: crawlerExecEnv() });
       lastError = null;
@@ -1489,6 +2237,7 @@ async function downloadVideoForAnalysis(input: {
           lastError = cookieError;
         }
       }
+      console.warn(`[videos] analysis download attempt failed (${candidate.label}):`, lastError instanceof Error ? lastError.message : lastError);
     }
   }
   if (lastError) {
@@ -1504,7 +2253,10 @@ async function downloadVideoForAnalysis(input: {
     throw lastError instanceof Error ? lastError : new Error('yt-dlp failed for all analysis formats');
   }
   const downloaded = pickDownloadedVideoFile(id, ANALYSIS_DIR);
-  if (!downloaded) throw new Error('yt-dlp did not produce an analysis video file');
+  if (!downloaded) {
+    cleanupDownloadedFilesById(id, ANALYSIS_DIR);
+    throw new Error('yt-dlp did not produce an analysis video file');
+  }
 
   const filePath = path.join(ANALYSIS_DIR, downloaded);
   return {
@@ -1518,7 +2270,17 @@ async function downloadVideoForAnalysis(input: {
 function pickDownloadedVideoFile(id: string, dir = MEDIA_DIR): string | undefined {
   const files = fs.readdirSync(dir)
     .filter(file => file.startsWith(`${id}.`) && !file.includes('.poster.'));
-  return files.find(file => /\.(mp4|webm|mov|mkv)$/i.test(file)) || files[0];
+  return files.find(file => /\.(mp4|webm|mov|mkv)$/i.test(file));
+}
+
+function cleanupDownloadedFilesById(id: string, dir: string): void {
+  try {
+    for (const file of fs.readdirSync(dir)) {
+      if (file.startsWith(`${id}.`)) fs.unlinkSync(path.join(dir, file));
+    }
+  } catch {
+    // best effort cleanup
+  }
 }
 
 async function downloadTikTokVideoViaApify(sourceUrl: string, tenantId?: string): Promise<{ filePath: string; fileName: string; mimeType: string; size: number }> {
@@ -1807,10 +2569,53 @@ async function analyzeDownloadedVideoWithFallback(opts: {
       : await geminiPromise;
     return { analysis, source: opts.sourceLabel };
   } catch (e) {
+    if (shouldRetryGeminiWithNormalizedVideo(e)) {
+      const normalizedPath = await normalizeVideoForGemini(opts.filePath);
+      if (normalizedPath) {
+        try {
+          const buf = fs.readFileSync(normalizedPath);
+          const analysis = await analyzeVideo({
+            videoBase64: buf.toString('base64'),
+            mimeType: 'video/mp4',
+          });
+          return { analysis, source: `${opts.sourceLabel}-normalized` };
+        } catch (normalizedError) {
+          console.warn('[videos] Gemini normalized video analysis failed:', normalizedError instanceof Error ? normalizedError.message : normalizedError);
+        } finally {
+          try { fs.unlinkSync(normalizedPath); } catch { /* best effort cleanup */ }
+        }
+      }
+    }
     if (!isQwenConfigured()) throw e;
     console.warn('[videos] Gemini video analysis failed, falling back to Qwen frames:', e instanceof Error ? e.message : e);
     return runQwen();
   }
+}
+
+function shouldRetryGeminiWithNormalizedVideo(error: unknown): boolean {
+  const msg = error instanceof Error ? error.message : String(error);
+  return /0 Frames found|wrong video metadata|corrupted|INVALID_ARGUMENT/i.test(msg);
+}
+
+async function normalizeVideoForGemini(filePath: string): Promise<string> {
+  if (!ffmpegBin || !fs.existsSync(filePath)) return '';
+  const outPath = path.join(path.dirname(filePath), `${path.basename(filePath, path.extname(filePath))}.gemini.mp4`);
+  const ok = await runFfmpeg([
+    '-i', filePath,
+    '-map', '0:v:0',
+    '-map', '0:a?',
+    '-vf', 'scale=trunc(min(720,iw)/2)*2:-2',
+    '-r', '24',
+    '-pix_fmt', 'yuv420p',
+    '-c:v', 'libx264',
+    '-preset', 'veryfast',
+    '-crf', '28',
+    '-c:a', 'aac',
+    '-b:a', '96k',
+    '-movflags', '+faststart',
+    '-y', outPath,
+  ]);
+  return ok && fs.existsSync(outPath) && fs.statSync(outPath).size > 0 ? outPath : '';
 }
 
 async function crawlYouTubeSearch(keyword: string, limit: number, dateFrom = '', dateTo = ''): Promise<CrawledVideo[]> {
@@ -2030,6 +2835,68 @@ async function crawlKeywordFallbackPool(platform: Platform, keyword: string, lim
   return crawlSeedMetadataFallback(platform, keyword, limit, excluded, dateFrom, dateTo);
 }
 
+async function topUpCrawledItems(input: {
+  platform: Platform;
+  keyword: string;
+  target: number;
+  items: CrawledVideo[];
+  dateFrom: string;
+  dateTo: string;
+}): Promise<CrawledVideo[]> {
+  const out = [...input.items];
+  const seen = new Set(out.map(item => videoDedupeKey(item)));
+  const add = (candidates: CrawledVideo[], dateEvidence: string) => {
+    for (const candidate of candidates.map(normalizeCrawledVideo)) {
+      const key = videoDedupeKey(candidate);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      out.push({ ...candidate, dateEvidence: candidate.dateEvidence || dateEvidence });
+      if (out.length >= input.target) break;
+    }
+  };
+
+  try {
+    const strict = await crawlKeywordFallbackPool(
+      input.platform,
+      input.keyword,
+      input.target - out.length,
+      new Set(out.map(item => item.sourceUrl)),
+      input.dateFrom,
+      input.dateTo,
+    );
+    add(strict, 'fallback-strict');
+  } catch (e) {
+    console.warn(`[videos] ${input.platform} strict top-up failed:`, e instanceof Error ? e.message : e);
+  }
+
+  if (out.length < input.target) {
+    try {
+      const relaxed = await crawlKeywordFallbackPool(
+        input.platform,
+        input.keyword,
+        input.target - out.length,
+        new Set(out.map(item => item.sourceUrl)),
+        '',
+        '',
+      );
+      add(relaxed, 'fallback-relaxed');
+    } catch (e) {
+      console.warn(`[videos] ${input.platform} relaxed top-up failed:`, e instanceof Error ? e.message : e);
+    }
+  }
+
+  if (out.length < input.target) {
+    add(verifiedKeywordSeedItems(input.platform, input.keyword)
+      .filter(item => isKeywordRelevant(item, input.keyword))
+      .map(item => ({
+        ...item,
+        thumbnailUrl: item.thumbnailUrl || thumbnailForPlatform(item.platform, item.sourceUrl, ''),
+      })), 'verified-seed');
+  }
+
+  return out.slice(0, Math.max(input.target, input.items.length));
+}
+
 async function crawlSeedMetadataFallback(platform: Platform, keyword: string, limit: number, excluded = new Set<string>(), dateFrom = '', dateTo = ''): Promise<CrawledVideo[]> {
   const seeds = verifiedKeywordSeedItems(platform, keyword)
     .filter(item => !excluded.has(item.sourceUrl))
@@ -2113,6 +2980,16 @@ function verifiedKeywordSeedItems(platform: Platform, keyword: string): CrawledV
       keywordSeedItem('tiktok', 'CeraVe developed with dermatologists skin barrier care', 'https://www.tiktok.com/@cerave/video/7655435142575475981', tags, '2.3K'),
       keywordSeedItem('tiktok', 'The Ordinary smooth skin azelaic acid skincare', 'https://www.tiktok.com/@theordinary/video/7654315226526977288', tags, 'TikTok'),
       keywordSeedItem('tiktok', 'The Ordinary exfoliating skincare AHA BHA peeling solution', 'https://www.tiktok.com/@theordinary/video/7652837204317768967', tags, 'TikTok'),
+    ];
+  }
+
+  if (platform === 'youtube') {
+    return [
+      keywordSeedItem('youtube', 'How to get glass skin for beginners affordable skincare routine', 'https://www.youtube.com/watch?v=nabwuTwtlnM', tags, 'YouTube', undefined, 'https://i.ytimg.com/vi/nabwuTwtlnM/hq720.jpg'),
+      keywordSeedItem('youtube', 'Dermatologist ultimate skincare routine for amazing skin', 'https://www.youtube.com/watch?v=qVIdfSLFfSM', tags, 'YouTube', undefined, 'https://i.ytimg.com/vi/qVIdfSLFfSM/hq720.jpg'),
+      keywordSeedItem('youtube', 'Budget friendly anti aging skincare routine', 'https://www.youtube.com/watch?v=hQAM5wy3vno', tags, 'YouTube', undefined, 'https://i.ytimg.com/vi/hQAM5wy3vno/hq720.jpg'),
+      keywordSeedItem('youtube', 'ASMR full summer glow up makeup skincare hair and more', 'https://www.youtube.com/watch?v=pMeWQghEffM', tags, 'YouTube', undefined, 'https://i.ytimg.com/vi/pMeWQghEffM/hq720.jpg'),
+      keywordSeedItem('youtube', 'Dokter kulit bongkar kesalahan skincare dan cara merawat wajah', 'https://www.youtube.com/watch?v=j-J6AzJ5eEk', tags, 'YouTube', undefined, 'https://i.ytimg.com/vi/j-J6AzJ5eEk/hq720.jpg'),
     ];
   }
 
@@ -2492,6 +3369,20 @@ function softDownloadFailure(platform: Platform, error: unknown): { status: stri
   return null;
 }
 
+function isNonRetryableVideoFetch(platform: Platform, message: string): boolean {
+  const lower = message.toLowerCase();
+  if (lower.includes('yt-dlp did not produce an analysis video file')) return true;
+  if (platform === 'youtube' && lower.includes('requested format is not available')) return true;
+  if (platform === 'youtube' && lower.includes('sign in to confirm') && lower.includes('not a bot')) return true;
+  return false;
+}
+
+function isTikTokUnusableWithoutVideoFallback(platform: Platform, message: string, record?: Record<string, unknown> | null): boolean {
+  if (platform !== 'tiktok') return false;
+  if (canUseApifyVideoFallback(apifyTenantIdFromRecord(record))) return false;
+  return /0 Frames found|wrong video metadata|corrupted|INVALID_ARGUMENT|yt-dlp did not produce an analysis video file/i.test(message);
+}
+
 async function purgeLegacyFakeVideos(): Promise<void> {
   if (process.env.NODE_ENV !== 'production' && process.env.PB_URL === undefined) return;
   if (!legacyFakePurgePromise) {
@@ -2724,6 +3615,15 @@ function mimeFromPath(filePath: string): string {
   if (ext === '.mov') return 'video/quicktime';
   if (ext === '.mkv') return 'video/x-matroska';
   return 'video/mp4';
+}
+
+function safeVideoExtension(filename: string | undefined, mimeType: string): string {
+  const ext = path.extname(filename || '').replace(/^\./, '').toLowerCase();
+  if (['mp4', 'webm', 'mov', 'mkv'].includes(ext)) return ext;
+  if (/webm/i.test(mimeType)) return 'webm';
+  if (/quicktime|mov/i.test(mimeType)) return 'mov';
+  if (/matroska|mkv/i.test(mimeType)) return 'mkv';
+  return 'mp4';
 }
 
 function parseDuration(label: string): number {
@@ -3166,6 +4066,7 @@ function apifyVideoUsageToday(tenantId?: string): { total: number; tenant: numbe
 
 function canUseApifyVideoFallback(tenantId?: string): boolean {
   if (process.env.APIFY_TIKTOK_VIDEO_FALLBACK_ENABLED === '0') return false;
+  if (!process.env.APIFY_TOKEN?.trim()) return false;
   const globalLimit = apifyVideoDailyLimit();
   const tenantLimit = apifyVideoTenantDailyLimit();
   if (globalLimit <= 0 || tenantLimit <= 0) return false;
@@ -3251,7 +4152,7 @@ function enqueueCrawlerOpsTask(input: {
 
 export function initCrawlerOpsWorker(): void {
   const workerFlag = process.env.CRAWLER_OPS_WORKER_ENABLED;
-  if (crawlerOpsWorkerTimer || workerFlag === '0' || (process.env.NODE_ENV !== 'production' && workerFlag !== '1')) return;
+  if (crawlerOpsWorkerTimer || workerFlag === '0') return;
   const intervalMs = Math.max(5_000, Number(process.env.CRAWLER_OPS_WORKER_INTERVAL_MS || 30_000));
   crawlerOpsWorkerTimer = setInterval(() => {
     void runCrawlerOpsWorkerOnce().then(logCrawlerOpsWorkerResult).catch((e) => {
@@ -3352,6 +4253,8 @@ export async function runCrawlerOpsWorkerOnce(): Promise<{
         resolved += 1;
       } catch (e) {
         const errorMessage = e instanceof Error ? e.message : String(e);
+        const compactError = compactVideoPipelineError(errorMessage);
+        const compactReason = compactVideoPipelineError(classifyCrawlerFailure(errorMessage), 360);
         const shouldTryApify = task.platform === 'tiktok'
           && attemptNo >= Math.max(1, Number(process.env.APIFY_TIKTOK_VIDEO_AFTER_ATTEMPTS || 2))
           && canUseApifyVideoFallback(apifyTenantIdFromRecord(record));
@@ -3380,6 +4283,7 @@ export async function runCrawlerOpsWorkerOnce(): Promise<{
                 geminiStatus: 'analyzed',
                 crawlerOpsStatus: 'resolved',
                 crawlerOpsTaskId: task.id,
+                ...videoSuccessVisibilityPatch(),
                 apifyVideoFallbackAt: new Date().toISOString(),
                 analysisFileSize: humanSize(downloaded.size),
                 analyzedAt: new Date().toISOString(),
@@ -3401,11 +4305,28 @@ export async function runCrawlerOpsWorkerOnce(): Promise<{
         const canRetry = attemptNo < maxAttempts;
         updateCrawlerOpsTask(task.id, {
           status: canRetry ? 'queued' : 'failed',
-          reason: classifyCrawlerFailure(errorMessage),
-          lastError: errorMessage,
+          reason: compactReason,
+          lastError: compactError,
           lastStrategy: strategy,
           updatedAt: new Date().toISOString(),
         });
+        if (!canRetry) {
+          const fallback = metadataFallbackAnalysis({
+            platform: task.platform,
+            title: task.title,
+            duration: Number(record.duration || 0),
+            views: String(parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {}).views || task.platform),
+            tags: parseJsonRecord<string[]>(record.tags, []),
+          });
+          await persistManualVideoFailure({
+            record,
+            sourceUrl: task.sourceUrl,
+            title: task.title,
+            platform: task.platform,
+          }, compactError, compactReason, fallback);
+          failed += 1;
+          continue;
+        }
         const latest = await store.getById(COL, task.recordId);
         const latestAnalysis = parseJsonRecord<Record<string, unknown>>(latest?.aiAnalysis ?? record.aiAnalysis, {});
         await store.update(COL, task.recordId, {
@@ -3416,13 +4337,12 @@ export async function runCrawlerOpsWorkerOnce(): Promise<{
             videoFetchStatus: canRetry ? 'ops_queued' : 'ops_failed',
             geminiStatus: 'waiting_for_video',
             crawlerOpsStatus: canRetry ? 'queued' : 'failed',
-            crawlerOpsReason: classifyCrawlerFailure(errorMessage),
-            crawlerOpsLastError: errorMessage,
+            crawlerOpsReason: compactReason,
+            crawlerOpsLastError: compactError,
             crawlerOpsNextRetryAt: canRetry ? new Date(Date.now() + crawlerRetryDelayMs(attemptNo)).toISOString() : undefined,
           }),
         });
-        if (canRetry) retried += 1;
-        else failed += 1;
+        retried += 1;
       }
     }
   } finally {
@@ -3525,41 +4445,44 @@ export async function getVideoPipelineStats(tenantId?: string): Promise<Record<s
     page += 1;
   }
 
+  const visibleRecords = tenantId && await isTestTenantId(tenantId)
+    ? records.filter(isPublicTestTenantVideo)
+    : records;
   const now = Date.now();
   const today = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
-  const byPlatform = records.reduce<Record<string, number>>((acc, record) => {
+  const byPlatform = visibleRecords.reduce<Record<string, number>>((acc, record) => {
     const platform = String(record.platform || 'unknown');
     acc[platform] = (acc[platform] || 0) + 1;
     return acc;
   }, {});
-  const statusCounts = records.reduce<Record<string, number>>((acc, record) => {
+  const statusCounts = visibleRecords.reduce<Record<string, number>>((acc, record) => {
     const status = String(record.status || 'unknown');
     acc[status] = (acc[status] || 0) + 1;
     return acc;
   }, {});
-  const downloadStatus = records.reduce<Record<string, number>>((acc, record) => {
+  const downloadStatus = visibleRecords.reduce<Record<string, number>>((acc, record) => {
     const analysis = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
     const status = String(analysis.downloadStatus || analysis.videoFetchStatus || 'none');
     acc[status] = (acc[status] || 0) + 1;
     return acc;
   }, {});
-  const geminiStatus = records.reduce<Record<string, number>>((acc, record) => {
+  const geminiStatus = visibleRecords.reduce<Record<string, number>>((acc, record) => {
     const analysis = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
     const status = String(analysis.geminiStatus || analysis.analysisQuality || 'none');
     acc[status] = (acc[status] || 0) + 1;
     return acc;
   }, {});
-  const fetchQueueCount = records.filter(record => {
+  const fetchQueueCount = visibleRecords.filter(record => {
     const analysis = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
     const status = String(analysis.downloadStatus || analysis.videoFetchStatus || '');
-    return ['queued', 'downloading', 'ops_queued', 'ops_processing'].includes(status);
+    return ['queued', 'downloading', 'download_retrying', 'ops_queued', 'ops_processing'].includes(status);
   }).length;
-  const analysisQueueCount = records.filter(record => {
+  const analysisQueueCount = visibleRecords.filter(record => {
     const analysis = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
     const status = String(analysis.geminiStatus || analysis.downloadStatus || '');
     return ['queued', 'analyzing'].includes(status);
   }).length;
-  const recentRecords = records.filter(record => {
+  const recentRecords = visibleRecords.filter(record => {
     const crawledAt = Date.parse(String(record.crawledAt || ''));
     return Number.isFinite(crawledAt) && now - crawledAt <= 24 * 60 * 60 * 1000;
   });
@@ -3567,14 +4490,14 @@ export async function getVideoPipelineStats(tenantId?: string): Promise<Record<s
   return {
     updatedAt: new Date().toISOString(),
     crawl: {
-      total: records.length,
-      today: records.filter(record => {
+      total: visibleRecords.length,
+      today: visibleRecords.filter(record => {
         const crawledAt = Date.parse(String(record.crawledAt || ''));
         return Number.isFinite(crawledAt) && new Date(crawledAt + 8 * 60 * 60 * 1000).toISOString().startsWith(today);
       }).length,
       last24h: recentRecords.length,
       byPlatform,
-      latestAt: String(records[0]?.crawledAt || ''),
+      latestAt: String(visibleRecords[0]?.crawledAt || ''),
       statusCounts,
     },
     fetchQueue: {
@@ -3680,6 +4603,7 @@ async function analyzeOpsVideo(task: CrawlerOpsTask, videoBase64: string, mimeTy
       downloadStatus: 'analyzed',
       crawlerOpsTaskId: task.id,
       crawlerOpsStatus: 'resolved',
+      ...videoSuccessVisibilityPatch(),
       analyzedAt: new Date().toISOString(),
     }),
   });

@@ -8,6 +8,21 @@ trendsRouter.use(requireAuth);
 const COL = 'daily_trends';
 const VIDEO_COL = 'trend_videos';
 
+function parseJson<T>(value: unknown, fallback: T): T {
+  try {
+    return typeof value === 'string' ? JSON.parse(value) as T : fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function isVideoLevelRecord(record: Record<string, unknown>): boolean {
+  const analysis = parseJson<Record<string, unknown>>(record.aiAnalysis, {});
+  return analysis.analysisQuality === 'video'
+    && Boolean(analysis.gemini)
+    && analysis.userVisible !== false;
+}
+
 function todayDate(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -29,14 +44,17 @@ trendsRouter.post('/push', async (req, res) => {
     return;
   }
 
-  // Pick latest 10 analyzed videos
+  // Pick latest 10 video-level analyzed videos
   const videos = await store.list(VIDEO_COL, {
     where: { tenantId, status: 'analyzed' },
     sort: '-crawledAt',
-    perPage: 10,
+    perPage: 100,
   });
 
-  const videoIds = videos.items.map((v) => (v as Record<string, unknown>).id as string);
+  const videoIds = videos.items
+    .filter((v): v is Record<string, unknown> & { id: string } => Boolean((v as Record<string, unknown>).id) && isVideoLevelRecord(v as Record<string, unknown>))
+    .slice(0, 10)
+    .map((v) => v.id);
 
   const record = await store.create(COL, {
     tenantId,
@@ -116,7 +134,3 @@ trendsRouter.patch('/:id/select', async (req, res) => {
 
   res.json({ ok: true, selectedIds });
 });
-
-function parseJson<T>(raw: string, fallback: T): T {
-  try { return JSON.parse(raw) as T; } catch { return fallback; }
-}

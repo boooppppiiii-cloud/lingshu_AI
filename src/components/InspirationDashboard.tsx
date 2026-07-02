@@ -134,6 +134,7 @@ const PLATFORM_FILTERS: { id: Platform; label: string }[] = [
   { id: 'instagram', label: 'Ins' },
   { id: 'facebook',  label: 'Facebook' },
 ];
+const ACTIVE_PLATFORMS: Array<Exclude<Platform, 'all'>> = ['youtube', 'tiktok'];
 
 const LOCKED_PLATFORM_MESSAGES: Partial<Record<Platform, string>> = {
   facebook: '正式版解锁FB爆点推荐功能',
@@ -645,13 +646,19 @@ function enhancementStatus(video: TrendVideo): { title: string; desc: string; ac
 // ── Fallback thumbnail ────────────────────────────────────────────────────────
 function VideoThumbnail({ platform, title }: { platform: Exclude<Platform, 'all'>; title: string }) {
   const meta = getPlatformMeta(platform);
-  const initials = title.split(' ').slice(0, 2).map(w => w[0]).join('').toUpperCase();
+  const words = title.split(/\s+/).filter(Boolean);
+  const initials = words.slice(0, 2).map(w => w[0]).join('').toUpperCase();
+  const shortTitle = title.length > 86 ? `${title.slice(0, 83)}...` : title;
   return (
-    <div className="w-full h-full flex items-center justify-center relative overflow-hidden"
-      style={{ background: `linear-gradient(135deg, ${meta.bg}22, ${meta.bg}44)` }}>
+    <div className="w-full h-full flex flex-col justify-between relative overflow-hidden p-4"
+      style={{ background: `linear-gradient(135deg, ${meta.bg} 0%, #111827 58%, #334155 100%)` }}>
       <div className="absolute inset-0 opacity-10"
-        style={{ backgroundImage: `repeating-linear-gradient(45deg, ${meta.bg} 0, ${meta.bg} 1px, transparent 0, transparent 50%)`, backgroundSize: '12px 12px' }} />
-      <span className="relative text-3xl font-black font-display opacity-20 text-white select-none">{initials}</span>
+        style={{ backgroundImage: 'linear-gradient(135deg, rgba(255,255,255,.35) 0, transparent 46%), repeating-linear-gradient(45deg, rgba(255,255,255,.3) 0, rgba(255,255,255,.3) 1px, transparent 1px, transparent 11px)' }} />
+      <span className="relative self-start rounded-lg bg-black/45 px-2.5 py-1 text-xs font-bold text-white">{meta.label}</span>
+      <div className="relative">
+        <div className="mb-2 text-4xl font-black font-display text-white/15 select-none">{initials || meta.label.slice(0, 2).toUpperCase()}</div>
+        <p className="line-clamp-3 text-sm font-semibold leading-snug text-white/90 drop-shadow-sm">{shortTitle}</p>
+      </div>
     </div>
   );
 }
@@ -874,6 +881,7 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
 // ── Script Panel ──────────────────────────────────────────────────────────────
 interface ScriptPanelProps {
   video: TrendVideo;
+  activePanelTab: 'analysis' | 'generate';
   onClose: () => void;
   onRetry?: () => void;
   onFavorite?: () => void;
@@ -894,8 +902,8 @@ interface GeneratedVideo {
   error?: string;
 }
 
-function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onNavigate, onEnterWorkflow }: ScriptPanelProps) {
-  const [activeTab, setActiveTab] = useState<'analysis' | 'generate'>('generate');
+function ScriptPanel({ video, activePanelTab, onClose, onRetry, onFavorite, favoriting, onNavigate, onEnterWorkflow }: ScriptPanelProps) {
+  const [activeTab, setActiveTab] = useState<'analysis' | 'generate'>(activePanelTab);
   const [scriptType, setScriptType] = useState<ScriptType>('voiceover');
   const [language, setLanguage] = useState('zh');
   const [productInfo, setProductInfo] = useState('');
@@ -943,7 +951,10 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onNaviga
   }, [activeTab, video.id]);
 
   useEffect(() => {
-    setActiveTab('analysis');
+    setActiveTab(activePanelTab);
+  }, [activePanelTab, video.id]);
+
+  useEffect(() => {
     setResult(null);
     setCopied(false);
     setShowLangDropdown(false);
@@ -1370,7 +1381,7 @@ function VideoCard({ video, index, isSelected, onSelect, onWatch, onAnalyzeVideo
           <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-white text-neutral-900">
             <Play size={11} fill="currentColor" />{video.videoUrl ? '观看' : '原站'}
           </span>
-          <button onClick={e => { e.stopPropagation(); if (needsVideoEnhancement(video)) onAnalyzeVideo?.(); onSelect(); }}
+          <button onClick={e => { e.stopPropagation(); if (onAnalyzeVideo) onAnalyzeVideo(); else onSelect(); }}
             disabled={analyzingVideo}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold"
             style={{ background: meta.bg, color: meta.color }}>
@@ -1451,7 +1462,7 @@ function VideoListItem({ video, isSelected, onSelect, onWatch, onAnalyzeVideo, o
         <p className="text-xs font-mono text-text-secondary">{Math.floor(video.duration / 60)}:{String(video.duration % 60).padStart(2, '0')}</p>
         <p className="text-[10px] text-text-muted">{video.views}</p>
       </div>
-      <button onClick={e => { e.stopPropagation(); if (needsVideoEnhancement(video)) onAnalyzeVideo?.(); onSelect(); }}
+      <button onClick={e => { e.stopPropagation(); if (onAnalyzeVideo) onAnalyzeVideo(); else onSelect(); }}
         disabled={analyzingVideo}
         className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all opacity-0 group-hover:opacity-100"
         style={{ color: 'var(--color-accent)', borderColor: 'rgba(22,163,74,0.25)', background: 'var(--color-accent-glow)' }}>
@@ -1647,6 +1658,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   const [platform, setPlatform] = useState<Platform>('all');
   const [search, setSearch] = useState('');
   const [selectedVideo, setSelectedVideo] = useState<TrendVideo | null>(null);
+  const [scriptPanelTab, setScriptPanelTab] = useState<'analysis' | 'generate'>('analysis');
   const [watchVideo, setWatchVideo] = useState<TrendVideo | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [sortMode, setSortMode] = useState<SortMode>('crawlTime');
@@ -1714,10 +1726,11 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
 
   const demoTrafficStep = isDemoTrafficStep();
   const allVideos = demoTrafficStep && crawledVideos.length === 0 ? [DEMO_TREND_VIDEO] : crawledVideos;
+  const visibleVideos = allVideos.filter(v => ACTIVE_PLATFORMS.includes(v.platform));
   const filtered = useMemo(() => {
     const lastCrawlIds = new Set(lastCrawlVideoIds);
     const q = search.trim().toLowerCase();
-    return allVideos
+    return visibleVideos
       .filter(v =>
         (lastCrawlIds.size === 0 || lastCrawlIds.has(v.id)) &&
         (platform === 'all' || v.platform === platform) &&
@@ -1729,9 +1742,9 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
         }
         return heatValue(b.views) - heatValue(a.views) || timeValue(b.crawledAt) - timeValue(a.crawledAt);
       });
-  }, [allVideos, lastCrawlVideoIds, platform, search, sortMode]);
+  }, [visibleVideos, lastCrawlVideoIds, platform, search, sortMode]);
 
-  const recentThreeDayUploads = allVideos.filter(v => {
+  const recentThreeDayUploads = visibleVideos.filter(v => {
     const t = v.crawledAt ? new Date(v.crawledAt).getTime() : 0;
     return t > 0 && Date.now() - t <= 3 * 24 * 60 * 60 * 1000;
   }).length;
@@ -1757,6 +1770,17 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
       return;
     }
     setWatchVideo(video);
+  };
+
+  const toggleScriptPanel = (video: TrendVideo) => {
+    setScriptPanelTab('analysis');
+    setSelectedVideo(current => current?.id === video.id ? null : video);
+  };
+
+  const openScriptAnalysis = (video: TrendVideo) => {
+    if (needsVideoEnhancement(video)) void analyzeVideoOnly(video);
+    setScriptPanelTab('analysis');
+    setSelectedVideo(video);
   };
 
   const analyzeVideoOnly = async (video: TrendVideo, quiet = false) => {
@@ -1885,7 +1909,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
             </div>
             <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-xs text-text-muted">
               <div className="w-1.5 h-1.5 rounded-full bg-green animate-pulse" />
-              <span>{materialMessage || `今日已推送 ${allVideos.length} 条`}</span>
+              <span>{materialMessage || `今日已推送 ${visibleVideos.length} 条`}</span>
             </div>
           </div>
           <div className="space-y-2.5">
@@ -1955,9 +1979,9 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
 
         <div className="px-6 mb-4 grid grid-cols-3 gap-3 max-w-xl">
           {[
-            { icon: <Zap size={13} />,       label: '热门视频', value: `${allVideos.length}`,    color: 'text-amber' },
+            { icon: <Zap size={13} />,       label: '热门视频', value: `${visibleVideos.length}`,    color: 'text-amber' },
             { icon: <TrendingUp size={13} />, label: '上升趋势', value: `${recentThreeDayUploads}`, color: 'text-green' },
-            { icon: <Globe size={13} />,      label: '覆盖平台', value: `${new Set(allVideos.map(v => v.platform)).size}`,       color: 'text-accent' },
+            { icon: <Globe size={13} />,      label: '覆盖平台', value: `${new Set(visibleVideos.map(v => v.platform)).size}`,       color: 'text-accent' },
           ].map(stat => (
             <div key={stat.label} className="card p-3 flex items-center gap-2.5">
               <span className={stat.color}>{stat.icon}</span>
@@ -1985,9 +2009,9 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
               {filtered.map((video, i) => (
                 <div key={video.id} className="break-inside-avoid mb-4">
                   <VideoCard video={video} index={i} isSelected={selectedVideo?.id === video.id}
-                    onSelect={() => setSelectedVideo(selectedVideo?.id === video.id ? null : video)}
+                    onSelect={() => toggleScriptPanel(video)}
                     onWatch={() => handleWatch(video)}
-                    onAnalyzeVideo={() => void analyzeVideoOnly(video)}
+                    onAnalyzeVideo={() => openScriptAnalysis(video)}
                     onFavoriteMaterial={() => void favoriteMaterial(video)}
                     analyzingVideo={analyzingVideoIds.includes(video.id)}
                     favoritingMaterial={favoritingMaterialIds.includes(video.id)} />
@@ -1998,9 +2022,9 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
             <div className="card overflow-hidden divide-y divide-border">
               {filtered.map(video => (
                 <VideoListItem key={video.id} video={video} isSelected={selectedVideo?.id === video.id}
-                  onSelect={() => setSelectedVideo(selectedVideo?.id === video.id ? null : video)}
+                  onSelect={() => toggleScriptPanel(video)}
                   onWatch={() => handleWatch(video)}
-                  onAnalyzeVideo={() => void analyzeVideoOnly(video)}
+                  onAnalyzeVideo={() => openScriptAnalysis(video)}
                   onFavoriteMaterial={() => void favoriteMaterial(video)}
                   analyzingVideo={analyzingVideoIds.includes(video.id)}
                   favoritingMaterial={favoritingMaterialIds.includes(video.id)} />
@@ -2033,6 +2057,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
           <ScriptPanel
             key={selectedVideo.id}
             video={selectedVideo}
+            activePanelTab={scriptPanelTab}
             onClose={() => setSelectedVideo(null)}
             onRetry={() => void retryVideoPipeline(selectedVideo)}
             onFavorite={() => void favoriteMaterial(selectedVideo)}
