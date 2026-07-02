@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { Component, lazy, Suspense, useCallback, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
 import { Loader2 } from 'lucide-react';
 import Layout from './components/Layout';
 import AuthScreen from './components/AuthScreen';
@@ -72,6 +72,73 @@ function PageLoading() {
       <Loader2 size={20} className="animate-spin text-text-muted" />
     </div>
   );
+}
+
+function isChunkLoadError(error: unknown): boolean {
+  const text = String(error instanceof Error ? `${error.name} ${error.message}` : error || '').toLowerCase();
+  return text.includes('failed to fetch dynamically imported module') ||
+    text.includes('loading chunk') ||
+    text.includes('chunkloaderror') ||
+    text.includes('importing a module script failed');
+}
+
+class PageErrorBoundary extends Component<
+  { page: Page; onNavigateHome: () => void; children: ReactNode },
+  { error: Error | null; resetKey: Page }
+> {
+  state = { error: null as Error | null, resetKey: this.props.page };
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  static getDerivedStateFromProps(props: { page: Page }, state: { error: Error | null; resetKey: Page }) {
+    if (props.page !== state.resetKey) return { error: null, resetKey: props.page };
+    return null;
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('[PageErrorBoundary]', error, info);
+    if (!isChunkLoadError(error)) return;
+    const retryKey = `ow_chunk_retry:${this.props.page}`;
+    try {
+      if (sessionStorage.getItem(retryKey)) return;
+      sessionStorage.setItem(retryKey, '1');
+      window.location.reload();
+    } catch {
+      window.location.reload();
+    }
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <div className="flex-1 min-h-0 flex items-center justify-center bg-white px-6">
+        <div className="w-full max-w-md rounded-2xl border border-border bg-surface p-6 text-center shadow-sm">
+          <p className="text-sm font-bold text-text-primary">页面加载异常</p>
+          <p className="mt-2 text-sm leading-relaxed text-text-muted">
+            当前页面资源没有正确加载，请重新加载页面；如果仍然异常，可以先返回首页继续使用。
+          </p>
+          <div className="mt-5 flex items-center justify-center gap-2">
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="px-4 py-2 rounded-lg bg-text-primary text-white text-sm font-semibold"
+            >
+              重新加载
+            </button>
+            <button
+              type="button"
+              onClick={this.props.onNavigateHome}
+              className="px-4 py-2 rounded-lg border border-border bg-white text-sm font-semibold text-text-secondary"
+            >
+              返回首页
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
 }
 
 export default function App() {
@@ -266,60 +333,62 @@ export default function App() {
       onDemoGuideShown={handleDemoGuideShown}
       conversations={conversations} activeConvId={activeConvId} onOpenConversation={openConversation} onNewConversation={newConversation}
       suppressRightPanel={scriptPanelOpen} onAction={startAgentTask}>
-      <Suspense fallback={<PageLoading />}>
-        {page === 'strategy' && (
-          <StrategyPage
-            onEnterConversation={enterConversation}
-            onLeaveConversation={leaveConversation}
-            isInConversation={conversation?.agent === 'strategy'}
-            restore={restoreFor('strategy')}
-            kickoff={kickoffFor('strategy')}
-            onAction={startAgentTask}
-            onSessionRefresh={() => void refreshSession()}
-          />
-        )}
-        {page === 'traffic' && (
-          <TrafficPage
-            onEnterConversation={enterConversation}
-            onLeaveConversation={leaveConversation}
-            isInConversation={conversation?.agent === 'traffic'}
-            onNavigate={handleNavigate}
-            restore={restoreFor('traffic')}
-            kickoff={kickoffFor('traffic')}
-            onAction={startAgentTask}
-            onScriptPanelOpen={() => setScriptPanelOpen(true)}
-            onScriptPanelClose={() => setScriptPanelOpen(false)}
-            onSessionRefresh={() => void refreshSession()}
-          />
-        )}
-        {page === 'conversion' && (
-          <ConversionPage
-            onEnterConversation={enterConversation}
-            onLeaveConversation={leaveConversation}
-            isInConversation={conversation?.agent === 'conversion'}
-            restore={restoreFor('conversion')}
-            kickoff={kickoffFor('conversion')}
-            onAction={startAgentTask}
-            onSessionRefresh={() => void refreshSession()}
-          />
-        )}
-        {page === 'retention' && (
-          <RetentionPage
-            onEnterConversation={enterConversation}
-            onLeaveConversation={leaveConversation}
-            isInConversation={conversation?.agent === 'retention'}
-            restore={restoreFor('retention')}
-            kickoff={kickoffFor('retention')}
-            onAction={startAgentTask}
-            onSessionRefresh={() => void refreshSession()}
-          />
-        )}
-        {page === 'enterprise' && <EnterprisePage />}
-        {page === 'plugins' && <IntegrationsPage />}
-        {page === 'scheduled' && <ScheduledPage onAction={startAgentTask} />}
-        {page === 'admin' && <AdminDashboard />}
-        {(page === 'channels' || page === 'youtube') && <IntegrationsPage />}
-      </Suspense>
+      <PageErrorBoundary page={page} onNavigateHome={() => handleNavigate('strategy')}>
+        <Suspense fallback={<PageLoading />}>
+          {page === 'strategy' && (
+            <StrategyPage
+              onEnterConversation={enterConversation}
+              onLeaveConversation={leaveConversation}
+              isInConversation={conversation?.agent === 'strategy'}
+              restore={restoreFor('strategy')}
+              kickoff={kickoffFor('strategy')}
+              onAction={startAgentTask}
+              onSessionRefresh={() => void refreshSession()}
+            />
+          )}
+          {page === 'traffic' && (
+            <TrafficPage
+              onEnterConversation={enterConversation}
+              onLeaveConversation={leaveConversation}
+              isInConversation={conversation?.agent === 'traffic'}
+              onNavigate={handleNavigate}
+              restore={restoreFor('traffic')}
+              kickoff={kickoffFor('traffic')}
+              onAction={startAgentTask}
+              onScriptPanelOpen={() => setScriptPanelOpen(true)}
+              onScriptPanelClose={() => setScriptPanelOpen(false)}
+              onSessionRefresh={() => void refreshSession()}
+            />
+          )}
+          {page === 'conversion' && (
+            <ConversionPage
+              onEnterConversation={enterConversation}
+              onLeaveConversation={leaveConversation}
+              isInConversation={conversation?.agent === 'conversion'}
+              restore={restoreFor('conversion')}
+              kickoff={kickoffFor('conversion')}
+              onAction={startAgentTask}
+              onSessionRefresh={() => void refreshSession()}
+            />
+          )}
+          {page === 'retention' && (
+            <RetentionPage
+              onEnterConversation={enterConversation}
+              onLeaveConversation={leaveConversation}
+              isInConversation={conversation?.agent === 'retention'}
+              restore={restoreFor('retention')}
+              kickoff={kickoffFor('retention')}
+              onAction={startAgentTask}
+              onSessionRefresh={() => void refreshSession()}
+            />
+          )}
+          {page === 'enterprise' && <EnterprisePage />}
+          {page === 'plugins' && <IntegrationsPage />}
+          {page === 'scheduled' && <ScheduledPage onAction={startAgentTask} />}
+          {page === 'admin' && <AdminDashboard />}
+          {(page === 'channels' || page === 'youtube') && <IntegrationsPage />}
+        </Suspense>
+      </PageErrorBoundary>
     </Layout>
   );
 }
