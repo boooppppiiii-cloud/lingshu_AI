@@ -1,18 +1,17 @@
-import { Component, lazy, Suspense, useCallback, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
+import { Component, Suspense, useCallback, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
 import { Loader2 } from 'lucide-react';
 import Layout from './components/Layout';
 import AuthScreen from './components/AuthScreen';
 import { authApi, type AuthSession } from './lib/auth';
 import { completeDemoStep, resetDemoProgress, setDemoProgressScope } from './lib/demoProgress';
-
-const StrategyPage = lazy(() => import('./components/StrategyPage'));
-const TrafficPage = lazy(() => import('./components/TrafficPage'));
-const ConversionPage = lazy(() => import('./components/ConversionPage'));
-const RetentionPage = lazy(() => import('./components/RetentionPage'));
-const EnterprisePage = lazy(() => import('./components/EnterprisePage'));
-const IntegrationsPage = lazy(() => import('./components/IntegrationsPage'));
-const ScheduledPage = lazy(() => import('./components/ScheduledPage'));
-const AdminDashboard = lazy(() => import('./components/AdminDashboard'));
+import StrategyPage from './components/StrategyPage';
+import TrafficPage from './components/TrafficPage';
+import ConversionPage from './components/ConversionPage';
+import RetentionPage from './components/RetentionPage';
+import EnterprisePage from './components/EnterprisePage';
+import IntegrationsPage from './components/IntegrationsPage';
+import ScheduledPage from './components/ScheduledPage';
+import AdminDashboard from './components/AdminDashboard';
 
 export type Page =
   | 'strategy'
