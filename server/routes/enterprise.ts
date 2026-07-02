@@ -2,12 +2,14 @@ import { Router } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { randomUUID } from 'crypto';
 import { resetDemoUsage } from '../lib/demo.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_FILE = path.join(__dirname, '../../data/enterprise.json');
 const TEMPLATES_FILE = path.join(__dirname, '../../data/demo-templates.json');
 const DATA_DIR = path.join(__dirname, '../../data');
+const ASSETS_DIR = path.join(DATA_DIR, 'enterprise-assets');
 
 export interface EnterpriseProfile {
   company: {
@@ -25,6 +27,17 @@ export interface EnterpriseProfile {
     moq: string;
     certifications: string;
     highlights: string;
+    items?: Array<{
+      name: string;
+      category?: string;
+      priceRange?: string;
+      moq?: string;
+      certifications?: string;
+      highlights?: string;
+      images?: Array<{ name: string; type: string; size: number; updatedAt: string; url?: string }>;
+      videos?: Array<{ name: string; type: string; size: number; updatedAt: string; url?: string }>;
+      documents?: Array<{ name: string; type: string; size: number; updatedAt: string; url?: string }>;
+    }>;
   };
   brand: {
     tone: string;
@@ -68,18 +81,29 @@ export interface EnterpriseProfile {
 function readProfile(): EnterpriseProfile {
   try {
     const raw = fs.readFileSync(DATA_FILE, 'utf8');
-    return JSON.parse(raw);
+    return normalizeProfile(JSON.parse(raw));
   } catch {
-    return {
+    return normalizeProfile({
       company: { name: '', industry: '', companyType: '', mainMarkets: '', primaryLanguages: '英语、阿拉伯语', founded: '', description: '' },
-      products: { categories: '', priceRange: '', moq: '', certifications: '', highlights: '' },
+      products: {
+        categories: '',
+        priceRange: '',
+        moq: '',
+        certifications: '',
+        highlights: '',
+        items: [
+          { name: '产品1', images: [], videos: [], documents: [] },
+          { name: '产品2', images: [], videos: [], documents: [] },
+          { name: '产品3', images: [], videos: [], documents: [] },
+        ],
+      },
       brand: { tone: '', style: '专业', taboos: '', usp: '', preferredLanguages: '英语、阿拉伯语' },
       strategy: { currentGoal: '', focusProducts: '', focusMarkets: '', excludedMarkets: '', pricingStrategy: '', minMargin: '', agentAutonomy: '建议优先，关键动作需确认' },
       customers: { targetProfiles: '', highValueSignals: '', lowQualitySignals: '', commonQuestions: '', followupStyle: '' },
       operations: { leadTime: '', customization: '', logistics: '', paymentTerms: '', riskNotes: '' },
       agentLearning: { provenAngles: '', weakAngles: '', pendingAssumptions: '', userCorrections: '' },
       knowledge: '',
-    };
+    });
   }
 }
 
@@ -102,6 +126,43 @@ function writeJson(file: string, value: unknown): void {
   fs.writeFileSync(path.join(DATA_DIR, file), JSON.stringify(value, null, 2), 'utf8');
 }
 
+function ensureAssetsDir(): void {
+  fs.mkdirSync(ASSETS_DIR, { recursive: true });
+}
+
+function safeStoredName(originalName: string): string {
+  const ext = path.extname(originalName).slice(0, 16).replace(/[^a-zA-Z0-9.]/g, '');
+  return `${Date.now()}-${randomUUID()}${ext}`;
+}
+
+function emptyProduct(index: number): NonNullable<EnterpriseProfile['products']['items']>[number] {
+  return { name: `产品${index + 1}`, images: [], videos: [], documents: [] };
+}
+
+function normalizeProfile(profile: EnterpriseProfile): EnterpriseProfile {
+  const products = profile.products ?? { categories: '', priceRange: '', moq: '', certifications: '', highlights: '' };
+  const existing = Array.isArray(products.items) ? products.items : [];
+  const items = existing.length
+    ? existing.map((item, index) => ({
+      ...emptyProduct(index),
+      ...item,
+      name: item.name || `产品${index + 1}`,
+      images: Array.isArray(item.images) ? item.images : [],
+      videos: Array.isArray(item.videos) ? item.videos : [],
+      documents: Array.isArray(item.documents) ? item.documents : [],
+    }))
+    : Array.from({ length: 3 }, (_, index) => ({
+      ...emptyProduct(index),
+      name: products.categories?.split(/[、,，\n]/).map(s => s.trim()).filter(Boolean)[index] || `产品${index + 1}`,
+      category: products.categories,
+      priceRange: products.priceRange,
+      moq: products.moq,
+      certifications: products.certifications,
+      highlights: products.highlights,
+    }));
+  return { ...profile, products: { ...products, items } };
+}
+
 export function buildEnterpriseContext(profile: EnterpriseProfile): string {
   const parts: string[] = [];
   if (profile.company.name) parts.push(`公司名称：${profile.company.name}`);
@@ -115,6 +176,22 @@ export function buildEnterpriseContext(profile: EnterpriseProfile): string {
   if (profile.products.moq) parts.push(`起订量：${profile.products.moq}`);
   if (profile.products.certifications) parts.push(`认证资质：${profile.products.certifications}`);
   if (profile.products.highlights) parts.push(`产品优势：${profile.products.highlights}`);
+  if (Array.isArray(profile.products.items) && profile.products.items.length) {
+    profile.products.items.forEach((item, index) => {
+      const details = [
+        item.name || `产品${index + 1}`,
+        item.category ? `类目：${item.category}` : '',
+        item.priceRange ? `价格：${item.priceRange}` : '',
+        item.moq ? `起订量：${item.moq}` : '',
+        item.certifications ? `资质：${item.certifications}` : '',
+        item.highlights ? `卖点：${item.highlights}` : '',
+        item.images?.length ? `图片附件：${item.images.map(a => a.name).join('、')}` : '',
+        item.videos?.length ? `视频附件：${item.videos.map(a => a.name).join('、')}` : '',
+        item.documents?.length ? `资质文书附件：${item.documents.map(a => a.name).join('、')}` : '',
+      ].filter(Boolean);
+      if (details.length) parts.push(`产品${index + 1}：${details.join('；')}`);
+    });
+  }
   if (profile.brand.usp) parts.push(`核心卖点：${profile.brand.usp}`);
   if (profile.brand.tone) parts.push(`品牌调性：${profile.brand.tone}`);
   if (profile.brand.preferredLanguages) parts.push(`首选输出语言：${profile.brand.preferredLanguages}`);
@@ -150,8 +227,39 @@ enterpriseRouter.get('/profile', (_req, res) => {
   res.json(readProfile());
 });
 
+enterpriseRouter.post('/assets', (req, res) => {
+  const { name, type, dataUrl } = req.body as { name?: string; type?: string; dataUrl?: string };
+  const match = String(dataUrl || '').match(/^data:([^;]+);base64,(.+)$/);
+  if (!name || !match) {
+    res.status(400).json({ error: 'invalid asset payload' });
+    return;
+  }
+  ensureAssetsDir();
+  const storedName = safeStoredName(name);
+  const filePath = path.join(ASSETS_DIR, storedName);
+  const buffer = Buffer.from(match[2], 'base64');
+  fs.writeFileSync(filePath, buffer);
+  res.json({
+    name,
+    type: type || match[1] || 'application/octet-stream',
+    size: buffer.length,
+    updatedAt: new Date().toISOString(),
+    url: `/api/overseas/enterprise/assets/${storedName}`,
+  });
+});
+
+enterpriseRouter.get('/assets/:file', (req, res) => {
+  const file = path.basename(req.params.file);
+  const filePath = path.join(ASSETS_DIR, file);
+  if (!fs.existsSync(filePath)) {
+    res.status(404).end();
+    return;
+  }
+  res.sendFile(filePath);
+});
+
 enterpriseRouter.post('/profile', (req, res) => {
-  const profile = req.body as EnterpriseProfile;
+  const profile = normalizeProfile(req.body as EnterpriseProfile);
   fs.writeFileSync(DATA_FILE, JSON.stringify(profile, null, 2), 'utf8');
   res.json({ ok: true });
 });
@@ -168,17 +276,19 @@ enterpriseRouter.get('/demo/templates', (_req, res) => {
 enterpriseRouter.post('/demo/templates/:id/apply', (req, res) => {
   const template = readTemplates().find(t => t.id === req.params.id);
   if (!template) { res.status(404).json({ error: 'template not found' }); return; }
-  fs.writeFileSync(DATA_FILE, JSON.stringify(template.profile, null, 2), 'utf8');
-  res.json({ ok: true, profile: template.profile });
+  const profile = normalizeProfile(template.profile);
+  fs.writeFileSync(DATA_FILE, JSON.stringify(profile, null, 2), 'utf8');
+  res.json({ ok: true, profile });
 });
 
 enterpriseRouter.post('/demo/reset', (_req, res) => {
   const template = readTemplates()[0];
-  if (template) fs.writeFileSync(DATA_FILE, JSON.stringify(template.profile, null, 2), 'utf8');
+  const profile = template ? normalizeProfile(template.profile) : readProfile();
+  if (template) fs.writeFileSync(DATA_FILE, JSON.stringify(profile, null, 2), 'utf8');
   writeJson('channels.json', []);
   writeJson('plugins.json', []);
   writeJson('tasks.json', []);
   writeJson('studio-projects.json', []);
   resetDemoUsage();
-  res.json({ ok: true, profile: template?.profile ?? readProfile() });
+  res.json({ ok: true, profile });
 });
