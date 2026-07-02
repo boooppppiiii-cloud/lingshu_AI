@@ -93,7 +93,7 @@ function isLocalTenant(tenantId: string): boolean {
 
 async function isTestTenantId(tenantId: string): Promise<boolean> {
   if (!tenantId) return false;
-  if (isLocalTenant(tenantId)) return isDemoMode();
+  if (isLocalTenant(tenantId)) return true;
   const tenant = await store.getById<Record<string, unknown>>('tenants', tenantId);
   return isTestTenantRecord(tenant);
 }
@@ -930,6 +930,65 @@ function videoListWhere(tenantId: string, platform?: string, status?: string): R
   return where;
 }
 
+function sharedVideoListWhere(platform?: string, status?: string): Record<string, string> | undefined {
+  const where: Record<string, string> = {};
+  if (platform) where.platform = platform;
+  if (status) where.status = status;
+  return Object.keys(where).length ? where : undefined;
+}
+
+async function seedTestTenantWithSharedVideoSamples(input: {
+  tenantId: string;
+  platform?: string;
+  status?: string;
+  target: number;
+}): Promise<void> {
+  const existingSourceUrls = await existingTenantSourceUrls(input.tenantId);
+  const created: Record<string, unknown>[] = [];
+  let page = 1;
+  let totalPages = 1;
+  do {
+    const result = await store.list<Record<string, unknown>>(COL, {
+      where: sharedVideoListWhere(input.platform, input.status),
+      sort: '-crawledAt',
+      page,
+      perPage: 100,
+    });
+    for (const record of result.items) {
+      if (String(record.tenantId || '') === input.tenantId) continue;
+      if (!isPublicTestTenantVideo(record)) continue;
+      const sourceUrl = String(record.sourceUrl || '').trim();
+      if (!sourceUrl || existingSourceUrls.has(sourceUrl)) continue;
+      const analysis = videoAnalysisOf(record);
+      const clone = await store.create(COL, {
+        tenantId: input.tenantId,
+        platform: record.platform,
+        title: record.title,
+        thumbnailUrl: record.thumbnailUrl,
+        videoFileId: record.videoFileId || '',
+        duration: record.duration || 0,
+        sourceUrl,
+        tags: record.tags || '[]',
+        aiAnalysis: JSON.stringify({
+          ...analysis,
+          userVisible: true,
+          seededFromRecordId: String(record.id || ''),
+          seededAt: new Date().toISOString(),
+        }),
+        status: record.status || 'analyzed',
+        crawledAt: record.crawledAt || new Date().toISOString(),
+      });
+      if (clone) {
+        created.push(clone);
+        existingSourceUrls.add(sourceUrl);
+      }
+      if (created.length >= input.target) return;
+    }
+    totalPages = result.totalPages || 1;
+    page += 1;
+  } while (page <= totalPages && page <= 50);
+}
+
 async function listPublicVideosForTenant(input: {
   tenantId: string;
   page: number;
@@ -957,17 +1016,54 @@ async function listPublicVideosForTenant(input: {
 
   const visible: Record<string, unknown>[] = [];
   const seenSourceUrls = new Set<string>();
-  let scanPage = 1;
-  let totalPages = 1;
-  do {
+  const scanTenantVideos = async () => {
+    visible.length = 0;
+    seenSourceUrls.clear();
+    let scanPage = 1;
+    let totalPages = 1;
+    do {
+      const result = await store.list<Record<string, unknown>>(COL, {
+        where,
+        sort: '-crawledAt',
+        page: scanPage,
+        perPage: 100,
+      });
+      for (const record of result.items) {
+        if (!isPublicTestTenantVideo(record)) continue;
+        const sourceUrl = String(record.sourceUrl || '').trim();
+        if (sourceUrl && seenSourceUrls.has(sourceUrl)) continue;
+        if (sourceUrl) seenSourceUrls.add(sourceUrl);
+        visible.push(publicVideoRecord(record));
+      }
+      totalPages = result.totalPages || 1;
+      scanPage += 1;
+    } while (scanPage <= totalPages && scanPage <= 50);
+  };
+
+  await scanTenantVideos();
+  if (visible.length === 0) {
+    await seedTestTenantWithSharedVideoSamples({
+      tenantId: input.tenantId,
+      platform: input.platform,
+      status: input.status,
+      target: Math.max(input.perPage, 12),
+    });
+    await scanTenantVideos();
+  }
+
+  if (visible.length === 0) {
+    let scanPage = 1;
+    let totalPages = 1;
+    do {
     const result = await store.list<Record<string, unknown>>(COL, {
-      where,
+      where: sharedVideoListWhere(input.platform, input.status),
       sort: '-crawledAt',
       page: scanPage,
       perPage: 100,
     });
     for (const record of result.items) {
       if (!isPublicTestTenantVideo(record)) continue;
+      if (String(record.tenantId || '') === input.tenantId) continue;
       const sourceUrl = String(record.sourceUrl || '').trim();
       if (sourceUrl && seenSourceUrls.has(sourceUrl)) continue;
       if (sourceUrl) seenSourceUrls.add(sourceUrl);
@@ -975,7 +1071,8 @@ async function listPublicVideosForTenant(input: {
     }
     totalPages = result.totalPages || 1;
     scanPage += 1;
-  } while (scanPage <= totalPages && scanPage <= 50);
+    } while (scanPage <= totalPages && scanPage <= 50);
+  }
 
   const totalItems = visible.length;
   const totalVisiblePages = Math.max(1, Math.ceil(totalItems / input.perPage));
