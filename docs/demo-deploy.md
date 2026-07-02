@@ -32,7 +32,7 @@ DEMO_DAILY_RENDER_LIMIT=3
 DEMO_INVITE_CODE=your-demo-code
 ```
 
-试用时长固定为 5 天。`DEMO_ALLOWED_ACCOUNTS` 必须配置，注册接口只允许名单内账号激活；未配置时默认拒绝注册。`DEMO_INVITE_CODE` 可留空；设置后注册还必须填写一致的邀请码。
+试用时长固定为 5 天。注册/登录白名单会读取 `DEMO_ALLOWED_ACCOUNTS` 和 `data/demo-account-registry.json`；线上部署后先执行 `npm run demo:sync-accounts`，把测试账号和管理员账号同步到 PocketBase。`DEMO_INVITE_CODE` 可留空；设置后注册还必须填写一致的邀请码。
 
 ## PM2 示例
 

@@ -100,6 +100,7 @@ CloudBase Run 容器本地目录适合临时文件，不适合保存正式客户
 
 ```bash
 npm run setup:pb
+npm run demo:sync-accounts
 npm run import:trend-videos
 ```
 

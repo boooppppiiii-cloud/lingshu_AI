@@ -17,4 +17,9 @@ git pull
 
 echo "==> Rebuilding and restarting"
 docker compose --env-file .env.production up -d --build
+
+echo "==> Syncing PocketBase schema and demo accounts"
+docker compose --env-file .env.production exec -T app npm run setup:pb
+docker compose --env-file .env.production exec -T app npm run demo:sync-accounts
+
 docker compose --env-file .env.production ps

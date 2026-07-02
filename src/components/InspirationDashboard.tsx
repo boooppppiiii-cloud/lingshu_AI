@@ -943,12 +943,21 @@ function ScriptPanel({ video, onClose, onRetry, onFavorite, favoriting, onNaviga
   }, [activeTab, video.id]);
 
   useEffect(() => {
+    setActiveTab('analysis');
+    setResult(null);
+    setCopied(false);
+    setShowLangDropdown(false);
+    setVideoResult(null);
+    setVideoError('');
+    setProductInfoOpen(false);
+  }, [video.id]);
+
+  useEffect(() => {
     setVoiceLanguageConfirmed(false);
   }, [language, scriptType, video.id]);
 
   useEffect(() => {
     if (!isDemoTrafficStep()) return;
-    setActiveTab('generate');
     setVoiceLanguageConfirmed(true);
   }, [video.id]);
 

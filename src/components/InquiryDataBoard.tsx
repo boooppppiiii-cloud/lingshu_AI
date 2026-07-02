@@ -2,6 +2,7 @@ import { useMemo, useState, useEffect } from 'react';
 import { Info, Sparkles, Loader2, AlertCircle, Clock } from 'lucide-react';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, CartesianGrid, PieChart, Pie, Cell } from 'recharts';
 import { studioApi } from '../lib/studioApi';
+import { authHeader } from '../lib/auth';
 
 /* 询盘页 = 线索经营（跨境询盘视角）。
    命题：漏斗转化 · 响应时效 · 来源 · 内容回溯 · 跟进。占位数据，接入 WhatsApp/DM/邮件/表单+订单后替换。 */
@@ -13,20 +14,20 @@ interface Rec {
 }
 
 const RECORDS: Rec[] = [
-  { id: 'i1',  customer: 'Ahmed K.',  channel: 'WhatsApp',   platform: 'TikTok',    lang: '阿语', intent: '高', product: '智能钱包 ×500', firstResp: 4,    status: '已成交', amount: 3900, daysAgo: 0 },
-  { id: 'i2',  customer: 'Maria L.',  channel: '站内 DM',     platform: 'Instagram', lang: '西语', intent: '中', product: '收纳盒 ×200',   firstResp: 11,   status: '已报价', amount: 0,    daysAgo: 1 },
-  { id: 'i3',  customer: 'John P.',   channel: '邮件',        platform: 'YouTube',   lang: '英语', intent: '中', product: '家居套装',     firstResp: 38,   status: '待跟进', amount: 0,    daysAgo: 2 },
-  { id: 'i4',  customer: 'Fatima Z.', channel: 'WhatsApp',   platform: 'TikTok',    lang: '阿语', intent: '高', product: '礼盒 ×300',     firstResp: 6,    status: '已成交', amount: 2740, daysAgo: 2 },
-  { id: 'i5',  customer: 'Diego R.',  channel: '站内 DM',     platform: 'Instagram', lang: '西语', intent: '低', product: '数据线',       firstResp: 22,   status: '流失',   amount: 0,    daysAgo: 3 },
-  { id: 'i6',  customer: 'Sara M.',   channel: 'WhatsApp',   platform: 'TikTok',    lang: '阿语', intent: '高', product: '厨房神器 ×150', firstResp: 5,    status: '已成交', amount: 1980, daysAgo: 4 },
-  { id: 'i7',  customer: 'Tom W.',    channel: '独立站表单',  platform: 'Pinterest', lang: '英语', intent: '中', product: '装饰灯',       firstResp: null, status: '待响应', amount: 0,    daysAgo: 5 },
-  { id: 'i8',  customer: 'Layla H.',  channel: 'WhatsApp',   platform: 'Instagram', lang: '阿语', intent: '中', product: '美妆套装 ×100', firstResp: 9,    status: '已报价', amount: 0,    daysAgo: 6 },
-  { id: 'i9',  customer: 'Chen Y.',   channel: '邮件',        platform: 'YouTube',   lang: '英语', intent: '低', product: '工具套装',     firstResp: 41,   status: '待跟进', amount: 0,    daysAgo: 8 },
-  { id: 'i10', customer: 'Noor A.',   channel: 'WhatsApp',   platform: 'TikTok',    lang: '阿语', intent: '高', product: '服饰 ×400',     firstResp: 7,    status: '已成交', amount: 3400, daysAgo: 9 },
-  { id: 'i11', customer: 'Pablo S.',  channel: '站内 DM',     platform: 'Instagram', lang: '西语', intent: '中', product: '收纳盒 ×80',    firstResp: 14,   status: '已报价', amount: 0,    daysAgo: 11 },
-  { id: 'i12', customer: 'Emma D.',   channel: '独立站表单',  platform: 'Pinterest', lang: '英语', intent: '低', product: '婚庆装饰',     firstResp: null, status: '待响应', amount: 0,    daysAgo: 13 },
-  { id: 'i13', customer: 'Yusuf B.',  channel: 'WhatsApp',   platform: 'TikTok',    lang: '阿语', intent: '高', product: '电子配件 ×250', firstResp: 8,    status: '已成交', amount: 2200, daysAgo: 15 },
-  { id: 'i14', customer: 'Anna K.',   channel: '邮件',        platform: 'YouTube',   lang: '英语', intent: '中', product: '家居套装',     firstResp: 35,   status: '流失',   amount: 0,    daysAgo: 22 },
+  { id: 'i1',  customer: 'Ahmed K.',  channel: 'WhatsApp',   platform: 'TikTok',    lang: '阿语', intent: '高', product: '', firstResp: 4,    status: '已成交', amount: 3900, daysAgo: 0 },
+  { id: 'i2',  customer: 'Maria L.',  channel: '站内 DM',     platform: 'Instagram', lang: '西语', intent: '中', product: '', firstResp: 11,   status: '已报价', amount: 0,    daysAgo: 1 },
+  { id: 'i3',  customer: 'John P.',   channel: '邮件',        platform: 'YouTube',   lang: '英语', intent: '中', product: '', firstResp: 38,   status: '待跟进', amount: 0,    daysAgo: 2 },
+  { id: 'i4',  customer: 'Fatima Z.', channel: 'WhatsApp',   platform: 'TikTok',    lang: '阿语', intent: '高', product: '', firstResp: 6,    status: '已成交', amount: 2740, daysAgo: 2 },
+  { id: 'i5',  customer: 'Diego R.',  channel: '站内 DM',     platform: 'Instagram', lang: '西语', intent: '低', product: '', firstResp: 22,   status: '流失',   amount: 0,    daysAgo: 3 },
+  { id: 'i6',  customer: 'Sara M.',   channel: 'WhatsApp',   platform: 'TikTok',    lang: '阿语', intent: '高', product: '', firstResp: 5,    status: '已成交', amount: 1980, daysAgo: 4 },
+  { id: 'i7',  customer: 'Tom W.',    channel: '独立站表单',  platform: 'Pinterest', lang: '英语', intent: '中', product: '', firstResp: null, status: '待响应', amount: 0,    daysAgo: 5 },
+  { id: 'i8',  customer: 'Layla H.',  channel: 'WhatsApp',   platform: 'Instagram', lang: '阿语', intent: '中', product: '', firstResp: 9,    status: '已报价', amount: 0,    daysAgo: 6 },
+  { id: 'i9',  customer: 'Chen Y.',   channel: '邮件',        platform: 'YouTube',   lang: '英语', intent: '低', product: '', firstResp: 41,   status: '待跟进', amount: 0,    daysAgo: 8 },
+  { id: 'i10', customer: 'Noor A.',   channel: 'WhatsApp',   platform: 'TikTok',    lang: '阿语', intent: '高', product: '', firstResp: 7,    status: '已成交', amount: 3400, daysAgo: 9 },
+  { id: 'i11', customer: 'Pablo S.',  channel: '站内 DM',     platform: 'Instagram', lang: '西语', intent: '中', product: '', firstResp: 14,   status: '已报价', amount: 0,    daysAgo: 11 },
+  { id: 'i12', customer: 'Emma D.',   channel: '独立站表单',  platform: 'Pinterest', lang: '英语', intent: '低', product: '', firstResp: null, status: '待响应', amount: 0,    daysAgo: 13 },
+  { id: 'i13', customer: 'Yusuf B.',  channel: 'WhatsApp',   platform: 'TikTok',    lang: '阿语', intent: '高', product: '', firstResp: 8,    status: '已成交', amount: 2200, daysAgo: 15 },
+  { id: 'i14', customer: 'Anna K.',   channel: '邮件',        platform: 'YouTube',   lang: '英语', intent: '中', product: '', firstResp: 35,   status: '流失',   amount: 0,    daysAgo: 22 },
 ];
 
 // 汇总（按 30 天基准，随窗口缩放）
@@ -46,11 +47,51 @@ const STATUS_C: Record<string, { bg: string; fg: string }> = {
 const usd = (n: number) => `$${Math.round(n).toLocaleString()}`;
 const C = { bg: '#E6F1FB', label: '#185FA5', value: '#0C447C' };
 
+interface EnterpriseProfileForBoard {
+  products?: { categories?: string; highlights?: string; moq?: string };
+  strategy?: { focusProducts?: string };
+}
+
+function splitProductText(value?: string): string[] {
+  return String(value || '')
+    .split(/[\n,，;；、/]+/)
+    .map(item => item.trim().replace(/^[-*]\s*/, ''))
+    .filter(Boolean)
+    .filter(item => item.length <= 24);
+}
+
+function productOptionsFromProfile(profile: EnterpriseProfileForBoard | null): string[] {
+  const names = [
+    ...splitProductText(profile?.strategy?.focusProducts),
+    ...splitProductText(profile?.products?.categories),
+  ];
+  const uniqNames = Array.from(new Set(names)).slice(0, 6);
+  return uniqNames.length ? uniqNames : ['企业中心主推品'];
+}
+
+function productForRow(products: string[], index: number): string {
+  const qty = [500, 200, 100, 300, 150, 80, 250][index % 7];
+  const name = products[index % products.length] || '企业中心主推品';
+  return index % 3 === 2 ? name : `${name} ×${qty}`;
+}
+
 export default function InquiryDataBoard({ windowDays = 30 }: { windowDays?: number }) {
   const [tf, setTf] = useState({ channel: '全部', platform: '全部', lang: '全部', intent: '全部', status: '全部' });
   const setF = (k: keyof typeof tf, v: string) => setTf(s => ({ ...s, [k]: v }));
   const [insight, setInsight] = useState<{ summary: string; actions: string[] } | null>(null);
   const [insightLoading, setInsightLoading] = useState(false);
+  const [enterpriseProducts, setEnterpriseProducts] = useState<string[]>(['企业中心主推品']);
+
+  useEffect(() => {
+    let alive = true;
+    fetch('/api/overseas/enterprise/profile', { headers: authHeader() })
+      .then(r => r.ok ? r.json() : null)
+      .then((profile: EnterpriseProfileForBoard | null) => {
+        if (alive) setEnterpriseProducts(productOptionsFromProfile(profile));
+      })
+      .catch(() => { if (alive) setEnterpriseProducts(['企业中心主推品']); });
+    return () => { alive = false; };
+  }, []);
 
   const mul = windowDays / 30;
   const a = useMemo(() => ({
@@ -64,12 +105,12 @@ export default function InquiryDataBoard({ windowDays = 30 }: { windowDays?: num
     { name: '成交', value: a.deal, color: '#16a34a' },
   ];
 
-  const rows = useMemo(() => RECORDS.filter(r => r.daysAgo <= windowDays
+  const rows = useMemo(() => RECORDS.map((r, index) => ({ ...r, product: productForRow(enterpriseProducts, index) })).filter(r => r.daysAgo <= windowDays
     && (tf.channel === '全部' || r.channel === tf.channel)
     && (tf.platform === '全部' || r.platform === tf.platform)
     && (tf.lang === '全部' || r.lang === tf.lang)
     && (tf.intent === '全部' || r.intent === tf.intent)
-    && (tf.status === '全部' || r.status === tf.status)), [windowDays, tf]);
+    && (tf.status === '全部' || r.status === tf.status)), [windowDays, tf, enterpriseProducts]);
 
   useEffect(() => {
     let cancelled = false; setInsightLoading(true);

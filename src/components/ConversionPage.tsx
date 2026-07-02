@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import AgentChatPage from './AgentChatPage';
-import type { ConversationContext, RestoreSignal, KickoffSignal, AgentAction, Message } from '../App';
+import type { ConversationContext, RestoreSignal, KickoffSignal, AgentAction } from '../App';
 
 type ViewMode = 'dashboard' | 'chat' | 'customer-chat';
 
@@ -157,6 +157,14 @@ const MANAGED_STATUS_META = {
 };
 
 const FUNNEL = ['刚建联', '意向', '报价', '谈判', '下单'];
+const CONVERSION_STAGES = ['进线', '意向', '询价', '样品', '首购'];
+const DEFAULT_CONVERSION_STAGE: Record<string, string> = {
+  '1': '询价',
+  '2': '询价',
+  '3': '样品',
+  '4': '询价',
+  '5': '意向',
+};
 
 // 目标语言元数据（人工模式显示）
 const LANG_META: Record<string, { name: string; full: string }> = {
@@ -361,13 +369,11 @@ function CustomerChatView({
   selectedId,
   onSelectInquiry,
   onBack,
-  onEnterConversation,
   onLeaveConversation,
 }: {
   selectedId: string;
   onSelectInquiry: (id: string) => void;
   onBack: () => void;
-  onEnterConversation: (ctx: ConversationContext) => void;
   onLeaveConversation: () => void;
 }) {
   const [aiMode, setAiMode]             = useState(true);
@@ -375,6 +381,7 @@ function CustomerChatView({
   const [suggestionOpen, setSuggestionOpen] = useState(false);
   const [translating, setTranslating]   = useState(false);
   const [sentMessages, setSentMessages] = useState<ChatMsg[]>([]);
+  const [stageByCustomer, setStageByCustomer] = useState<Record<string, string>>(DEFAULT_CONVERSION_STAGE);
   const bottomRef = useRef<HTMLDivElement>(null);
 
   const inquiry      = INQUIRIES.find(i => i.id === selectedId)!;
@@ -382,14 +389,10 @@ function CustomerChatView({
   const aiSuggestion = AI_SUGGESTIONS[selectedId];
   const langMeta     = LANG_META[inquiry.lang] ?? LANG_META.EN;
   const hasChinese   = /[一-鿿]/.test(humanInput);
+  const currentStage  = stageByCustomer[selectedId] ?? CONVERSION_STAGES[0];
 
-  // Notify parent (triggers RightPanel) and reset state on inquiry change
+  // Reset local conversation state on inquiry change.
   useEffect(() => {
-    const msgs: Message[] = (MOCK_THREADS[selectedId] ?? []).map(m => ({
-      role: m.role === 'buyer' ? 'user' : 'assistant',
-      content: m.content,
-    }));
-    onEnterConversation({ agent: 'conversion', messages: msgs });
     setAiMode(true);
     setHumanInput('');
     setSuggestionOpen(false);
@@ -652,6 +655,56 @@ function CustomerChatView({
           </div>
         )}
       </div>
+
+      <div className="w-60 border-l border-border bg-surface flex-shrink-0 px-4 py-4 overflow-y-auto">
+        <p className="text-[10px] font-semibold text-text-muted uppercase tracking-widest mb-2">客户阶段</p>
+        <div className="rounded-2xl border border-border bg-surface-2 p-3 mb-4">
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-base leading-none">{inquiry.country}</span>
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-text-primary truncate">{inquiry.buyer}</p>
+              <p className="text-[10px] text-text-muted truncate">{inquiry.product}</p>
+            </div>
+          </div>
+          <p className="text-xs text-text-muted">当前阶段</p>
+          <p className="text-xl font-bold font-display mt-1" style={{ color: '#0891b2' }}>{currentStage}</p>
+        </div>
+
+        <div className="space-y-2">
+          {CONVERSION_STAGES.map((stage, idx) => {
+            const active = stage === currentStage;
+            return (
+              <button
+                key={stage}
+                onClick={() => setStageByCustomer(prev => ({ ...prev, [selectedId]: stage }))}
+                className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl border text-left transition-all ${
+                  active ? 'border-[#0891b2] bg-[#0891b2]/10 text-text-primary' : 'border-border hover:border-border-bright text-text-secondary'
+                }`}>
+                <span className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold"
+                  style={{ background: active ? '#0891b2' : 'rgba(107,114,128,0.12)', color: active ? '#fff' : '#6b7280' }}>
+                  {idx + 1}
+                </span>
+                <span className="text-sm font-semibold">{stage}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mt-4 rounded-xl bg-surface-2 border border-border p-3 space-y-2">
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-text-muted">语言</span>
+            <span className="font-medium text-text-secondary">{langMeta.full}</span>
+          </div>
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-text-muted">金额</span>
+            <span className="font-medium text-text-secondary">{inquiry.amount}</span>
+          </div>
+          <div className="flex items-center justify-between text-xs">
+            <span className="text-text-muted">最近进线</span>
+            <span className="font-medium text-text-secondary">{inquiry.time}</span>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }
@@ -771,7 +824,6 @@ export default function ConversionPage({
                 selectedId={selectedInquiryId}
                 onSelectInquiry={setSelectedInquiryId}
                 onBack={() => setViewMode('dashboard')}
-                onEnterConversation={onEnterConversation}
                 onLeaveConversation={onLeaveConversation}
               />
             </motion.div>

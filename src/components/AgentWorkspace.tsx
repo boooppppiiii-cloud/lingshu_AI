@@ -5,10 +5,10 @@ import type { AgentType, ConversationContext } from '../App';
 import { authHeader } from '../lib/auth';
 
 const AGENTS = [
-  { type: 'strategy' as AgentType, name: '策略专家', desc: '跨三侧策略编排，经营分析与多 Agent 协调', icon: Compass, color: '#4f46e5', bg: 'rgba(79,70,229,0.08)', maturity: 85, status: 'active' as const, recentActivity: '生成斋月中东推广方案', stats: [{ label: '本周方案', value: '6' }, { label: '协调任务', value: '14' }, { label: '采纳率', value: '91%' }] },
-  { type: 'traffic' as AgentType, name: '流量专家', desc: '竞品视频克隆、脚本生成、素材去重矩阵', icon: Zap, color: '#d97706', bg: 'rgba(217,119,6,0.08)', maturity: 72, status: 'running' as const, recentActivity: '分析 TikTok 10 条假发爆款', stats: [{ label: '今日脚本', value: '12' }, { label: '覆盖平台', value: '5' }, { label: '去重命中', value: '3' }] },
-  { type: 'conversion' as AgentType, name: '转化专家', desc: '多语种 24/7 接待，大单预警，AI+人工无缝切换', icon: MessageSquare, color: '#0891b2', bg: 'rgba(8,145,178,0.08)', maturity: 61, status: 'idle' as const, recentActivity: '处理 3 条 WhatsApp 阿语询盘', stats: [{ label: '今日询盘', value: '23' }, { label: '转报价', value: '8' }, { label: '大单预警', value: '1' }] },
-  { type: 'retention' as AgentType, name: '留存专家', desc: '老客画像沉淀、生命周期唤醒、行动建议', icon: RefreshCw, color: '#16a34a', bg: 'rgba(22,163,74,0.08)', maturity: 89, status: 'active' as const, recentActivity: '识别 2 个采购周期到期老客', stats: [{ label: '老客总数', value: '632' }, { label: '本月唤醒', value: '47' }, { label: '复购率', value: '34%' }] },
+  { type: 'strategy' as AgentType, name: '策略专家', desc: '跨三侧策略编排，经营分析与多 Agent 协调', icon: Compass, color: '#4f46e5', bg: 'rgba(79,70,229,0.08)', status: 'active' as const, recentActivity: '生成斋月中东推广方案', stats: [{ label: '本周方案', value: '6' }, { label: '协调任务', value: '14' }, { label: '采纳率', value: '91%' }] },
+  { type: 'traffic' as AgentType, name: '流量专家', desc: '竞品视频克隆、脚本生成、素材去重矩阵', icon: Zap, color: '#d97706', bg: 'rgba(217,119,6,0.08)', status: 'running' as const, recentActivity: '分析 TikTok 10 条假发爆款', stats: [{ label: '今日脚本', value: '12' }, { label: '覆盖平台', value: '5' }, { label: '去重命中', value: '3' }] },
+  { type: 'conversion' as AgentType, name: '转化专家', desc: '多语种 24/7 接待，大单预警，AI+人工无缝切换', icon: MessageSquare, color: '#0891b2', bg: 'rgba(8,145,178,0.08)', status: 'idle' as const, recentActivity: '处理 3 条 WhatsApp 阿语询盘', stats: [{ label: '今日询盘', value: '23' }, { label: '转报价', value: '8' }, { label: '大单预警', value: '1' }] },
+  { type: 'retention' as AgentType, name: '留存专家', desc: '老客画像沉淀、生命周期唤醒、行动建议', icon: RefreshCw, color: '#16a34a', bg: 'rgba(22,163,74,0.08)', status: 'active' as const, recentActivity: '识别 2 个采购周期到期老客', stats: [{ label: '老客总数', value: '632' }, { label: '本月唤醒', value: '47' }, { label: '复购率', value: '34%' }] },
 ];
 const SM = { active: { label: '运行中', color: '#16a34a' }, running: { label: '执行中', color: '#d97706' }, idle: { label: '待机', color: '#94a3b8' } };
 
@@ -30,6 +30,46 @@ interface CalendarRow {
   owner: string;
   action: string;
   status: string;
+}
+
+interface StoredConversation {
+  agent: AgentType;
+  messages?: { role: 'user' | 'assistant'; content: string }[];
+  updatedAt?: number;
+}
+
+function todayStartMs(): number {
+  const d = new Date();
+  d.setHours(0, 0, 0, 0);
+  return d.getTime();
+}
+
+function estimateTextTokens(value: string): number {
+  const ascii = (value.match(/[\x00-\x7F]/g) ?? []).length;
+  const nonAscii = value.length - ascii;
+  return Math.ceil(ascii / 4 + nonAscii * 0.75);
+}
+
+function formatTokens(tokens: number): string {
+  if (tokens >= 1000) return `${(tokens / 1000).toFixed(tokens >= 10_000 ? 0 : 1)}k`;
+  return String(tokens);
+}
+
+function readAgentTokenUsage(): Record<AgentType, number> {
+  const usage: Record<AgentType, number> = { strategy: 0, traffic: 0, conversion: 0, retention: 0 };
+  try {
+    const list = JSON.parse(localStorage.getItem('ow_convs') || '[]') as StoredConversation[];
+    const start = todayStartMs();
+    for (const conv of Array.isArray(list) ? list : []) {
+      if (!conv.agent || !(conv.agent in usage)) continue;
+      if (conv.updatedAt && conv.updatedAt < start) continue;
+      const messages = Array.isArray(conv.messages) ? conv.messages : [];
+      const userTurns = messages.filter(msg => msg.role === 'user').length;
+      const contentTokens = messages.reduce((sum, msg) => sum + estimateTextTokens(msg.content || ''), 0);
+      usage[conv.agent] += contentTokens + userTurns * 1600;
+    }
+  } catch { /* ignore local storage parse errors */ }
+  return usage;
 }
 
 const TASK_OWNER: Record<string, string> = {
@@ -105,6 +145,7 @@ function getBeijingMonthPlan() {
 export default function AgentWorkspace({ onEnterConversation }: { onEnterConversation: (ctx: ConversationContext) => void }) {
   const monthPlan = useMemo(() => getBeijingMonthPlan(), []);
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
+  const [agentTokens, setAgentTokens] = useState<Record<AgentType, number>>(() => readAgentTokenUsage());
   useEffect(() => {
     let alive = true;
     fetch('/api/overseas/scheduler', { headers: authHeader() })
@@ -112,6 +153,18 @@ export default function AgentWorkspace({ onEnterConversation }: { onEnterConvers
       .then(data => { if (alive && Array.isArray(data)) setTasks(data); })
       .catch(() => { if (alive) setTasks([]); });
     return () => { alive = false; };
+  }, []);
+  useEffect(() => {
+    const refresh = () => setAgentTokens(readAgentTokenUsage());
+    refresh();
+    const timer = window.setInterval(refresh, 2500);
+    window.addEventListener('storage', refresh);
+    window.addEventListener('focus', refresh);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('storage', refresh);
+      window.removeEventListener('focus', refresh);
+    };
   }, []);
   const calendarRows = useMemo(
     () => [...monthPlan.rows.slice(0, 1), ...taskRows(tasks), ...monthPlan.rows.slice(1)],
@@ -173,6 +226,8 @@ export default function AgentWorkspace({ onEnterConversation }: { onEnterConvers
       <div className="grid grid-cols-2 gap-4">
         {AGENTS.map((agent, i) => {
           const sm = SM[agent.status]; const Icon = agent.icon;
+          const tokenUsage = agentTokens[agent.type] ?? 0;
+          const tokenPct = Math.max(3, Math.min(100, (tokenUsage / 30_000) * 100));
           return (
             <motion.button key={agent.type} type="button" data-agent-card={agent.type}
               initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.07 }}
@@ -187,8 +242,8 @@ export default function AgentWorkspace({ onEnterConversation }: { onEnterConvers
               </div>
               <p className="text-[11px] text-text-muted leading-relaxed">{agent.desc}</p>
               <div>
-                <div className="flex items-center justify-between mb-1"><span className="text-[10px] text-text-muted uppercase tracking-wider font-semibold">成熟度</span><Sparkles size={10} style={{ color: agent.color }} /></div>
-                <div className="flex items-center gap-2"><div className="flex-1 h-1.5 rounded-full bg-surface-2 overflow-hidden"><motion.div initial={{ width: 0 }} animate={{ width: `${agent.maturity}%` }} transition={{ duration: 0.8, ease: 'easeOut' }} className="h-full rounded-full" style={{ background: agent.color }} /></div><span className="text-[11px] font-mono font-semibold text-text-secondary w-7 text-right">{agent.maturity}</span></div>
+                <div className="flex items-center justify-between mb-1"><span className="text-[10px] text-text-muted uppercase tracking-wider font-semibold">Token 用量</span><Sparkles size={10} style={{ color: agent.color }} /></div>
+                <div className="flex items-center gap-2"><div className="flex-1 h-1.5 rounded-full bg-surface-2 overflow-hidden"><motion.div initial={{ width: 0 }} animate={{ width: `${tokenPct}%` }} transition={{ duration: 0.8, ease: 'easeOut' }} className="h-full rounded-full" style={{ background: agent.color }} /></div><span className="text-[11px] font-mono font-semibold text-text-secondary w-10 text-right">{formatTokens(tokenUsage)}</span></div>
               </div>
               <div className="grid grid-cols-3 gap-1 pt-2 border-t border-border">{agent.stats.map(s => (<div key={s.label} className="text-center"><p className="text-sm font-bold text-text-primary font-display">{s.value}</p><p className="text-[9px] text-text-muted mt-0.5">{s.label}</p></div>))}</div>
               <div className="flex items-start gap-1.5 px-2.5 py-1.5 rounded-lg" style={{ background: agent.bg }}><TrendingUp size={10} className="flex-shrink-0 mt-0.5" style={{ color: agent.color }} /><p className="text-[10px] leading-relaxed" style={{ color: agent.color }}>{agent.recentActivity}</p></div>

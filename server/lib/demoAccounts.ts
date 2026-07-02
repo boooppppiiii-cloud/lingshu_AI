@@ -54,10 +54,15 @@ function writeRegistry(registry: DemoAccountRegistry): void {
 }
 
 export function allowedDemoAccounts(): string[] {
-  return String(process.env.DEMO_ALLOWED_ACCOUNTS ?? '')
+  const envAccounts = String(process.env.DEMO_ALLOWED_ACCOUNTS ?? '')
     .split(/[\s,;]+/)
     .map(norm)
     .filter(Boolean);
+  const registry = readJson<DemoAccountRegistry>(REGISTRY_FILE, {});
+  return Array.from(new Set([
+    ...envAccounts,
+    ...Object.keys(registry).map(norm).filter(Boolean),
+  ]));
 }
 
 export function isAllowedDemoAccount(email: string): boolean {
