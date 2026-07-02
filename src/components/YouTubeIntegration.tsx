@@ -981,7 +981,7 @@ export function ChannelOverview() {
       : `/api/overseas/social/accounts/${selectedAccountId}/video/${selectedVideoId}/comments?maxResults=50`;
     fetchJson<{ comments?: YouTubeComment[] }>(url)
       .then(data => setComments(data.comments ?? []))
-      .catch(e => setError(e instanceof Error ? e.message : '无法读取评论'))
+      .catch(() => setComments([]))
       .finally(() => setCommentsLoading(false));
   }, [selectedAccountId, selectedVideoId, currentPlatform]);
 

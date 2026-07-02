@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { Component, useEffect, useState, type ErrorInfo, type ReactNode } from 'react';
 import { Settings, Puzzle, Share2 } from 'lucide-react';
 import PluginsPage from './PluginsPage';
 import ChannelsPage from './ChannelsPage';
@@ -21,6 +21,47 @@ function readInitialTab(): IntegrationTab {
     return saved === 'channels' ? 'channels' : 'plugins';
   } catch {
     return 'plugins';
+  }
+}
+
+class IntegrationTabBoundary extends Component<
+  { tab: IntegrationTab; onReset: () => void; children: ReactNode },
+  { hasError: boolean; tab: IntegrationTab }
+> {
+  state = { hasError: false, tab: this.props.tab };
+
+  static getDerivedStateFromError() {
+    return { hasError: true };
+  }
+
+  static getDerivedStateFromProps(props: { tab: IntegrationTab }, state: { tab: IntegrationTab }) {
+    if (props.tab !== state.tab) return { hasError: false, tab: props.tab };
+    return null;
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('[IntegrationsPage]', error, info);
+  }
+
+  render() {
+    if (!this.state.hasError) return this.props.children;
+    return (
+      <div className="flex h-full items-center justify-center bg-white px-6">
+        <div className="w-full max-w-md rounded-xl border border-gray-100 bg-gray-50 p-5 text-center">
+          <p className="text-sm font-semibold text-gray-900">当前模块暂时无法显示</p>
+          <p className="mt-2 text-xs leading-relaxed text-gray-500">
+            这不会影响其他集成功能。请先返回插件市场继续使用，系统会自动避开异常模块。
+          </p>
+          <button
+            type="button"
+            onClick={this.props.onReset}
+            className="mt-4 rounded-lg bg-gray-900 px-4 py-2 text-xs font-semibold text-white"
+          >
+            返回插件市场
+          </button>
+        </div>
+      </div>
+    );
   }
 }
 
@@ -66,9 +107,11 @@ export default function IntegrationsPage() {
       </div>
 
       <div className="min-h-0 flex-1">
-        {activeTab === 'plugins' && <PluginsPage />}
-        {activeTab === 'channels' && <ChannelsPage />}
-        {activeTab === 'social' && <YouTubeIntegrationPage />}
+        <IntegrationTabBoundary tab={activeTab} onReset={() => setActiveTab('plugins')}>
+          {activeTab === 'plugins' && <PluginsPage />}
+          {activeTab === 'channels' && <ChannelsPage />}
+          {activeTab === 'social' && <YouTubeIntegrationPage />}
+        </IntegrationTabBoundary>
       </div>
     </div>
   );
