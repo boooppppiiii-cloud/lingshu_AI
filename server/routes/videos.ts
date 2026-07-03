@@ -102,6 +102,41 @@ function videoAnalysisOf(record: Record<string, unknown>): Record<string, unknow
   return parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
 }
 
+function textPresent(value: unknown): boolean {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function objectRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+}
+
+function hasCompleteVideoGeminiAnalysis(gemini: unknown): boolean {
+  const analysis = objectRecord(gemini);
+  if (!Object.keys(analysis).length) return false;
+
+  const firstTen = objectRecord(analysis.firstTenSeconds);
+  const firstTenCount = ['atmosphere', 'audioVisual', 'camera', 'visuals', 'voiceMusic']
+    .filter(key => textPresent(firstTen[key]))
+    .length;
+  const coarseStructure = Array.isArray(analysis.coarseStructure)
+    ? analysis.coarseStructure.filter(item => {
+      const frame = objectRecord(item);
+      return textPresent(frame.description || frame.desc || frame.frame);
+    })
+    : [];
+  const scriptDetails = Array.isArray(analysis.scriptDetails15s)
+    ? analysis.scriptDetails15s.filter(item => {
+      const detail = objectRecord(item);
+      return textPresent(detail.visual) || textPresent(detail.subtitle);
+    })
+    : [];
+
+  return textPresent(analysis.theme)
+    && firstTenCount >= 3
+    && coarseStructure.length >= 2
+    && scriptDetails.length >= 2;
+}
+
 function isVideoLevelAnalysis(analysis: Record<string, unknown>): boolean {
   const geminiStatus = String(analysis.geminiStatus || '');
   const downloadStatus = String(analysis.downloadStatus || '');
@@ -109,7 +144,7 @@ function isVideoLevelAnalysis(analysis: Record<string, unknown>): boolean {
   return analysis.analysisQuality === 'video'
     && (!geminiStatus || geminiStatus === 'analyzed')
     && (!downloadStatus || downloadStatus === 'analyzed' || videoFetchStatus === 'direct_url' || videoFetchStatus === 'fetched')
-    && Boolean(analysis.gemini);
+    && hasCompleteVideoGeminiAnalysis(analysis.gemini);
 }
 
 function isPublicTestTenantVideo(record: Record<string, unknown>): boolean {
@@ -124,6 +159,31 @@ function videoSuccessVisibilityPatch(): Record<string, unknown> {
     adminOnlyVideoFailure: undefined,
     videoLevelFailureStatus: undefined,
     manualRequiredReason: undefined,
+  };
+}
+
+function assertCompleteVideoGeminiAnalysis(gemini: VideoAiAnalysis, sourceLabel: string): void {
+  if (hasCompleteVideoGeminiAnalysis(gemini)) return;
+  throw new Error(`${sourceLabel}_incomplete_gemini_video_analysis`);
+}
+
+function videoLevelSuccessPatch(input: {
+  analysis: VideoAiAnalysis;
+  source: string;
+  videoFetchStatus: string;
+  extra?: Record<string, unknown>;
+}): Record<string, unknown> {
+  assertCompleteVideoGeminiAnalysis(input.analysis, input.source);
+  return {
+    gemini: input.analysis,
+    analysisSource: input.source,
+    analysisQuality: 'video',
+    downloadStatus: 'analyzed',
+    videoFetchStatus: input.videoFetchStatus,
+    geminiStatus: 'analyzed',
+    ...videoSuccessVisibilityPatch(),
+    analyzedAt: new Date().toISOString(),
+    ...(input.extra ?? {}),
   };
 }
 
@@ -1237,15 +1297,12 @@ async function triggerVideoAnalysis(
     await store.update(COL, recordId, {
       aiAnalysis: JSON.stringify({
         ...latestAnalysis,
-        gemini: result.analysis,
-        analysisSource: result.source,
-        analysisQuality: 'video',
-        downloadStatus: 'analyzed',
-        videoFetchStatus: 'manual_upload',
-        geminiStatus: 'analyzed',
-        manualVideoUploadStatus: 'analyzed',
-        ...videoSuccessVisibilityPatch(),
-        analyzedAt: new Date().toISOString(),
+        ...videoLevelSuccessPatch({
+          analysis: result.analysis,
+          source: result.source,
+          videoFetchStatus: 'manual_upload',
+          extra: { manualVideoUploadStatus: 'analyzed' },
+        }),
       }),
       status: 'analyzed',
     });
@@ -1723,15 +1780,12 @@ async function analyzeSourceVideoJobInner(input: {
         status: 'analyzed' as VideoStatus,
         aiAnalysis: JSON.stringify({
           ...previous,
-          gemini: videoAnalysis.analysis,
-          analysisSource: videoAnalysis.source,
-          analysisQuality: 'video',
-          downloadStatus: 'analyzed',
-          videoFetchStatus: 'fetched',
-          geminiStatus: 'analyzed',
-          ...videoSuccessVisibilityPatch(),
-          analyzedAt: new Date().toISOString(),
-          tempVideoDeleted: true,
+          ...videoLevelSuccessPatch({
+            analysis: videoAnalysis.analysis,
+            source: videoAnalysis.source,
+            videoFetchStatus: 'fetched',
+            extra: { tempVideoDeleted: true },
+          }),
         }),
       });
     }
@@ -1996,14 +2050,11 @@ async function tryAnalyzeYouTubeUrl(input: {
         status: 'analyzed' as VideoStatus,
         aiAnalysis: JSON.stringify({
           ...previous,
-          gemini: geminiAnalysis,
-          analysisSource: 'gemini-youtube-url',
-          analysisQuality: 'video',
-          downloadStatus: 'analyzed',
-          videoFetchStatus: 'direct_url',
-          geminiStatus: 'analyzed',
-          ...videoSuccessVisibilityPatch(),
-          analyzedAt: new Date().toISOString(),
+          ...videoLevelSuccessPatch({
+            analysis: geminiAnalysis,
+            source: 'gemini-youtube-url',
+            videoFetchStatus: 'direct_url',
+          }),
         }),
       });
     }
@@ -2043,26 +2094,47 @@ async function analyzeDownloadedMaterial(recordId: string, filePath: string, mat
       status: 'analyzed' as VideoStatus,
       aiAnalysis: JSON.stringify({
         ...previous,
-        gemini: videoAnalysis.analysis,
-        analysisSource: videoAnalysis.source,
-        analyzedAt: new Date().toISOString(),
-        materialId: material.id,
-        materialUrl: material.url,
-        materialPoster: material.poster,
+        ...videoLevelSuccessPatch({
+          analysis: videoAnalysis.analysis,
+          source: videoAnalysis.source,
+          videoFetchStatus: 'fetched',
+          extra: {
+            materialId: material.id,
+            materialUrl: material.url,
+            materialPoster: material.poster,
+          },
+        }),
       }),
     });
   } catch (e) {
     console.error(`[videos] Gemini material analysis failed for ${recordId}:`, e);
     const latest = await store.getById(COL, recordId);
-    const previous = parseJsonRecord(latest?.aiAnalysis, {});
-    await store.update(COL, recordId, {
-      status: 'failed' as VideoStatus,
-      aiAnalysis: JSON.stringify({
-        ...previous,
-        analysisSource: 'gemini-video',
-        analysisError: compactVideoPipelineError(e instanceof Error ? e.message : 'Gemini analysis failed'),
-      }),
+    const previous = parseJsonRecord<Record<string, unknown>>(latest?.aiAnalysis, {});
+    const platform = (latest?.platform || inferPlatformFromUrl(String(latest?.sourceUrl || ''))) as Platform;
+    const fallback = metadataFallbackAnalysis({
+      platform,
+      title: String(latest?.title || material.name),
+      duration: Number(latest?.duration || material.duration || 0),
+      views: String(previous.views || platform),
+      tags: parseJsonRecord<string[]>(latest?.tags, []),
     });
+    if (latest) {
+      await persistManualVideoFailure({
+        record: latest,
+        sourceUrl: String(latest.sourceUrl || material.url || ''),
+        title: String(latest.title || material.name),
+        platform,
+      }, e instanceof Error ? e.message : 'Gemini analysis failed', classifyCrawlerFailure(e instanceof Error ? e.message : String(e)), fallback);
+    } else {
+      await store.update(COL, recordId, {
+        status: 'failed' as VideoStatus,
+        aiAnalysis: JSON.stringify({
+          ...previous,
+          analysisSource: 'gemini-video',
+          analysisError: compactVideoPipelineError(e instanceof Error ? e.message : 'Gemini analysis failed'),
+        }),
+      });
+    }
   }
 }
 
@@ -3469,6 +3541,7 @@ function softDownloadFailure(platform: Platform, error: unknown): { status: stri
 
 function isNonRetryableVideoFetch(platform: Platform, message: string): boolean {
   const lower = message.toLowerCase();
+  if (lower.includes('incomplete_gemini_video_analysis')) return true;
   if (lower.includes('yt-dlp did not produce an analysis video file')) return true;
   if (platform === 'youtube' && lower.includes('requested format is not available')) return true;
   if (platform === 'youtube' && lower.includes('sign in to confirm') && lower.includes('not a bot')) return true;
@@ -4373,19 +4446,18 @@ export async function runCrawlerOpsWorkerOnce(): Promise<{
               status: 'analyzed' as VideoStatus,
               aiAnalysis: JSON.stringify({
                 ...latestAnalysis,
-                gemini: videoAnalysis.analysis,
-                analysisSource: videoAnalysis.source,
-                analysisQuality: 'video',
-                downloadStatus: 'analyzed',
-                videoFetchStatus: 'fetched',
-                geminiStatus: 'analyzed',
-                crawlerOpsStatus: 'resolved',
-                crawlerOpsTaskId: task.id,
-                ...videoSuccessVisibilityPatch(),
-                apifyVideoFallbackAt: new Date().toISOString(),
-                analysisFileSize: humanSize(downloaded.size),
-                analyzedAt: new Date().toISOString(),
-                tempVideoDeleted: true,
+                ...videoLevelSuccessPatch({
+                  analysis: videoAnalysis.analysis,
+                  source: videoAnalysis.source,
+                  videoFetchStatus: 'fetched',
+                  extra: {
+                    crawlerOpsStatus: 'resolved',
+                    crawlerOpsTaskId: task.id,
+                    apifyVideoFallbackAt: new Date().toISOString(),
+                    analysisFileSize: humanSize(downloaded.size),
+                    tempVideoDeleted: true,
+                  },
+                }),
               }),
             });
             updateCrawlerOpsTask(task.id, {
@@ -4646,6 +4718,7 @@ function crawlerRetryDelayMs(attemptNo: number): number {
 
 function classifyCrawlerFailure(message: string): string {
   const lower = message.toLowerCase();
+  if (lower.includes('incomplete_gemini_video_analysis')) return 'incomplete_gemini_video_analysis';
   if (lower.includes('requested format is not available')) return 'format_unavailable';
   if (lower.includes('timed out') || lower.includes('timeout')) return 'network_timeout';
   if (lower.includes('cookies') || lower.includes('login') || lower.includes('sign in')) return 'login_required';
@@ -4679,32 +4752,55 @@ async function pushCrawlerOpsTask(task: CrawlerOpsTask): Promise<void> {
 async function analyzeOpsVideo(task: CrawlerOpsTask, videoBase64: string, mimeType: string): Promise<void> {
   if (!fs.existsSync(ANALYSIS_DIR)) fs.mkdirSync(ANALYSIS_DIR, { recursive: true });
   const tempExt = mimeType.includes('webm') ? 'webm' : mimeType.includes('quicktime') ? 'mov' : 'mp4';
-  const tempPath = path.join(ANALYSIS_DIR, `ops-${task.id}-${Date.now()}.${tempExt}`);
-  fs.writeFileSync(tempPath, Buffer.from(videoBase64.replace(/^data:[^,]+,/, ''), 'base64'));
-  const videoAnalysis = await analyzeDownloadedVideoWithFallback({
-    filePath: tempPath,
-    mimeType,
-    title: task.title,
-    platform: task.platform,
-    sourceLabel: 'crawler-ops-video',
-  });
-  cleanupTempVideo(tempPath);
-  const record = await store.getById(COL, task.recordId);
-  const previous = parseJsonRecord<Record<string, unknown>>(record?.aiAnalysis, {});
-  await store.update(COL, task.recordId, {
-    status: 'analyzed' as VideoStatus,
-    aiAnalysis: JSON.stringify({
-      ...previous,
-      gemini: videoAnalysis.analysis,
-      analysisSource: videoAnalysis.source,
-      analysisQuality: 'video',
-      downloadStatus: 'analyzed',
-      crawlerOpsTaskId: task.id,
-      crawlerOpsStatus: 'resolved',
-      ...videoSuccessVisibilityPatch(),
-      analyzedAt: new Date().toISOString(),
-    }),
-  });
+  let tempPath = path.join(ANALYSIS_DIR, `ops-${task.id}-${Date.now()}.${tempExt}`);
+  try {
+    fs.writeFileSync(tempPath, Buffer.from(videoBase64.replace(/^data:[^,]+,/, ''), 'base64'));
+    const videoAnalysis = await analyzeDownloadedVideoWithFallback({
+      filePath: tempPath,
+      mimeType,
+      title: task.title,
+      platform: task.platform,
+      sourceLabel: 'crawler-ops-video',
+    });
+    cleanupTempVideo(tempPath);
+    tempPath = '';
+    const record = await store.getById(COL, task.recordId);
+    const previous = parseJsonRecord<Record<string, unknown>>(record?.aiAnalysis, {});
+    await store.update(COL, task.recordId, {
+      status: 'analyzed' as VideoStatus,
+      aiAnalysis: JSON.stringify({
+        ...previous,
+        ...videoLevelSuccessPatch({
+          analysis: videoAnalysis.analysis,
+          source: videoAnalysis.source,
+          videoFetchStatus: 'fetched',
+          extra: {
+            crawlerOpsTaskId: task.id,
+            crawlerOpsStatus: 'resolved',
+          },
+        }),
+      }),
+    });
+  } catch (e) {
+    if (tempPath) cleanupTempVideo(tempPath);
+    const record = await store.getById(COL, task.recordId);
+    const fallback = metadataFallbackAnalysis({
+      platform: task.platform,
+      title: task.title,
+      duration: Number(record?.duration || 0),
+      views: String(parseJsonRecord<Record<string, unknown>>(record?.aiAnalysis, {}).views || task.platform),
+      tags: parseJsonRecord<string[]>(record?.tags, []),
+    });
+    if (record) {
+      await persistManualVideoFailure({
+        record,
+        sourceUrl: task.sourceUrl,
+        title: task.title,
+        platform: task.platform,
+      }, e instanceof Error ? e.message : 'Crawler ops video analysis failed', classifyCrawlerFailure(e instanceof Error ? e.message : String(e)), fallback);
+    }
+    throw e;
+  }
 }
 
 function loadMaterials(): Material[] {
