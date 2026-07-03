@@ -1553,6 +1553,23 @@ function metadataFallbackAnalysis(
   };
 }
 
+function metadataPanelFallback(video: TrendVideo): TrendVideo {
+  if (video.aiAnalysis?.analysisSource === 'metadata-fallback' && video.aiAnalysis?.analysisQuality === 'metadata') {
+    return video;
+  }
+  return {
+    ...video,
+    aiAnalysis: {
+      ...(video.aiAnalysis || {}),
+      gemini: metadataFallbackAnalysis(video.title, video.platform, video.tags, video.views, video.duration),
+      analysisSource: 'metadata-fallback',
+      analysisQuality: 'metadata',
+      geminiStatus: 'metadata_fallback',
+      downloadStatus: 'metadata_only',
+    },
+  };
+}
+
 const DEMO_TREND_VIDEO: TrendVideo = {
   id: 'demo-tiktok-skincare',
   platform: 'tiktok',
@@ -1709,8 +1726,15 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   useEffect(() => {
     if (!selectedVideo) return;
     const latest = crawledVideos.find(v => v.id === selectedVideo.id);
+    if (selectedVideo.id.startsWith('crawl-')) {
+      const next = latest || selectedVideo;
+      if (!isDisplayableVideoAnalysis(next.aiAnalysis)) {
+        const fallback = metadataPanelFallback(next);
+        if (fallback !== selectedVideo) setSelectedVideo(fallback);
+        return;
+      }
+    }
     if (latest && latest !== selectedVideo) setSelectedVideo(latest);
-    if (!latest && selectedVideo.id.startsWith('crawl-')) setSelectedVideo(null);
   }, [crawledVideos, selectedVideo]);
 
   const demoTrafficStep = isDemoTrafficStep();
