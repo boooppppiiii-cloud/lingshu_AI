@@ -158,6 +158,36 @@ function cleanAnalysisText(value: unknown): string {
     .trim();
 }
 
+function hasCompleteGeminiAnalysis(gemini?: GeminiVideoAnalysis): boolean {
+  if (!gemini) return false;
+  const firstTen = gemini.firstTenSeconds || {};
+  const firstTenCount = [firstTen.atmosphere, firstTen.audioVisual, firstTen.camera, firstTen.visuals, firstTen.voiceMusic]
+    .filter(value => cleanAnalysisText(value).length > 0)
+    .length;
+  const coarseCount = Array.isArray(gemini.coarseStructure)
+    ? gemini.coarseStructure.filter(item => cleanAnalysisText(item.description || item.desc || item.frame).length > 0).length
+    : 0;
+  const detailCount = Array.isArray(gemini.scriptDetails15s)
+    ? gemini.scriptDetails15s.filter(item => cleanAnalysisText(item.visual || item.subtitle).length > 0).length
+    : 0;
+
+  return cleanAnalysisText(gemini.theme).length > 0
+    && firstTenCount >= 3
+    && coarseCount >= 2
+    && detailCount >= 2;
+}
+
+function isDisplayableVideoAnalysis(analysis?: VideoAnalysisPayload): boolean {
+  if (!analysis) return false;
+  const geminiStatus = String(analysis.geminiStatus || '');
+  const downloadStatus = String(analysis.downloadStatus || '');
+  const videoFetchStatus = String(analysis.videoFetchStatus || '');
+  return analysis.analysisQuality === 'video'
+    && (!geminiStatus || geminiStatus === 'analyzed')
+    && (!downloadStatus || downloadStatus === 'analyzed' || videoFetchStatus === 'direct_url' || videoFetchStatus === 'fetched')
+    && hasCompleteGeminiAnalysis(analysis.gemini);
+}
+
 function getAnalysis(video: TrendVideo): ScriptAnalysis | null {
   const gemini = video.aiAnalysis?.gemini;
   if (!gemini) return null;
@@ -619,30 +649,6 @@ function needsVideoEnhancement(video: TrendVideo): boolean {
     analysis.downloadStatus === 'ops_queued';
 }
 
-function enhancementStatus(video: TrendVideo): { title: string; desc: string; active: boolean } {
-  const analysis = video.aiAnalysis || {};
-  const quotaError = /429|RESOURCE_EXHAUSTED|quota|prepayment credits|额度|余额/i.test(String(analysis.analysisError || analysis.downloadError || analysis.crawlerOpsLastError || ''));
-  if (quotaError) {
-    return { title: '待测试用户填入真实 Gemini API Key', desc: '当前展示基础资料分析；配置可用 Gemini API Key 后可重新排队升级为视频级分析。', active: false };
-  }
-  if (analysis.analysisQuality === 'video' || analysis.analysisSource === 'gemini-temp-video' && analysis.downloadStatus === 'analyzed') {
-    return { title: '真实视频分析完成', desc: '已升级为视频级 Gemini 分析。', active: false };
-  }
-  if (analysis.downloadStatus === 'ops_queued' || analysis.videoFetchStatus === 'ops_queued') {
-    return { title: '后台增强中', desc: '自动获取失败，已进入后台增强队列，回填后会升级。', active: true };
-  }
-  if (analysis.downloadStatus === 'queued' || analysis.videoFetchStatus === 'queued') {
-    return { title: '视频获取队列中', desc: '后台已收到任务，等待获取真实视频。', active: true };
-  }
-  if (analysis.downloadStatus === 'downloading' || analysis.videoFetchStatus === 'downloading') {
-    return { title: '正在获取真实视频', desc: '正在拉取 360p 内分析版视频，成功后自动进入 Gemini 队列。', active: true };
-  }
-  if (analysis.downloadStatus === 'analyzing' || analysis.geminiStatus === 'queued' || analysis.geminiStatus === 'analyzing') {
-    return { title: 'Gemini 视频分析中', desc: '真实视频已拿到，正在生成视频级脚本拆解。', active: true };
-  }
-  return { title: '基础分析可用', desc: '当前结果基于标题、标签、平台、热度和时长推断。', active: false };
-}
-
 // ── Fallback thumbnail ────────────────────────────────────────────────────────
 function VideoThumbnail({ platform, title }: { platform: Exclude<Platform, 'all'>; title: string }) {
   const meta = getPlatformMeta(platform);
@@ -750,24 +756,6 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="p-4 space-y-4">
-        {(video.aiAnalysis?.analysisQuality === 'metadata' || video.aiAnalysis?.analysisSource === 'metadata-fallback') && (
-          <div className="rounded-xl border border-amber/30 bg-amber/10 px-3 py-2">
-            <div className="flex items-start gap-2">
-              {enhancementStatus(video).active
-                ? <Loader2 size={12} className="text-amber mt-0.5 flex-shrink-0 animate-spin" />
-                : <Sparkles size={12} className="text-amber mt-0.5 flex-shrink-0" />}
-              <div>
-                <p className="text-[11px] font-semibold text-text-primary">
-                  {enhancementStatus(video).title}
-                </p>
-                <p className="text-[10px] text-text-muted leading-relaxed mt-0.5">
-                  {enhancementStatus(video).desc}
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-
         <div className="flex flex-wrap items-center gap-2 text-[10px] text-text-muted">
           <span className="px-2 py-1 rounded-md border border-border bg-surface-2 text-text-secondary font-semibold">{analysis.videoType}</span>
           <span className="flex items-center gap-1"><BarChart2 size={9} className="text-accent" />信息速度 {analysis.infoSpeed}</span>
@@ -1722,11 +1710,15 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
     if (!selectedVideo) return;
     const latest = crawledVideos.find(v => v.id === selectedVideo.id);
     if (latest && latest !== selectedVideo) setSelectedVideo(latest);
+    if (!latest && selectedVideo.id.startsWith('crawl-')) setSelectedVideo(null);
   }, [crawledVideos, selectedVideo]);
 
   const demoTrafficStep = isDemoTrafficStep();
   const allVideos = demoTrafficStep && crawledVideos.length === 0 ? [DEMO_TREND_VIDEO] : crawledVideos;
-  const visibleVideos = allVideos.filter(v => ACTIVE_PLATFORMS.includes(v.platform));
+  const visibleVideos = allVideos.filter(v =>
+    ACTIVE_PLATFORMS.includes(v.platform)
+    && (v.id.startsWith('demo-') || isDisplayableVideoAnalysis(v.aiAnalysis))
+  );
   const filtered = useMemo(() => {
     const lastCrawlIds = new Set(lastCrawlVideoIds);
     const q = search.trim().toLowerCase();
