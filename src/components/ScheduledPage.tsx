@@ -667,11 +667,11 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
                   视频爬取数据
                 </div>
                 <div className="mt-3 flex items-end gap-3">
-                  <span className="text-2xl font-semibold text-gray-900">{crawl.total ?? 0}</span>
-                  <span className="text-xs text-gray-500 pb-1">库内视频</span>
+                  <span className="text-2xl font-semibold text-gray-900">{crawl.today ?? 0}</span>
+                  <span className="text-xs text-gray-500 pb-1">今日新增</span>
                 </div>
-                <p className="text-xs text-gray-500 mt-2">今日 {crawl.today ?? 0} 条 · 24小时 {crawl.last24h ?? 0} 条 · 最新 {formatTime(crawl.latestAt)}</p>
-                <p className="text-xs text-gray-400 mt-1">YT {crawl.byPlatform?.youtube ?? 0} / TK {crawl.byPlatform?.tiktok ?? 0} / IG {crawl.byPlatform?.instagram ?? 0} / FB {crawl.byPlatform?.facebook ?? 0}</p>
+                <p className="text-xs text-gray-500 mt-2">24小时 {crawl.last24h ?? 0} 条 · 累计库内 {crawl.total ?? 0} 条 · 最新 {formatTime(crawl.latestAt)}</p>
+                <p className="text-xs text-gray-400 mt-1">累计来源：YT {crawl.byPlatform?.youtube ?? 0} / TK {crawl.byPlatform?.tiktok ?? 0} / IG {crawl.byPlatform?.instagram ?? 0} / FB {crawl.byPlatform?.facebook ?? 0}</p>
               </div>
 
               <div className="rounded-xl border border-gray-200 p-4 bg-white">

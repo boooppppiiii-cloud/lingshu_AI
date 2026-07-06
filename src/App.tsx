@@ -1,9 +1,11 @@
 import { Component, Suspense, useCallback, useEffect, useRef, useState, type ErrorInfo, type ReactNode } from 'react';
-import { Loader2 } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
+import { BookOpen, Loader2 } from 'lucide-react';
 import Layout from './components/Layout';
 import AuthScreen from './components/AuthScreen';
 import { authApi, type AuthSession } from './lib/auth';
 import { completeDemoStep, resetDemoProgress, setDemoProgressScope } from './lib/demoProgress';
+import BusinessDiagnosisModal from './components/BusinessDiagnosisModal';
 import StrategyPage from './components/StrategyPage';
 import TrafficPage from './components/TrafficPage';
 import ConversionPage from './components/ConversionPage';
@@ -53,6 +55,8 @@ export type AgentAction = (agent: AgentType, task: string) => void;
 
 const AGENT_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention'];
 const ALL_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention', 'enterprise', 'plugins', 'scheduled', 'admin', 'channels', 'youtube'];
+const BUSINESS_DIAGNOSIS_SEEN_SESSION_KEY = 'ow_business_diagnosis_seen_scope';
+const BUSINESS_DIAGNOSIS_SKIP_TODAY_KEY = 'ow_business_diagnosis_skip_today';
 const firstUserText = (msgs?: Message[]) => (msgs?.find(m => m.role === 'user')?.content ?? '新会话').slice(0, 24);
 const loadConvs = (): Conversation[] => {
   try { return JSON.parse(localStorage.getItem('ow_convs') || '[]'); } catch { return []; }
@@ -161,8 +165,46 @@ export default function App() {
   const [session, setSession] = useState<AuthSession | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [demoGuideActive, setDemoGuideActive] = useState(false);
+  const [businessDiagnosisOpen, setBusinessDiagnosisOpen] = useState(false);
+  const [businessDiagnosisDocked, setBusinessDiagnosisDocked] = useState(false);
 
   const progressScopeFor = (s: AuthSession | null) => s?.demo?.guideScope || (s?.demo?.expiresAt ? `${s.user.id}:${s.demo.expiresAt}` : s?.user?.id || s?.tenant?.id || null);
+  const diagnosisScopeFor = (s: AuthSession | null) => s?.demo?.guideScope || s?.user?.id || s?.tenant?.id || 'guest';
+  const diagnosisTodayKeyFor = (s: AuthSession | null) => `${diagnosisScopeFor(s)}:${new Date().toISOString().slice(0, 10)}`;
+  const showBusinessDiagnosisFor = (s: AuthSession | null) => {
+    if (!s) return;
+    if (s.demo?.guideTrigger) return;
+    const scope = diagnosisScopeFor(s);
+    try {
+      if (sessionStorage.getItem(BUSINESS_DIAGNOSIS_SEEN_SESSION_KEY) === scope) return;
+      if (localStorage.getItem(BUSINESS_DIAGNOSIS_SKIP_TODAY_KEY) === diagnosisTodayKeyFor(s)) return;
+    } catch { /* ignore */ }
+    setBusinessDiagnosisOpen(true);
+    setBusinessDiagnosisDocked(false);
+  };
+  const closeBusinessDiagnosis = () => {
+    if (session) {
+      try {
+        sessionStorage.setItem(BUSINESS_DIAGNOSIS_SEEN_SESSION_KEY, diagnosisScopeFor(session));
+      } catch { /* ignore */ }
+    }
+    setBusinessDiagnosisOpen(false);
+    setBusinessDiagnosisDocked(true);
+  };
+  const dismissBusinessDiagnosisToday = () => {
+    if (session) {
+      try {
+        sessionStorage.setItem(BUSINESS_DIAGNOSIS_SEEN_SESSION_KEY, diagnosisScopeFor(session));
+        localStorage.setItem(BUSINESS_DIAGNOSIS_SKIP_TODAY_KEY, diagnosisTodayKeyFor(session));
+      } catch { /* ignore */ }
+    }
+    setBusinessDiagnosisOpen(false);
+    setBusinessDiagnosisDocked(false);
+  };
+  const reopenBusinessDiagnosis = () => {
+    setBusinessDiagnosisOpen(true);
+    setBusinessDiagnosisDocked(false);
+  };
   const shouldShowGuide = (s: AuthSession | null) => {
     if (!s?.demo?.enabled) return false;
     return Boolean(s.demo.guideTrigger && progressScopeFor(s));
@@ -187,6 +229,7 @@ export default function App() {
       if (s && shouldShowGuide(s)) showGuideFor(s);
       else setDemoGuideActive(hasActiveGuideScope(s));
       setSession(s);
+      showBusinessDiagnosisFor(s);
       setAuthLoading(false);
     });
   }, []);
@@ -276,6 +319,7 @@ export default function App() {
       setDemoGuideActive(hasActiveGuideScope(s));
     }
     setSession(s);
+    showBusinessDiagnosisFor(s);
   };
   const refreshSession = async () => {
     const latest = await authApi.me();
@@ -283,6 +327,8 @@ export default function App() {
       setDemoProgressScope(null);
       setSession(null);
       setDemoGuideActive(false);
+      setBusinessDiagnosisOpen(false);
+      setBusinessDiagnosisDocked(false);
       return;
     }
     setDemoProgressScope(progressScopeFor(latest));
@@ -292,8 +338,11 @@ export default function App() {
   const handleLogout = () => {
     authApi.logout();
     try { sessionStorage.removeItem(DEMO_GUIDE_ACTIVE_SCOPE_KEY); } catch { /* ignore */ }
+    try { sessionStorage.removeItem(BUSINESS_DIAGNOSIS_SEEN_SESSION_KEY); } catch { /* ignore */ }
     setDemoProgressScope(null);
     setDemoGuideActive(false);
+    setBusinessDiagnosisOpen(false);
+    setBusinessDiagnosisDocked(false);
     setSession(null);
   };
   const handleDemoGuideShown = useCallback(() => {
@@ -332,6 +381,38 @@ export default function App() {
       onDemoGuideShown={handleDemoGuideShown}
       conversations={conversations} activeConvId={activeConvId} onOpenConversation={openConversation} onNewConversation={newConversation}
       suppressRightPanel={scriptPanelOpen} onAction={startAgentTask}>
+      <AnimatePresence>
+        {businessDiagnosisDocked && !businessDiagnosisOpen && (
+          <motion.button
+            type="button"
+            layoutId="business-diagnosis-surface"
+            initial={{ opacity: 0.72, scale: 0.92 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0.72, scale: 0.92 }}
+            transition={{
+              layout: { type: 'spring', damping: 30, stiffness: 360, mass: 0.8 },
+              opacity: { duration: 0.14, ease: 'easeOut' },
+              scale: { duration: 0.18, ease: 'easeOut' },
+            }}
+            onClick={reopenBusinessDiagnosis}
+            className="fixed bottom-5 right-5 z-[70] flex flex-col items-center gap-1 rounded-2xl border border-border bg-white px-3 py-3 text-text-secondary shadow-[0_16px_38px_rgba(15,23,42,0.18)] transition-colors hover:border-green-200 hover:text-green-700"
+            title="打开经营日报"
+          >
+            <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-green-50 text-green-700">
+              <BookOpen size={18} />
+            </span>
+            <span className="text-[11px] font-semibold">经营日报</span>
+          </motion.button>
+        )}
+      </AnimatePresence>
+      <BusinessDiagnosisModal
+        open={businessDiagnosisOpen}
+        session={session}
+        onClose={closeBusinessDiagnosis}
+        onDismissToday={dismissBusinessDiagnosisToday}
+        onNavigate={handleNavigate}
+        onAction={startAgentTask}
+      />
       <PageErrorBoundary page={page} onNavigateHome={() => handleNavigate('strategy')}>
         <Suspense fallback={<PageLoading />}>
           {page === 'strategy' && (

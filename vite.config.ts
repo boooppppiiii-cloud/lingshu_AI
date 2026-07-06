@@ -7,14 +7,14 @@ function resolveHmr(): ServerOptions['hmr'] {
   if (process.env.DISABLE_HMR === 'true') return false;
   const publicHost = process.env.DEV_HMR_HOST?.trim();
   if (publicHost) {
-    const port = Number(process.env.DEV_HMR_PORT || 5176);
+    const port = Number(process.env.DEV_HMR_PORT || 5177);
     const clientPort = Number(process.env.DEV_HMR_CLIENT_PORT || port);
     return { host: publicHost, port, clientPort };
   }
   return true;
 }
 
-const devApiTarget = process.env.DEV_API_TARGET ?? 'http://127.0.0.1:8793';
+const devApiTarget = process.env.DEV_API_TARGET ?? 'http://127.0.0.1:8788';
 
 export default defineConfig(() => ({
   plugins: [react(), tailwindcss()],
@@ -23,7 +23,7 @@ export default defineConfig(() => ({
   },
   server: {
     // 合并版使用独立端口，避免和 overseas / 新手引导两个工作区互相抢占。
-    port: Number(process.env.DEV_PORT || 5176),
+    port: Number(process.env.DEV_PORT || 5177),
     strictPort: true,
     host: '0.0.0.0',
     hmr: resolveHmr(),
