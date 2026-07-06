@@ -19,6 +19,7 @@ import {
 import Sidebar from './components/Sidebar';
 import Header from './components/Header';
 import AuthModal from './components/AuthModal';
+import DailyBriefingModal from './components/DailyBriefingModal';
 import type { IterationHandoff, IterationVideoPayload } from './lib/iterationHandoff';
 import { ViewState } from './types';
 
@@ -153,6 +154,12 @@ function AppShell() {
       </div>
 
       <AuthModal open={authModalOpen} onClose={() => setAuthModalOpen(false)} />
+      <DailyBriefingModal
+        gameProfileId={gameProfileId}
+        canAccessWorkshop={canAccessWorkshop}
+        onOpenBuyingDashboard={() => setActiveView('buying_dashboard')}
+        onOpenWorkshop={() => setActiveView('workshop')}
+      />
     </ToastProvider>
   );
 }
