@@ -6,12 +6,12 @@ import CrmDataBoard from './CrmDataBoard';
 
 /* 策略页「数据大屏」——全平台经营数据只在策略 agent 看（负责"想"）；
    流量/转化/留存三个 agent 是干活的工作台，不看数据。
-   三个 tab：流量 / 询盘 / CRM；时间维度（月/周/日 + 自定义日期范围）在壳层统一控制。 */
+   三个 tab：社媒 / 询盘 / 客户；时间维度（月/周/日 + 自定义日期范围）在壳层统一控制。 */
 
 const TABS = [
-  { id: 'traffic', label: '流量', icon: Zap, Comp: TrafficDataBoard },
+  { id: 'traffic', label: '社媒', icon: Zap, Comp: TrafficDataBoard },
   { id: 'inquiry', label: '询盘', icon: MessageSquare, Comp: InquiryDataBoard },
-  { id: 'crm', label: 'CRM', icon: Users, Comp: CrmDataBoard },
+  { id: 'crm', label: '客户', icon: Users, Comp: CrmDataBoard },
 ] as const;
 const PRESETS = [['月', 30], ['周', 7], ['日', 1]] as const;
 const today = new Date().toISOString().slice(0, 10);

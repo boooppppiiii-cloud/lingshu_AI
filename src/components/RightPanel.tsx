@@ -11,10 +11,10 @@ interface Props {
 }
 
 const AGENT_META = {
-  strategy:   { label: '策略专家', Icon: Compass,       color: '#4f46e5', bg: 'rgba(79,70,229,0.08)' },
-  traffic:    { label: '流量专家', Icon: Zap,           color: '#d97706', bg: 'rgba(217,119,6,0.08)' },
-  conversion: { label: '转化专家', Icon: MessageSquare, color: '#0891b2', bg: 'rgba(8,145,178,0.08)' },
-  retention:  { label: '留存专家', Icon: RefreshCw,     color: '#16a34a', bg: 'rgba(22,163,74,0.08)' },
+  strategy:   { label: '首页', Icon: Compass,       color: '#4f46e5', bg: 'rgba(79,70,229,0.08)' },
+  traffic:    { label: '我的社媒', Icon: Zap,           color: '#d97706', bg: 'rgba(217,119,6,0.08)' },
+  conversion: { label: '我的客户', Icon: MessageSquare, color: '#0891b2', bg: 'rgba(8,145,178,0.08)' },
+  retention:  { label: '我的客户', Icon: RefreshCw,     color: '#16a34a', bg: 'rgba(22,163,74,0.08)' },
 };
 
 const WORKSPACE_STATUS: Record<AgentType, { label: string; color: string }> = {
@@ -63,8 +63,8 @@ function StrategyPanel({ conversation, onAction }: { conversation: ConversationC
 
   const ACTIONS: Record<string, { action: string; desc: string; task: string }> = {
     traffic:    { action: '生成社媒内容矩阵', desc: '基于本次策略生成 TikTok/Instagram 脚本', task: '根据本次策略，直接产出一套内容矩阵：5 个「选题 × 钩子 × 形式」的 TikTok/Instagram 脚本要点，不要讲方法论。' },
-    conversion: { action: '更新转化话术库',   desc: '将推广重点同步到转化专家应答策略',       task: '把本次策略的推广重点，直接落成 5 条可用的询盘应答话术（中英双语），不要讲原理。' },
-    retention:  { action: '触发老客唤醒任务', desc: '通知留存专家筛选并联系相关老客',         task: '根据本次策略，直接给老客唤醒方案：目标人群 + 触达节奏 + 3 条文案，不要讲方法论。' },
+    conversion: { action: '更新客户回复库',   desc: '将推广重点同步到客户跟进策略',       task: '把本次策略的推广重点，直接落成 5 条可用的询盘应答话术（中英双语），不要讲原理。' },
+    retention:  { action: '触发老客唤醒任务', desc: '通知我的客户筛选并联系相关老客',         task: '根据本次策略，直接给老客唤醒方案：目标人群 + 触达节奏 + 3 条文案，不要讲方法论。' },
   };
 
   return (
@@ -76,7 +76,7 @@ function StrategyPanel({ conversation, onAction }: { conversation: ConversationC
             <Compass size={16} />
           </div>
           <div>
-            <p className="text-xs font-semibold text-text-primary">策略专家</p>
+            <p className="text-xs font-semibold text-text-primary">首页</p>
             <p className="text-[10px] text-text-muted">策略编排 · 多专家协调</p>
           </div>
           <span className="ml-auto flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full" style={{ background: 'rgba(22,163,74,0.1)', color: '#16a34a' }}>
@@ -294,7 +294,7 @@ function RetentionPanel({ conversation, onAction }: { conversation: Conversation
       <AgentHeader conversation={conversation} subtitle="老客唤醒 · 行动建议" />
       <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
         <div>
-          <SectionHeader label="CRM 快览" />
+          <SectionHeader label="客户快览" />
           <div className="space-y-2">
             {[
               { label: '老客总数', value: '632', color: '#16a34a' },

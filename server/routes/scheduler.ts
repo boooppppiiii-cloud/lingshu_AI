@@ -76,47 +76,47 @@ function readEnterpriseProfile(): Record<string, any> {
 function taskReportActions(taskType: string): TaskReportAction[] {
   if (taskType === 'holiday_push') {
     return [
-      { label: '整理节日前 7 天主推 SKU 与库存水位', agentLabel: '策略专家' },
-      { label: '生成社媒预热脚本和短视频内容方向', agentLabel: '流量专家' },
-      { label: '生成私域触达话术并安排近 90 天询盘跟进', agentLabel: '转化专家' },
+      { label: '整理节日前 7 天主推 SKU 与库存水位', agentLabel: '首页' },
+      { label: '生成社媒预热脚本和短视频内容方向', agentLabel: '我的社媒' },
+      { label: '生成私域触达话术并安排近 90 天询盘跟进', agentLabel: '我的客户' },
     ];
   }
   if (taskType === 'trend_report') {
     return [
-      { label: '把高频话题转成 3 条 TikTok 脚本方向', agentLabel: '流量专家' },
-      { label: '挑选 2 个产品卖点做 A/B 内容测试', agentLabel: '流量专家' },
-      { label: '将适配市场和语言写回企业中心学习记录', agentLabel: '策略专家' },
+      { label: '把高频话题转成 3 条 TikTok 脚本方向', agentLabel: '我的社媒' },
+      { label: '挑选 2 个产品卖点做 A/B 内容测试', agentLabel: '我的社媒' },
+      { label: '将适配市场和语言写回企业中心学习记录', agentLabel: '首页' },
     ];
   }
   if (taskType === 'video_keyword_crawl') {
     return [
-      { label: '查看新入库视频并筛选可复用素材', agentLabel: '流量专家' },
-      { label: '选择高互动视频生成克隆脚本', agentLabel: '流量专家' },
-      { label: '复盘失败下载链接并补充关键词', agentLabel: '策略专家' },
+      { label: '查看新入库视频并筛选可复用素材', agentLabel: '我的社媒' },
+      { label: '选择高互动视频生成克隆脚本', agentLabel: '我的社媒' },
+      { label: '复盘失败下载链接并补充关键词', agentLabel: '首页' },
     ];
   }
   if (taskType === 'exchange_rate') {
     return [
-      { label: '生成多币种询盘报价话术', agentLabel: '转化专家' },
-      { label: '更新报价风险和利润提醒', agentLabel: '策略专家' },
-      { label: '整理老客补货报价提醒', agentLabel: '留存专家' },
+      { label: '生成多币种询盘报价话术', agentLabel: '我的客户' },
+      { label: '更新报价风险和利润提醒', agentLabel: '首页' },
+      { label: '整理老客补货报价提醒', agentLabel: '我的客户' },
     ];
   }
   if (taskType === 'weekly_review') {
     return [
-      { label: '拆解下周社媒内容任务', agentLabel: '流量专家' },
-      { label: '生成询盘转化跟进动作', agentLabel: '转化专家' },
-      { label: '生成老客复购唤醒动作', agentLabel: '留存专家' },
+      { label: '拆解下周社媒内容任务', agentLabel: '我的社媒' },
+      { label: '生成询盘转化跟进动作', agentLabel: '我的客户' },
+      { label: '生成老客复购唤醒动作', agentLabel: '我的客户' },
     ];
   }
   if (taskType === 'crm_wakeup') {
     return [
-      { label: '生成老客唤醒分层和触达节奏', agentLabel: '留存专家' },
-      { label: '生成 WhatsApp 跟进话术', agentLabel: '转化专家' },
-      { label: '生成复购内容素材方向', agentLabel: '流量专家' },
+      { label: '生成老客唤醒分层和触达节奏', agentLabel: '我的客户' },
+      { label: '生成 WhatsApp 跟进话术', agentLabel: '我的客户' },
+      { label: '生成复购内容素材方向', agentLabel: '我的社媒' },
     ];
   }
-  return [{ label: '交给策略专家拆解后续任务', agentLabel: '策略专家' }];
+  return [{ label: '交给首页拆解后续任务', agentLabel: '首页' }];
 }
 
 function pdfPythonPath(): string {

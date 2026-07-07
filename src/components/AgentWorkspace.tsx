@@ -1,14 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
-import { Compass, Zap, MessageSquare, RefreshCw, TrendingUp, Users, BarChart2, Sparkles, ChevronRight, Activity, CalendarDays } from 'lucide-react';
+import { Compass, Zap, MessageSquare, TrendingUp, Users, BarChart2, Sparkles, ChevronRight, Activity, CalendarDays } from 'lucide-react';
 import type { AgentType, ConversationContext } from '../App';
 import { authHeader } from '../lib/auth';
 
 const AGENTS = [
-  { type: 'strategy' as AgentType, name: '策略专家', desc: '跨三侧策略编排，经营分析与多 Agent 协调', icon: Compass, color: '#4f46e5', bg: 'rgba(79,70,229,0.08)', status: 'active' as const, recentActivity: '生成斋月中东推广方案', stats: [{ label: '本周方案', value: '6' }, { label: '协调任务', value: '14' }, { label: '采纳率', value: '91%' }] },
-  { type: 'traffic' as AgentType, name: '流量专家', desc: '竞品视频克隆、脚本生成、素材去重矩阵', icon: Zap, color: '#d97706', bg: 'rgba(217,119,6,0.08)', status: 'running' as const, recentActivity: '分析 TikTok 10 条假发爆款', stats: [{ label: '今日脚本', value: '12' }, { label: '覆盖平台', value: '5' }, { label: '去重命中', value: '3' }] },
-  { type: 'conversion' as AgentType, name: '转化专家', desc: '多语种 24/7 接待，大单预警，AI+人工无缝切换', icon: MessageSquare, color: '#0891b2', bg: 'rgba(8,145,178,0.08)', status: 'idle' as const, recentActivity: '处理 3 条 WhatsApp 阿语询盘', stats: [{ label: '今日询盘', value: '23' }, { label: '转报价', value: '8' }, { label: '大单预警', value: '1' }] },
-  { type: 'retention' as AgentType, name: '留存专家', desc: '老客画像沉淀、生命周期唤醒、行动建议', icon: RefreshCw, color: '#16a34a', bg: 'rgba(22,163,74,0.08)', status: 'active' as const, recentActivity: '识别 2 个采购周期到期老客', stats: [{ label: '老客总数', value: '632' }, { label: '本月唤醒', value: '47' }, { label: '复购率', value: '34%' }] },
+  { type: 'strategy' as AgentType, name: '首页', desc: '经营总览、策略编排和关键动作拆解', icon: Compass, color: '#4f46e5', bg: 'rgba(79,70,229,0.08)', status: 'active' as const, recentActivity: '生成斋月中东推广方案', stats: [{ label: '本周方案', value: '6' }, { label: '协调任务', value: '14' }, { label: '采纳率', value: '91%' }] },
+  { type: 'traffic' as AgentType, name: '我的社媒', desc: '竞品视频克隆、脚本生成、素材去重矩阵', icon: Zap, color: '#d97706', bg: 'rgba(217,119,6,0.08)', status: 'running' as const, recentActivity: '分析 TikTok 10 条假发爆款', stats: [{ label: '今日脚本', value: '12' }, { label: '覆盖平台', value: '5' }, { label: '去重命中', value: '3' }] },
+  { type: 'conversion' as AgentType, name: '我的客户', desc: '询盘筛选、自动回复、跟单建议和老客唤醒', icon: MessageSquare, color: '#0891b2', bg: 'rgba(8,145,178,0.08)', status: 'idle' as const, recentActivity: '处理 3 条 WhatsApp 阿语询盘', stats: [{ label: '今日询盘', value: '23' }, { label: '高意向', value: '8' }, { label: '待唤醒', value: '65' }] },
 ];
 const SM = { active: { label: '运行中', color: '#16a34a' }, running: { label: '执行中', color: '#d97706' }, idle: { label: '待机', color: '#94a3b8' } };
 
@@ -73,12 +72,12 @@ function readAgentTokenUsage(): Record<AgentType, number> {
 }
 
 const TASK_OWNER: Record<string, string> = {
-  trend_report: '流量专家',
-  video_keyword_crawl: '流量专家',
-  weekly_review: '策略专家',
-  crm_wakeup: '留存专家',
-  exchange_rate: '转化专家',
-  holiday_push: '策略专家',
+  trend_report: '我的社媒',
+  video_keyword_crawl: '我的社媒',
+  weekly_review: '首页',
+  crm_wakeup: '我的客户',
+  exchange_rate: '我的客户',
+  holiday_push: '首页',
 };
 
 function taskAction(task: ScheduledTask): string {
@@ -111,7 +110,7 @@ function taskRows(tasks: ScheduledTask[]): CalendarRow[] {
     id: task.id,
     date: task.cronLabel || '定时',
     type: '定时任务',
-    owner: TASK_OWNER[task.taskType] || '策略专家',
+    owner: TASK_OWNER[task.taskType] || '首页',
     action: taskAction(task),
     status: taskStatus(task),
   }));
@@ -132,8 +131,8 @@ function getBeijingMonthPlan() {
       : isDecember ? '圣诞季收口'
         : '本月主推市场营销节点';
   const baseRows: CalendarRow[] = [
-    { date: `${pad(1)}-${pad(3)}`, type: '运营周期', owner: '策略专家', action: '复盘上月 GMV、询盘、复购与素材消耗，拆成本月目标。', status: now.getDate() > 3 ? '已过' : '本周' },
-    { date: `${pad(10)}-${pad(20)}`, type: '营销节点', owner: '策略专家', action: mainNode, status: now.getDate() <= 20 ? '进行中' : '已过' },
+    { date: `${pad(1)}-${pad(3)}`, type: '运营周期', owner: '首页', action: '复盘上月 GMV、询盘、复购与素材消耗，拆成本月目标。', status: now.getDate() > 3 ? '已过' : '本周' },
+    { date: `${pad(10)}-${pad(20)}`, type: '营销节点', owner: '首页', action: mainNode, status: now.getDate() <= 20 ? '进行中' : '已过' },
     { date: `${pad(Math.max(1, lastDay - 2))}-${pad(lastDay)}`, type: '关键行动', owner: '全体 Agent', action: '月末经营复盘、下月选题池、素材去重与自动任务校准。', status: now.getDate() >= lastDay - 2 ? '本周' : '待办' },
   ];
   return {
@@ -219,7 +218,7 @@ export default function AgentWorkspace({ onEnterConversation }: { onEnterConvers
       <div className="card p-3.5 mb-6 flex items-center gap-3">
         <div className="flex items-center gap-1.5 flex-shrink-0"><Activity size={13} className="text-accent" /><span className="text-xs font-semibold text-text-primary">行动建议流水线</span></div>
         <div className="flex-1 flex items-center gap-1">
-          {['社媒检测', 'CRM筛选', '生成话术', '待推送'].map((s, i) => (<div key={s} className="flex items-center gap-1 flex-1 min-w-0"><span className="text-[10px] text-text-muted truncate">{s}</span>{i < 3 && <ChevronRight size={10} className="text-border-bright flex-shrink-0" />}</div>))}
+          {['社媒检测', '客户筛选', '生成话术', '待推送'].map((s, i) => (<div key={s} className="flex items-center gap-1 flex-1 min-w-0"><span className="text-[10px] text-text-muted truncate">{s}</span>{i < 3 && <ChevronRight size={10} className="text-border-bright flex-shrink-0" />}</div>))}
         </div>
         <span className="text-[10px] font-semibold text-accent bg-accent-glow px-2 py-0.5 rounded-full border border-accent/20 flex-shrink-0">今日触发 2 次</span>
       </div>

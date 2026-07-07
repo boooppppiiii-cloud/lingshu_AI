@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
-  Compass, Zap, MessageSquare, RefreshCw,
+  Home, Share2, Users, LayoutGrid,
   Building2, PlugZap, Clock,
   ChevronRight, Plus, LogOut, Loader2, RefreshCcw, X, ShieldCheck,
 } from 'lucide-react';
@@ -16,10 +16,10 @@ interface NavSection {
 
 const PRIMARY_NAV: NavSection = {
   items: [
-    { id: 'strategy',   label: '策略专家', icon: <Compass size={16} /> },
-    { id: 'traffic',    label: '流量专家', icon: <Zap size={16} /> },
-    { id: 'conversion', label: '转化专家', icon: <MessageSquare size={16} /> },
-    { id: 'retention',  label: '留存专家', icon: <RefreshCw size={16} /> },
+    { id: 'strategy',   label: '首页', icon: <Home size={16} /> },
+    { id: 'traffic',    label: '我的社媒', icon: <Share2 size={16} /> },
+    { id: 'conversion', label: '我的客户', icon: <Users size={16} /> },
+    { id: 'orders',     label: '我的订单', icon: <LayoutGrid size={16} /> },
   ],
 };
 

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { Building2, Package, Megaphone, BookOpen, Save, CheckCircle2, Loader2, Compass, Zap, MessageSquare, RefreshCw, RotateCcw, Plus, Upload, X, Image, Video, FileText, KeyRound, Copy, ExternalLink } from 'lucide-react';
+import { Building2, Package, Megaphone, BookOpen, Save, CheckCircle2, Loader2, Compass, Zap, MessageSquare, RotateCcw, Plus, Upload, X, Image, Video, FileText, KeyRound, Copy, ExternalLink } from 'lucide-react';
 import { authHeader } from '../lib/auth';
 import { completeDemoStep } from '../lib/demoProgress';
 
@@ -54,10 +54,9 @@ const DEFAULT: Profile = {
 };
 
 const AGENTS = [
-  { icon: Compass, label: '策略专家', color: '#4f46e5' },
-  { icon: Zap, label: '流量专家', color: '#d97706' },
-  { icon: MessageSquare, label: '转化专家', color: '#0891b2' },
-  { icon: RefreshCw, label: '留存专家', color: '#16a34a' },
+  { icon: Compass, label: '首页', color: '#4f46e5' },
+  { icon: Zap, label: '我的社媒', color: '#d97706' },
+  { icon: MessageSquare, label: '我的客户', color: '#0891b2' },
 ];
 
 interface DemoTemplate { id: string; name: string; description: string; profile?: Profile }
@@ -692,7 +691,7 @@ export default function EnterprisePage() {
               <input className={inputCls} placeholder="工厂直供，极具价格竞争力，7天极速发货" value={profile.brand.usp}
                 onChange={e => set('brand')('usp', e.target.value)} />
             </Field>
-            <Field label="禁忌话题" hint="客服和社媒 Agent 不应涉及的内容">
+            <Field label="禁忌话题" hint="客户跟进和社媒内容不应涉及的内容">
               <input className={inputCls} placeholder="不提竞品价格对比、不承诺具体到货日期…" value={profile.brand.taboos}
                 onChange={e => set('brand')('taboos', e.target.value)} />
             </Field>

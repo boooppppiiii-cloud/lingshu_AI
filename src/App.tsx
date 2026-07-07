@@ -9,7 +9,7 @@ import BusinessDiagnosisModal from './components/BusinessDiagnosisModal';
 import StrategyPage from './components/StrategyPage';
 import TrafficPage from './components/TrafficPage';
 import ConversionPage from './components/ConversionPage';
-import RetentionPage from './components/RetentionPage';
+import OrdersPage from './components/OrdersPage';
 import EnterprisePage from './components/EnterprisePage';
 import IntegrationsPage from './components/IntegrationsPage';
 import ScheduledPage from './components/ScheduledPage';
@@ -20,6 +20,7 @@ export type Page =
   | 'traffic'
   | 'conversion'
   | 'retention'
+  | 'orders'
   | 'enterprise'
   | 'plugins'
   | 'scheduled'
@@ -53,9 +54,10 @@ export interface KickoffSignal { text: string; key: string }
 export type AgentAction = (agent: AgentType, task: string) => void;
 
 const AGENT_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention'];
-const ALL_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention', 'enterprise', 'plugins', 'scheduled', 'admin', 'channels', 'youtube'];
+const ALL_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention', 'orders', 'enterprise', 'plugins', 'scheduled', 'admin', 'channels', 'youtube'];
 const BUSINESS_DIAGNOSIS_SEEN_KEY = 'ow_business_diagnosis_seen_scope_v2';
 const firstUserText = (msgs?: Message[]) => (msgs?.find(m => m.role === 'user')?.content ?? '新会话').slice(0, 24);
+const customerUnifiedAgent = (agent: AgentType): AgentType => (agent === 'retention' ? 'conversion' : agent);
 const loadConvs = (): Conversation[] => {
   try { return JSON.parse(localStorage.getItem('ow_convs') || '[]'); } catch { return []; }
 };
@@ -249,10 +251,11 @@ export default function App() {
     const conv = convsRef.current.find(c => c.id === id);
     if (!conv) return;
     activeIdRef.current = id; setActiveConvId(id);
-    setConversation({ agent: conv.agent, messages: conv.messages });
-    setRestore({ agent: conv.agent, messages: conv.messages, key: `${id}:${Date.now()}` });
+    const pageAgent = customerUnifiedAgent(conv.agent);
+    setConversation({ agent: pageAgent, messages: conv.messages });
+    setRestore({ agent: pageAgent, messages: conv.messages, key: `${id}:${Date.now()}` });
     setKickoff(null);
-    setPage(conv.agent);
+    setPage(pageAgent);
   };
   const newConversation = () => {
     activeIdRef.current = null; setActiveConvId(null);
@@ -262,16 +265,17 @@ export default function App() {
 
   // 一键执行：策略专家把任务交给某个专家，跳转过去并自动发起任务
   const startAgentTask = (agent: AgentType, text: string) => {
+    const pageAgent = customerUnifiedAgent(agent);
     activeIdRef.current = null; setActiveConvId(null);
-    setRestore(null); setConversation({ agent });
-    setKickoff({ agent, text, key: `k${Date.now()}` });
-    setPage(agent);
+    setRestore(null); setConversation({ agent: pageAgent });
+    setKickoff({ agent: pageAgent, text, key: `k${Date.now()}` });
+    setPage(pageAgent);
   };
 
   const handleNavigate = useCallback((p: Page) => {
     setConversation(null); setRestore(null); setKickoff(null);
     activeIdRef.current = null; setActiveConvId(null);
-    setPage(p);
+    setPage(p === 'retention' ? 'conversion' : p);
   }, []);
   const restoreFor = (a: AgentType) => (restore && restore.agent === a ? restore : undefined);
   const kickoffFor = (a: AgentType) => (kickoff && kickoff.agent === a ? { text: kickoff.text, key: kickoff.key } : undefined);
@@ -399,17 +403,7 @@ export default function App() {
               onSessionRefresh={() => void refreshSession()}
             />
           )}
-          {page === 'retention' && (
-            <RetentionPage
-              onEnterConversation={enterConversation}
-              onLeaveConversation={leaveConversation}
-              isInConversation={conversation?.agent === 'retention'}
-              restore={restoreFor('retention')}
-              kickoff={kickoffFor('retention')}
-              onAction={startAgentTask}
-              onSessionRefresh={() => void refreshSession()}
-            />
-          )}
+          {page === 'orders' && <OrdersPage />}
           {page === 'enterprise' && <EnterprisePage />}
           {page === 'plugins' && <IntegrationsPage />}
           {page === 'scheduled' && <ScheduledPage onAction={startAgentTask} />}
