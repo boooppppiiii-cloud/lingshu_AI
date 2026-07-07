@@ -1,21 +1,24 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Search, Play, Sparkles, FileText, Layout as LayoutIcon,
   TrendingUp, Clock, Globe, ChevronDown, X, Loader2,
   Check, Copy, ArrowRight, Zap, LayoutGrid, List,
   Lightbulb, Flame, BarChart2, ChevronRight, Film, Download, Plus,
-  Bookmark, Maximize2, Minimize2, Lock,
+  Bookmark, Maximize2, Minimize2, Lock, Upload,
 } from 'lucide-react';
 import { studioApi, type Material } from '../lib/studioApi';
 import { authHeader } from '../lib/auth';
 import type { Page } from '../App';
 import { completeDemoStep, readDemoProgress } from '../lib/demoProgress';
+import demoCover1 from '../assets/covers/mock-1.png';
+import demoCover2 from '../assets/covers/mock-8.png';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type Platform = 'all' | 'tiktok' | 'instagram' | 'youtube' | 'facebook';
 type ScriptType = 'voiceover' | 'storyboard';
 type SortMode = 'heat' | 'crawlTime';
+type InspirationInnerView = 'inspiration' | 'library' | 'shooting';
 
 const isDemoTrafficStep = () => {
   const progress = readDemoProgress();
@@ -115,6 +118,26 @@ interface ScriptAnalysis {
   adaptTip: string;
   emotion: string;
   infoSpeed: string;
+}
+
+interface FrameMaterialMatch {
+  detail: ScriptDetail15s;
+  material?: Material;
+  score: number;
+  reason: string;
+  suggestion: string;
+}
+
+interface ShootingNeed {
+  id: string;
+  priority: '高' | '中' | '低';
+  title: string;
+  suggestion: string;
+  count: number;
+  sourceVideos: string[];
+  platform: Exclude<Platform, 'all'>;
+  ratio: '9:16' | '16:9';
+  example?: ScriptDetail15s;
 }
 
 // ── Platform meta ─────────────────────────────────────────────────────────────
@@ -344,6 +367,128 @@ function getProductField(productInfo: string, label: string): string {
 function shortenText(text: string, max = 72): string {
   const clean = text.replace(/\s+/g, ' ').trim();
   return clean.length > max ? `${clean.slice(0, max)}...` : clean;
+}
+
+const fileToDataUrl = (file: File) => new Promise<string>((resolve, reject) => {
+  const reader = new FileReader();
+  reader.onload = () => resolve(String(reader.result));
+  reader.onerror = reject;
+  reader.readAsDataURL(file);
+});
+
+function tokenizeForMatch(...values: string[]): string[] {
+  const stop = new Set(['the', 'and', 'with', 'this', 'that', 'for', 'you', 'your', 'our', '字幕', '画面', '镜头', '固定', '中近景', '特写']);
+  return Array.from(new Set(values.join(' ')
+    .toLowerCase()
+    .replace(/https?:\/\/\S+/g, ' ')
+    .split(/[^a-z0-9\u4e00-\u9fa5]+/)
+    .map(item => item.trim())
+    .filter(item => item.length > 1 && !stop.has(item))));
+}
+
+function shootingSuggestion(detail: ScriptDetail15s): string {
+  const text = `${detail.visual} ${detail.subtitle}`.toLowerCase();
+  if (/face|脸|skin|肤|acne|dry|保湿|护肤|洁面|妆|唇|lip/.test(text)) {
+    return '建议补拍真人上脸/手部使用镜头：自然光，9:16，近景或中近景，动作包含涂抹、展示肤感或前后对比。';
+  }
+  if (/package|包装|logo|brand|瓶|罐|产品|product|texture|质地/.test(text)) {
+    return '建议补拍产品特写：干净桌面，正面包装、Logo、质地挤出/涂抹各一条，保留 2 秒稳定画面方便剪辑。';
+  }
+  if (/factory|工厂|warehouse|生产|发货|ship|proof|证明/.test(text)) {
+    return '建议补拍工厂/履约证明镜头：包装线、库存、打包、发货单或质检动作，横竖屏各留一版。';
+  }
+  return '建议补拍与该分镜描述一致的 3-5 秒短素材：主体明确、背景干净、动作从静态展示到轻微移动。';
+}
+
+function materialMatchReason(material: Material, tokens: string[], score: number): string {
+  const source = `${material.name} ${material.folder}`.toLowerCase();
+  const hits = tokens.filter(token => source.includes(token)).slice(0, 3);
+  return hits.length ? `命中关键词：${hits.join(' / ')}` : `按视频类型和时长兜底匹配，匹配度 ${score}`;
+}
+
+function matchMaterialsToFrames(details: ScriptDetail15s[], materials: Material[]): FrameMaterialMatch[] {
+  const videos = materials.filter(item => item.type === 'video');
+  const used = new Set<string>();
+  return details.map((detail, index) => {
+    const tokens = tokenizeForMatch(detail.visual, detail.subtitle, detail.shot, detail.camera);
+    let best: { material: Material; score: number } | null = null;
+    for (const material of videos) {
+      const haystack = `${material.name} ${material.folder}`.toLowerCase();
+      let score = 0;
+      for (const token of tokens) if (haystack.includes(token)) score += token.length >= 4 ? 3 : 1;
+      if (/close|特写|texture|质地|产品|product/.test(tokens.join(' ')) && /detail|product|产品|特写|upload|hot/i.test(`${material.folder} ${material.name}`)) score += 2;
+      if (/face|skin|肤|脸|真人|model/.test(tokens.join(' ')) && /model|scene|skin|face|真人|场景/i.test(`${material.folder} ${material.name}`)) score += 2;
+      if (material.duration >= 3) score += 1;
+      if (used.has(material.id)) score -= 2;
+      if (!best || score > best.score) best = { material, score };
+    }
+    const matched = best && (best.score >= 3 || (videos.length > index && !used.has(videos[index]!.id)))
+      ? best
+      : videos[index] && !used.has(videos[index]!.id)
+      ? { material: videos[index]!, score: 2 }
+      : null;
+    if (matched) used.add(matched.material.id);
+    return {
+      detail,
+      material: matched?.material,
+      score: matched?.score ?? 0,
+      reason: matched ? materialMatchReason(matched.material, tokens, matched.score) : '本地素材库暂未找到足够贴合的镜头',
+      suggestion: shootingSuggestion(detail),
+    };
+  });
+}
+
+function frameStartsEarly(time: string): boolean {
+  const match = String(time).match(/(\d+(?:\.\d+)?)/);
+  return match ? Number(match[1]) <= 3 : false;
+}
+
+function shootingNeedTitle(detail: ScriptDetail15s): string {
+  const text = `${detail.visual} ${detail.subtitle}`.toLowerCase();
+  if (/face|脸|skin|肤|acne|dry|保湿|护肤|洁面|妆|唇|lip/.test(text)) return '真人上脸/使用场景';
+  if (/package|包装|logo|brand|瓶|罐|产品|product|texture|质地/.test(text)) return '产品包装/质地特写';
+  if (/factory|工厂|warehouse|生产|发货|ship|proof|证明/.test(text)) return '工厂履约/发货证明';
+  return '通用转场/场景补充';
+}
+
+function buildShootingNeeds(videos: TrendVideo[], materials: Material[]): ShootingNeed[] {
+  const grouped = new Map<string, ShootingNeed>();
+  for (const video of videos) {
+    const analysis = getAnalysis(video);
+    if (!analysis) continue;
+    const matches = matchMaterialsToFrames(analysis.scriptDetails15s, materials);
+    for (const match of matches) {
+      if (match.material) continue;
+      const title = shootingNeedTitle(match.detail);
+      const key = `${video.platform}-${title}-${match.suggestion}`;
+      const existing = grouped.get(key);
+      const sourceTitle = shortenText(video.title, 42);
+      if (existing) {
+        existing.count += 1;
+        if (!existing.sourceVideos.includes(sourceTitle)) existing.sourceVideos.push(sourceTitle);
+        if (frameStartsEarly(match.detail.time)) existing.priority = '高';
+        continue;
+      }
+      grouped.set(key, {
+        id: key,
+        priority: frameStartsEarly(match.detail.time) ? '高' : '中',
+        title,
+        suggestion: match.suggestion,
+        count: 1,
+        sourceVideos: [sourceTitle],
+        platform: video.platform,
+        ratio: video.platform === 'youtube' ? '16:9' : '9:16',
+        example: match.detail,
+      });
+    }
+  }
+  return Array.from(grouped.values())
+    .map(item => ({ ...item, priority: item.priority === '高' || item.count >= 3 ? '高' : item.count >= 2 ? '中' : '低' }))
+    .sort((a, b) => {
+      const rank = { '高': 3, '中': 2, '低': 1 };
+      return rank[b.priority] - rank[a.priority] || b.count - a.count;
+    })
+    .slice(0, 30);
 }
 
 function conciseLines(text: string, maxLines = 6, maxChars = 34): string[] {
@@ -689,6 +834,11 @@ function ThumbnailImage({
 function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo; onGenerateScript: () => void; onRetry?: () => void }) {
   const [loaded, setLoaded] = useState(false);
   const [analysis, setAnalysis] = useState<ScriptAnalysis | null>(null);
+  const [materials, setMaterials] = useState<Material[]>([]);
+  const [materialLoading, setMaterialLoading] = useState(false);
+  const [generatingFrame, setGeneratingFrame] = useState('');
+  const [generatedFrameMaterials, setGeneratedFrameMaterials] = useState<Record<string, GeneratedVideo>>({});
+  const [frameErrors, setFrameErrors] = useState<Record<string, string>>({});
   const analysisKey = JSON.stringify(video.aiAnalysis || {});
 
   useEffect(() => {
@@ -700,6 +850,28 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
     }, video.aiAnalysis?.gemini ? 250 : 900);
     return () => clearTimeout(t);
   }, [video.id, analysisKey]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setMaterialLoading(true);
+    studioApi.listMaterials()
+      .then(list => {
+        if (!cancelled) setMaterials(list.filter(item => item.type === 'video'));
+      })
+      .catch(() => {
+        if (!cancelled) setMaterials([]);
+      })
+      .finally(() => {
+        if (!cancelled) setMaterialLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [video.id]);
+
+  useEffect(() => {
+    setGeneratedFrameMaterials({});
+    setFrameErrors({});
+    setGeneratingFrame('');
+  }, [video.id]);
 
   if (!loaded) {
     return (
@@ -726,7 +898,7 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
     return (
       <div className="flex-1 flex flex-col items-center justify-center gap-4 px-6 text-center">
         <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-surface-2 border border-border">
-          {state.spinning ? <Loader2 size={18} className="text-accent animate-spin" /> : <X size={18} className={state.failed ? 'text-amber' : 'text-text-muted'} />}
+          {state.spinning ? <Loader2 size={18} className="text-accent animate-spin" /> : <X size={18} className={state.failed ? 'text-accent' : 'text-text-muted'} />}
         </div>
         <div className="space-y-1 max-w-xs">
           <p className="text-sm font-semibold text-text-primary">{state.title}</p>
@@ -752,6 +924,72 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
       </div>
     );
   }
+
+  const frameMatches = matchMaterialsToFrames(analysis.scriptDetails15s, materials).map((item, index) => {
+    const key = `${item.detail.time}-${index}`;
+    const generated = generatedFrameMaterials[key];
+    return generated ? {
+      ...item,
+      material: {
+        id: generated.id,
+        name: generated.title,
+        folder: 'seedance',
+        type: 'video' as const,
+        duration: generated.duration,
+        size: 'Seedance 2.0',
+        file: generated.url || '',
+        url: generated.url || '',
+        poster: generated.poster,
+        scope: 'own' as const,
+        createdAt: generated.createdAt,
+      },
+      score: 9,
+      reason: 'Seedance 2.0 已按该分镜生成素材',
+    } : item;
+  });
+  const matchedCount = frameMatches.filter(item => item.material).length;
+
+  const generateFrameMaterial = async (match: FrameMaterialMatch, index: number) => {
+    const key = `${match.detail.time}-${index}`;
+    setGeneratingFrame(key);
+    setFrameErrors(prev => ({ ...prev, [key]: '' }));
+    try {
+      const prompt = [
+        `分镜时间：${match.detail.time}`,
+        `镜头：${match.detail.shot}；${match.detail.camera}`,
+        `画面：${match.detail.visual}`,
+        match.detail.subtitle ? `字幕/口播：${match.detail.subtitle}` : '',
+        `拍摄要求：9:16 社媒短视频，真实产品展示，自然光，动作清晰。`,
+      ].filter(Boolean).join('\n');
+      const output = await studioApi.seedanceVideo({
+        script: prompt,
+        productInfo: match.suggestion,
+        language: 'zh',
+        ratio: video.platform === 'youtube' ? '16:9' : '9:16',
+        duration: 5,
+        resolution: '720p',
+        title: `Seedance 2.0 分镜素材 · ${match.detail.time}`,
+      });
+      if (!output.ok || !output.url) throw new Error(output.error || 'Seedance 2.0 未返回视频素材');
+      setGeneratedFrameMaterials(prev => ({
+        ...prev,
+        [key]: {
+          id: output.material?.id || output.id || `seedance-frame-${video.id}-${index}-${Date.now()}`,
+          title: output.material?.name || output.title || `Seedance 2.0 分镜素材 · ${match.detail.time}`,
+          url: output.material?.url || output.url,
+          poster: output.material?.poster || output.poster || video.thumbnail,
+          duration: output.duration || 5,
+          createdAt: output.createdAt || new Date().toISOString(),
+          source: output.source,
+          material: output.material,
+        },
+      }));
+    } catch (err: any) {
+      setFrameErrors(prev => ({ ...prev, [key]: String(err?.message || err || 'Seedance 2.0 生成失败') }));
+    } finally {
+      setGeneratingFrame('');
+    }
+  };
 
   return (
     <div className="flex-1 overflow-y-auto">
@@ -785,38 +1023,80 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
           </div>
         </div>
 
-        {/* 脚本结构 */}
+        {/* 自动分镜 + 本地素材匹配 */}
         <div>
-          <div className="flex items-center gap-1.5 mb-2">
-            <LayoutIcon size={11} style={{ color: '#0891b2' }} />
-            <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wider">视频结构拆解</p>
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <div className="flex items-center gap-1.5">
+              <Film size={11} className="text-accent" />
+              <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wider">自动分镜素材匹配</p>
+            </div>
+            <span className="text-[10px] font-semibold text-text-muted">
+              {materialLoading ? '读取本地素材中...' : `${matchedCount}/${frameMatches.length} 已匹配`}
+            </span>
           </div>
-          <div className="space-y-1.5">
-            {analysis.structure.map((step, i) => (
-              <div key={i} className="flex gap-2.5">
-                <div className="flex flex-col items-center flex-shrink-0 pt-0.5">
-                  <div className="w-5 h-5 rounded-full flex items-center justify-center text-[9px] font-bold text-white flex-shrink-0"
-                    style={{ background: i === 0 ? '#d97706' : i === analysis.structure.length - 1 ? '#0891b2' : '#16a34a' }}>
-                    {i + 1}
+          <div className="space-y-2">
+            {frameMatches.map((match, i) => {
+              const key = `${match.detail.time}-${i}`;
+              const hasMaterial = Boolean(match.material);
+              const error = frameErrors[key];
+              return (
+                <div key={key} className={`rounded-xl border p-3 ${hasMaterial ? 'border-green-100 bg-green-50/70' : 'border-accent-100 bg-accent-50/60'}`}>
+                  <div className="flex gap-3">
+                    <div className="w-16 h-24 rounded-lg overflow-hidden bg-white border border-border flex-shrink-0 relative">
+                      {match.material?.url ? (
+                        <video src={`${match.material.url}#t=0.1`} poster={match.material.poster} muted playsInline preload="metadata" className="h-full w-full object-cover" />
+                      ) : match.material?.poster ? (
+                        <img src={match.material.poster} alt="" className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="h-full w-full flex flex-col items-center justify-center gap-1 text-text-muted">
+                          <Film size={16} />
+                          <span className="text-[9px] font-bold">缺素材</span>
+                        </div>
+                      )}
+                      <span className="absolute left-1 top-1 rounded bg-black/60 px-1 py-0.5 text-[8px] font-bold text-white">{match.detail.time}</span>
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="text-[11px] font-bold text-text-primary truncate">{match.detail.shot} · {match.detail.camera}</p>
+                          <p className="mt-1 text-[11px] leading-relaxed text-text-secondary line-clamp-2">{match.detail.visual}</p>
+                        </div>
+                        <span className={`flex-shrink-0 rounded-full px-2 py-0.5 text-[9px] font-bold ${hasMaterial ? 'bg-white text-green-700' : 'bg-white text-accent-700'}`}>
+                          {hasMaterial ? '已匹配' : '待补拍'}
+                        </span>
+                      </div>
+                      {hasMaterial && match.material ? (
+                        <div className="mt-2 rounded-lg bg-white/80 px-2 py-1.5">
+                          <p className="truncate text-[11px] font-semibold text-text-primary">{match.material.name}</p>
+                          <p className="mt-0.5 text-[10px] text-text-muted">{match.reason}</p>
+                        </div>
+                      ) : (
+                        <div className="mt-2 space-y-2">
+                          <p className="rounded-lg bg-white/80 px-2 py-1.5 text-[10px] leading-relaxed text-accent-800">{match.suggestion}</p>
+                          <button
+                            type="button"
+                            onClick={() => void generateFrameMaterial(match, i)}
+                            disabled={generatingFrame === key}
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1.5 text-[11px] font-bold text-white disabled:opacity-60"
+                          >
+                            {generatingFrame === key ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
+                            Seedance 2.0 生成素材
+                          </button>
+                          {error && <p className="text-[10px] leading-relaxed text-red-500">{error}</p>}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  {i < analysis.structure.length - 1 && <div className="w-px flex-1 bg-border mt-1" />}
                 </div>
-                <div className={`pb-2 ${i === analysis.structure.length - 1 ? '' : ''}`}>
-                  <div className="flex items-center gap-2">
-                    <span className="text-[10px] font-mono text-text-muted">{step.time}</span>
-                    <span className="text-[10px] font-semibold text-text-primary">{step.label}</span>
-                  </div>
-                  <p className="text-[11px] text-text-secondary leading-relaxed mt-0.5">{step.desc}</p>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
 
         {/* 15 秒脚本详析 */}
         <div>
           <div className="flex items-center gap-1.5 mb-2">
-            <FileText size={11} className="text-amber" />
+            <FileText size={11} className="text-accent" />
             <p className="text-[10px] font-semibold text-text-muted uppercase tracking-wider">15 秒脚本详析</p>
           </div>
           <div className="rounded-xl border border-border overflow-hidden">
@@ -858,7 +1138,7 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
           className="w-full flex items-center justify-center gap-2 py-2.5 rounded-xl text-sm font-semibold text-white transition-all"
           style={{ background: 'var(--color-accent)', boxShadow: '0 4px 12px rgba(22,163,74,0.25)' }}>
           <Sparkles size={14} />
-          用此结构生成我的产品脚本
+          去生成我的脚本
           <ChevronRight size={14} />
         </button>
       </div>
@@ -875,7 +1155,21 @@ interface ScriptPanelProps {
   onFavorite?: () => void;
   favoriting?: boolean;
   onNavigate?: (p: Page) => void;
-  onEnterWorkflow?: (payload: { script: string; video: TrendVideo; scriptType: ScriptType; language: string; productInfo: string; generatedVideo?: GeneratedVideo }) => void;
+  onEnterWorkflow?: (payload: {
+    source?: string;
+    script?: string;
+    video: TrendVideo;
+    scriptType?: ScriptType;
+    language?: string;
+    productInfo?: string;
+    generatedVideo?: GeneratedVideo;
+    referenceAnalysis?: {
+      title?: string;
+      visualStyle?: string;
+      coreEmotion?: string;
+      details?: { time: string; shot: string; camera: string; visual: string; subtitle?: string; audio?: string; note?: string }[];
+    };
+  }) => void;
 }
 
 interface GeneratedVideo {
@@ -935,11 +1229,11 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onFavorite, favo
   }, []);
 
   useEffect(() => {
-    if (activeTab === 'generate') loadEnterpriseProducts();
-  }, [activeTab, video.id]);
+    loadEnterpriseProducts();
+  }, [video.id]);
 
   useEffect(() => {
-    setActiveTab(activePanelTab);
+    if (activePanelTab) setActiveTab('analysis');
   }, [activePanelTab, video.id]);
 
   useEffect(() => {
@@ -1042,7 +1336,28 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onFavorite, favo
 
   const enterWorkflow = () => {
     if (!result || !videoResult) return;
-    onEnterWorkflow?.({ script: result, video, scriptType, language, productInfo, generatedVideo: videoResult });
+    onEnterWorkflow?.({ source: 'seedance_video', script: result, video, scriptType, language, productInfo, generatedVideo: videoResult });
+  };
+
+  const enterQuickCutFromAnalysis = () => {
+    const realAnalysis = getAnalysis(video);
+    const languageLabel = LANGUAGES.find(l => l.code === language)?.label;
+    const initialScript = realAnalysis ? makeStoryboardDraft(video, realAnalysis, productInfo, languageLabel, language) : '';
+    onEnterWorkflow?.({
+      source: 'inspiration_analysis',
+      script: initialScript,
+      video,
+      scriptType: 'storyboard',
+      language,
+      productInfo,
+      referenceAnalysis: realAnalysis ? {
+        title: video.title,
+        visualStyle: realAnalysis.scriptSummary15s.visualStyle,
+        coreEmotion: realAnalysis.scriptSummary15s.coreEmotion,
+        details: realAnalysis.scriptDetails15s,
+      } : undefined,
+    });
+    onClose();
   };
 
   const selectedLang = LANGUAGES.find(l => l.code === language);
@@ -1084,7 +1399,6 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onFavorite, favo
       <div className="flex items-center gap-0.5 px-4 py-2 border-b border-border flex-shrink-0">
         {([
           { id: 'analysis' as const, icon: <BarChart2 size={12} />, label: '脚本分析' },
-          { id: 'generate' as const, icon: <Sparkles size={12} />,  label: '生成脚本' },
         ]).map(tab => (
           <button key={tab.id} onClick={() => setActiveTab(tab.id)}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
@@ -1099,7 +1413,7 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onFavorite, favo
         {activeTab === 'analysis' ? (
           <motion.div key="analysis" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             className="flex flex-col flex-1 min-h-0 overflow-hidden">
-            <AnalysisPanel key={video.id} video={video} onGenerateScript={() => setActiveTab('generate')} onRetry={onRetry} />
+            <AnalysisPanel key={video.id} video={video} onGenerateScript={enterQuickCutFromAnalysis} onRetry={onRetry} />
           </motion.div>
         ) : (
           <motion.div key="generate" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -1342,7 +1656,7 @@ interface VideoCardProps {
 function VideoCard({ video, index, isSelected, onSelect, onWatch, onAnalyzeVideo, onFavoriteMaterial, analyzingVideo, favoritingMaterial }: VideoCardProps) {
   const meta = getPlatformMeta(video.platform);
   const trendLabel = video.trend === 'hot' ? '🔥 热门' : video.trend === 'rising' ? '↑ 上升' : '— 平稳';
-  const trendColor = video.trend === 'hot' ? 'text-amber' : video.trend === 'rising' ? 'text-green' : 'text-text-muted';
+  const trendColor = video.trend === 'hot' ? 'text-accent' : video.trend === 'rising' ? 'text-green' : 'text-text-muted';
   const crawlRule = video.aiAnalysis?.crawlRule || '关键词检索';
 
   return (
@@ -1419,7 +1733,7 @@ function VideoListItem({ video, isSelected, onSelect, onWatch, onAnalyzeVideo, o
   favoritingMaterial?: boolean;
 }) {
   const meta = getPlatformMeta(video.platform);
-  const trendColor = video.trend === 'hot' ? 'text-amber' : video.trend === 'rising' ? 'text-green' : 'text-text-muted';
+  const trendColor = video.trend === 'hot' ? 'text-accent' : video.trend === 'rising' ? 'text-green' : 'text-text-muted';
   const trendLabel = video.trend === 'hot' ? '热门' : video.trend === 'rising' ? '上升' : '平稳';
   const crawlRule = video.aiAnalysis?.crawlRule || '关键词检索';
   return (
@@ -1570,30 +1884,58 @@ function metadataPanelFallback(video: TrendVideo): TrendVideo {
   };
 }
 
-const DEMO_TREND_VIDEO: TrendVideo = {
-  id: 'demo-tiktok-skincare',
-  platform: 'tiktok',
-  title: '@_byjessevans dropping her routine for hydrated, healthy skin.',
-  thumbnail: '',
-  duration: 18,
-  tags: ['skincare', 'hydratedskin', 'beautyroutine'],
-  views: '1.2M',
-  trend: 'hot',
-  status: 'analyzed',
-  crawledAt: new Date().toISOString(),
-  aiAnalysis: {
-    gemini: metadataFallbackAnalysis(
-      '@_byjessevans dropping her routine for hydrated, healthy skin.',
-      'tiktok',
-      ['skincare', 'hydratedskin', 'beautyroutine'],
-      '1.2M',
-      18,
-    ),
-    analysisSource: 'demo-onboarding',
-    analysisQuality: 'metadata',
-    crawlRule: '新手演示素材',
+const DEMO_TREND_VIDEOS: TrendVideo[] = [
+  {
+    id: 'demo-tiktok-skincare',
+    platform: 'tiktok',
+    title: '@_byjessevans dropping her routine for hydrated, healthy skin.',
+    thumbnail: demoCover1,
+    duration: 18,
+    tags: ['skincare', 'hydratedskin', 'beautyroutine'],
+    views: '1.2M',
+    trend: 'hot',
+    videoUrl: '/demo/mock-0627.mp4',
+    status: 'analyzed',
+    crawledAt: new Date().toISOString(),
+    aiAnalysis: {
+      gemini: metadataFallbackAnalysis(
+        '@_byjessevans dropping her routine for hydrated, healthy skin.',
+        'tiktok',
+        ['skincare', 'hydratedskin', 'beautyroutine'],
+        '1.2M',
+        18,
+      ),
+      analysisSource: 'demo-local-video',
+      analysisQuality: 'metadata',
+      crawlRule: '本地演示素材',
+    },
   },
-};
+  {
+    id: 'demo-youtube-product-shot',
+    platform: 'youtube',
+    title: 'Factory product demo video with clean packaging and fast-cut social proof.',
+    thumbnail: demoCover2,
+    duration: 24,
+    tags: ['productdemo', 'factoryvideo', 'packaging'],
+    views: '486K',
+    trend: 'rising',
+    videoUrl: '/demo/img2video.mp4',
+    status: 'analyzed',
+    crawledAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+    aiAnalysis: {
+      gemini: metadataFallbackAnalysis(
+        'Factory product demo video with clean packaging and fast-cut social proof.',
+        'youtube',
+        ['productdemo', 'factoryvideo', 'packaging'],
+        '486K',
+        24,
+      ),
+      analysisSource: 'demo-local-video',
+      analysisQuality: 'metadata',
+      crawlRule: '本地演示素材',
+    },
+  },
+];
 
 function heatValue(views: string): number {
   const raw = String(views || '').toLowerCase().replace(/,/g, '');
@@ -1656,10 +1998,25 @@ interface InspirationDashboardProps {
   onScriptPanelOpen?: () => void;
   onScriptPanelClose?: () => void;
   onNavigate?: (p: Page) => void;
-  onEnterWorkflow?: (payload: { script: string; video: TrendVideo; scriptType: ScriptType; language: string; productInfo: string; generatedVideo?: GeneratedVideo }) => void;
+  onEnterWorkflow?: (payload: {
+    source?: string;
+    script?: string;
+    video: TrendVideo;
+    scriptType?: ScriptType;
+    language?: string;
+    productInfo?: string;
+    generatedVideo?: GeneratedVideo;
+    referenceAnalysis?: {
+      title?: string;
+      visualStyle?: string;
+      coreEmotion?: string;
+      details?: { time: string; shot: string; camera: string; visual: string; subtitle?: string; audio?: string; note?: string }[];
+    };
+  }) => void;
 }
 
 export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelClose, onNavigate, onEnterWorkflow }: InspirationDashboardProps) {
+  const [innerView, setInnerView] = useState<InspirationInnerView>('inspiration');
   const [platform, setPlatform] = useState<Platform>('all');
   const [search, setSearch] = useState('');
   const [selectedVideo, setSelectedVideo] = useState<TrendVideo | null>(null);
@@ -1675,6 +2032,11 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   const [analyzingVideoIds, setAnalyzingVideoIds] = useState<string[]>([]);
   const [favoritingMaterialIds, setFavoritingMaterialIds] = useState<string[]>([]);
   const [materialMessage, setMaterialMessage] = useState('');
+  const [localMaterials, setLocalMaterials] = useState<Material[]>([]);
+  const [materialsLoading, setMaterialsLoading] = useState(false);
+  const [uploadingMaterial, setUploadingMaterial] = useState(false);
+  const [generatingNeedId, setGeneratingNeedId] = useState('');
+  const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const platformLabel = PLATFORM_FILTERS.find(f => f.id === platform)?.label ?? '全部平台';
   const sortLabel = sortMode === 'crawlTime' ? '按爬取时间' : '按热度';
 
@@ -1685,6 +2047,17 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
 
   // Clean up on unmount
   useEffect(() => () => { onScriptPanelClose?.(); }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const refreshMaterials = async () => {
+    setMaterialsLoading(true);
+    try {
+      setLocalMaterials(await studioApi.listMaterials());
+    } finally {
+      setMaterialsLoading(false);
+    }
+  };
+
+  useEffect(() => { void refreshMaterials(); }, []);
 
   const refreshVideos = async (nextPage = 1, append = false) => {
     setVideosLoading(true);
@@ -1698,11 +2071,32 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
       };
       if (!r.ok) throw new Error('视频列表加载失败');
       const videos = recordsToVideos(data.items || []);
+      if (!append && videos.length === 0) {
+        const demo = await fetch('/demo/trend-videos-47.json');
+        const demoData = await demo.json().catch(() => ({})) as { items?: CrawlerRecord[] };
+        const fallbackVideos = recordsToVideos(demoData.items || []);
+        if (fallbackVideos.length) {
+          setVideoPage(1);
+          setVideoTotalPages(1);
+          setCrawledVideos(fallbackVideos);
+          return;
+        }
+      }
       setVideoPage(Number(data.page || nextPage));
       setVideoTotalPages(Math.max(1, Number(data.totalPages || nextPage)));
       setCrawledVideos(prev => append ? [...prev, ...videos.filter(v => !prev.some(old => old.id === v.id))] : videos);
     } catch {
-      if (!append) setCrawledVideos([]);
+      if (!append) {
+        try {
+          const demo = await fetch('/demo/trend-videos-47.json');
+          const demoData = await demo.json().catch(() => ({})) as { items?: CrawlerRecord[] };
+          setVideoPage(1);
+          setVideoTotalPages(1);
+          setCrawledVideos(recordsToVideos(demoData.items || []));
+        } catch {
+          setCrawledVideos([]);
+        }
+      }
     } finally {
       setVideosLoading(false);
     }
@@ -1737,8 +2131,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
     if (latest && latest !== selectedVideo) setSelectedVideo(latest);
   }, [crawledVideos, selectedVideo]);
 
-  const demoTrafficStep = isDemoTrafficStep();
-  const allVideos = demoTrafficStep && crawledVideos.length === 0 ? [DEMO_TREND_VIDEO] : crawledVideos;
+  const allVideos = crawledVideos.length === 0 ? DEMO_TREND_VIDEOS : crawledVideos;
   const visibleVideos = allVideos.filter(v =>
     ACTIVE_PLATFORMS.includes(v.platform)
     && (v.id.startsWith('demo-') || isDisplayableVideoAnalysis(v.aiAnalysis))
@@ -1764,6 +2157,60 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
     const t = v.crawledAt ? new Date(v.crawledAt).getTime() : 0;
     return t > 0 && Date.now() - t <= 3 * 24 * 60 * 60 * 1000;
   }).length;
+
+  const shootingNeeds = useMemo(() => buildShootingNeeds(visibleVideos, localMaterials), [visibleVideos, localMaterials]);
+
+  const handleUploadMaterials = async (files: FileList | null) => {
+    if (!files?.length) return;
+    setUploadingMaterial(true);
+    setMaterialMessage('');
+    try {
+      for (const file of Array.from(files)) {
+        const type = file.type.startsWith('video') ? 'video' : file.type.startsWith('audio') ? 'audio' : 'image';
+        const dataBase64 = await fileToDataUrl(file);
+        await studioApi.uploadMaterial({
+          name: file.name,
+          folder: 'social',
+          type,
+          duration: 0,
+          dataBase64,
+          mimeType: file.type,
+        });
+      }
+      await refreshMaterials();
+      setMaterialMessage(`已上传 ${files.length} 个素材到社媒素材库`);
+      setTimeout(() => setMaterialMessage(''), 2800);
+    } catch (e) {
+      setMaterialMessage(e instanceof Error ? e.message : '素材上传失败');
+    } finally {
+      setUploadingMaterial(false);
+      if (uploadInputRef.current) uploadInputRef.current.value = '';
+    }
+  };
+
+  const generateNeedMaterial = async (need: ShootingNeed) => {
+    setGeneratingNeedId(need.id);
+    setMaterialMessage('');
+    try {
+      const output = await studioApi.seedanceVideo({
+        script: `${need.title}\n${need.suggestion}\n参考分镜：${need.example?.visual || ''}\n输出 ${need.ratio} 社媒短视频素材。`,
+        productInfo: need.suggestion,
+        language: 'zh',
+        ratio: need.ratio,
+        duration: 5,
+        resolution: '720p',
+        title: `Seedance 2.0 待拍素材 · ${need.title}`,
+      });
+      if (!output.ok) throw new Error(output.error || 'Seedance 2.0 生成失败');
+      await refreshMaterials();
+      setMaterialMessage(`Seedance 2.0 已生成素材：${need.title}`);
+      setTimeout(() => setMaterialMessage(''), 2800);
+    } catch (e) {
+      setMaterialMessage(e instanceof Error ? e.message : 'Seedance 2.0 生成失败');
+    } finally {
+      setGeneratingNeedId('');
+    }
+  };
 
   const handlePlatformFilter = (nextPlatform: Platform) => {
     const lockedMessage = LOCKED_PLATFORM_MESSAGES[nextPlatform];
@@ -1917,85 +2364,98 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   return (
     <div className="relative">
       <div className="transition-all duration-300">
-        <div className="px-6 pt-5 pb-4">
-          <div className="flex items-start justify-between mb-4">
-            <div>
-              <h2 className="text-lg font-bold text-text-primary font-display">灵感大屏</h2>
-              <p className="text-sm text-text-muted mt-0.5">追踪全球社媒爆款，AI 脚本分析 + 一键生成口播 / 分镜</p>
-            </div>
-            <div className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-xs text-text-muted">
-              <div className="w-1.5 h-1.5 rounded-full bg-green animate-pulse" />
-              <span>{materialMessage || `今日已推送 ${visibleVideos.length} 条`}</span>
-            </div>
-          </div>
-          <div className="space-y-2.5">
-            <div className="relative min-w-0">
-              <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
-              <input type="text" value={search} onChange={e => { setLastCrawlVideoIds([]); setSearch(e.target.value); }}
-                placeholder="搜索视频标题或标签..."
-                className="h-11 w-full pl-9 pr-4 rounded-xl border border-border bg-surface text-sm text-text-primary placeholder:text-text-muted outline-none focus:border-accent transition-colors" />
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-2.5">
-              <div className="h-11 rounded-xl border border-border bg-surface px-2 flex items-center gap-1.5 overflow-hidden">
-                <Globe size={14} className="text-text-muted flex-shrink-0" />
-                <span className="text-sm text-text-muted flex-shrink-0">社媒平台</span>
-                <div className="flex items-center gap-1 min-w-0 overflow-x-auto">
-                  {PLATFORM_FILTERS.map(f => {
-                    const locked = f.id === 'facebook' || f.id === 'instagram';
-                    return (
-                      <button
-                        key={f.id}
-                        type="button"
-                        onClick={() => handlePlatformFilter(f.id)}
-                        className={`h-7 px-2 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors ${
-                          platform === f.id
-                            ? 'bg-accent text-white'
-                            : locked
-                              ? 'bg-surface-2 text-text-muted hover:text-text-primary'
-                              : 'text-text-secondary hover:bg-surface-2 hover:text-text-primary'
-                        }`}
-                      >
-                        {f.label}
-                      </button>
-                    );
-                  })}
-                </div>
+        <div className="pointer-events-none absolute left-0 top-48 z-30 flex flex-col gap-2">
+          {([
+            { id: 'inspiration' as const, label: '爆款灵感', short: '爆款', count: visibleVideos.length, icon: <Flame size={14} /> },
+            { id: 'library' as const, label: '社媒素材库', short: '素材', count: localMaterials.length, icon: <Film size={14} /> },
+            { id: 'shooting' as const, label: '待拍摄素材', short: '待拍', count: shootingNeeds.length, icon: <Lightbulb size={14} /> },
+          ]).map(item => {
+            const active = innerView === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                title={`${item.label} · ${item.count}`}
+                onClick={() => setInnerView(item.id)}
+                className={`pointer-events-auto flex h-24 w-12 flex-col items-center justify-center gap-1 rounded-r-2xl border border-l-0 text-[11px] font-black shadow-sm transition-all ${
+                  active
+                    ? 'border-accent/30 bg-accent text-white'
+                    : 'border-border bg-white/95 text-text-muted hover:bg-accent-glow hover:text-accent'
+                }`}
+              >
+                {item.icon}
+                <span className="[writing-mode:vertical-rl] tracking-[0.14em]">{item.short}</span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="px-6 py-5 pl-[74px]">
+            {innerView === 'inspiration' && <div className="mb-4 space-y-2.5">
+              <div className="relative min-w-0">
+                <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+                <input type="text" value={search} onChange={e => { setLastCrawlVideoIds([]); setSearch(e.target.value); }}
+                  placeholder="搜索视频标题或标签..."
+                  className="h-11 w-full pl-9 pr-4 rounded-xl border border-border bg-surface text-sm text-text-primary placeholder:text-text-muted outline-none focus:border-accent transition-colors" />
+              </div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div className="relative h-14 rounded-2xl border border-border bg-surface shadow-sm transition-colors hover:border-border-bright focus-within:border-accent">
+                <Globe size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+                <span className="absolute left-11 top-2 text-[11px] font-semibold text-text-muted pointer-events-none">社媒平台</span>
+                <select
+                  value={platform}
+                  onChange={e => handlePlatformFilter(e.target.value as Platform)}
+                  aria-label="社媒平台"
+                  className="h-full w-full cursor-pointer appearance-none rounded-2xl bg-transparent pl-11 pr-10 pt-4 text-base font-black text-text-primary outline-none"
+                >
+                  {PLATFORM_FILTERS.map(f => (
+                    <option key={f.id} value={f.id}>
+                      {f.id === 'instagram' ? 'Ins（正式版）' : f.id === 'facebook' ? 'Facebook（正式版）' : f.label}
+                    </option>
+                  ))}
+                </select>
+                <ChevronDown size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
                 <span className="sr-only">{platformLabel}</span>
               </div>
-              <div className="relative h-11">
+              <div className="relative h-14 rounded-2xl border border-border bg-surface shadow-sm transition-colors hover:border-border-bright focus-within:border-accent">
                 {sortMode === 'heat'
-                  ? <Flame size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
-                  : <Clock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />}
-                <span className="absolute left-9 top-1/2 -translate-y-1/2 text-sm text-text-muted pointer-events-none">排序方法</span>
-                <select value={sortMode} onChange={e => { setLastCrawlVideoIds([]); setSortMode(e.target.value as SortMode); }}
+                  ? <Flame size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+                  : <Clock size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />}
+                <span className="absolute left-11 top-2 text-[11px] font-semibold text-text-muted pointer-events-none">排序方法</span>
+                <select
+                  value={sortMode}
+                  onChange={e => { setLastCrawlVideoIds([]); setSortMode(e.target.value as SortMode); }}
                   aria-label="排序方法"
-                  className="h-11 w-full appearance-none rounded-xl border border-border bg-surface pl-[6.5rem] pr-9 text-sm font-semibold text-text-primary outline-none transition-colors hover:border-border-bright focus:border-accent">
+                  className="h-full w-full cursor-pointer appearance-none rounded-2xl bg-transparent pl-11 pr-10 pt-4 text-base font-black text-text-primary outline-none"
+                >
                   <option value="crawlTime">按爬取时间</option>
                   <option value="heat">按热度</option>
                 </select>
-                <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+                <ChevronDown size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
                 <span className="sr-only">{sortLabel}</span>
               </div>
-              <div className="relative h-11">
+              <div className="relative h-14 rounded-2xl border border-border bg-surface shadow-sm transition-colors hover:border-border-bright focus-within:border-accent">
                 {viewMode === 'grid'
-                  ? <LayoutGrid size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
-                  : <List size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />}
-                <span className="absolute left-9 top-1/2 -translate-y-1/2 text-sm text-text-muted pointer-events-none">大屏视图</span>
-                <select value={viewMode} onChange={e => setViewMode(e.target.value as 'grid' | 'list')}
+                  ? <LayoutGrid size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+                  : <List size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />}
+                <span className="absolute left-11 top-2 text-[11px] font-semibold text-text-muted pointer-events-none">大屏视图</span>
+                <select
+                  value={viewMode}
+                  onChange={e => setViewMode(e.target.value as 'grid' | 'list')}
                   aria-label="大屏视图"
-                  className="h-11 w-full appearance-none rounded-xl border border-border bg-surface pl-[6.5rem] pr-9 text-sm font-semibold text-text-primary outline-none transition-colors hover:border-border-bright focus:border-accent">
+                  className="h-full w-full cursor-pointer appearance-none rounded-2xl bg-transparent pl-11 pr-10 pt-4 text-base font-black text-text-primary outline-none"
+                >
                   <option value="grid">卡片视图</option>
                   <option value="list">列表视图</option>
                 </select>
-                <ChevronDown size={14} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+                <ChevronDown size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
               </div>
             </div>
-          </div>
-        </div>
+          </div>}
 
-        <div className="px-6 mb-4 grid grid-cols-3 gap-3 max-w-xl">
+        {innerView === 'inspiration' && <div className="mb-4 grid grid-cols-3 gap-3 max-w-xl">
           {[
-            { icon: <Zap size={13} />,       label: '热门视频', value: `${visibleVideos.length}`,    color: 'text-amber' },
+            { icon: <Zap size={13} />,       label: '热门视频', value: `${visibleVideos.length}`,    color: 'text-accent' },
             { icon: <TrendingUp size={13} />, label: '上升趋势', value: `${recentThreeDayUploads}`, color: 'text-green' },
             { icon: <Globe size={13} />,      label: '覆盖平台', value: `${new Set(visibleVideos.map(v => v.platform)).size}`,       color: 'text-accent' },
           ].map(stat => (
@@ -2007,65 +2467,193 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
               </div>
             </div>
           ))}
-        </div>
+        </div>}
 
-        <div className="px-6 pb-6">
-          {filtered.length === 0 ? (
-            <div className="min-h-72 rounded-xl border border-dashed border-border bg-surface flex flex-col items-center justify-center gap-3 text-center px-6">
-              <div className="w-11 h-11 rounded-xl bg-surface-2 border border-border flex items-center justify-center text-text-muted">
-                <Download size={18} />
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-text-primary">暂无真实视频数据</p>
-                <p className="text-xs text-text-muted mt-1">测试版请通过「定时任务」在北京时间 01:00 自动采集公开视频。</p>
-              </div>
-            </div>
-          ) : viewMode === 'grid' ? (
-            <div className="columns-2 lg:columns-3 xl:columns-4 gap-4">
-              {filtered.map((video, i) => (
-                <div key={video.id} className="break-inside-avoid mb-4">
-                  <VideoCard video={video} index={i} isSelected={selectedVideo?.id === video.id}
-                    onSelect={() => toggleScriptPanel(video)}
-                    onWatch={() => handleWatch(video)}
-                    onAnalyzeVideo={() => openScriptAnalysis(video)}
-                    onFavoriteMaterial={() => void favoriteMaterial(video)}
-                    analyzingVideo={analyzingVideoIds.includes(video.id)}
-                    favoritingMaterial={favoritingMaterialIds.includes(video.id)} />
+        <div>
+          {innerView === 'inspiration' && (
+            <>
+              {filtered.length === 0 ? (
+                <div className="min-h-72 rounded-xl border border-dashed border-border bg-surface flex flex-col items-center justify-center gap-3 text-center px-6">
+                  <div className="w-11 h-11 rounded-xl bg-surface-2 border border-border flex items-center justify-center text-text-muted">
+                    <Download size={18} />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-text-primary">暂无真实视频数据</p>
+                    <p className="text-xs text-text-muted mt-1">测试版请通过「定时任务」在北京时间 01:00 自动采集公开视频。</p>
+                  </div>
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div className="card overflow-hidden divide-y divide-border">
-              {filtered.map(video => (
-                <VideoListItem key={video.id} video={video} isSelected={selectedVideo?.id === video.id}
-                  onSelect={() => toggleScriptPanel(video)}
-                  onWatch={() => handleWatch(video)}
-                  onAnalyzeVideo={() => openScriptAnalysis(video)}
-                  onFavoriteMaterial={() => void favoriteMaterial(video)}
-                  analyzingVideo={analyzingVideoIds.includes(video.id)}
-                  favoritingMaterial={favoritingMaterialIds.includes(video.id)} />
-              ))}
+              ) : viewMode === 'grid' ? (
+                <div className="columns-2 lg:columns-3 xl:columns-4 gap-4">
+                  {filtered.map((video, i) => (
+                    <div key={video.id} className="break-inside-avoid mb-4">
+                      <VideoCard video={video} index={i} isSelected={selectedVideo?.id === video.id}
+                        onSelect={() => toggleScriptPanel(video)}
+                        onWatch={() => handleWatch(video)}
+                        onAnalyzeVideo={() => openScriptAnalysis(video)}
+                        onFavoriteMaterial={() => void favoriteMaterial(video)}
+                        analyzingVideo={analyzingVideoIds.includes(video.id)}
+                        favoritingMaterial={favoritingMaterialIds.includes(video.id)} />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="card overflow-hidden divide-y divide-border">
+                  {filtered.map(video => (
+                    <VideoListItem key={video.id} video={video} isSelected={selectedVideo?.id === video.id}
+                      onSelect={() => toggleScriptPanel(video)}
+                      onWatch={() => handleWatch(video)}
+                      onAnalyzeVideo={() => openScriptAnalysis(video)}
+                      onFavoriteMaterial={() => void favoriteMaterial(video)}
+                      analyzingVideo={analyzingVideoIds.includes(video.id)}
+                      favoritingMaterial={favoritingMaterialIds.includes(video.id)} />
+                  ))}
+                </div>
+              )}
+              {filtered.length > 0 && videoPage < videoTotalPages && (
+                <div className="flex justify-center pt-2 pb-4">
+                  <button
+                    onClick={() => void refreshVideos(videoPage + 1, true)}
+                    disabled={videosLoading}
+                    className="btn-ghost !px-4 !py-2 flex items-center gap-2 disabled:opacity-60"
+                  >
+                    {videosLoading ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
+                    加载更多
+                  </button>
+                </div>
+              )}
+              {filtered.length === 0 && (
+                <div className="text-center py-20">
+                  <Search size={28} className="mx-auto text-text-muted mb-3 opacity-30" />
+                  <p className="text-text-muted text-sm">没有找到相关视频</p>
+                </div>
+              )}
+            </>
+          )}
+
+          {innerView === 'library' && (
+            <div className="space-y-4">
+              <input
+                ref={uploadInputRef}
+                type="file"
+                multiple
+                accept="video/*,image/*"
+                className="hidden"
+                onChange={e => void handleUploadMaterials(e.currentTarget.files)}
+              />
+              <div className="flex items-center justify-between gap-4 rounded-2xl border border-border bg-surface p-5">
+                <div>
+                  <h3 className="text-base font-bold text-text-primary">社媒素材库</h3>
+                  <p className="mt-1 text-sm text-text-muted">本地拍摄、Seedance 2.0 生成、爆款收藏的素材统一保存在这里。</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => uploadInputRef.current?.click()}
+                  disabled={uploadingMaterial}
+                  className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60"
+                >
+                  {uploadingMaterial ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
+                  上传本地素材
+                </button>
+              </div>
+
+              <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+                {materialsLoading ? (
+                  <div className="col-span-full flex items-center justify-center gap-2 py-16 text-sm text-text-muted">
+                    <Loader2 size={16} className="animate-spin" /> 正在读取素材库...
+                  </div>
+                ) : localMaterials.length === 0 ? (
+                  <div className="col-span-full rounded-2xl border border-dashed border-border bg-surface px-6 py-16 text-center">
+                    <Film size={30} className="mx-auto mb-3 text-text-muted opacity-50" />
+                    <p className="text-sm font-bold text-text-primary">还没有本地社媒素材</p>
+                    <p className="mt-1 text-xs text-text-muted">拍摄完成后上传，或从待拍摄素材池用 Seedance 2.0 生成。</p>
+                  </div>
+                ) : localMaterials.map(material => (
+                  <article key={material.id} className="overflow-hidden rounded-2xl border border-border bg-surface">
+                    <div className="relative aspect-[9/16] bg-surface-2">
+                      {material.type === 'video' ? (
+                        <video src={`${material.url}#t=0.1`} poster={material.poster} muted playsInline preload="metadata" className="h-full w-full object-cover" />
+                      ) : material.poster || material.url ? (
+                        <img src={material.poster || material.url} alt={material.name} className="h-full w-full object-cover" />
+                      ) : (
+                        <div className="flex h-full items-center justify-center text-text-muted"><Film size={22} /></div>
+                      )}
+                      <span className="absolute left-2 top-2 rounded bg-black/60 px-2 py-0.5 text-[10px] font-bold text-white">{material.type === 'video' ? '视频' : '图片'}</span>
+                    </div>
+                    <div className="p-3">
+                      <p className="truncate text-sm font-bold text-text-primary">{material.name}</p>
+                      <p className="mt-1 text-xs text-text-muted">{material.folder} · {material.size || `${material.duration}s`}</p>
+                    </div>
+                  </article>
+                ))}
+              </div>
             </div>
           )}
-          {filtered.length > 0 && videoPage < videoTotalPages && (
-            <div className="flex justify-center pt-2 pb-4">
-              <button
-                onClick={() => void refreshVideos(videoPage + 1, true)}
-                disabled={videosLoading}
-                className="btn-ghost !px-4 !py-2 flex items-center gap-2 disabled:opacity-60"
-              >
-                {videosLoading ? <Loader2 size={14} className="animate-spin" /> : <Plus size={14} />}
-                加载更多
-              </button>
-            </div>
-          )}
-          {filtered.length === 0 && (
-            <div className="text-center py-20">
-              <Search size={28} className="mx-auto text-text-muted mb-3 opacity-30" />
-              <p className="text-text-muted text-sm">没有找到相关视频</p>
+
+          {innerView === 'shooting' && (
+            <div className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-3">
+                {[
+                  { label: '待拍摄缺口', value: shootingNeeds.length, color: 'text-accent' },
+                  { label: '高优先级', value: shootingNeeds.filter(item => item.priority === '高').length, color: 'text-red-500' },
+                  { label: '已入库素材', value: localMaterials.length, color: 'text-accent' },
+                ].map(item => (
+                  <div key={item.label} className="card p-4">
+                    <p className={`text-2xl font-bold ${item.color}`}>{item.value}</p>
+                    <p className="mt-1 text-xs text-text-muted">{item.label}</p>
+                  </div>
+                ))}
+              </div>
+
+              {shootingNeeds.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-border bg-surface px-6 py-16 text-center">
+                  <Check size={30} className="mx-auto mb-3 text-accent" />
+                  <p className="text-sm font-bold text-text-primary">当前没有明显待拍摄缺口</p>
+                  <p className="mt-1 text-xs text-text-muted">素材库已能覆盖当前抓取视频的主要分镜。</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {shootingNeeds.map(need => (
+                    <article key={need.id} className="rounded-2xl border border-border bg-surface p-4">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                              need.priority === '高' ? 'bg-red-50 text-red-600' : need.priority === '中' ? 'bg-accent-50 text-accent-700' : 'bg-slate-100 text-text-muted'
+                            }`}>{need.priority}优先级</span>
+                            <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[10px] font-bold text-text-secondary">{need.ratio}</span>
+                            <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[10px] font-bold text-text-secondary">{getPlatformMeta(need.platform).label}</span>
+                          </div>
+                          <h3 className="mt-2 text-sm font-bold text-text-primary">{need.title}</h3>
+                          <p className="mt-1 text-xs leading-relaxed text-text-secondary">{need.suggestion}</p>
+                          <p className="mt-2 text-[11px] text-text-muted">出现 {need.count} 次 · 来源：{need.sourceVideos.slice(0, 3).join(' / ')}</p>
+                        </div>
+                        <div className="flex flex-shrink-0 gap-2">
+                          <button
+                            type="button"
+                            onClick={() => { setInnerView('library'); setTimeout(() => uploadInputRef.current?.click(), 50); }}
+                            className="rounded-lg border border-border px-3 py-2 text-xs font-bold text-text-secondary hover:text-text-primary"
+                          >
+                            上传已拍素材
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void generateNeedMaterial(need)}
+                            disabled={generatingNeedId === need.id}
+                            className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-xs font-bold text-white disabled:opacity-60"
+                          >
+                            {generatingNeedId === need.id ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                            Seedance 2.0 生成素材
+                          </button>
+                        </div>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
+      </div>
       </div>
 
       <AnimatePresence>

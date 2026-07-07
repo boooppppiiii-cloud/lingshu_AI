@@ -94,7 +94,7 @@ function mergeConsecutiveAssistant(list: Message[]): Message[] {
 }
 
 export default function StrategyPage({ onEnterConversation, onLeaveConversation, isInConversation, restore, kickoff, onAction, onSessionRefresh }: Props) {
-  const [viewMode, setViewMode] = useState<ViewMode>('chat');
+  const [viewMode, setViewMode] = useState<ViewMode>('board');
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [suggestions, setSuggestions] = useState(FALLBACK_SUGGESTIONS);
@@ -115,7 +115,11 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
       .catch(() => setSuggestions(FALLBACK_SUGGESTIONS));
   }, []);
   // 从近期会话恢复 / 新建（清空）
-  useEffect(() => { if (restore) { setMessages(mergeConsecutiveAssistant(restore.messages)); setViewMode('chat'); } }, [restore?.key]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (!restore) return;
+    setMessages(mergeConsecutiveAssistant(restore.messages));
+    setViewMode(restore.messages.length ? 'chat' : 'board');
+  }, [restore?.key]); // eslint-disable-line react-hooks/exhaustive-deps
   // 一键执行：自动发起任务（新开一段对话）
   useEffect(() => {
     if (!kickoff || sentKickoffKeysRef.current.has(kickoff.key)) return;
@@ -277,7 +281,7 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
         <AnimatePresence mode="wait">
           {viewMode === 'board' ? (
             <motion.div key="board" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
-              <StrategyDataBoard />
+              <StrategyDataBoard onAction={onAction} />
             </motion.div>
           ) : viewMode === 'workspace' ? (
             <motion.div key="workspace" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">

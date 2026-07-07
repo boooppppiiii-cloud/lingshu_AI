@@ -47,7 +47,7 @@ const PLATFORMS = ['全部', 'TikTok', 'Instagram', 'YouTube', 'Facebook', 'Pint
 const LANGS = ['全部', '英语', '阿语', '西语'];
 const POST_TYPES = ['全部', '自发', '达人'] as const;
 const TOPIC_COLORS: Record<string, string> = {
-  痛点解决: '#d97706', 促销: '#16a34a', 测评: '#3b82f6', 场景演示: '#a855f7',
+  痛点解决: '#16a34a', 促销: '#16a34a', 测评: '#3b82f6', 场景演示: '#a855f7',
   对比: '#ec4899', 教程: '#0891b2', 达人种草: '#ef4444', 开箱: '#f59e0b',
 };
 const THRESHOLDS = [[300000, '30万'], [500000, '50万'], [800000, '80万']] as const;
@@ -158,7 +158,7 @@ export default function TrafficDataBoard({ windowDays = 30 }: { windowDays?: num
 
   const seg = (active: boolean) => `px-2.5 py-1 rounded-md text-xs font-semibold transition-all ${active ? 'bg-surface text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'}`;
   const sel = 'rounded-lg border border-border bg-surface px-2.5 py-1.5 text-xs outline-none hover:border-border-bright';
-  const AMBER = '#d97706';
+  const GREEN = '#16a34a';
   const delta = (v: string) => compare ? <span className="text-[10px] font-semibold text-accent ml-1">▲ {v}</span> : null;
 
   return (
@@ -171,8 +171,8 @@ export default function TrafficDataBoard({ windowDays = 30 }: { windowDays?: num
           </div>
           <select value={platform} onChange={e => setPlatform(e.target.value)} className={sel}>{PLATFORMS.map(p => <option key={p} value={p}>{p === '全部' ? '全部平台' : p}</option>)}</select>
           <select value={lang} onChange={e => setLang(e.target.value)} className={sel}>{LANGS.map(l => <option key={l} value={l}>{l === '全部' ? '全部语言' : l}</option>)}</select>
-          <button onClick={() => setPaidOnly(v => !v)} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-colors" style={paidOnly ? { borderColor: AMBER, background: '#FAEEDA', color: '#633806' } : { borderColor: 'var(--color-border)', color: 'var(--color-text-secondary)' }}>
-            <span className="w-3.5 h-3.5 rounded flex items-center justify-center" style={{ background: paidOnly ? AMBER : 'transparent', border: paidOnly ? 'none' : '1px solid var(--color-border-bright)' }}>{paidOnly && <Check size={10} className="text-white" />}</span>仅投流
+          <button onClick={() => setPaidOnly(v => !v)} className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-colors" style={paidOnly ? { borderColor: GREEN, background: '#DCFCE7', color: '#166534' } : { borderColor: 'var(--color-border)', color: 'var(--color-text-secondary)' }}>
+            <span className="w-3.5 h-3.5 rounded flex items-center justify-center" style={{ background: paidOnly ? GREEN : 'transparent', border: paidOnly ? 'none' : '1px solid var(--color-border-bright)' }}>{paidOnly && <Check size={10} className="text-white" />}</span>仅投流
           </button>
           <button onClick={() => setCompare(v => !v)} className={`px-2.5 py-1.5 rounded-lg border text-xs font-semibold transition-colors ${compare ? 'border-accent text-accent' : 'border-border text-text-secondary hover:text-text-primary'}`}>对比上期</button>
         </div>
@@ -198,7 +198,7 @@ export default function TrafficDataBoard({ windowDays = 30 }: { windowDays?: num
 
         {/* 一号位：爆款率 + 爆款墙 */}
         <div className="flex items-center gap-2 mb-2.5">
-          <Flame size={15} style={{ color: AMBER }} />
+          <Flame size={15} style={{ color: GREEN }} />
           <span className="text-sm font-semibold text-text-primary">{view === 'reach' ? '爆款表现' : '高转化内容'}</span>
           <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-surface-2 border border-border ml-1">
             <button className={seg(view === 'reach')} onClick={() => setView('reach')}>高起量</button>
@@ -215,23 +215,23 @@ export default function TrafficDataBoard({ windowDays = 30 }: { windowDays?: num
         </div>
         <div className="flex gap-4 mb-6 flex-col lg:flex-row">
           {/* 爆款率仪表 */}
-          <div className="rounded-2xl p-5 flex-shrink-0 lg:w-56" style={{ background: '#FAEEDA' }}>
+          <div className="rounded-2xl p-5 flex-shrink-0 lg:w-56" style={{ background: '#DCFCE7' }}>
             {view === 'reach' ? (
               <>
-                <p className="text-xs" style={{ color: '#854F0B' }}>爆款率 {delta('4pp')}</p>
-                <p className="text-4xl font-bold mt-1" style={{ color: '#633806' }}>{agg.hitRate.toFixed(0)}%</p>
-                <p className="text-xs mt-2" style={{ color: '#854F0B' }}>本期发 {agg.n} 条 · 爆 {agg.hits} 条</p>
+                <p className="text-xs" style={{ color: '#166534' }}>爆款率 {delta('4pp')}</p>
+                <p className="text-4xl font-bold mt-1" style={{ color: '#166534' }}>{agg.hitRate.toFixed(0)}%</p>
+                <p className="text-xs mt-2" style={{ color: '#166534' }}>本期发 {agg.n} 条 · 爆 {agg.hits} 条</p>
                 <div className="h-1.5 rounded-full mt-3 overflow-hidden" style={{ background: 'rgba(133,79,11,0.2)' }}>
-                  <div className="h-full rounded-full" style={{ width: `${agg.hitRate}%`, background: AMBER }} />
+                  <div className="h-full rounded-full" style={{ width: `${agg.hitRate}%`, background: GREEN }} />
                 </div>
-                <p className="text-[11px] mt-3" style={{ color: '#854F0B' }}>破流量池 {agg.hits} · 平均完播 {agg.comp.toFixed(0)}%</p>
+                <p className="text-[11px] mt-3" style={{ color: '#166534' }}>破流量池 {agg.hits} · 平均完播 {agg.comp.toFixed(0)}%</p>
               </>
             ) : (
               <>
-                <p className="text-xs" style={{ color: '#854F0B' }}>平均转化率 {delta('1.2pp')}</p>
-                <p className="text-4xl font-bold mt-1" style={{ color: '#633806' }}>{agg.conv.toFixed(1)}%</p>
-                <p className="text-xs mt-2" style={{ color: '#854F0B' }}>引流 {wan(agg.clicks)} · 下单 {Math.round(agg.orders)}</p>
-                <p className="text-[11px] mt-3" style={{ color: '#854F0B' }}>视频曝光 {wan(agg.plays)}</p>
+                <p className="text-xs" style={{ color: '#166534' }}>平均转化率 {delta('1.2pp')}</p>
+                <p className="text-4xl font-bold mt-1" style={{ color: '#166534' }}>{agg.conv.toFixed(1)}%</p>
+                <p className="text-xs mt-2" style={{ color: '#166534' }}>引流 {wan(agg.clicks)} · 下单 {Math.round(agg.orders)}</p>
+                <p className="text-[11px] mt-3" style={{ color: '#166534' }}>视频曝光 {wan(agg.plays)}</p>
               </>
             )}
           </div>
@@ -243,7 +243,7 @@ export default function TrafficDataBoard({ windowDays = 30 }: { windowDays?: num
                 return (
                   <div key={p.id} className="card !rounded-xl overflow-hidden">
                     <div className="relative aspect-[4/5]" style={{ background: `linear-gradient(135deg, hsl(${p.hue} 60% 80%), hsl(${(p.hue + 40) % 360} 60% 68%))` }}>
-                      {view === 'reach' && hot && <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold text-white flex items-center gap-0.5" style={{ background: AMBER }}><Flame size={9} /> 爆款</span>}
+                      {view === 'reach' && hot && <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold text-white flex items-center gap-0.5" style={{ background: GREEN }}><Flame size={9} /> 爆款</span>}
                       <span className="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded text-[8px] font-semibold text-white bg-black/45">{p.platform}</span>
                       <span className="absolute bottom-1.5 left-1.5 right-1.5 text-[10px] font-bold text-white" style={{ textShadow: '0 1px 2px rgba(0,0,0,.7)' }}>
                         {view === 'reach' ? `曝光 ${wan(p.plays)}` : `转化 ${convOf(p).toFixed(1)}% · 曝光 ${wan(p.plays)}`}
@@ -296,7 +296,7 @@ export default function TrafficDataBoard({ windowDays = 30 }: { windowDays?: num
                   {genes[key].map(g => (
                     <div key={g.k} className="mb-2">
                       <div className="flex justify-between text-[11px]"><span className="truncate">{g.k}</span><span className="text-text-muted ml-1">{wan(g.v)}</span></div>
-                      <div className="h-1.5 rounded-full bg-surface-2 mt-1 overflow-hidden"><div className="h-full rounded-full" style={{ width: `${g.pct}%`, background: AMBER }} /></div>
+                      <div className="h-1.5 rounded-full bg-surface-2 mt-1 overflow-hidden"><div className="h-full rounded-full" style={{ width: `${g.pct}%`, background: GREEN }} /></div>
                     </div>
                   ))}
                 </div>
@@ -312,12 +312,12 @@ export default function TrafficDataBoard({ windowDays = 30 }: { windowDays?: num
             <div className="h-[200px]">
               <ResponsiveContainer width="100%" height="100%">
                 <AreaChart data={trend} margin={{ top: 6, right: 10, bottom: 0, left: -10 }}>
-                  <defs><linearGradient id="gmvFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={AMBER} stopOpacity={0.35} /><stop offset="100%" stopColor={AMBER} stopOpacity={0} /></linearGradient></defs>
+                  <defs><linearGradient id="gmvFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={GREEN} stopOpacity={0.35} /><stop offset="100%" stopColor={GREEN} stopOpacity={0} /></linearGradient></defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
                   <XAxis dataKey="day" tick={{ fontSize: 9 }} stroke="var(--color-text-muted)" interval="preserveStartEnd" minTickGap={24} />
                   <YAxis tick={{ fontSize: 9 }} stroke="var(--color-text-muted)" />
                   <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} formatter={((v: number) => [wan(Number(v)), '视频曝光']) as never} />
-                  <Area type="monotone" dataKey="plays" stroke={AMBER} strokeWidth={2} fill="url(#gmvFill)" />
+                  <Area type="monotone" dataKey="plays" stroke={GREEN} strokeWidth={2} fill="url(#gmvFill)" />
                 </AreaChart>
               </ResponsiveContainer>
             </div>
@@ -331,7 +331,7 @@ export default function TrafficDataBoard({ windowDays = 30 }: { windowDays?: num
                   <XAxis type="number" tick={{ fontSize: 9 }} stroke="var(--color-text-muted)" />
                   <YAxis type="category" dataKey="platform" tick={{ fontSize: 10 }} stroke="var(--color-text-muted)" width={62} />
                   <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} formatter={((v: number) => [wan(Number(v)), '视频曝光']) as never} cursor={{ fill: 'var(--color-surface-2)' }} />
-                  <Bar dataKey="exposure" radius={[0, 4, 4, 0]} fill={AMBER} />
+                  <Bar dataKey="exposure" radius={[0, 4, 4, 0]} fill={GREEN} />
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -351,7 +351,7 @@ export default function TrafficDataBoard({ windowDays = 30 }: { windowDays?: num
                 {([['topic', '选题'], ['hook', '钩子'], ['format', '形式'], ['platform', '平台'], ['lang', '语言'], ['paid', '投流']] as const).map(([k, label]) => (
                   <th key={k} className="px-1 py-1.5 text-left font-semibold">
                     <select value={tf[k]} onChange={e => setF(k, e.target.value)}
-                      className={`w-full bg-transparent text-[11px] font-semibold outline-none cursor-pointer ${tf[k] === '全部' ? 'text-text-secondary' : 'text-amber'}`}>
+                      className={`w-full bg-transparent text-[11px] font-semibold outline-none cursor-pointer ${tf[k] === '全部' ? 'text-text-secondary' : 'text-accent'}`}>
                       {F[k].map(o => <option key={o} value={o}>{o === '全部' ? label : o}</option>)}
                     </select>
                   </th>
@@ -377,13 +377,13 @@ export default function TrafficDataBoard({ windowDays = 30 }: { windowDays?: num
                   <td className="px-1.5 py-2 whitespace-nowrap">{p.format}</td>
                   <td className="px-1.5 py-2">{p.platform}</td>
                   <td className="px-1.5 py-2">{p.lang}</td>
-                  <td className="px-1.5 py-2">{p.paid ? <span className="px-1 py-0.5 rounded text-[9px] font-semibold" style={{ background: '#FAEEDA', color: '#633806' }}>投流</span> : <span className="text-text-muted">—</span>}</td>
+                  <td className="px-1.5 py-2">{p.paid ? <span className="px-1 py-0.5 rounded text-[9px] font-semibold" style={{ background: '#DCFCE7', color: '#166534' }}>投流</span> : <span className="text-text-muted">—</span>}</td>
                   <td className="px-1.5 py-2">{wan(p.plays)}</td>
                   <td className="px-1.5 py-2">{p.comp ? `${p.comp}%` : '—'}</td>
                   <td className="px-1.5 py-2">{p.clicks.toLocaleString()}</td>
                   <td className="px-1.5 py-2">{p.inq}</td>
                   <td className="px-1.5 py-2">{p.orders}</td>
-                  <td className="px-1.5 py-2 font-semibold" style={{ color: '#633806' }}>{wan(p.plays)}</td>
+                  <td className="px-1.5 py-2 font-semibold" style={{ color: '#166534' }}>{wan(p.plays)}</td>
                   <td className="px-1.5 py-2">{convOf(p).toFixed(1)}%</td>
                 </tr>
               ))}
