@@ -10,7 +10,7 @@ import GlobalAssistant from './components/GlobalAssistant';
 import StrategyPage from './components/StrategyPage';
 import TrafficPage from './components/TrafficPage';
 import ConversionPage from './components/ConversionPage';
-import OrdersPage from './components/OrdersPage';
+import OrderManagementPage from './components/OrderManagementPage';
 import EnterprisePage from './components/EnterprisePage';
 import IntegrationsPage from './components/IntegrationsPage';
 import ScheduledPage from './components/ScheduledPage';
@@ -412,7 +412,7 @@ export default function App() {
               onSessionRefresh={() => void refreshSession()}
             />
           )}
-          {page === 'orders' && <OrdersPage />}
+          {page === 'orders' && <OrderManagementPage />}
           {page === 'enterprise' && <EnterprisePage />}
           {page === 'plugins' && <IntegrationsPage />}
           {page === 'scheduled' && <ScheduledPage onAction={startAgentTask} />}
