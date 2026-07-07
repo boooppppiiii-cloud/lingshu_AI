@@ -4,12 +4,12 @@ import { BookOpen, Loader2 } from 'lucide-react';
 import Layout from './components/Layout';
 import AuthScreen from './components/AuthScreen';
 import { authApi, type AuthSession } from './lib/auth';
-import { completeDemoStep, resetDemoProgress, setDemoProgressScope } from './lib/demoProgress';
+import { completeDemoStep, setDemoProgressScope } from './lib/demoProgress';
 import BusinessDiagnosisModal from './components/BusinessDiagnosisModal';
 import StrategyPage from './components/StrategyPage';
 import TrafficPage from './components/TrafficPage';
 import ConversionPage from './components/ConversionPage';
-import RetentionPage from './components/RetentionPage';
+import OrdersPage from './components/OrdersPage';
 import EnterprisePage from './components/EnterprisePage';
 import IntegrationsPage from './components/IntegrationsPage';
 import ScheduledPage from './components/ScheduledPage';
@@ -20,6 +20,7 @@ export type Page =
   | 'traffic'
   | 'conversion'
   | 'retention'
+  | 'orders'
   | 'enterprise'
   | 'plugins'
   | 'scheduled'
@@ -28,7 +29,6 @@ export type Page =
   | 'youtube';
 
 export type AgentType = 'strategy' | 'traffic' | 'conversion' | 'retention';
-const DEMO_GUIDE_ACTIVE_SCOPE_KEY = 'ow_demo_guide_active_scope';
 
 export interface Source { title: string; uri: string }
 export interface Message {
@@ -54,10 +54,10 @@ export interface KickoffSignal { text: string; key: string }
 export type AgentAction = (agent: AgentType, task: string) => void;
 
 const AGENT_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention'];
-const ALL_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention', 'enterprise', 'plugins', 'scheduled', 'admin', 'channels', 'youtube'];
-const BUSINESS_DIAGNOSIS_SEEN_SESSION_KEY = 'ow_business_diagnosis_seen_scope';
-const BUSINESS_DIAGNOSIS_SKIP_TODAY_KEY = 'ow_business_diagnosis_skip_today';
+const ALL_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention', 'orders', 'enterprise', 'plugins', 'scheduled', 'admin', 'channels', 'youtube'];
+const BUSINESS_DIAGNOSIS_SEEN_KEY = 'ow_business_diagnosis_seen_scope_v2';
 const firstUserText = (msgs?: Message[]) => (msgs?.find(m => m.role === 'user')?.content ?? '新会话').slice(0, 24);
+const customerUnifiedAgent = (agent: AgentType): AgentType => (agent === 'retention' ? 'conversion' : agent);
 const loadConvs = (): Conversation[] => {
   try { return JSON.parse(localStorage.getItem('ow_convs') || '[]'); } catch { return []; }
 };
@@ -164,70 +164,40 @@ export default function App() {
   // 账号会话
   const [session, setSession] = useState<AuthSession | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
-  const [demoGuideActive, setDemoGuideActive] = useState(false);
   const [businessDiagnosisOpen, setBusinessDiagnosisOpen] = useState(false);
-  const [businessDiagnosisDocked, setBusinessDiagnosisDocked] = useState(false);
+  const businessDiagnosisDocked = false;
 
   const progressScopeFor = (s: AuthSession | null) => s?.demo?.guideScope || (s?.demo?.expiresAt ? `${s.user.id}:${s.demo.expiresAt}` : s?.user?.id || s?.tenant?.id || null);
   const diagnosisScopeFor = (s: AuthSession | null) => s?.demo?.guideScope || s?.user?.id || s?.tenant?.id || 'guest';
-  const diagnosisTodayKeyFor = (s: AuthSession | null) => `${diagnosisScopeFor(s)}:${new Date().toISOString().slice(0, 10)}`;
   const showBusinessDiagnosisFor = (s: AuthSession | null) => {
     if (!s) return;
-    if (s.demo?.guideTrigger) return;
     const scope = diagnosisScopeFor(s);
     try {
-      if (sessionStorage.getItem(BUSINESS_DIAGNOSIS_SEEN_SESSION_KEY) === scope) return;
-      if (localStorage.getItem(BUSINESS_DIAGNOSIS_SKIP_TODAY_KEY) === diagnosisTodayKeyFor(s)) return;
+      if (localStorage.getItem(BUSINESS_DIAGNOSIS_SEEN_KEY) === scope) return;
     } catch { /* ignore */ }
     setBusinessDiagnosisOpen(true);
-    setBusinessDiagnosisDocked(false);
   };
   const closeBusinessDiagnosis = () => {
     if (session) {
       try {
-        sessionStorage.setItem(BUSINESS_DIAGNOSIS_SEEN_SESSION_KEY, diagnosisScopeFor(session));
+        localStorage.setItem(BUSINESS_DIAGNOSIS_SEEN_KEY, diagnosisScopeFor(session));
       } catch { /* ignore */ }
     }
     setBusinessDiagnosisOpen(false);
-    setBusinessDiagnosisDocked(true);
   };
   const dismissBusinessDiagnosisToday = () => {
     if (session) {
       try {
-        sessionStorage.setItem(BUSINESS_DIAGNOSIS_SEEN_SESSION_KEY, diagnosisScopeFor(session));
-        localStorage.setItem(BUSINESS_DIAGNOSIS_SKIP_TODAY_KEY, diagnosisTodayKeyFor(session));
+        localStorage.setItem(BUSINESS_DIAGNOSIS_SEEN_KEY, diagnosisScopeFor(session));
       } catch { /* ignore */ }
     }
     setBusinessDiagnosisOpen(false);
-    setBusinessDiagnosisDocked(false);
   };
-  const reopenBusinessDiagnosis = () => {
-    setBusinessDiagnosisOpen(true);
-    setBusinessDiagnosisDocked(false);
-  };
-  const shouldShowGuide = (s: AuthSession | null) => {
-    if (!s?.demo?.enabled) return false;
-    return Boolean(s.demo.guideTrigger && progressScopeFor(s));
-  };
-  const hasActiveGuideScope = (s: AuthSession | null) => {
-    const scope = progressScopeFor(s);
-    if (!s?.demo?.enabled || !scope) return false;
-    try { return sessionStorage.getItem(DEMO_GUIDE_ACTIVE_SCOPE_KEY) === scope; } catch { return false; }
-  };
-  const showGuideFor = (s: AuthSession) => {
-    const scope = progressScopeFor(s);
-    if (scope) {
-      try { sessionStorage.setItem(DEMO_GUIDE_ACTIVE_SCOPE_KEY, scope); } catch { /* ignore */ }
-    }
-    resetDemoProgress();
-    setDemoGuideActive(true);
-  };
+  const reopenBusinessDiagnosis = () => setBusinessDiagnosisOpen(true);
 
   useEffect(() => {
     authApi.me().then(s => {
       setDemoProgressScope(progressScopeFor(s));
-      if (s && shouldShowGuide(s)) showGuideFor(s);
-      else setDemoGuideActive(hasActiveGuideScope(s));
       setSession(s);
       showBusinessDiagnosisFor(s);
       setAuthLoading(false);
@@ -238,10 +208,7 @@ export default function App() {
     const timer = window.setInterval(() => {
       authApi.me().then(s => {
         setDemoProgressScope(progressScopeFor(s));
-        if (s && shouldShowGuide(s)) showGuideFor(s);
-        else if (s) setDemoGuideActive(hasActiveGuideScope(s));
         setSession(s);
-        if (!s) setDemoGuideActive(false);
       });
     }, 300_000);
     return () => window.clearInterval(timer);
@@ -284,10 +251,11 @@ export default function App() {
     const conv = convsRef.current.find(c => c.id === id);
     if (!conv) return;
     activeIdRef.current = id; setActiveConvId(id);
-    setConversation({ agent: conv.agent, messages: conv.messages });
-    setRestore({ agent: conv.agent, messages: conv.messages, key: `${id}:${Date.now()}` });
+    const pageAgent = customerUnifiedAgent(conv.agent);
+    setConversation({ agent: pageAgent, messages: conv.messages });
+    setRestore({ agent: pageAgent, messages: conv.messages, key: `${id}:${Date.now()}` });
     setKickoff(null);
-    setPage(conv.agent);
+    setPage(pageAgent);
   };
   const newConversation = () => {
     activeIdRef.current = null; setActiveConvId(null);
@@ -297,27 +265,23 @@ export default function App() {
 
   // 一键执行：策略专家把任务交给某个专家，跳转过去并自动发起任务
   const startAgentTask = (agent: AgentType, text: string) => {
+    const pageAgent = customerUnifiedAgent(agent);
     activeIdRef.current = null; setActiveConvId(null);
-    setRestore(null); setConversation({ agent });
-    setKickoff({ agent, text, key: `k${Date.now()}` });
-    setPage(agent);
+    setRestore(null); setConversation({ agent: pageAgent });
+    setKickoff({ agent: pageAgent, text, key: `k${Date.now()}` });
+    setPage(pageAgent);
   };
 
   const handleNavigate = useCallback((p: Page) => {
     setConversation(null); setRestore(null); setKickoff(null);
     activeIdRef.current = null; setActiveConvId(null);
-    setPage(p);
+    setPage(p === 'retention' ? 'conversion' : p);
   }, []);
   const restoreFor = (a: AgentType) => (restore && restore.agent === a ? restore : undefined);
   const kickoffFor = (a: AgentType) => (kickoff && kickoff.agent === a ? { text: kickoff.text, key: kickoff.key } : undefined);
 
   const handleAuthed = (s: AuthSession) => {
     setDemoProgressScope(progressScopeFor(s));
-    if (shouldShowGuide(s)) {
-      showGuideFor(s);
-    } else {
-      setDemoGuideActive(hasActiveGuideScope(s));
-    }
     setSession(s);
     showBusinessDiagnosisFor(s);
   };
@@ -326,28 +290,18 @@ export default function App() {
     if (!latest) {
       setDemoProgressScope(null);
       setSession(null);
-      setDemoGuideActive(false);
       setBusinessDiagnosisOpen(false);
-      setBusinessDiagnosisDocked(false);
       return;
     }
     setDemoProgressScope(progressScopeFor(latest));
-    setDemoGuideActive(hasActiveGuideScope(latest));
     setSession(latest);
   };
   const handleLogout = () => {
     authApi.logout();
-    try { sessionStorage.removeItem(DEMO_GUIDE_ACTIVE_SCOPE_KEY); } catch { /* ignore */ }
-    try { sessionStorage.removeItem(BUSINESS_DIAGNOSIS_SEEN_SESSION_KEY); } catch { /* ignore */ }
     setDemoProgressScope(null);
-    setDemoGuideActive(false);
     setBusinessDiagnosisOpen(false);
-    setBusinessDiagnosisDocked(false);
     setSession(null);
   };
-  const handleDemoGuideShown = useCallback(() => {
-    void authApi.guideSeen();
-  }, []);
 
   if (authLoading) {
     return (
@@ -377,8 +331,7 @@ export default function App() {
   return (
     <Layout page={page} onNavigate={handleNavigate} conversation={conversation} session={session} onLogout={handleLogout}
       onSessionUpdate={setSession}
-      demoGuideActive={demoGuideActive}
-      onDemoGuideShown={handleDemoGuideShown}
+      demoGuideActive={false}
       conversations={conversations} activeConvId={activeConvId} onOpenConversation={openConversation} onNewConversation={newConversation}
       suppressRightPanel={scriptPanelOpen} onAction={startAgentTask}>
       <AnimatePresence>
@@ -411,7 +364,6 @@ export default function App() {
         onClose={closeBusinessDiagnosis}
         onDismissToday={dismissBusinessDiagnosisToday}
         onNavigate={handleNavigate}
-        onAction={startAgentTask}
       />
       <PageErrorBoundary page={page} onNavigateHome={() => handleNavigate('strategy')}>
         <Suspense fallback={<PageLoading />}>
@@ -451,17 +403,7 @@ export default function App() {
               onSessionRefresh={() => void refreshSession()}
             />
           )}
-          {page === 'retention' && (
-            <RetentionPage
-              onEnterConversation={enterConversation}
-              onLeaveConversation={leaveConversation}
-              isInConversation={conversation?.agent === 'retention'}
-              restore={restoreFor('retention')}
-              kickoff={kickoffFor('retention')}
-              onAction={startAgentTask}
-              onSessionRefresh={() => void refreshSession()}
-            />
-          )}
+          {page === 'orders' && <OrdersPage />}
           {page === 'enterprise' && <EnterprisePage />}
           {page === 'plugins' && <IntegrationsPage />}
           {page === 'scheduled' && <ScheduledPage onAction={startAgentTask} />}

@@ -47,11 +47,11 @@ export default function TrafficPage({ onEnterConversation, onLeaveConversation, 
           <div className="w-6 h-6 rounded-lg flex items-center justify-center" style={{ background: 'rgba(217,119,6,0.1)', color: '#d97706' }}>
             <Zap size={13} />
           </div>
-          <span className="text-sm font-semibold text-text-primary">流量</span>
+          <span className="text-sm font-semibold text-text-primary">我的社媒</span>
           {isInConversation && (
             <span className="flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full ml-1" style={{ background: 'rgba(217,119,6,0.1)', color: '#d97706' }}>
               <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
-              流量专家 运行中
+              社媒助手运行中
             </span>
           )}
         </div>
@@ -98,7 +98,7 @@ export default function TrafficPage({ onEnterConversation, onLeaveConversation, 
                   color: '#d97706',
                   bg: 'rgba(217,119,6,0.1)',
                   icon: <Zap size={13} />,
-                  name: '流量专家',
+                  name: '我的社媒',
                   tagline: '爆款拆解 · 多语言脚本 · 矩阵发布',
                   suggestions: [
                     '主推品脚本方向',

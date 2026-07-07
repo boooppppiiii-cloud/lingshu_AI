@@ -177,7 +177,7 @@ const SKILLS: Skill[] = [
     ],
     tools: [
       { id: 'product_kb', label: '产品知识库查询', desc: '接入当前 Product Skill，查询产品规格、价格、库存',    icon: <Package size={12} /> },
-      { id: 'crm',        label: 'CRM 客户档案',   desc: '读取客户历史订单、询盘记录、标签信息',                icon: <Users size={12} /> },
+      { id: 'crm',        label: '客户档案',   desc: '读取客户历史订单、询盘记录、标签信息',                icon: <Users size={12} /> },
       { id: 'whatsapp',   label: 'WhatsApp 发送',  desc: '在成交阶段自动发送报价单、产品目录到客户 WhatsApp', icon: <MessageSquare size={12} /> },
     ],
   },
@@ -222,7 +222,7 @@ const SKILLS: Skill[] = [
 ];
 
 const CATEGORY_SECTIONS: { id: SkillCategory; label: string; desc: string }[] = [
-  { id: 'sales',    label: '销冠专家',      desc: '提升销售转化的核心 Skill，驱动客服与询盘 Agent 表现' },
+  { id: 'sales',    label: '销冠专家',      desc: '提升销售转化的核心 Skill，驱动我的客户处理询盘和跟单' },
   { id: 'industry', label: '行业专家',      desc: '垂直领域知识注入，让 Agent 具备行业洞察力' },
   { id: 'product',  label: '客户产品知识库', desc: '结构化产品信息，减少幻觉，提升应答准确率' },
 ];
@@ -287,19 +287,19 @@ const PLUGIN_INTERACTIONS: Record<string, PluginAction[]> = {
   ],
   tiktok: [
     { label: '视频数据', desc: '读取账号视频、播放和互动数据，供社媒账号页展示' },
-    { label: '一键发布', desc: '流量专家生成视频后，可发布到已连接的 TikTok 账号' },
+    { label: '一键发布', desc: '我的社媒生成视频后，可发布到已连接的 TikTok 账号' },
   ],
   whatsapp_business: [
-    { label: '询盘消息', desc: '接收 WhatsApp 对话，供转化专家识别意向和生成回复' },
+    { label: '询盘消息', desc: '接收 WhatsApp 对话，供我的客户识别意向和生成回复' },
     { label: '模板触达', desc: '唤醒老客时生成模板消息，并记录触达结果' },
   ],
   instagram: [
     { label: '主页内容', desc: '读取主页基础信息、帖子和互动数据' },
-    { label: '发布入口', desc: '将流量专家生成内容整理为 Reels 或帖子草稿' },
+    { label: '发布入口', desc: '将我的社媒生成内容整理为 Reels 或帖子草稿' },
   ],
   facebook: [
     { label: '主页帖子', desc: '读取主页帖子、评论和基础互动数据' },
-    { label: '内容分发', desc: '把流量专家生成内容映射成主页帖子草稿' },
+    { label: '内容分发', desc: '把我的社媒生成内容映射成主页帖子草稿' },
   ],
   pinterest: [
     { label: 'Idea Pin', desc: '生成 Pin 标题、描述和落地页建议' },

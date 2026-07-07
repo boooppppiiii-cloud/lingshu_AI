@@ -2,13 +2,13 @@ import { useState, useEffect, useRef } from 'react';
 import {
   MessageSquare, LayoutGrid, AlertTriangle, Clock, TrendingUp,
   CheckCircle2, Circle, ChevronLeft, Bot, User, Send,
-  Sparkles, ChevronDown, Languages, Loader2,
+  Sparkles, ChevronDown, Languages, Loader2, Users, RefreshCw, Filter,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import AgentChatPage from './AgentChatPage';
 import type { ConversationContext, RestoreSignal, KickoffSignal, AgentAction } from '../App';
 
-type ViewMode = 'dashboard' | 'chat' | 'customer-chat';
+type ViewMode = 'dashboard' | 'qualified' | 'reactivation' | 'chat' | 'customer-chat';
 
 interface Props {
   onEnterConversation: (ctx: ConversationContext) => void;
@@ -41,6 +41,20 @@ const TASKS = [
   { label: '发送 Maria 艾灸贴报价单',        done: false, urgent: false },
   { label: '跟进 John 样品寄送进度',          done: true,  urgent: false },
   { label: '更新 WhatsApp 阿语话术模板',      done: true,  urgent: false },
+];
+
+const QUALIFIED_CUSTOMERS = [
+  { buyer: 'Ahmed Al-Rashid', source: 'WhatsApp', product: '假发定制', score: 96, reason: '500件 OEM + 明确交期问题', action: '自动首响后转人工报价' },
+  { buyer: 'Fatima Hassan', source: 'WhatsApp', product: '香皂礼盒', score: 91, reason: '1000套礼盒 + 中东节日前采购', action: '推送阿语报价模板' },
+  { buyer: 'Maria Santos', source: '站内 DM', product: '艾灸贴', score: 74, reason: '小批量试单，适合样品转化', action: '发送样品政策' },
+  { buyer: 'Nguyen Van A', source: 'Instagram', product: '发饰批发', score: 69, reason: '询问目录，需判断复购潜力', action: '自动发送目录并追踪点击' },
+];
+
+const REACTIVATION_CUSTOMERS = [
+  { buyer: 'Khalid Mohammed', tier: '高价值老客', last: '68天未互动', channel: 'WhatsApp', product: '新款棕色直发14寸', action: '发新品目录 + 老客价' },
+  { buyer: 'Carlos Rivera', tier: '沉睡客', last: '55天未复购', channel: 'WhatsApp', product: '升级版热敷贴', action: '发西语包装样图' },
+  { buyer: 'Omar Hassan', tier: '沉睡客', last: '74天未互动', channel: 'WhatsApp', product: '防摔磁吸壳', action: '按机型发库存表' },
+  { buyer: 'Aisha Rahman', tier: 'VIP', last: '18天前下单', channel: 'WhatsApp', product: '斋月礼盒套装', action: '确认补货窗口' },
 ];
 
 // zh = 中文注释，AI模式下每条消息下方显示
@@ -303,7 +317,7 @@ function Dashboard({ onInquiryClick }: { onInquiryClick: (id: string) => void })
               }}
               className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-all text-white"
               style={{ background: '#0891b2' }}>
-              <MessageSquare size={12} />让转化专家 回复
+              <MessageSquare size={12} />生成回复建议
             </button>
           </div>
           <div className="divide-y divide-border">
@@ -358,6 +372,113 @@ function Dashboard({ onInquiryClick }: { onInquiryClick: (id: string) => void })
           </div>
         </div>
 
+      </div>
+    </div>
+  );
+}
+
+function QualifiedCustomersPanel({ onOpenInquiry }: { onOpenInquiry: (id: string) => void }) {
+  return (
+    <div className="h-full overflow-y-auto">
+      <div className="max-w-4xl mx-auto px-6 py-5 space-y-5">
+        <div className="grid grid-cols-4 gap-3">
+          {[
+            { label: '今日进线', value: '23', color: '#0891b2' },
+            { label: '高质量询盘', value: '8', color: '#16a34a' },
+            { label: '已自动首响', value: '17', color: '#4f46e5' },
+            { label: '需人工介入', value: '3', color: '#dc2626' },
+          ].map(item => (
+            <div key={item.label} className="card p-4">
+              <p className="text-[11px] font-medium text-text-muted">{item.label}</p>
+              <p className="mt-2 text-2xl font-bold font-display" style={{ color: item.color }}>{item.value}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="card overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+            <div className="flex items-center gap-2">
+              <Filter size={14} className="text-accent" />
+              <p className="text-sm font-semibold text-text-primary">成交客资自动筛选</p>
+            </div>
+            <span className="text-[11px] font-semibold px-2 py-1 rounded-md bg-green-50 text-green-700">自动回复开启</span>
+          </div>
+          <div className="divide-y divide-border">
+            {QUALIFIED_CUSTOMERS.map((item, index) => (
+              <button key={item.buyer} onClick={() => onOpenInquiry(index === 1 ? '4' : index === 2 ? '2' : index === 3 ? '5' : '1')}
+                className="w-full grid grid-cols-[minmax(160px,1fr)_120px_90px_minmax(180px,1fr)_150px] gap-3 px-4 py-3 text-left hover:bg-surface-2 transition-colors">
+                <div>
+                  <p className="text-sm font-semibold text-text-primary">{item.buyer}</p>
+                  <p className="text-xs text-text-muted">{item.source} · {item.product}</p>
+                </div>
+                <div>
+                  <p className="text-[11px] text-text-muted">质量分</p>
+                  <p className="text-lg font-bold text-text-primary">{item.score}</p>
+                </div>
+                <span className={`mt-2 h-fit rounded-full px-2 py-1 text-[11px] font-bold ${item.score >= 90 ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
+                  {item.score >= 90 ? '高意向' : '可培育'}
+                </span>
+                <p className="text-xs leading-relaxed text-text-secondary">{item.reason}</p>
+                <p className="text-xs font-semibold text-accent">{item.action}</p>
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <div className="rounded-xl border border-border bg-surface p-4">
+          <p className="text-sm font-semibold text-text-primary">自动回复规则</p>
+          <div className="mt-3 grid grid-cols-3 gap-3">
+            {['新询盘 2 分钟内自动首响', '高分询盘推送人工报价', '低分询盘自动发目录/样品政策'].map(rule => (
+              <div key={rule} className="rounded-lg border border-border bg-white px-3 py-3 text-xs font-semibold text-text-secondary">{rule}</div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ReactivationPanel({ onChatClick }: { onChatClick: () => void }) {
+  return (
+    <div className="h-full overflow-y-auto">
+      <div className="max-w-4xl mx-auto px-6 py-5 space-y-5">
+        <div className="grid grid-cols-4 gap-3">
+          {[
+            { label: '老客总数', value: '632', color: '#16a34a' },
+            { label: '60天沉默', value: '65', color: '#d97706' },
+            { label: 'VIP待跟进', value: '18', color: '#4f46e5' },
+            { label: '本月复购率', value: '34%', color: '#0891b2' },
+          ].map(item => (
+            <div key={item.label} className="card p-4">
+              <p className="text-[11px] font-medium text-text-muted">{item.label}</p>
+              <p className="mt-2 text-2xl font-bold font-display" style={{ color: item.color }}>{item.value}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="card overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-border">
+            <div className="flex items-center gap-2">
+              <RefreshCw size={14} className="text-green-700" />
+              <p className="text-sm font-semibold text-text-primary">老客唤醒 · 今日优先</p>
+            </div>
+            <button type="button" onClick={onChatClick} className="rounded-lg bg-slate-950 px-3 py-1.5 text-xs font-bold text-white">生成唤醒话术</button>
+          </div>
+          <div className="divide-y divide-border">
+            {REACTIVATION_CUSTOMERS.map(item => (
+              <div key={item.buyer} className="grid grid-cols-[minmax(160px,1fr)_120px_120px_minmax(160px,1fr)_150px] gap-3 px-4 py-3">
+                <div>
+                  <p className="text-sm font-semibold text-text-primary">{item.buyer}</p>
+                  <p className="text-xs text-text-muted">{item.channel} · {item.tier}</p>
+                </div>
+                <p className="text-xs font-semibold text-amber-700">{item.last}</p>
+                <p className="text-xs text-text-secondary">{item.product}</p>
+                <p className="text-xs leading-relaxed text-text-muted">基于历史采购偏好自动匹配新品/补货理由</p>
+                <button type="button" className="h-fit rounded-lg border border-border px-3 py-2 text-xs font-bold text-text-secondary hover:bg-surface-2">{item.action}</button>
+              </div>
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -750,20 +871,22 @@ export default function ConversionPage({
           <div className="flex items-center gap-2.5">
             <div className="w-6 h-6 rounded-lg flex items-center justify-center"
               style={{ background: 'rgba(8,145,178,0.1)', color: '#0891b2' }}>
-              <MessageSquare size={13} />
+              <Users size={13} />
             </div>
-            <span className="text-sm font-semibold text-text-primary">转化</span>
+            <span className="text-sm font-semibold text-text-primary">我的客户</span>
             {isInConversation && viewMode === 'chat' && (
               <span className="flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full ml-1"
                 style={{ background: 'rgba(8,145,178,0.1)', color: '#0891b2' }}>
-                <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />转化专家
+                <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />客户助手
               </span>
             )}
           </div>
           <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-surface-2 border border-border">
             {([
-              { mode: 'dashboard' as ViewMode, icon: <LayoutGrid size={12} />,    label: '工作台' },
-              { mode: 'chat'      as ViewMode, icon: <MessageSquare size={12} />, label: '对话'   },
+              { mode: 'dashboard' as ViewMode, icon: <MessageSquare size={12} />, label: '潜客询盘' },
+              { mode: 'qualified' as ViewMode, icon: <Filter size={12} />, label: '成交客资' },
+              { mode: 'reactivation' as ViewMode, icon: <RefreshCw size={12} />, label: '老客唤醒' },
+              { mode: 'chat'      as ViewMode, icon: <Bot size={12} />, label: '跟单回复建议' },
             ] as const).map(({ mode, icon, label }) => (
               <button key={mode}
                 onClick={() => {
@@ -789,6 +912,19 @@ export default function ConversionPage({
               <Dashboard onInquiryClick={openCustomerChat} />
             </motion.div>
           )}
+          {viewMode === 'qualified' && (
+            <motion.div key="qualified" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
+              <QualifiedCustomersPanel onOpenInquiry={openCustomerChat} />
+            </motion.div>
+          )}
+          {viewMode === 'reactivation' && (
+            <motion.div key="reactivation" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
+              <ReactivationPanel onChatClick={() => handleEnterChat({
+                agent: 'conversion',
+                messages: [{ role: 'user', content: '请根据当前老客列表，生成老客唤醒分层、触达节奏和 WhatsApp 跟进话术。' }],
+              })} />
+            </motion.div>
+          )}
           {viewMode === 'chat' && (
             <motion.div key="chat" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
               <AgentChatPage
@@ -798,8 +934,8 @@ export default function ConversionPage({
                   color: '#0891b2',
                   bg: 'rgba(8,145,178,0.1)',
                   icon: <MessageSquare size={13} />,
-                  name: '转化专家',
-                  tagline: '多语种 24/7 · 大单预警 · AI+人工切换',
+                  name: '我的客户',
+                  tagline: '询盘筛选 · 自动回复 · 跟单建议 · 老客唤醒',
                   suggestions: [
                     '首响询盘模板',
                     '大单跟进话术',

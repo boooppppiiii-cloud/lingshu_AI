@@ -285,6 +285,44 @@ function extractJSON<T>(text: string): T | null {
 
 export const studioRouter = Router();
 
+// POST /studio/map-product-columns Body: { headers, sampleRows }
+studioRouter.post('/map-product-columns', async (req, res) => {
+  const headers = Array.isArray(req.body?.headers) ? req.body.headers.map(String) : [];
+  const sampleRows = Array.isArray(req.body?.sampleRows) ? req.body.sampleRows.slice(0, 5) : [];
+  if (!headers.length) {
+    res.status(400).json({ ok: false, error: 'headers required' });
+    return;
+  }
+
+  const allowed = new Set(['sku', 'name', 'color', 'size', 'tagPrice', 'material', 'imageUrl', 'highlights', '']);
+  try {
+    const text = await callLLM(JSON.stringify({ headers, sampleRows }), {
+      systemPrompt: `你是 B2B 商品表格字段映射助手。只根据用户给出的表头和前 5 行样本，把客户列名映射到产品 schema。
+可用目标字段：
+- sku: 货号/款号/SKU/商品编码，用于 upsert 去重
+- name: 商品名称
+- color: 颜色
+- size: 尺码/规格
+- tagPrice: 吊牌价/价格
+- material: 面料/材质/成分
+- imageUrl: 图片 URL/主图链接
+- highlights: 一句话卖点/描述
+不确定或无关列映射为空字符串。只输出 JSON，不要 markdown。格式：
+{"mapping":{"客户列名":"sku"},"notes":"简短说明"}`,
+    });
+    const match = text.match(/\{[\s\S]*\}/);
+    const parsed = match ? JSON.parse(match[0]) as { mapping?: Record<string, unknown>; notes?: unknown } : {};
+    const mapping: Record<string, string> = {};
+    for (const header of headers) {
+      const value = parsed.mapping?.[header];
+      mapping[header] = typeof value === 'string' && allowed.has(value) ? value : '';
+    }
+    res.json({ ok: true, mapping, notes: typeof parsed.notes === 'string' ? parsed.notes : '' });
+  } catch (error) {
+    res.status(502).json({ ok: false, error: error instanceof Error ? error.message : String(error) });
+  }
+});
+
 /* ── 订阅状态查询 ──────────────────────────────────────────────────────────
    放在收费墙之前：即使未订阅，用户/客户端也要能查到自己的状态与原因。
    返回 entitled，供桌面客户端在合成前判断是否放行。

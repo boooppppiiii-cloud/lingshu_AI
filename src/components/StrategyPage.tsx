@@ -250,7 +250,7 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
           <div className="w-6 h-6 rounded-lg flex items-center justify-center" style={{ background: 'rgba(22,163,74,0.1)', color: '#16a34a' }}>
             <Compass size={13} />
           </div>
-          <span className="text-sm font-semibold text-text-primary">策略</span>
+          <span className="text-sm font-semibold text-text-primary">首页</span>
           {hasConversation && (
             <button onClick={handleClose} className="ml-1 p-1 rounded-md hover:bg-surface-2 text-text-muted transition-colors">
               <X size={13} />
@@ -293,7 +293,7 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
                       <Compass size={28} />
                     </div>
                     <div className="text-center">
-                      <p className="text-base font-bold text-text-primary font-display">策略专家</p>
+                      <p className="text-base font-bold text-text-primary font-display">首页经营助手</p>
                       <p className="text-sm text-text-muted mt-1">跨三侧策略编排 · 经营分析 · 多 Agent 协调</p>
                     </div>
                     <div className="grid grid-cols-2 gap-2 max-w-lg w-full">
@@ -347,7 +347,7 @@ export default function StrategyPage({ onEnterConversation, onLeaveConversation,
                 <div className="max-w-2xl mx-auto rounded-2xl border border-border bg-surface-2 overflow-hidden focus-within:border-border-bright transition-colors">
                   <textarea value={input} onChange={e => setInput(e.target.value)}
                     onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); void send(input); } }}
-                    placeholder="告诉策略专家 你的目标或问题..." rows={2}
+                    placeholder="告诉我你的目标或问题..." rows={2}
                     className="w-full px-4 pt-3 pb-1 bg-transparent text-sm text-text-primary placeholder:text-text-muted resize-none outline-none" />
                   <div className="flex items-center justify-between px-3 pb-3 pt-1">
                     <button type="button" onClick={() => setDeepThinking(v => !v)}

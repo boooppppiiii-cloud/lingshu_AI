@@ -439,7 +439,7 @@ export function YouTubeConnectionPanel({ compact = false }: { compact?: boolean 
         <div className="mt-5 rounded-xl border border-dashed border-gray-200 px-4 py-5 text-center">
           <TvMinimalPlay size={28} className="mx-auto text-gray-300 mb-2" />
           <p className="text-sm font-medium text-gray-700">还没有连接 YouTube 频道</p>
-          <p className="text-xs text-gray-400 mt-1">连接后，流量专家的 AI 生成视频可以一键发布到 YouTube。</p>
+          <p className="text-xs text-gray-400 mt-1">连接后，我的社媒里的 AI 生成视频可以一键发布到 YouTube。</p>
         </div>
       )}
     </section>
