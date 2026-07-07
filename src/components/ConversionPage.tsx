@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
 import {
-  AlertTriangle, BellRing, Bot, CalendarClock, CheckCircle2, ChevronLeft, Clock,
-  FileText, Filter, Languages, MessageSquare, Mic, Phone, RefreshCw, Send,
-  Sparkles, StickyNote, TrendingUp, UserRound, Users,
+  Bot, CalendarClock, CheckCircle2, ChevronLeft, Clock,
+  FileText, Languages, MessageSquare, Mic, Phone, RefreshCw, Search, Send,
+  Sparkles, StickyNote, Users,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import type { AgentAction, ConversationContext, KickoffSignal, RestoreSignal } from '../App';
 
-type CustomerView = 'inbox' | 'leads' | 'won' | 'silent';
+type CustomerView = 'all' | 'leads' | 'won' | 'silent';
 type CustomerStage = '潜客' | '询盘中' | '已报价' | '成交' | '沉默30' | '沉默60';
 type AutomationLevel = 'auto' | 'confirm' | 'manual';
 type TimelineEventType = 'whatsapp' | 'ai' | 'call' | 'note' | 'quote' | 'task';
@@ -242,11 +242,11 @@ const CUSTOMERS: CustomerProfile[] = [
   },
 ];
 
-const VIEW_META: Record<CustomerView, { label: string; icon: typeof MessageSquare; desc: string }> = {
-  inbox: { label: '收件箱', icon: BellRing, desc: '所有待处理会话，按紧急度排序' },
-  leads: { label: '潜客', icon: Filter, desc: '新询盘、未成交，带AI意向评分' },
-  won: { label: '成交客户', icon: CheckCircle2, desc: '已下单客户和跟单任务' },
-  silent: { label: '沉默客户', icon: RefreshCw, desc: '30/60天雷达与老客唤醒' },
+const VIEW_META: Record<CustomerView, { label: string; desc: string }> = {
+  all: { label: '全部', desc: '按姓名、渠道、产品搜索客户' },
+  leads: { label: '潜客', desc: '新询盘和未成交客户' },
+  won: { label: '成交', desc: '已下单客户和跟单任务' },
+  silent: { label: '沉默', desc: '30/60天雷达和唤醒对象' },
 };
 
 function reasonLabel(reason?: CustomerProfile['inboxReason']) {
@@ -258,10 +258,33 @@ function reasonLabel(reason?: CustomerProfile['inboxReason']) {
 }
 
 function filterCustomers(view: CustomerView) {
-  if (view === 'inbox') return CUSTOMERS.filter(c => c.inboxReason).sort((a, b) => b.priority - a.priority);
+  if (view === 'all') return CUSTOMERS.slice().sort((a, b) => b.priority - a.priority);
   if (view === 'leads') return CUSTOMERS.filter(c => c.stage === '潜客' || c.stage === '询盘中' || c.stage === '已报价').sort((a, b) => b.intentScore - a.intentScore);
   if (view === 'won') return CUSTOMERS.filter(c => c.stage === '成交');
   return CUSTOMERS.filter(c => c.stage === '沉默30' || c.stage === '沉默60').sort((a, b) => b.intentScore - a.intentScore);
+}
+
+function taskTitle(customer: CustomerProfile) {
+  if (customer.inboxReason === 'call') return `想通电话的 ${customer.name.split(' ')[0]}`;
+  if (customer.inboxReason === 'large') return `${customer.name.split(' ')[0]} 的大单要盯一下`;
+  if (customer.inboxReason === 'draft') return `${customer.name.split(' ')[0]} 的报价草稿好了`;
+  if (customer.stage === '沉默60' || customer.stage === '沉默30') return `老客户 ${customer.name.split(' ')[0]} ${customer.lastActive}`;
+  return `${customer.name.split(' ')[0]} 等你回复`;
+}
+
+function taskActionLabel(customer: CustomerProfile) {
+  if (customer.inboxReason === 'call') return '查看简报，去回电';
+  if (customer.inboxReason === 'large') return '看一眼，发送报价';
+  if (customer.inboxReason === 'draft') return '看一眼，发送';
+  if (customer.stage === '沉默60' || customer.stage === '沉默30') return '发这条唤醒消息';
+  return '查看并处理';
+}
+
+function draftForCustomer(customer: CustomerProfile) {
+  if (customer.inboxReason === 'call') return 'Our manager will call you shortly. What time works best for you?';
+  if (customer.stage === '沉默60' || customer.stage === '沉默30') return `Hi ${customer.name.split(' ')[0]}, we have new arrivals matching your previous order. Would you like me to send the updated catalog and old-customer price?`;
+  if (customer.inboxReason === 'large') return 'Thanks for your interest. I prepared the quotation with packaging options and delivery time. Please check if the logo size and target delivery date are correct.';
+  return 'Thanks for reaching out. Could you share your delivery country and expected quantity? I will prepare the best option for you.';
 }
 
 function openGlobalAssistant(customer: CustomerProfile, text?: string) {
@@ -306,13 +329,10 @@ function CustomerRow({ customer, selected, onOpen }: { customer: CustomerProfile
           </div>
           <p className="mt-1 truncate text-xs text-text-muted">{customer.product} · {customer.estimatedValue} · {customer.source}</p>
           <div className="mt-2 flex flex-wrap items-center gap-2">
-            <span className="text-xs font-bold text-text-primary">意向 {customer.intentScore}</span>
-            <div className="h-1.5 w-24 overflow-hidden rounded-full bg-surface-2">
-              <div className="h-full rounded-full bg-[#0891b2]" style={{ width: `${customer.intentScore}%` }} />
-            </div>
             <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ color: automation.color, background: automation.bg }}>
               {automation.label}
             </span>
+            <span className="text-[10px] font-bold text-text-muted">下一步：{customer.nextStep}</span>
           </div>
         </div>
         <div className="flex-shrink-0 text-right">
@@ -324,33 +344,141 @@ function CustomerRow({ customer, selected, onOpen }: { customer: CustomerProfile
   );
 }
 
-function CustomerListView({ view, selectedId, onOpen }: { view: CustomerView; selectedId: string; onOpen: (id: string) => void }) {
-  const list = filterCustomers(view);
-  const stats = [
-    { label: '待处理', value: String(filterCustomers('inbox').length), color: '#dc2626' },
-    { label: '想通话', value: String(CUSTOMERS.filter(c => c.inboxReason === 'call').length), color: '#dc2626' },
-    { label: '高意向', value: String(CUSTOMERS.filter(c => c.intentScore >= 85).length), color: '#16a34a' },
-    { label: '沉默客户', value: String(filterCustomers('silent').length), color: '#d97706' },
-  ];
+function TaskQueueView({
+  customers,
+  doneCount,
+  onOpen,
+  onDone,
+  onOpenAll,
+}: {
+  customers: CustomerProfile[];
+  doneCount: number;
+  onOpen: (id: string) => void;
+  onDone: (id: string) => void;
+  onOpenAll: () => void;
+}) {
+  const visible = customers.slice(0, 3);
+  const later = Math.max(0, customers.length - visible.length);
+  const autoHandled = 12 + CUSTOMERS.filter(customer => customer.automation === 'auto').length;
+  return (
+    <div className="h-full overflow-y-auto bg-surface">
+      <div className="mx-auto max-w-4xl px-6 py-6">
+        <div className="mb-5 flex items-start justify-between gap-4">
+          <div>
+            <p className="text-2xl font-black font-display text-text-primary">
+              {customers.length ? `今天有 ${customers.length} 件事要处理` : '都处理完了'}
+            </p>
+            <p className="mt-1 text-sm text-text-muted">
+              {customers.length ? '我已经按紧急度排好，先处理最上面这张。' : '今天的客户红点已经清空。'}
+            </p>
+          </div>
+          <button type="button" onClick={onOpenAll} className="rounded-xl border border-border bg-white px-4 py-2 text-sm font-bold text-text-secondary hover:bg-surface-2">
+            全部客户
+          </button>
+        </div>
+
+        {!customers.length ? (
+          <div className="flex min-h-[420px] flex-col items-center justify-center rounded-2xl border border-border bg-white text-center">
+            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-green-50 text-green-700">
+              <CheckCircle2 size={32} />
+            </div>
+            <p className="mt-4 text-xl font-black text-text-primary">都处理完了</p>
+            <p className="mt-2 text-sm text-text-muted">新的 WhatsApp 询盘、报价草稿和沉默唤醒会自动排进这里。</p>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {visible.map((customer, index) => {
+              const reason = reasonLabel(customer.inboxReason);
+              return (
+                <motion.div
+                  key={customer.id}
+                  layout
+                  initial={{ opacity: 0, y: 14 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, x: 40 }}
+                  className="rounded-2xl border border-border bg-white p-4 shadow-sm"
+                >
+                  <div className="flex items-start gap-4">
+                    <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-full bg-surface-2 text-2xl">{customer.country}</div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="rounded-full px-2 py-0.5 text-[10px] font-black" style={{ color: reason.color, background: reason.bg }}>
+                          {reason.label}
+                        </span>
+                        <span className="text-[10px] font-bold text-text-muted">#{index + 1}</span>
+                        <span className="text-[10px] font-bold text-text-muted">{customer.source} · 当地 {customer.localTime}</span>
+                      </div>
+                      <p className="mt-2 text-lg font-black text-text-primary">{taskTitle(customer)}</p>
+                      <p className="mt-1 text-sm leading-relaxed text-text-muted">{customer.summary}</p>
+                      <div className="mt-3 rounded-xl bg-surface px-3 py-2">
+                        <div className="flex items-center gap-1.5 text-xs font-bold text-text-secondary">
+                          <Sparkles size={12} className="text-[#0891b2]" />AI 建议
+                        </div>
+                        <p className="mt-1 text-sm font-semibold text-text-primary">{customer.nextStep}</p>
+                      </div>
+                    </div>
+                    <div className="flex w-40 flex-shrink-0 flex-col gap-2">
+                      <button type="button" onClick={() => onOpen(customer.id)} className="rounded-xl bg-slate-950 px-3 py-2.5 text-sm font-black text-white">
+                        {taskActionLabel(customer)}
+                      </button>
+                      <button type="button" onClick={() => onDone(customer.id)} className="rounded-xl border border-border px-3 py-2 text-xs font-bold text-text-muted hover:bg-surface-2">
+                        已处理
+                      </button>
+                    </div>
+                  </div>
+                </motion.div>
+              );
+            })}
+            {later > 0 && (
+              <div className="rounded-xl border border-border bg-white px-4 py-3 text-sm font-bold text-text-muted">
+                还有 {later} 件低优先级事项已放到稍后
+              </div>
+            )}
+            <button type="button" onClick={onOpenAll} className="w-full rounded-xl border border-dashed border-border bg-white px-4 py-3 text-sm font-bold text-text-secondary hover:bg-surface-2">
+              AI 已自动接待 {autoHandled} 条新咨询 ✓（点开看）
+            </button>
+            {doneCount > 0 && <p className="text-center text-xs font-semibold text-text-muted">已清掉 {doneCount} 件事</p>}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AllCustomersView({ view, query, selectedId, onViewChange, onQueryChange, onOpen, onBack }: {
+  view: CustomerView;
+  query: string;
+  selectedId: string;
+  onViewChange: (view: CustomerView) => void;
+  onQueryChange: (value: string) => void;
+  onOpen: (id: string) => void;
+  onBack: () => void;
+}) {
+  const normalized = query.trim().toLowerCase();
+  const list = filterCustomers(view).filter(customer => {
+    if (!normalized) return true;
+    return [customer.name, customer.product, customer.countryName, customer.source, customer.stage, ...customer.tags].join(' ').toLowerCase().includes(normalized);
+  });
   return (
     <div className="h-full overflow-y-auto bg-surface">
       <div className="mx-auto max-w-5xl px-6 py-5">
-        <div className="mb-4 grid grid-cols-4 gap-3">
-          {stats.map(item => (
-            <div key={item.label} className="rounded-xl border border-border bg-white p-4">
-              <p className="text-[11px] font-semibold text-text-muted">{item.label}</p>
-              <p className="mt-2 text-2xl font-black font-display" style={{ color: item.color }}>{item.value}</p>
-            </div>
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <button type="button" onClick={onBack} className="inline-flex items-center gap-2 rounded-xl border border-border bg-white px-4 py-2 text-sm font-bold text-text-secondary">
+            <ChevronLeft size={15} />返回今日队列
+          </button>
+          <div className="relative w-72">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
+            <input value={query} onChange={event => onQueryChange(event.target.value)} placeholder="找客户、产品、渠道" className="w-full rounded-xl border border-border bg-white py-2 pl-9 pr-3 text-sm outline-none focus:border-[#0891b2]" />
+          </div>
+        </div>
+        <div className="mb-4 flex flex-wrap gap-2">
+          {(Object.entries(VIEW_META) as [CustomerView, typeof VIEW_META[CustomerView]][]).map(([key, item]) => (
+            <button key={key} type="button" onClick={() => onViewChange(key)}
+              className={`rounded-full border px-3 py-1.5 text-xs font-bold ${view === key ? 'border-slate-950 bg-slate-950 text-white' : 'border-border bg-white text-text-secondary'}`}>
+              {item.label}
+            </button>
           ))}
         </div>
-        {view === 'silent' && (
-          <div className="mb-4 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3">
-            <div className="flex items-center gap-2 text-sm font-bold text-amber-800">
-              <RefreshCw size={14} />
-              沉默客户回复后自动流回“询盘中”，重新进入收件箱
-            </div>
-          </div>
-        )}
         <div className="space-y-2">
           {list.map(customer => (
             <CustomerRow key={customer.id} customer={customer} selected={customer.id === selectedId} onOpen={() => onOpen(customer.id)} />
@@ -563,9 +691,11 @@ function AssistantRail({ customer }: { customer: CustomerProfile }) {
   );
 }
 
-function CustomerDetail({ customer, onBack }: { customer: CustomerProfile; onBack: () => void }) {
+function CustomerDetail({ customer, onBack, onDone }: { customer: CustomerProfile; onBack: () => void; onDone: () => void }) {
+  const [draft, setDraft] = useState(draftForCustomer(customer));
+  const [infoOpen, setInfoOpen] = useState(false);
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col bg-surface">
       <div className="flex h-12 flex-shrink-0 items-center justify-between border-b border-border px-4">
         <div className="flex items-center gap-2.5">
           <button onClick={onBack} className="rounded-lg p-1.5 text-text-muted hover:bg-surface-2">
@@ -580,43 +710,138 @@ function CustomerDetail({ customer, onBack }: { customer: CustomerProfile; onBac
           <Clock size={12} />对方当地 {customer.localTime}
         </div>
       </div>
-      <div className="flex min-h-0 flex-1">
-        <ProfileCard customer={customer} />
-        <Timeline customer={customer} />
-        <AssistantRail customer={customer} />
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto flex min-h-full max-w-3xl flex-col px-5 py-4">
+          <button type="button" onClick={() => setInfoOpen(v => !v)} className="mb-3 rounded-2xl border border-border bg-white px-4 py-3 text-left">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-black text-text-primary">了解这个客户</p>
+                <p className="mt-1 text-xs text-text-muted">{customer.countryName} · {customer.language} · {customer.source} · {customer.estimatedValue}</p>
+              </div>
+              <span className="text-xs font-bold text-text-muted">{infoOpen ? '收起' : '展开'}</span>
+            </div>
+            <AnimatePresence>
+              {infoOpen && (
+                <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+                  <div className="mt-3 grid gap-3 border-t border-border pt-3">
+                    <div>
+                      <p className="text-xs font-bold text-text-muted">历史订单</p>
+                      <p className="mt-1 text-sm text-text-secondary">{customer.orderHistory.length ? customer.orderHistory.join(' / ') : '暂无订单'}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-text-muted">意向信号</p>
+                      <div className="mt-1 flex flex-wrap gap-1.5">
+                        {customer.intentSignals.map(signal => <span key={signal} className="rounded-full bg-surface-2 px-2 py-1 text-[10px] font-bold text-text-secondary">{signal}</span>)}
+                      </div>
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-text-muted">标签</p>
+                      <div className="mt-1 flex flex-wrap gap-1.5">
+                        {customer.tags.map(tag => <span key={tag} className="rounded-full border border-border px-2 py-1 text-[10px] font-bold text-text-muted">{tag}</span>)}
+                      </div>
+                    </div>
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </button>
+
+          <div className="flex-1 space-y-3">
+            {customer.timeline.map(event => {
+              const isBuyer = event.actor === 'buyer';
+              const isSeller = event.actor === 'seller';
+              return (
+                <div key={event.id} className={`flex ${isSeller ? 'justify-end' : 'justify-start'}`}>
+                  <div className={`max-w-[78%] rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm ${
+                    isBuyer ? 'rounded-tl-sm border border-border bg-white text-text-primary'
+                      : isSeller ? 'rounded-tr-sm bg-[#0891b2] text-white'
+                        : 'border border-border bg-white text-text-secondary'
+                  }`}>
+                    <div className="mb-1 flex items-center gap-2 text-[10px] font-bold opacity-70">
+                      <span>{event.title}</span>
+                      <span>{event.time}</span>
+                    </div>
+                    {event.body}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex-shrink-0 border-t border-border bg-white px-5 py-4">
+        <div className="mx-auto max-w-3xl">
+          <div className="mb-2 flex items-center gap-2 text-xs font-black text-text-primary">
+            <Sparkles size={13} className="text-[#0891b2]" />AI 已写好，可改一句就发
+          </div>
+          <div className="rounded-2xl border border-border bg-surface p-3">
+            <textarea value={draft} onChange={event => setDraft(event.target.value)} rows={3}
+              className="w-full resize-none bg-transparent text-sm leading-relaxed text-text-primary outline-none" />
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+              <button type="button" onClick={() => openGlobalAssistant(customer, `帮我优化这条发给${customer.name}的回复：${draft}`)}
+                className="rounded-xl border border-border bg-white px-3 py-2 text-xs font-bold text-text-secondary">
+                让灵枢润色
+              </button>
+              <div className="flex gap-2">
+                {customer.inboxReason === 'call' && (
+                  <button type="button" className="inline-flex items-center gap-1.5 rounded-xl bg-red-600 px-4 py-2 text-xs font-black text-white">
+                    <Phone size={13} />去回电
+                  </button>
+                )}
+                <button type="button" onClick={onDone} className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-4 py-2 text-xs font-black text-white">
+                  <Send size={13} />发送并完成
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   );
 }
 
 export default function ConversionPage({ onLeaveConversation }: Props) {
-  const [view, setView] = useState<CustomerView>('inbox');
+  const [view, setView] = useState<CustomerView>('all');
   const [selectedId, setSelectedId] = useState(CUSTOMERS[0].id);
   const [detailOpen, setDetailOpen] = useState(false);
+  const [allOpen, setAllOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [doneIds, setDoneIds] = useState<string[]>([]);
   const selected = CUSTOMERS.find(customer => customer.id === selectedId) ?? CUSTOMERS[0];
-  const activeView = VIEW_META[view];
+  const queue = useMemo(
+    () => CUSTOMERS.filter(customer => customer.inboxReason && customer.automation !== 'auto' && !doneIds.includes(customer.id)).sort((a, b) => b.priority - a.priority).slice(0, 7),
+    [doneIds],
+  );
 
   const openCustomer = (id: string) => {
     setSelectedId(id);
     setDetailOpen(true);
   };
 
+  const markDone = (id: string) => {
+    setDoneIds(prev => prev.includes(id) ? prev : [...prev, id]);
+    setDetailOpen(false);
+  };
+
   useEffect(() => {
-    const viewLabel = detailOpen ? `客户详情 / ${selected.name}` : activeView.label;
+    const viewLabel = detailOpen ? `客户详情 / ${selected.name}` : allOpen ? '全部客户' : '今日客户队列';
     const summary = detailOpen
-      ? `当前在我的客户详情页：${selected.name}，阶段${selected.stage}，意向分${selected.intentScore}，产品${selected.product}，预估单值${selected.estimatedValue}。${selected.summary}`
-      : `当前在我的客户 - ${activeView.label}视图。${activeView.desc}。默认按“现在该回谁”处理客户。`;
+      ? `当前在我的客户详情页：${selected.name}，产品${selected.product}，预估单值${selected.estimatedValue}。默认只展示对话和一条可编辑AI草稿。客户摘要：${selected.summary}`
+      : allOpen
+        ? '当前在我的客户 - 全部客户入口，可搜索和筛选潜客、成交、沉默客户。'
+        : `当前在我的客户 - 今日任务卡队列。还有 ${queue.length} 件事待处理，按紧急度排序。`;
     window.dispatchEvent(new CustomEvent('lingshu-assistant-context', {
       detail: {
         agent: 'conversion',
         label: viewLabel,
         summary,
         suggestions: detailOpen
-          ? ['生成下一条回复建议', '生成通话前简报', '整理报价草稿', '生成通话后跟进任务']
-          : ['告诉我现在该先回谁', '筛选想通电话客户', '解释意向评分', '生成沉默客户唤醒批次'],
+          ? ['润色这条回复', '生成通话前简报', '把回复翻译成客户语言', '生成通话后跟进任务']
+          : ['告诉我先处理哪张卡', '生成通话客户简报', '生成沉默客户唤醒消息', '总结AI自动接待情况'],
       },
     }));
-  }, [view, detailOpen, selected.id]);
+  }, [allOpen, detailOpen, queue.length, selected.id]);
 
   const handleBack = () => {
     onLeaveConversation();
@@ -633,25 +858,10 @@ export default function ConversionPage({ onLeaveConversation }: Props) {
             </div>
             <div>
               <p className="text-sm font-black text-text-primary">我的客户</p>
-              <p className="text-[10px] text-text-muted">一张客户列表 · 一条完整时间线</p>
+              <p className="text-[10px] text-text-muted">秘书模式 · 先处理最重要的客户动作</p>
             </div>
           </div>
-          <div className="flex items-center gap-0.5 rounded-lg border border-border bg-surface-2 p-0.5">
-            {(Object.entries(VIEW_META) as [CustomerView, typeof VIEW_META[CustomerView]][]).map(([key, item]) => {
-              const Icon = item.icon;
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setView(key)}
-                  className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-bold transition-all ${view === key ? 'bg-white text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'}`}
-                >
-                  <Icon size={12} />
-                  {item.label}
-                </button>
-              );
-            })}
-          </div>
+          {allOpen && <p className="text-xs font-bold text-text-muted">全部客户 · 搜索和筛选</p>}
         </div>
       )}
 
@@ -659,11 +869,29 @@ export default function ConversionPage({ onLeaveConversation }: Props) {
         <AnimatePresence mode="wait">
           {detailOpen ? (
             <motion.div key="detail" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
-              <CustomerDetail customer={selected} onBack={handleBack} />
+              <CustomerDetail customer={selected} onBack={handleBack} onDone={() => markDone(selected.id)} />
+            </motion.div>
+          ) : allOpen ? (
+            <motion.div key="all-customers" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
+              <AllCustomersView
+                view={view}
+                query={query}
+                selectedId={selectedId}
+                onViewChange={setView}
+                onQueryChange={setQuery}
+                onOpen={openCustomer}
+                onBack={() => setAllOpen(false)}
+              />
             </motion.div>
           ) : (
-            <motion.div key={view} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
-              <CustomerListView view={view} selectedId={selectedId} onOpen={openCustomer} />
+            <motion.div key="queue" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
+              <TaskQueueView
+                customers={queue}
+                doneCount={doneIds.length}
+                onOpen={openCustomer}
+                onDone={markDone}
+                onOpenAll={() => setAllOpen(true)}
+              />
             </motion.div>
           )}
         </AnimatePresence>
