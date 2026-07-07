@@ -6,6 +6,7 @@ import AuthScreen from './components/AuthScreen';
 import { authApi, type AuthSession } from './lib/auth';
 import { completeDemoStep, setDemoProgressScope } from './lib/demoProgress';
 import BusinessDiagnosisModal from './components/BusinessDiagnosisModal';
+import GlobalAssistant from './components/GlobalAssistant';
 import StrategyPage from './components/StrategyPage';
 import TrafficPage from './components/TrafficPage';
 import ConversionPage from './components/ConversionPage';
@@ -149,7 +150,7 @@ export default function App() {
   const [conversation, setConversation] = useState<ConversationContext | null>(null);
   const [scriptPanelOpen, setScriptPanelOpen] = useState(false);
 
-  // 会话历史（近期会话，本地持久化）
+  // 会话历史（本地持久化，供全局助手恢复旧内容）
   const [conversations, setConversations] = useState<Conversation[]>(loadConvs);
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
   const [restore, setRestore] = useState<RestoreSignal | null>(null);
@@ -217,7 +218,7 @@ export default function App() {
     try { localStorage.setItem('ow_page', page); } catch { /* ignore */ }
   }, [page]);
 
-  // 每次对话推进都记录/更新近期会话
+  // 每次对话推进都记录/更新会话历史
   const enterConversation = (ctx: ConversationContext) => {
     if (ctx.messages?.some(msg => msg.role === 'assistant' && msg.content.trim().length > 12)) {
       if (ctx.agent === 'strategy') completeDemoStep('strategy');
@@ -246,7 +247,7 @@ export default function App() {
   };
   const leaveConversation = () => setConversation(null);
 
-  // 点击近期会话 → 回到该历史会话并可继续提问
+  // 恢复历史会话 → 打开全局助手并载入旧内容
   const openConversation = (id: string) => {
     const conv = convsRef.current.find(c => c.id === id);
     if (!conv) return;
@@ -267,9 +268,9 @@ export default function App() {
   const startAgentTask = (agent: AgentType, text: string) => {
     const pageAgent = customerUnifiedAgent(agent);
     activeIdRef.current = null; setActiveConvId(null);
-    setRestore(null); setConversation({ agent: pageAgent });
+    setRestore(null); setConversation(null);
     setKickoff({ agent: pageAgent, text, key: `k${Date.now()}` });
-    setPage(pageAgent);
+    if (!AGENT_PAGES.includes(page)) setPage(pageAgent);
   };
 
   const handleNavigate = useCallback((p: Page) => {
@@ -364,6 +365,14 @@ export default function App() {
         onClose={closeBusinessDiagnosis}
         onDismissToday={dismissBusinessDiagnosisToday}
         onNavigate={handleNavigate}
+      />
+      <GlobalAssistant
+        page={page}
+        restore={restore}
+        kickoff={kickoff}
+        onKickoffConsumed={() => setKickoff(null)}
+        onAction={startAgentTask}
+        onSessionRefresh={() => void refreshSession()}
       />
       <PageErrorBoundary page={page} onNavigateHome={() => handleNavigate('strategy')}>
         <Suspense fallback={<PageLoading />}>

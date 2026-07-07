@@ -5,10 +5,9 @@ import {
   Sparkles, ChevronDown, Languages, Loader2, Users, RefreshCw, Filter,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
-import AgentChatPage from './AgentChatPage';
 import type { ConversationContext, RestoreSignal, KickoffSignal, AgentAction } from '../App';
 
-type ViewMode = 'dashboard' | 'qualified' | 'reactivation' | 'chat' | 'customer-chat';
+type ViewMode = 'dashboard' | 'qualified' | 'reactivation' | 'customer-chat';
 
 interface Props {
   onEnterConversation: (ctx: ConversationContext) => void;
@@ -833,34 +832,49 @@ function CustomerChatView({
 // ─── ConversionPage (root) ────────────────────────────────────────────────────
 
 export default function ConversionPage({
-  onEnterConversation,
   onLeaveConversation,
-  isInConversation,
-  restore,
-  kickoff,
-  onAction,
-  onSessionRefresh,
 }: Props) {
   const [viewMode, setViewMode]                 = useState<ViewMode>('dashboard');
   const [selectedInquiryId, setSelectedInquiryId] = useState('1');
-
-  useEffect(() => { if (restore) setViewMode('chat'); }, [restore?.key]);  // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (kickoff) setViewMode('chat'); }, [kickoff?.key]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const openCustomerChat = (id: string) => {
     setSelectedInquiryId(id);
     setViewMode('customer-chat');
   };
 
-  const handleEnterChat = (ctx: ConversationContext) => {
-    setViewMode('chat');
-    onEnterConversation(ctx);
+  const openAssistant = (text?: string) => {
+    window.dispatchEvent(new CustomEvent('lingshu-assistant-open', { detail: { text } }));
   };
 
-  const handleLeave = () => {
-    setViewMode('dashboard');
-    onLeaveConversation();
-  };
+  useEffect(() => {
+    const selected = INQUIRIES.find(item => item.id === selectedInquiryId) ?? INQUIRIES[0];
+    const status = STATUS_META[selected.status as keyof typeof STATUS_META]?.label ?? selected.status;
+    const contextByMode = {
+      dashboard: {
+        label: '潜客询盘',
+        summary: '当前在我的客户 - 潜客询盘页，适合筛选高质量询盘、判断回复优先级、生成首响和跟单话术。',
+        suggestions: ['筛选今天最高质量的询盘', '生成待回复询盘首响', '整理大单跟进顺序', '优化 WhatsApp 自动回复'],
+      },
+      qualified: {
+        label: '成交客资',
+        summary: '当前在我的客户 - 成交客资页，适合解释客资评分、完善自动筛选规则、安排人工报价和自动回复动作。',
+        suggestions: ['解释成交客资筛选逻辑', '优化高分询盘自动回复', '生成报价转人工规则', '整理今日重点客资'],
+      },
+      reactivation: {
+        label: '老客唤醒',
+        summary: '当前在我的客户 - 老客唤醒页，适合做沉睡客户分层、复购触达节奏、新品推荐和 WhatsApp 唤醒话术。',
+        suggestions: ['生成老客唤醒话术', '按价值分层老客', '规划三天触达节奏', '推荐复购加推组合'],
+      },
+      'customer-chat': {
+        label: '询盘跟进',
+        summary: `当前在询盘详情：买家 ${selected.buyer}，国家 ${selected.country}，产品 ${selected.product}，金额 ${selected.amount}，语言 ${selected.lang}，状态 ${status}。适合生成跟单回复、翻译客户消息、判断下一步成交动作。`,
+        suggestions: ['生成下一条 WhatsApp 回复', '翻译并润色当前回复', '判断这个询盘下一步怎么跟', '生成报价前确认问题'],
+      },
+    }[viewMode];
+    window.dispatchEvent(new CustomEvent('lingshu-assistant-context', {
+      detail: { agent: 'conversion', ...contextByMode },
+    }));
+  }, [viewMode, selectedInquiryId]);
 
   return (
     <div className="flex flex-col h-full">
@@ -874,25 +888,15 @@ export default function ConversionPage({
               <Users size={13} />
             </div>
             <span className="text-sm font-semibold text-text-primary">我的客户</span>
-            {isInConversation && viewMode === 'chat' && (
-              <span className="flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full ml-1"
-                style={{ background: 'rgba(8,145,178,0.1)', color: '#0891b2' }}>
-                <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />客户助手
-              </span>
-            )}
           </div>
           <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-surface-2 border border-border">
             {([
               { mode: 'dashboard' as ViewMode, icon: <MessageSquare size={12} />, label: '潜客询盘' },
               { mode: 'qualified' as ViewMode, icon: <Filter size={12} />, label: '成交客资' },
               { mode: 'reactivation' as ViewMode, icon: <RefreshCw size={12} />, label: '老客唤醒' },
-              { mode: 'chat'      as ViewMode, icon: <Bot size={12} />, label: '跟单回复建议' },
             ] as const).map(({ mode, icon, label }) => (
               <button key={mode}
-                onClick={() => {
-                  if (mode === 'chat') handleEnterChat({ agent: 'conversion' });
-                  else setViewMode(mode);
-                }}
+                onClick={() => setViewMode(mode)}
                 className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold transition-all ${
                   viewMode === mode
                     ? 'bg-surface text-text-primary shadow-sm'
@@ -919,39 +923,7 @@ export default function ConversionPage({
           )}
           {viewMode === 'reactivation' && (
             <motion.div key="reactivation" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
-              <ReactivationPanel onChatClick={() => handleEnterChat({
-                agent: 'conversion',
-                messages: [{ role: 'user', content: '请根据当前老客列表，生成老客唤醒分层、触达节奏和 WhatsApp 跟进话术。' }],
-              })} />
-            </motion.div>
-          )}
-          {viewMode === 'chat' && (
-            <motion.div key="chat" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
-              <AgentChatPage
-                config={{
-                  type: 'conversion',
-                  apiPath: '/api/overseas/agents/conversion/chat',
-                  color: '#0891b2',
-                  bg: 'rgba(8,145,178,0.1)',
-                  icon: <MessageSquare size={13} />,
-                  name: '我的客户',
-                  tagline: '询盘筛选 · 自动回复 · 跟单建议 · 老客唤醒',
-                  suggestions: [
-                    '首响询盘模板',
-                    '大单跟进话术',
-                    '询盘优先级',
-                    '未回复跟单话术',
-                  ],
-                }}
-                onEnterConversation={handleEnterChat}
-                onLeaveConversation={handleLeave}
-                isInConversation={isInConversation}
-                restoreKey={restore?.key}
-                restoreMessages={restore?.messages}
-                kickoff={kickoff}
-                onAction={onAction}
-                onSessionRefresh={onSessionRefresh}
-              />
+              <ReactivationPanel onChatClick={() => openAssistant('请根据当前老客列表，生成老客唤醒分层、触达节奏和 WhatsApp 跟进话术。')} />
             </motion.div>
           )}
           {viewMode === 'customer-chat' && (

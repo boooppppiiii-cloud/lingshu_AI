@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Home, Share2, Users, LayoutGrid,
   Building2, PlugZap, Clock,
-  ChevronRight, Plus, LogOut, Loader2, RefreshCcw, X, ShieldCheck,
+  ChevronRight, LogOut, Loader2, RefreshCcw, X, ShieldCheck,
 } from 'lucide-react';
 import type { Page, ConversationContext, Conversation, AgentAction } from '../App';
 import { authApi, type AuthSession } from '../lib/auth';
@@ -29,13 +29,6 @@ const SECONDARY_NAV: NavSection = {
     { id: 'plugins',    label: '集成中心', icon: <PlugZap size={16} /> },
     { id: 'scheduled',  label: '定时任务', icon: <Clock size={16} /> },
   ],
-};
-
-const AGENT_COLORS: Record<string, string> = {
-  strategy: '#4f46e5',
-  traffic:  '#d97706',
-  conversion: '#0891b2',
-  retention: '#16a34a',
 };
 
 interface LayoutProps {
@@ -127,8 +120,7 @@ const isAdminSession = (session?: AuthSession | null) => (
   session?.subscription?.plan === 'admin'
 );
 
-export default function Layout({ page, onNavigate, conversation, children, session, onLogout, conversations, activeConvId, onOpenConversation, onNewConversation, suppressRightPanel, onAction, onSessionUpdate, demoGuideActive, onDemoGuideShown }: LayoutProps) {
-  const recent = (conversations ?? []).filter(c => c.messages.length > 0);
+export default function Layout({ page, onNavigate, conversation, children, session, onLogout, suppressRightPanel, onAction, onSessionUpdate, demoGuideActive, onDemoGuideShown }: LayoutProps) {
   const isInConversation = conversation !== null && !suppressRightPanel;
   const [quotaOpen, setQuotaOpen] = useState(false);
   const [quotaLoading, setQuotaLoading] = useState(false);
@@ -242,40 +234,7 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
         {/* Divider */}
         <div className="mx-4 my-3 border-t border-border" />
 
-        {/* Recent conversations */}
-        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-          <div className="px-3 flex items-center justify-between mb-1.5 flex-shrink-0">
-            <p className="px-3 text-[10px] font-semibold text-text-muted uppercase tracking-wider">近期会话</p>
-            <button onClick={() => onNewConversation?.()} title="新建会话"
-              className="p-1 rounded-md hover:bg-black/5 text-text-muted transition-colors">
-              <Plus size={12} />
-            </button>
-          </div>
-          <div className="flex-1 overflow-y-auto px-3 space-y-0.5 pb-2">
-            {recent.length === 0 && (
-              <p className="px-3 py-2 text-[11px] text-text-muted leading-relaxed">还没有会话，去和某位专家对话后会出现在这里。</p>
-            )}
-            {recent.map(conv => (
-              <button
-                key={conv.id}
-                onClick={() => onOpenConversation?.(conv.id)}
-                className="w-full flex items-start gap-2.5 px-3 py-2 rounded-xl text-left transition-colors group"
-                style={conv.id === activeConvId ? { background: 'rgba(255,255,255,0.8)' } : undefined}
-              >
-                <span
-                  className="mt-0.5 w-2 h-2 rounded-full flex-shrink-0"
-                  style={{ background: AGENT_COLORS[conv.agent] }}
-                />
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs text-text-secondary truncate leading-snug group-hover:text-text-primary transition-colors">
-                    {conv.title}
-                  </p>
-                  <p className="text-[10px] text-text-muted mt-0.5">{relTime(conv.updatedAt)}</p>
-                </div>
-              </button>
-            ))}
-          </div>
-        </div>
+        <div className="flex-1 min-h-0" />
 
         {/* Bottom user */}
         <div className="relative px-3 py-3 border-t border-border flex-shrink-0">
