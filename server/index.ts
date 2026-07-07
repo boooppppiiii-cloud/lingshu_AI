@@ -24,6 +24,8 @@ import { youtubeRouter } from './routes/youtube.js';
 import { socialRouter } from './routes/social.js';
 import { platformIntegrationsRouter } from './routes/platformIntegrations.js';
 import { adminRouter } from './routes/admin.js';
+import { customersRouter } from './routes/customers.js';
+import { devSimRouter } from './routes/devSim.js';
 import { isDemoMode, demoLimits } from './lib/demo.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -102,6 +104,10 @@ app.use('/api/overseas/auth', authRouter);
 app.use('/api/overseas/admin', adminRouter);
 app.use('/api/overseas/studio', studioRouter);
 app.use('/api/overseas/platform-integrations', platformIntegrationsRouter);
+app.use('/api/overseas/customers', customersRouter);
+if (process.env.NODE_ENV !== 'production') {
+  app.use('/api/overseas/dev', devSimRouter);
+}
 app.use('/api/v1/products', productApiRouter);
 
 initScheduler();

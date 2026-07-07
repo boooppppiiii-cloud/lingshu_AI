@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import type { AgentAction, ConversationContext, KickoffSignal, RestoreSignal } from '../App';
+import { authHeader } from '../lib/auth';
 
 type CustomerView = 'inbox' | 'leads' | 'won' | 'silent';
 type CustomerStage = '潜客' | '询盘中' | '已报价' | '成交' | '沉默30' | '沉默60';
@@ -29,6 +30,7 @@ interface TimelineEvent {
   title: string;
   body: string;
   time: string;
+  status?: string;
 }
 
 interface CustomerProfile {
@@ -55,6 +57,23 @@ interface CustomerProfile {
   summary: string;
   nextStep: string;
   sla?: string;
+  channelId?: string;
+  waId?: string;
+  phone?: string;
+  insight?: {
+    language?: string;
+    country_guess?: string;
+    product?: string;
+    quantity?: string;
+    budget?: string;
+    urgency?: string;
+    call_request?: boolean;
+    complaint?: boolean;
+    intent_score?: number;
+    signals?: { label: string; score: number }[];
+    missing_fields?: string[];
+  } | null;
+  window?: { open: boolean; closesAt: string | null };
   timeline: TimelineEvent[];
 }
 
@@ -257,11 +276,97 @@ function reasonLabel(reason?: CustomerProfile['inboxReason']) {
   return { label: '待回复', color: '#0891b2', bg: 'rgba(8,145,178,0.1)' };
 }
 
-function filterCustomers(view: CustomerView) {
-  if (view === 'inbox') return CUSTOMERS.filter(c => c.inboxReason).sort((a, b) => b.priority - a.priority);
-  if (view === 'leads') return CUSTOMERS.filter(c => c.stage === '潜客' || c.stage === '询盘中' || c.stage === '已报价').sort((a, b) => b.intentScore - a.intentScore);
-  if (view === 'won') return CUSTOMERS.filter(c => c.stage === '成交');
-  return CUSTOMERS.filter(c => c.stage === '沉默30' || c.stage === '沉默60').sort((a, b) => b.intentScore - a.intentScore);
+function filterCustomers(view: CustomerView, customers: CustomerProfile[]) {
+  if (view === 'inbox') return customers.filter(c => c.inboxReason).sort((a, b) => b.priority - a.priority);
+  if (view === 'leads') return customers.filter(c => c.stage === '潜客' || c.stage === '询盘中' || c.stage === '已报价').sort((a, b) => b.intentScore - a.intentScore);
+  if (view === 'won') return customers.filter(c => c.stage === '成交');
+  return customers.filter(c => c.stage === '沉默30' || c.stage === '沉默60').sort((a, b) => b.intentScore - a.intentScore);
+}
+
+async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, { ...init, headers: { ...authHeader(), ...(init?.headers ?? {}) } });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || '请求失败');
+  return data as T;
+}
+
+function countryFlag(country?: string, waId?: string): string {
+  if (country?.includes('沙特') || waId?.startsWith('966')) return '🇸🇦';
+  if (country?.includes('阿联酋') || waId?.startsWith('971')) return '🇦🇪';
+  if (country?.includes('巴西') || waId?.startsWith('55')) return '🇧🇷';
+  if (country?.includes('美国') || waId?.startsWith('1')) return '🇺🇸';
+  if (country?.includes('越南') || waId?.startsWith('84')) return '🇻🇳';
+  return '🌍';
+}
+
+function formatLastActive(iso?: string): string {
+  const t = iso ? Date.parse(iso) : 0;
+  if (!t) return '未知';
+  const mins = Math.max(0, Math.round((Date.now() - t) / 60000));
+  if (mins < 60) return `${mins || 1}分钟前`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `${hours}小时前`;
+  return `${Math.round(hours / 24)}天前`;
+}
+
+function localTimeFromWaId(waId?: string): string {
+  const zone = waId?.startsWith('966') ? 'Asia/Riyadh'
+    : waId?.startsWith('971') ? 'Asia/Dubai'
+      : waId?.startsWith('55') ? 'America/Sao_Paulo'
+        : waId?.startsWith('84') ? 'Asia/Ho_Chi_Minh'
+          : 'America/New_York';
+  return new Date().toLocaleTimeString('zh-CN', { timeZone: zone, hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+function mapApiCustomer(raw: any): CustomerProfile {
+  const customer = raw.customer ?? raw;
+  const insight = raw.insight ?? null;
+  const stage = (customer.stage || '潜客') as CustomerStage;
+  const score = Number(insight?.intent_score ?? customer.priority ?? 50);
+  const signals = Array.isArray(insight?.signals) ? insight.signals.map((s: any) => `${s.label} +${s.score}`) : [];
+  const countryName = insight?.country_guess || '';
+  return {
+    id: customer.id,
+    name: customer.profile_name || customer.wa_id || 'WhatsApp 客户',
+    country: countryFlag(countryName, customer.wa_id),
+    countryName: countryName || '未知国家',
+    language: insight?.language || 'Unknown',
+    timezone: '',
+    localTime: localTimeFromWaId(customer.wa_id),
+    source: customer.first_source?.source_type || 'WhatsApp',
+    product: insight?.product || customer.next_step || '待识别产品',
+    estimatedValue: insight?.budget || customer.estimatedValue || '-',
+    stage,
+    intentScore: score,
+    intentSignals: signals.length ? signals : ['等待更多消息'],
+    automation: (customer.automation || 'confirm') as AutomationLevel,
+    priority: Number(customer.priority ?? score),
+    inboxReason: customer.inboxReason,
+    lastActive: customer.lastActiveLabel || formatLastActive(customer.last_inbound_at),
+    orderHistory: Array.isArray(customer.orderHistory) ? customer.orderHistory : [],
+    tags: Array.isArray(customer.tags) ? customer.tags : [],
+    summary: insight?.missing_fields?.length ? `缺失字段：${insight.missing_fields.join('、')}` : 'AI 正在根据 WhatsApp 消息补全客户画像。',
+    nextStep: customer.next_step || '生成下一步跟进建议',
+    channelId: customer.channelId,
+    waId: customer.wa_id,
+    phone: customer.phone || customer.wa_id,
+    insight,
+    window: raw.window,
+    timeline: [],
+  };
+}
+
+function mapTimeline(raw: any): TimelineEvent {
+  const type = raw.type === 'message' ? 'whatsapp' : raw.type;
+  return {
+    id: raw.id,
+    type,
+    actor: raw.actor,
+    title: raw.title,
+    body: raw.body,
+    time: raw.ts ? new Date(raw.ts).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '',
+    status: raw.status,
+  };
 }
 
 function openGlobalAssistant(customer: CustomerProfile, text?: string) {
@@ -324,13 +429,13 @@ function CustomerRow({ customer, selected, onOpen }: { customer: CustomerProfile
   );
 }
 
-function CustomerListView({ view, selectedId, onOpen }: { view: CustomerView; selectedId: string; onOpen: (id: string) => void }) {
-  const list = filterCustomers(view);
+function CustomerListView({ view, customers, selectedId, onOpen, loading, onSeed }: { view: CustomerView; customers: CustomerProfile[]; selectedId: string; onOpen: (id: string) => void; loading?: boolean; onSeed: () => void }) {
+  const list = filterCustomers(view, customers);
   const stats = [
-    { label: '待处理', value: String(filterCustomers('inbox').length), color: '#dc2626' },
-    { label: '想通话', value: String(CUSTOMERS.filter(c => c.inboxReason === 'call').length), color: '#dc2626' },
-    { label: '高意向', value: String(CUSTOMERS.filter(c => c.intentScore >= 85).length), color: '#16a34a' },
-    { label: '沉默客户', value: String(filterCustomers('silent').length), color: '#d97706' },
+    { label: '待处理', value: String(filterCustomers('inbox', customers).length), color: '#dc2626' },
+    { label: '想通话', value: String(customers.filter(c => c.inboxReason === 'call').length), color: '#dc2626' },
+    { label: '高意向', value: String(customers.filter(c => c.intentScore >= 85).length), color: '#16a34a' },
+    { label: '沉默客户', value: String(filterCustomers('silent', customers).length), color: '#d97706' },
   ];
   return (
     <div className="h-full overflow-y-auto bg-surface">
@@ -352,9 +457,19 @@ function CustomerListView({ view, selectedId, onOpen }: { view: CustomerView; se
           </div>
         )}
         <div className="space-y-2">
-          {list.map(customer => (
+          {loading && <div className="rounded-xl border border-border bg-white p-6 text-sm text-text-muted">正在读取 WhatsApp 客户...</div>}
+          {!loading && list.map(customer => (
             <CustomerRow key={customer.id} customer={customer} selected={customer.id === selectedId} onOpen={() => onOpen(customer.id)} />
           ))}
+          {!loading && list.length === 0 && (
+            <div className="rounded-xl border border-dashed border-border bg-white p-8 text-center">
+              <p className="text-sm font-bold text-text-primary">还没有 WhatsApp 进线</p>
+              <p className="mt-1 text-xs text-text-muted">可先用模拟器注入 6 个客户，验证进线、建档、时间线和熔断链路。</p>
+              <button type="button" onClick={onSeed} className="mt-4 rounded-xl bg-[#0891b2] px-4 py-2 text-xs font-bold text-white">
+                注入演示进线
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -459,12 +574,104 @@ function Timeline({ customer }: { customer: CustomerProfile }) {
                   <span className="text-[10px] text-text-muted">{event.time}</span>
                 </div>
                 <p className="mt-1 text-sm leading-relaxed text-text-secondary">{event.body}</p>
+                {event.status === 'pending_credentials' && (
+                  <span className="mt-2 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+                    待发送（凭证未配置）
+                  </span>
+                )}
               </div>
             </div>
           );
         })}
       </div>
     </section>
+  );
+}
+
+function ReplyComposer({ customer, onSent }: { customer: CustomerProfile; onSent: () => void }) {
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
+  const [drafting, setDrafting] = useState(false);
+  const [error, setError] = useState('');
+  const open = customer.window?.open ?? true;
+  const latestDraft = [...customer.timeline].reverse().find(event => event.status === 'ai_draft')?.body || '';
+  const closesAt = customer.window?.closesAt ? new Date(customer.window.closesAt) : null;
+  const countdown = closesAt
+    ? `${Math.max(0, Math.floor((closesAt.getTime() - Date.now()) / 3600000))}小时${Math.max(0, Math.floor((closesAt.getTime() - Date.now()) / 60000) % 60)}分钟`
+    : '未知';
+
+  const send = async () => {
+    if (!text.trim()) return;
+    setSending(true);
+    setError('');
+    try {
+      await apiJson(`/api/overseas/customers/${customer.id}/reply`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'text', body: text.trim(), aiDraft: latestDraft || text.trim() }),
+      });
+      setText('');
+      onSent();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '发送失败');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const regenerateDraft = async () => {
+    setDrafting(true);
+    setError('');
+    try {
+      const data = await apiJson<{ draft?: { reply_text?: string; should_escalate?: boolean; reason?: string } }>(`/api/overseas/customers/${customer.id}/draft`, { method: 'POST' });
+      if (data.draft?.should_escalate) setError(data.draft.reason || '需要人工确认，AI 未生成可发送草稿');
+      else setText(data.draft?.reply_text || '');
+      onSent();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '生成草稿失败');
+    } finally {
+      setDrafting(false);
+    }
+  };
+
+  return (
+    <div className="border-t border-border bg-white px-5 py-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${open ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
+          {open ? `24h 窗口剩余 ${countdown}` : '24h 窗口已关闭，需模板消息'}
+        </span>
+        <div className="flex items-center gap-2">
+          {latestDraft && (
+            <button type="button" onClick={() => setText(latestDraft)} className="rounded-full bg-cyan-50 px-2 py-0.5 text-[10px] font-bold text-cyan-700">
+              使用AI草稿
+            </button>
+          )}
+          <button type="button" onClick={regenerateDraft} disabled={drafting} className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-text-secondary disabled:opacity-50">
+            {drafting ? '生成中' : '重新生成草稿'}
+          </button>
+          {error && <span className="text-[11px] font-semibold text-red-600">{error}</span>}
+        </div>
+      </div>
+      <div className="flex items-end gap-2">
+        <textarea
+          value={text}
+          onChange={event => setText(event.target.value)}
+          rows={2}
+          disabled={!open || sending}
+          placeholder={open ? '输入 WhatsApp 回复，当前无凭证时会进入待发送...' : '窗口已关闭，明早配置模板消息后可发送'}
+          className="min-h-[44px] flex-1 resize-none rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-[#0891b2] disabled:opacity-60"
+        />
+        <button
+          type="button"
+          onClick={send}
+          disabled={!open || !text.trim() || sending}
+          className="flex h-11 items-center justify-center gap-1.5 rounded-xl bg-[#0891b2] px-4 text-xs font-bold text-white disabled:opacity-50"
+        >
+          <Send size={13} />
+          {sending ? '发送中' : '发送'}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -496,8 +703,12 @@ function AssistantRail({ customer }: { customer: CustomerProfile }) {
           <p className="mt-2 text-xs leading-relaxed text-red-700/80">
             当地时间 {customer.localTime}，建议现在接。{customer.sla}
           </p>
-          <button className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-red-600 px-3 py-2 text-xs font-bold text-white">
-            <Phone size={13} />拉起 WhatsApp 通话
+          <button
+            type="button"
+            onClick={() => window.open(`https://wa.me/${customer.phone || customer.waId || ''}`, '_blank')}
+            className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-red-600 px-3 py-2 text-xs font-bold text-white"
+          >
+            <Phone size={13} />打开 WhatsApp 联系
           </button>
         </div>
       )}
@@ -563,7 +774,7 @@ function AssistantRail({ customer }: { customer: CustomerProfile }) {
   );
 }
 
-function CustomerDetail({ customer, onBack }: { customer: CustomerProfile; onBack: () => void }) {
+function CustomerDetail({ customer, onBack, onSent }: { customer: CustomerProfile; onBack: () => void; onSent: () => void }) {
   return (
     <div className="flex h-full flex-col">
       <div className="flex h-12 flex-shrink-0 items-center justify-between border-b border-border px-4">
@@ -585,23 +796,67 @@ function CustomerDetail({ customer, onBack }: { customer: CustomerProfile; onBac
         <Timeline customer={customer} />
         <AssistantRail customer={customer} />
       </div>
+      <ReplyComposer customer={customer} onSent={onSent} />
     </div>
   );
 }
 
 export default function ConversionPage({ onLeaveConversation }: Props) {
   const [view, setView] = useState<CustomerView>('inbox');
-  const [selectedId, setSelectedId] = useState(CUSTOMERS[0].id);
+  const [customers, setCustomers] = useState<CustomerProfile[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [selectedId, setSelectedId] = useState('');
   const [detailOpen, setDetailOpen] = useState(false);
-  const selected = CUSTOMERS.find(customer => customer.id === selectedId) ?? CUSTOMERS[0];
+  const selected = customers.find(customer => customer.id === selectedId) ?? customers[0] ?? null;
   const activeView = VIEW_META[view];
+
+  const loadCustomers = async (nextView = view) => {
+    setLoading(true);
+    try {
+      const data = await apiJson<{ items: any[] }>(`/api/overseas/customers?view=${nextView}`);
+      const next = data.items.map(mapApiCustomer);
+      setCustomers(next);
+      if (!selectedId && next[0]) setSelectedId(next[0].id);
+    } catch {
+      setCustomers([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadCustomerDetail = async (id: string) => {
+    const [detail, timeline] = await Promise.all([
+      apiJson<any>(`/api/overseas/customers/${id}`),
+      apiJson<{ items: any[] }>(`/api/overseas/customers/${id}/timeline`),
+    ]);
+    const mapped = { ...mapApiCustomer(detail), timeline: timeline.items.map(mapTimeline) };
+    setCustomers(prev => {
+      const exists = prev.some(customer => customer.id === mapped.id);
+      return exists ? prev.map(customer => customer.id === mapped.id ? mapped : customer) : [mapped, ...prev];
+    });
+    setSelectedId(mapped.id);
+  };
 
   const openCustomer = (id: string) => {
     setSelectedId(id);
     setDetailOpen(true);
+    void loadCustomerDetail(id);
   };
 
+  const seedCustomers = async () => {
+    setLoading(true);
+    try {
+      await apiJson('/api/overseas/dev/wa/seed', { method: 'POST' });
+      await loadCustomers(view);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { void loadCustomers(view); }, [view]); // eslint-disable-line react-hooks/exhaustive-deps
+
   useEffect(() => {
+    if (!selected) return;
     const viewLabel = detailOpen ? `客户详情 / ${selected.name}` : activeView.label;
     const summary = detailOpen
       ? `当前在我的客户详情页：${selected.name}，阶段${selected.stage}，意向分${selected.intentScore}，产品${selected.product}，预估单值${selected.estimatedValue}。${selected.summary}`
@@ -616,7 +871,7 @@ export default function ConversionPage({ onLeaveConversation }: Props) {
           : ['告诉我现在该先回谁', '筛选想通电话客户', '解释意向评分', '生成沉默客户唤醒批次'],
       },
     }));
-  }, [view, detailOpen, selected.id]);
+  }, [view, detailOpen, selected?.id]);
 
   const handleBack = () => {
     onLeaveConversation();
@@ -659,11 +914,15 @@ export default function ConversionPage({ onLeaveConversation }: Props) {
         <AnimatePresence mode="wait">
           {detailOpen ? (
             <motion.div key="detail" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
-              <CustomerDetail customer={selected} onBack={handleBack} />
+              {selected ? (
+                <CustomerDetail customer={selected} onBack={handleBack} onSent={() => void loadCustomerDetail(selected.id)} />
+              ) : (
+                <CustomerListView view={view} customers={customers} selectedId={selectedId} onOpen={openCustomer} loading={loading} onSeed={seedCustomers} />
+              )}
             </motion.div>
           ) : (
             <motion.div key={view} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
-              <CustomerListView view={view} selectedId={selectedId} onOpen={openCustomer} />
+              <CustomerListView view={view} customers={customers} selectedId={selectedId} onOpen={openCustomer} loading={loading} onSeed={seedCustomers} />
             </motion.div>
           )}
         </AnimatePresence>

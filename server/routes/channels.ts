@@ -1,16 +1,12 @@
 import { Router, type Request, type Response } from 'express';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { sendWhatsAppText, verifyWhatsAppWebhook, getPhoneNumberInfo } from '../integrations/whatsapp.js';
 import { getBotInfo, sendTelegramMessage } from '../integrations/telegram.js';
 import { testDingTalk } from '../integrations/dingtalk.js';
 import { testFeishu } from '../integrations/feishu.js';
 import { getShopInfo, testShopify } from '../integrations/shopify.js';
 import { isDemoMode } from '../lib/demo.js';
-
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const DATA = path.join(__dirname, '../../data/channels.json');
+import { loadChannels as load, saveChannels as save } from '../lib/channelsStore.js';
+import { processWebhookPayload } from '../lib/waInbound.js';
 
 export interface Channel {
   id: string;
@@ -22,13 +18,6 @@ export interface Channel {
   connectedAt?: string;
   lastActivity?: string;
   stats: { sent: number; received: number };
-}
-
-function load(): Channel[] {
-  try { return JSON.parse(fs.readFileSync(DATA, 'utf8')); } catch { return []; }
-}
-function save(channels: Channel[]) {
-  fs.writeFileSync(DATA, JSON.stringify(channels, null, 2));
 }
 
 export const channelsRouter = Router();
@@ -192,14 +181,19 @@ channelsRouter.get('/webhook/whatsapp/:id', (req: Request, res: Response) => {
 });
 
 // WhatsApp webhook receive
-channelsRouter.post('/webhook/whatsapp/:id', (req: Request, res: Response) => {
+channelsRouter.post('/webhook/whatsapp/:id', async (req: Request, res: Response) => {
   const channel = load().find(c => c.id === req.params.id && c.type === 'whatsapp');
   if (!channel) { res.status(404).send('Not found'); return; }
   const channels = load();
   const idx = channels.findIndex(c => c.id === req.params.id);
   if (idx !== -1) { channels[idx].stats.received++; channels[idx].lastActivity = new Date().toISOString(); save(channels); }
-  // TODO: route message to agent
-  res.sendStatus(200);
+  try {
+    await processWebhookPayload(req.params.id, req.body, { tenantId: channel.config.tenantId });
+    res.sendStatus(200);
+  } catch (err) {
+    console.error('[wa webhook] process failed', err);
+    res.sendStatus(200);
+  }
 });
 
 // Telegram webhook receive

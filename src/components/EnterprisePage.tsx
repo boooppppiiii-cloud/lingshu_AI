@@ -30,6 +30,7 @@ interface Profile {
   brand: { tone: string; style: string; taboos: string; usp: string; preferredLanguages?: string };
   strategy?: { currentGoal?: string; focusProducts?: string; focusMarkets?: string; excludedMarkets?: string; pricingStrategy?: string; minMargin?: string; agentAutonomy?: string };
   customers?: { targetProfiles?: string; highValueSignals?: string; lowQualitySignals?: string; commonQuestions?: string; followupStyle?: string };
+  customerOps?: { bigDealThreshold?: string; takeoverOwner?: string; notificationChannel?: string; workingTimezone?: string; workingHours?: string; automationPreference?: string; extraMissingFields?: string };
   operations?: { leadTime?: string; customization?: string; logistics?: string; paymentTerms?: string; riskNotes?: string };
   agentLearning?: { provenAngles?: string; weakAngles?: string; pendingAssumptions?: string; userCorrections?: string };
   knowledge: string;
@@ -48,6 +49,7 @@ const DEFAULT: Profile = {
   brand: { tone: '', style: '', taboos: '', usp: '', preferredLanguages: '' },
   strategy: { currentGoal: '', focusProducts: '', focusMarkets: '', excludedMarkets: '', pricingStrategy: '', minMargin: '', agentAutonomy: '' },
   customers: { targetProfiles: '', highValueSignals: '', lowQualitySignals: '', commonQuestions: '', followupStyle: '' },
+  customerOps: { bigDealThreshold: '', takeoverOwner: '', notificationChannel: '', workingTimezone: '', workingHours: '', automationPreference: '', extraMissingFields: '' },
   operations: { leadTime: '', customization: '', logistics: '', paymentTerms: '', riskNotes: '' },
   agentLearning: { provenAngles: '', weakAngles: '', pendingAssumptions: '', userCorrections: '' },
   knowledge: '',
@@ -161,6 +163,7 @@ export default function EnterprisePage() {
           brand: { ...DEFAULT.brand, ...data.brand },
           strategy: { ...DEFAULT.strategy, ...data.strategy },
           customers: { ...DEFAULT.customers, ...data.customers },
+          customerOps: { ...DEFAULT.customerOps, ...data.customerOps },
           operations: { ...DEFAULT.operations, ...data.operations },
           agentLearning: { ...DEFAULT.agentLearning, ...data.agentLearning },
           knowledge: data.knowledge ?? '',
@@ -502,6 +505,43 @@ export default function EnterprisePage() {
                   const [commonQuestions = '', ...rest] = e.target.value.split('\n');
                   setProfile(prev => ({ ...prev, customers: { ...prev.customers, commonQuestions, followupStyle: rest.join('\n') } }));
                 }} placeholder={"常问：样品费、交期、认证文件、包装设计支持\n跟进：报价后第 2 天提醒，强调库存和打样档期"} />
+            </Field>
+          </section>
+
+          <section className="card p-5 space-y-4">
+            <div className="flex items-center gap-2 mb-1">
+              <MessageSquare size={14} className="text-text-secondary" />
+              <h3 className="text-sm font-semibold text-text-primary">客户运营配置</h3>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <Field label="大单阈值" hint="不填则默认 ≥ $1,000；可写金额或数量规则">
+                <input className={inputCls} placeholder="≥ $1,000 / ≥ 500 pcs" value={profile.customerOps?.bigDealThreshold ?? ''}
+                  onChange={e => set('customerOps')('bigDealThreshold', e.target.value)} />
+              </Field>
+              <Field label="熔断接管人">
+                <input className={inputCls} placeholder="老板 / 销售主管 / Julia" value={profile.customerOps?.takeoverOwner ?? ''}
+                  onChange={e => set('customerOps')('takeoverOwner', e.target.value)} />
+              </Field>
+              <Field label="接管通知渠道">
+                <input className={inputCls} placeholder="飞书群 / 钉钉群 / 企业微信 / WhatsApp" value={profile.customerOps?.notificationChannel ?? ''}
+                  onChange={e => set('customerOps')('notificationChannel', e.target.value)} />
+              </Field>
+              <Field label="工作时区">
+                <input className={inputCls} placeholder="Asia/Shanghai / Asia/Dubai" value={profile.customerOps?.workingTimezone ?? ''}
+                  onChange={e => set('customerOps')('workingTimezone', e.target.value)} />
+              </Field>
+              <Field label="工作时段">
+                <input className={inputCls} placeholder="09:00-22:00；夜间只出草稿不自动发" value={profile.customerOps?.workingHours ?? ''}
+                  onChange={e => set('customerOps')('workingHours', e.target.value)} />
+              </Field>
+              <Field label="自动化偏好">
+                <input className={inputCls} placeholder="低意向自动回目录；中意向确认；大单老板接管" value={profile.customerOps?.automationPreference ?? ''}
+                  onChange={e => set('customerOps')('automationPreference', e.target.value)} />
+              </Field>
+            </div>
+            <Field label="品类相关缺失字段" hint="例如 Logo、包装、规格、目的港、认证用途等，会追加到 AI 问需求清单">
+              <textarea className={textareaCls} rows={2} placeholder="Logo 文件、包装方式、目标上架平台、是否需要私标资质"
+                value={profile.customerOps?.extraMissingFields ?? ''} onChange={e => set('customerOps')('extraMissingFields', e.target.value)} />
             </Field>
           </section>
 

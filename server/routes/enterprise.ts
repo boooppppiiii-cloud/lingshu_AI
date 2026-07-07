@@ -71,6 +71,15 @@ export interface EnterpriseProfile {
     commonQuestions?: string;
     followupStyle?: string;
   };
+  customerOps?: {
+    bigDealThreshold?: string;
+    takeoverOwner?: string;
+    notificationChannel?: string;
+    workingTimezone?: string;
+    workingHours?: string;
+    automationPreference?: string;
+    extraMissingFields?: string;
+  };
   operations?: {
     leadTime?: string;
     customization?: string;
@@ -114,6 +123,7 @@ function readProfile(): EnterpriseProfile {
       brand: { tone: '', style: '', taboos: '', usp: '', preferredLanguages: '' },
       strategy: { currentGoal: '', focusProducts: '', focusMarkets: '', excludedMarkets: '', pricingStrategy: '', minMargin: '', agentAutonomy: '' },
       customers: { targetProfiles: '', highValueSignals: '', lowQualitySignals: '', commonQuestions: '', followupStyle: '' },
+      customerOps: { bigDealThreshold: '', takeoverOwner: '', notificationChannel: '', workingTimezone: '', workingHours: '', automationPreference: '', extraMissingFields: '' },
       operations: { leadTime: '', customization: '', logistics: '', paymentTerms: '', riskNotes: '' },
       agentLearning: { provenAngles: '', weakAngles: '', pendingAssumptions: '', userCorrections: '' },
       knowledge: '',
@@ -358,6 +368,13 @@ export function buildEnterpriseContext(profile: EnterpriseProfile): string {
   if (profile.customers?.lowQualitySignals) parts.push(`低质量询盘特征：${profile.customers.lowQualitySignals}`);
   if (profile.customers?.commonQuestions) parts.push(`客户常问问题：${profile.customers.commonQuestions}`);
   if (profile.customers?.followupStyle) parts.push(`跟进偏好：${profile.customers.followupStyle}`);
+  if (profile.customerOps?.bigDealThreshold) parts.push(`客户运营大单阈值：${profile.customerOps.bigDealThreshold}`);
+  if (profile.customerOps?.takeoverOwner) parts.push(`熔断接管人：${profile.customerOps.takeoverOwner}`);
+  if (profile.customerOps?.notificationChannel) parts.push(`接管通知渠道：${profile.customerOps.notificationChannel}`);
+  if (profile.customerOps?.workingTimezone) parts.push(`工作时区：${profile.customerOps.workingTimezone}`);
+  if (profile.customerOps?.workingHours) parts.push(`工作时段：${profile.customerOps.workingHours}`);
+  if (profile.customerOps?.automationPreference) parts.push(`客户自动化偏好：${profile.customerOps.automationPreference}`);
+  if (profile.customerOps?.extraMissingFields) parts.push(`品类相关缺失字段：${profile.customerOps.extraMissingFields}`);
   if (profile.operations?.leadTime) parts.push(`交期能力：${profile.operations.leadTime}`);
   if (profile.operations?.customization) parts.push(`定制能力：${profile.operations.customization}`);
   if (profile.operations?.logistics) parts.push(`物流履约：${profile.operations.logistics}`);
@@ -477,6 +494,7 @@ enterpriseRouter.post('/demo/reset', (_req, res) => {
     brand: { tone: '', style: '', taboos: '', usp: '', preferredLanguages: '' },
     strategy: { currentGoal: '', focusProducts: '', focusMarkets: '', excludedMarkets: '', pricingStrategy: '', minMargin: '', agentAutonomy: '' },
     customers: { targetProfiles: '', highValueSignals: '', lowQualitySignals: '', commonQuestions: '', followupStyle: '' },
+    customerOps: { bigDealThreshold: '', takeoverOwner: '', notificationChannel: '', workingTimezone: '', workingHours: '', automationPreference: '', extraMissingFields: '' },
     operations: { leadTime: '', customization: '', logistics: '', paymentTerms: '', riskNotes: '' },
     agentLearning: { provenAngles: '', weakAngles: '', pendingAssumptions: '', userCorrections: '' },
     knowledge: '',

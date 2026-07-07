@@ -2,6 +2,7 @@
  * PocketBase Admin client — fetch-based, no SDK dependency.
  * Pattern: cached admin token, auto-refresh on 401.
  */
+import { Agent, fetch as undiciFetch } from 'undici';
 
 export function getPbUrl(): string {
   return (process.env.PB_URL ?? 'http://localhost:8090').replace(/\/$/, '');
@@ -9,6 +10,12 @@ export function getPbUrl(): string {
 
 let cachedToken: string | null = null;
 let cachedIdentityKey: string | null = null;
+const directDispatcher = new Agent({});
+
+function pbFetch(pathOrUrl: string, options: RequestInit = {}): Promise<Response> {
+  const url = pathOrUrl.startsWith('http') ? pathOrUrl : `${getPbUrl()}${pathOrUrl}`;
+  return undiciFetch(url, { ...options, dispatcher: directDispatcher } as Parameters<typeof undiciFetch>[1]) as Promise<Response>;
+}
 
 function adminCreds(): { email: string; password: string } | null {
   const email = process.env.PB_ADMIN_EMAIL?.trim();
@@ -35,7 +42,7 @@ export async function getPbAdminToken(): Promise<string | null> {
     '/api/admins/auth-with-password',
   ]) {
     try {
-      const res = await fetch(`${pbUrl}${path}`, {
+      const res = await pbFetch(`${pbUrl}${path}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body,
@@ -68,7 +75,7 @@ async function adminFetch(
     ...(options.headers as Record<string, string> ?? {}),
     ...(token ? { Authorization: token } : {}),
   };
-  const res = await fetch(`${getPbUrl()}${path}`, { ...options, headers });
+  const res = await pbFetch(path, { ...options, headers });
   if (res.status === 401) {
     invalidatePbAdminToken();
   }
@@ -84,7 +91,7 @@ export async function getTenantIdFromToken(
   if (!token) return null;
 
   try {
-    const res = await fetch(`${getPbUrl()}/api/collections/users/auth-refresh`, {
+    const res = await pbFetch('/api/collections/users/auth-refresh', {
       method: 'POST',
       headers: { Authorization: token },
     });

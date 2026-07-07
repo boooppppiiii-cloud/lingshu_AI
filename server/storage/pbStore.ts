@@ -64,7 +64,8 @@ export const pbStore: DataStore = {
   async create<T = Record_>(collection: string, data: Record<string, unknown>) {
     try {
       return await pbCreate(collection, data) as T | null;
-    } catch {
+    } catch (err) {
+      console.error(`[store] create ${collection} threw`, err instanceof Error ? err.message : err);
       return null;
     }
   },
@@ -93,7 +94,8 @@ export const pbStore: DataStore = {
         page: query.page,
         perPage: query.perPage,
       });
-    } catch {
+    } catch (err) {
+      console.error(`[store] list ${collection} threw`, err instanceof Error ? err.message : err);
       return { items: [], totalItems: 0, totalPages: 0, page: query.page ?? 1, perPage: query.perPage ?? 20 };
     }
   },
