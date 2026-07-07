@@ -483,7 +483,7 @@ function buildShootingNeeds(videos: TrendVideo[], materials: Material[]): Shooti
     }
   }
   return Array.from(grouped.values())
-    .map(item => ({ ...item, priority: item.priority === '高' || item.count >= 3 ? '高' : item.count >= 2 ? '中' : '低' }))
+    .map((item): ShootingNeed => ({ ...item, priority: item.priority === '高' || item.count >= 3 ? '高' : item.count >= 2 ? '中' : '低' }))
     .sort((a, b) => {
       const rank = { '高': 3, '中': 2, '低': 1 };
       return rank[b.priority] - rank[a.priority] || b.count - a.count;

@@ -16,12 +16,11 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import InspirationDashboard from './InspirationDashboard';
 import AiCreateStudio from './AiCreateStudio';
-import AgentChatPage from './AgentChatPage';
 import { ChannelOverview } from './YouTubeIntegration';
 import type { ConversationContext, Page, RestoreSignal, KickoffSignal, AgentAction } from '../App';
 import { authHeader } from '../lib/auth';
 
-type ViewMode = 'materials' | 'create' | 'publish' | 'accounts' | 'chat';
+type ViewMode = 'materials' | 'create' | 'publish' | 'accounts';
 type PublishDraft = {
   videoPath?: string;
   title: string;
@@ -42,19 +41,50 @@ interface Props {
   onSessionRefresh?: () => void;
 }
 
-export default function TrafficPage({ onEnterConversation, onLeaveConversation, isInConversation, onNavigate, restore, kickoff, onAction, onScriptPanelOpen, onScriptPanelClose, onSessionRefresh }: Props) {
+export default function TrafficPage({ onNavigate, restore, kickoff, onScriptPanelOpen, onScriptPanelClose }: Props) {
   const [viewMode, setViewMode] = useState<ViewMode>('materials');
   const [publishDraft, setPublishDraft] = useState<PublishDraft | null>(null);
-  useEffect(() => { if (restore) setViewMode('chat'); }, [restore?.key]); // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { if (kickoff) setViewMode('chat'); }, [kickoff?.key]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (restore || kickoff) setViewMode('materials'); }, [restore?.key, kickoff?.key]);
+  useEffect(() => {
+    const contextByMode: Record<ViewMode, { label: string; summary: string; suggestions: string[] }> = {
+      materials: {
+        label: '我的社媒',
+        summary: '当前在我的社媒灵感大屏，适合拆解爆款内容、筛选素材方向、规划发布节奏和把灵感转成创作任务。',
+        suggestions: ['拆解当前素材方向', '规划本周发布节奏', '找出适合中东市场的内容角度', '把素材转成脚本任务'],
+      },
+      create: {
+        label: 'AI素材快剪',
+        summary: '当前在 AI 素材快剪，适合根据商品、目标市场和平台生成短视频脚本、标题、口播钩子和发布文案。',
+        suggestions: ['生成一条主推品短视频脚本', '把卖点改成阿语口播', '设计 TikTok 三条发布文案', '优化视频开头 3 秒钩子'],
+      },
+      publish: {
+        label: '账号一键发布',
+        summary: '当前在账号一键发布页，适合检查授权账号、发布素材路径、平台选择和发布前配置。',
+        suggestions: ['检查哪些平台已授权', '帮我优化发布标题', '生成四个平台的发布文案', '确认发布前检查项'],
+      },
+      accounts: {
+        label: '账号流量数据',
+        summary: '当前在账号流量数据看板，适合复盘各平台账号表现、找出增长趋势和下一轮内容优化方向。',
+        suggestions: ['复盘账号流量表现', '找出上升最快的平台', '给我下周发布建议', '总结高表现内容规律'],
+      },
+    };
+    const current = contextByMode[viewMode];
+    window.dispatchEvent(new CustomEvent('lingshu-assistant-context', {
+      detail: { agent: 'traffic', ...current },
+    }));
+  }, [viewMode]);
 
-  const handleEnterChat = (ctx: ConversationContext = { agent: 'traffic' }) => {
-    setViewMode('chat');
-    onEnterConversation(ctx);
-  };
-  const handleLeave = () => {
-    setViewMode('materials');
-    onLeaveConversation();
+  const openAssistant = () => {
+    window.dispatchEvent(new CustomEvent('lingshu-assistant-open', {
+      detail: {
+        context: {
+          agent: 'traffic',
+          label: '我的社媒',
+          summary: '当前在我的社媒模块，可围绕灵感拆解、AI素材快剪、账号发布和流量数据继续协助。',
+          suggestions: ['规划四平台发布节奏', '复盘账号流量数据', '生成短视频素材方向', '拆解爆款钩子'],
+        },
+      },
+    }));
   };
   const handleEnterWorkflow = (payload: unknown) => {
     try { localStorage.setItem('ow_video_kickoff', JSON.stringify(payload)); } catch { /* ignore */ }
@@ -75,23 +105,13 @@ export default function TrafficPage({ onEnterConversation, onLeaveConversation, 
             <Zap size={13} />
           </div>
           <span className="text-sm font-semibold text-text-primary">我的社媒</span>
-          {isInConversation && (
-            <span className="flex items-center gap-1 text-[10px] font-medium px-2 py-0.5 rounded-full ml-1" style={{ background: 'rgba(22,163,74,0.1)', color: '#16a34a' }}>
-              <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
-              我的社媒助手运行中
-            </span>
-          )}
         </div>
 
         <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => handleEnterChat()}
-            className={`flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-semibold transition-colors ${
-              viewMode === 'chat'
-                ? 'border-accent bg-accent-glow text-accent'
-                : 'border-border text-text-muted hover:text-text-primary'
-            }`}
+            onClick={openAssistant}
+            className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold text-text-muted transition-colors hover:text-text-primary"
           >
             <MessageSquare size={12} />
             问我的社媒
@@ -99,38 +119,36 @@ export default function TrafficPage({ onEnterConversation, onLeaveConversation, 
         </div>
       </div>
 
-      {viewMode !== 'chat' && (
-        <div className="flex-shrink-0 border-b border-border bg-surface px-6 py-4">
-          <div className="flex items-center gap-2 rounded-2xl border border-border bg-surface-2 p-1.5 shadow-sm">
-            {([
-              { mode: 'materials' as ViewMode, icon: <Film size={17} />, label: '灵感大屏', desc: '爆款拆解' },
-              { mode: 'create' as ViewMode,    icon: <Wand2 size={17} />, label: 'AI素材快剪', desc: '脚本成片' },
-              { mode: 'publish' as ViewMode,   icon: <Send size={17} />, label: '账号一键发布', desc: '多平台' },
-              { mode: 'accounts' as ViewMode,  icon: <BarChart3 size={17} />, label: '账号流量数据', desc: '复盘' },
-            ]).map(({ mode, icon, label, desc }) => {
-              const active = viewMode === mode;
-              return (
-                <button
-                  key={mode}
-                  type="button"
-                  onClick={() => setViewMode(mode)}
-                  className={`flex min-h-14 flex-1 items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-left transition-all ${
-                    active
-                      ? 'bg-white text-text-primary shadow-sm ring-1 ring-border'
-                      : 'text-text-muted hover:bg-white/60 hover:text-text-secondary'
-                  }`}
-                >
-                  <span className={active ? 'text-accent' : 'text-text-muted'}>{icon}</span>
-                  <span className="min-w-0">
-                    <span className="block whitespace-nowrap text-base font-black">{label}</span>
-                    <span className="mt-0.5 block text-[11px] font-semibold opacity-70">{desc}</span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
+      <div className="flex-shrink-0 border-b border-border bg-surface px-6 py-4">
+        <div className="flex items-center gap-2 rounded-2xl border border-border bg-surface-2 p-1.5 shadow-sm">
+          {([
+            { mode: 'materials' as ViewMode, icon: <Film size={17} />, label: '灵感大屏', desc: '爆款拆解' },
+            { mode: 'create' as ViewMode,    icon: <Wand2 size={17} />, label: 'AI素材快剪', desc: '脚本成片' },
+            { mode: 'publish' as ViewMode,   icon: <Send size={17} />, label: '账号一键发布', desc: '多平台' },
+            { mode: 'accounts' as ViewMode,  icon: <BarChart3 size={17} />, label: '账号流量数据', desc: '复盘' },
+          ]).map(({ mode, icon, label, desc }) => {
+            const active = viewMode === mode;
+            return (
+              <button
+                key={mode}
+                type="button"
+                onClick={() => setViewMode(mode)}
+                className={`flex min-h-14 flex-1 items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-left transition-all ${
+                  active
+                    ? 'bg-white text-text-primary shadow-sm ring-1 ring-border'
+                    : 'text-text-muted hover:bg-white/60 hover:text-text-secondary'
+                }`}
+              >
+                <span className={active ? 'text-accent' : 'text-text-muted'}>{icon}</span>
+                <span className="min-w-0">
+                  <span className="block whitespace-nowrap text-base font-black">{label}</span>
+                  <span className="mt-0.5 block text-[11px] font-semibold opacity-70">{desc}</span>
+                </span>
+              </button>
+            );
+          })}
         </div>
-      )}
+      </div>
 
       {/* Content */}
       <div className="flex-1 min-h-0 overflow-hidden">
@@ -156,35 +174,7 @@ export default function TrafficPage({ onEnterConversation, onLeaveConversation, 
             <motion.div key="accounts" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full overflow-y-auto px-6 py-5">
               <ChannelOverview />
             </motion.div>
-          ) : (
-            <motion.div key="chat" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
-              <AgentChatPage
-                config={{
-                  type: 'traffic',
-                  apiPath: '/api/overseas/agents/traffic/chat',
-                  color: '#16a34a',
-                  bg: 'rgba(22,163,74,0.1)',
-                  icon: <Zap size={13} />,
-                  name: '我的社媒',
-                  tagline: '素材复用 · AI 生成 · 多账号发布 · 数据复盘',
-                  suggestions: [
-                    '规划四平台发布节奏',
-                    '复盘账号流量数据',
-                    '生成短视频素材方向',
-                    '拆解爆款钩子',
-                  ],
-                }}
-                onEnterConversation={handleEnterChat}
-                onLeaveConversation={handleLeave}
-                isInConversation={isInConversation}
-                restoreKey={restore?.key}
-                restoreMessages={restore?.messages}
-                kickoff={kickoff}
-                onAction={onAction}
-                onSessionRefresh={onSessionRefresh}
-              />
-            </motion.div>
-          )}
+          ) : null}
         </AnimatePresence>
       </div>
     </div>
