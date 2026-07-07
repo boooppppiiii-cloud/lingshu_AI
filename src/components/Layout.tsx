@@ -2,7 +2,7 @@ import { type ReactNode, useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Compass, Zap, MessageSquare, RefreshCw,
-  Building2, PlugZap, Clock,
+  Building2, PlugZap, Clock, ShoppingCart,
   ChevronRight, Plus, LogOut, Loader2, RefreshCcw, X, ShieldCheck,
 } from 'lucide-react';
 import type { Page, ConversationContext, Conversation, AgentAction } from '../App';
@@ -20,6 +20,7 @@ const PRIMARY_NAV: NavSection = {
     { id: 'traffic',    label: '社媒流量', icon: <Zap size={16} /> },
     { id: 'conversion', label: '转化专家', icon: <MessageSquare size={16} /> },
     { id: 'retention',  label: '留存专家', icon: <RefreshCw size={16} /> },
+    { id: 'orders',     label: '我的订单', icon: <ShoppingCart size={16} /> },
   ],
 };
 

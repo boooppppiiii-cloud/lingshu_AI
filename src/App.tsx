@@ -8,6 +8,7 @@ import StrategyPage from './components/StrategyPage';
 import TrafficPage from './components/TrafficPage';
 import ConversionPage from './components/ConversionPage';
 import RetentionPage from './components/RetentionPage';
+import OrderManagementPage from './components/OrderManagementPage';
 import EnterprisePage from './components/EnterprisePage';
 import IntegrationsPage from './components/IntegrationsPage';
 import ScheduledPage from './components/ScheduledPage';
@@ -18,6 +19,7 @@ export type Page =
   | 'traffic'
   | 'conversion'
   | 'retention'
+  | 'orders'
   | 'enterprise'
   | 'plugins'
   | 'scheduled'
@@ -52,7 +54,7 @@ export interface KickoffSignal { text: string; key: string }
 export type AgentAction = (agent: AgentType, task: string) => void;
 
 const AGENT_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention'];
-const ALL_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention', 'enterprise', 'plugins', 'scheduled', 'admin', 'channels', 'youtube'];
+const ALL_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention', 'orders', 'enterprise', 'plugins', 'scheduled', 'admin', 'channels', 'youtube'];
 const firstUserText = (msgs?: Message[]) => (msgs?.find(m => m.role === 'user')?.content ?? '新会话').slice(0, 24);
 const loadConvs = (): Conversation[] => {
   try { return JSON.parse(localStorage.getItem('ow_convs') || '[]'); } catch { return []; }
@@ -381,6 +383,7 @@ export default function App() {
               onSessionRefresh={() => void refreshSession()}
             />
           )}
+          {page === 'orders' && <OrderManagementPage />}
           {page === 'enterprise' && <EnterprisePage />}
           {page === 'plugins' && <IntegrationsPage />}
           {page === 'scheduled' && <ScheduledPage onAction={startAgentTask} />}

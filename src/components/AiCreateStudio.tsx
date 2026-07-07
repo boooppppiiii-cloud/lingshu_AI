@@ -264,7 +264,21 @@ function languageTextToCode(text = '') {
 
 interface EnterpriseProfileLite {
   company?: { industry?: string; mainMarkets?: string; primaryLanguages?: string };
-  products?: { categories?: string; priceRange?: string; moq?: string; highlights?: string };
+  products?: {
+    categories?: string;
+    priceRange?: string;
+    moq?: string;
+    certifications?: string;
+    highlights?: string;
+    items?: Array<{
+      name?: string;
+      category?: string;
+      priceRange?: string;
+      moq?: string;
+      certifications?: string;
+      highlights?: string;
+    }>;
+  };
   brand?: { tone?: string; usp?: string; preferredLanguages?: string };
   strategy?: { focusProducts?: string; focusMarkets?: string };
   customers?: { targetProfiles?: string };
@@ -311,17 +325,37 @@ const uniqueLangs = (primary: string, count: number) => {
 };
 
 function buildAiProductOptions(profile: EnterpriseProfileLite): ProductOption[] {
-  const focus = compact(profile.strategy?.focusProducts);
   const categories = compact(profile.products?.categories);
-  const highlights = compact(profile.products?.highlights || profile.brand?.usp);
-  const price = compact(profile.products?.priceRange);
-  const moq = compact(profile.products?.moq);
-  const baseInfo = [focus || categories || '企业产品组合', categories, highlights, price, moq].filter(Boolean).join('；');
-  const options: ProductOption[] = [
-    { id: 'portfolio', label: focus || categories || '企业产品组合', info: baseInfo || '企业产品组合' },
-  ];
-  if (categories && categories !== focus) options.push({ id: 'categories', label: categories, info: [categories, highlights, price, moq].filter(Boolean).join('；') });
-  return options;
+  const fallbackNames = compact(profile.strategy?.focusProducts || categories)
+    .split(/[、,，\n]/)
+    .map(item => item.trim())
+    .filter(Boolean);
+  const rawItems = profile.products?.items?.length
+    ? profile.products.items
+    : fallbackNames.map(name => ({ name }));
+  return rawItems
+    .map((item, index) => {
+      const name = compact(item.name);
+      if (!name || /^产品\d+$/.test(name)) return null;
+      const category = compact(item.category || categories);
+      const highlights = compact(item.highlights || profile.products?.highlights || profile.brand?.usp);
+      const price = compact(item.priceRange || profile.products?.priceRange);
+      const moq = compact(item.moq || profile.products?.moq);
+      const certifications = compact(item.certifications || profile.products?.certifications);
+      return {
+        id: `product-${index}-${name}`,
+        label: name,
+        info: [
+          `产品名称：${name}`,
+          category ? `所属类目：${category}` : '',
+          highlights ? `产品卖点：${highlights}` : '',
+          price ? `价格区间：${price}` : '',
+          moq ? `起订量：${moq}` : '',
+          certifications ? `认证资质：${certifications}` : '',
+        ].filter(Boolean).join('\n'),
+      };
+    })
+    .filter(Boolean) as ProductOption[];
 }
 
 function buildReferenceScript(kickoff: VideoKickoff, productInfo: string, languageCode: string, variantIndex: number, mode: 'ideas' | 'languages') {
@@ -348,6 +382,101 @@ function buildReferenceScript(kickoff: VideoKickoff, productInfo: string, langua
       : `[${item.time}] ${item.shot}; ${item.camera}; keep the reference rhythm: ${item.visual}; replace visuals and benefits with our product; ${line}`;
   }).join('\n\n');
   return `${header}\n\n${body}`;
+}
+
+function localizeVoiceoverFallback(base: string, target: string): string {
+  const lines = base
+    .split(/[\n。；]+/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .slice(0, 8);
+  const sourceLines = lines.length ? lines : ['这款产品值得马上询盘。'];
+  if (target === 'zh') return sourceLines.join('\n');
+
+  const product = inferProductName(sourceLines.join(' '), target);
+  return sourceLines.map((line, index) => translateVoiceoverLineFallback(line, target, product, index)).join('\n');
+}
+
+function inferProductName(text: string, target: string): string {
+  const match = text.match(/(?:又便宜又好用的|客户一直在问的|这款|这个|主推)([^，。；\n]{2,24}?(?:机|器|仪|设备|套装|产品|工具|配件|用品|面霜|精华|家具))/);
+  const raw = match?.[1] || '';
+  const known: Record<string, Record<string, string>> = {
+    家用蛋糕机: {
+      en: 'home cake maker',
+      es: 'máquina doméstica para hacer pasteles',
+      ar: 'آلة صنع الكعك المنزلية',
+      pt: 'máquina doméstica de bolo',
+      id: 'mesin pembuat kue rumahan',
+    },
+    蛋糕机: {
+      en: 'cake maker',
+      es: 'máquina para hacer pasteles',
+      ar: 'آلة صنع الكعك',
+      pt: 'máquina de bolo',
+      id: 'mesin pembuat kue',
+    },
+  };
+  const key = Object.keys(known).find(item => raw.includes(item) || text.includes(item));
+  return key ? (known[key][target] || known[key].en) : ({
+    en: 'this product',
+    es: 'este producto',
+    ar: 'هذا المنتج',
+    pt: 'este produto',
+    id: 'produk ini',
+  }[target] || 'this product');
+}
+
+function translateVoiceoverLineFallback(line: string, target: string, product: string, index: number): string {
+  const shotNo = line.match(/第\s*(\d+)\s*个镜头/)?.[1];
+  const templates: Record<string, string[]> = {
+    en: [
+      `Don't scroll away. This is the affordable, easy-to-use ${product} that customers keep asking about.`,
+      'Factory-direct supply, stable quality, fast sampling, and cross-border shipping are all supported.',
+      'Whether you need private-label packaging or small-batch market testing, you can get started quickly.',
+      'For samples, pricing, or a custom solution, leave a message with your target market.',
+    ],
+    es: [
+      `No sigas deslizando. Este es ${product} económico y fácil de usar que los clientes no dejan de preguntar.`,
+      'Suministro directo de fábrica, calidad estable, muestreo rápido y envíos internacionales.',
+      'Ya sea que necesites empaque de marca privada o pruebas en lotes pequeños, puedes empezar rápidamente.',
+      'Para muestras, precios o una solución personalizada, déjanos tu mercado objetivo en un mensaje.',
+    ],
+    ar: [
+      `لا تتجاوز الفيديو. هذا هو ${product} العملي والمناسب في السعر الذي يسأل عنه العملاء باستمرار.`,
+      'توريد مباشر من المصنع، جودة مستقرة، عينات سريعة، وشحن دولي متاح.',
+      'سواء كنت تحتاج إلى تغليف بعلامتك الخاصة أو اختبار دفعات صغيرة، يمكنك البدء بسرعة.',
+      'للحصول على عينات أو أسعار أو حل مخصص، اترك لنا رسالة مع السوق المستهدف.',
+    ],
+    pt: [
+      `Nao pule este video. Este e ${product} acessivel e facil de usar que os clientes vivem perguntando.`,
+      'Fornecimento direto da fabrica, qualidade estavel, amostras rapidas e envio internacional.',
+      'Se voce precisa de embalagem private label ou teste em pequenos lotes, pode comecar rapidamente.',
+      'Para amostras, precos ou uma solucao personalizada, envie uma mensagem com seu mercado-alvo.',
+    ],
+    id: [
+      `Jangan lewatkan. Ini ${product} yang terjangkau dan mudah dipakai, yang sering ditanyakan pelanggan.`,
+      'Pasokan langsung dari pabrik, kualitas stabil, sampel cepat, dan pengiriman lintas negara tersedia.',
+      'Baik untuk kemasan private label maupun uji pasar dalam batch kecil, Anda bisa mulai dengan cepat.',
+      'Untuk sampel, harga, atau solusi khusus, tinggalkan pesan dengan target pasar Anda.',
+    ],
+  };
+  if (shotNo) {
+    const shotTemplates: Record<string, string> = {
+      en: `This is not an ordinary product. Shot ${shotNo} shows exactly why it is worth an inquiry.`,
+      es: `Este no es un producto cualquiera. La toma ${shotNo} muestra exactamente por qué vale la pena consultarlo.`,
+      ar: `هذا ليس منتجا عاديا. اللقطة ${shotNo} توضح بالضبط لماذا يستحق الاستفسار عنه.`,
+      pt: `Este nao e um produto comum. A cena ${shotNo} mostra exatamente por que vale a pena pedir detalhes.`,
+      id: `Ini bukan produk biasa. Adegan ${shotNo} menunjukkan kenapa produk ini layak ditanyakan.`,
+    };
+    return shotTemplates[target] || shotTemplates.en;
+  }
+  const normalized = line.replace(/^\s*\[[^\]]+\]\s*/g, '');
+  const list = templates[target] || templates.en;
+  if (/先别划走|别划走|客户.*问|又便宜又好用/.test(normalized)) return list[0];
+  if (/工厂直供|品质稳定|快速打样|跨境发货/.test(normalized)) return list[1];
+  if (/私标|小批量|测款|快速开始/.test(normalized)) return list[2];
+  if (/样品|报价|定制方案|留言|目标市场/.test(normalized)) return list[3];
+  return list[Math.min(index, list.length - 1)];
 }
 
 const SAMPLE_SCRIPT = `[开场 · 0-3s]
@@ -461,8 +590,9 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   const [provider, setProvider] = useState<'gemini' | 'qwen'>('gemini');
   const [productInfo, setProductInfo] = useState('');
   const [productOptions, setProductOptions] = useState<ProductOption[]>([]);
-  const [selectedProductId, setSelectedProductId] = useState('');
-  const [cloneCount, setCloneCount] = useState(2);
+  const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
+  const [productSelectMode, setProductSelectMode] = useState<'single' | 'multi'>('single');
+  const [cloneCount] = useState(1);
   const [cloneOutputMode, setCloneOutputMode] = useState<'ideas' | 'languages'>('ideas');
   const [audience, setAudience] = useState('');
   const [sellingPoints, setSellingPoints] = useState('');
@@ -553,7 +683,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         if (!alive) return;
         const options = buildAiProductOptions(profile);
         setProductOptions(options);
-        if (options[0]) setSelectedProductId(current => current || options[0]!.id);
+        if (options[0]) setSelectedProductIds(current => current.length ? current : [options[0]!.id]);
         setLang('zh');
         setProductInfo(prev => prev || options[0]?.info || [
           profile.strategy?.focusProducts || profile.products?.categories,
@@ -573,6 +703,19 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       .catch(() => {});
     return () => { alive = false; };
   }, []);
+
+  useEffect(() => {
+    if (productOptions.length === 0 || selectedProductIds.length === 0) return;
+    const selectedOptions = productOptions.filter(option => selectedProductIds.includes(option.id));
+    if (selectedOptions.length === 0) return;
+    setProductInfo(selectedOptions.map(option => option.info).filter(Boolean).join('\n\n'));
+  }, [productOptions, selectedProductIds]);
+
+  useEffect(() => {
+    if (productSelectMode === 'single' && selectedProductIds.length > 1) {
+      setSelectedProductIds([selectedProductIds[0]]);
+    }
+  }, [productSelectMode, selectedProductIds]);
 
   // 成片预览：网页端顺序播放选中的真实视频片段（mock 占位素材无 url，不可播放）
   const [previewIdx, setPreviewIdx] = useState<number | null>(null);
@@ -618,6 +761,13 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
 
   const canNext = step === 'material' ? selected.length > 0 : true;
   const isLast = stepIdx === STEPS.length - 1;
+  const toggleProductSelection = (id: string) => {
+    setSelectedProductIds(current => {
+      if (productSelectMode === 'single') return [id];
+      const next = current.includes(id) ? current.filter(item => item !== id) : [...current, id];
+      return next.length ? next : [id];
+    });
+  };
   const cloneScripts = useMemo(() => {
     if (mode !== 'clone' || !videoKickoff?.referenceAnalysis) return [];
     const langs = cloneOutputMode === 'languages'
@@ -1024,7 +1174,9 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       for (const code of voiceLangs) {
         if (code === 'zh') continue;
         const translated = await studioApi.translate({ text: base, target: code, source: 'zh' });
-        next[code] = translated.ok && translated.text ? translated.text : base;
+        next[code] = translated.ok && translated.text?.trim()
+          ? translated.text
+          : localizeVoiceoverFallback(base, code);
       }
       setVoiceDrafts(next);
       setActiveVoiceLang(voiceLangs[0] || 'zh');
@@ -1395,7 +1547,9 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
           drafts.zh = base;
         } else {
           const translated = await studioApi.translate({ text: base, target: code, source: 'zh' });
-          drafts[code] = translated.ok && translated.text ? translated.text : base;
+          drafts[code] = translated.ok && translated.text?.trim()
+            ? translated.text
+            : localizeVoiceoverFallback(base, code);
         }
       }
       setVoiceoverLines(base);
@@ -1471,7 +1625,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   /* ── 草稿 / 作品 ─────────────────────────────────────────────────────── */
   const collectSpec = () => ({
     mode, platform, ratio, duration, lang, provider,
-    productInfo, audience, sellingPoints, tone,
+    productInfo, productSelectMode, selectedProductIds, audience, sellingPoints, tone,
     selected, script, scriptType, voice,
     bgm, bgmVol, cover, coverTitle, coverStyle, account, caption,
     subtitlesOn, subMode, clipEdits, voiceoverMode, uploadedVoiceName,
@@ -1485,6 +1639,8 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     if (s.lang) setLang(s.lang as string);
     if (s.provider === 'gemini' || s.provider === 'qwen') setProvider(s.provider);
     if (typeof s.productInfo === 'string') setProductInfo(s.productInfo);
+    if (s.productSelectMode === 'single' || s.productSelectMode === 'multi') setProductSelectMode(s.productSelectMode);
+    if (Array.isArray(s.selectedProductIds)) setSelectedProductIds(s.selectedProductIds as string[]);
     if (typeof s.audience === 'string') setAudience(s.audience);
     if (typeof s.sellingPoints === 'string') setSellingPoints(s.sellingPoints);
     if (typeof s.tone === 'string') setTone(s.tone);
@@ -1596,48 +1752,63 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
               </Field>
               <Field label="选择产品">
                 <div className="space-y-2 max-w-2xl">
-                  {productOptions.length > 0 && (
-                    <div className="relative">
-                      <select
-                        value={selectedProductId}
-                        onChange={e => {
-                          setSelectedProductId(e.target.value);
-                          const option = productOptions.find(item => item.id === e.target.value);
-                          if (option) setProductInfo(option.info);
-                        }}
-                        className="w-full appearance-none rounded-lg border border-border bg-surface px-3 py-2 pr-9 text-sm font-medium text-text-primary outline-none cursor-pointer transition-colors hover:border-border-bright focus:border-accent"
-                      >
-                        {productOptions.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
-                      </select>
-                      <ChevronDown size={15} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-text-muted" />
+                  <div className="flex items-center justify-between gap-3">
+                    <p className="text-xs text-text-muted">产品信息从企业中心配置导入，用于后续口播脚本和素材生成。</p>
+                    <div className="flex items-center gap-0.5 rounded-lg border border-border bg-surface-2 p-0.5">
+                      {([
+                        ['single', '单选'],
+                        ['multi', '多选'],
+                      ] as const).map(([value, label]) => (
+                        <button
+                          key={value}
+                          type="button"
+                          onClick={() => setProductSelectMode(value)}
+                          className={`rounded-md px-2.5 py-1 text-xs font-bold transition ${productSelectMode === value ? 'bg-surface text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'}`}
+                        >
+                          {label}
+                        </button>
+                      ))}
                     </div>
-                  )}
-                  <textarea
-                    value={productInfo}
-                    onChange={e => setProductInfo(e.target.value)}
-                    rows={3}
-                    placeholder="产品信息：品类、核心卖点、目标市场、价格或起订量"
-                    className="w-full rounded-lg border border-border bg-surface px-3 py-2 text-sm text-text-primary outline-none focus:border-accent resize-none"
-                  />
-                </div>
-              </Field>
-              <Field label="中文脚本输出">
-                <div className="flex flex-wrap items-center gap-3">
-                  <label className="flex items-center gap-2 text-xs font-semibold text-text-secondary">
-                    {mode === 'clone' ? '创意数量' : '脚本数量'}
-                    <input
-                      type="number"
-                      min={1}
-                      max={5}
-                      value={cloneCount}
-                      onChange={e => setCloneCount(Math.max(1, Math.min(5, Number(e.target.value) || 1)))}
-                      className="w-16 rounded-lg border border-border bg-surface px-2 py-1.5 text-sm font-bold text-text-primary outline-none focus:border-accent"
-                    />
-                  </label>
+                  </div>
+                  <div className="grid gap-2 md:grid-cols-2">
+                    {productOptions.length > 0 ? productOptions.map(option => {
+                      const active = selectedProductIds.includes(option.id);
+                      return (
+                        <button
+                          key={option.id}
+                          type="button"
+                          onClick={() => toggleProductSelection(option.id)}
+                          className="rounded-xl border bg-surface p-3 text-left transition"
+                          style={active ? { borderColor: TRAFFIC_GREEN, boxShadow: `0 0 0 1px ${TRAFFIC_GREEN}` } : { borderColor: 'var(--color-border)' }}
+                        >
+                          <div className="flex items-start gap-2">
+                            <span
+                              className={`mt-0.5 flex h-4 w-4 items-center justify-center border ${productSelectMode === 'single' ? 'rounded-full' : 'rounded'}`}
+                              style={active ? { borderColor: TRAFFIC_GREEN, background: TRAFFIC_GREEN, color: '#fff' } : { borderColor: 'var(--color-border)' }}
+                            >
+                              {active && <Check size={11} />}
+                            </span>
+                            <div className="min-w-0">
+                              <p className="truncate text-sm font-bold text-text-primary">{option.label}</p>
+                              <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-text-muted">{option.info}</p>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    }) : (
+                      <div className="rounded-xl border border-dashed border-border bg-surface-2 px-3 py-4 text-sm text-text-muted">
+                        企业中心还没有可导入的产品信息，请先到企业中心完成配置。
+                      </div>
+                    )}
+                  </div>
+                  <div className="rounded-xl border border-border bg-surface-2 px-3 py-2">
+                    <p className="mb-1 text-[11px] font-bold text-text-muted">已导入产品信息</p>
+                    <pre className="max-h-28 overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-text-primary">{productInfo || '暂无产品信息'}</pre>
+                  </div>
                 </div>
               </Field>
               <div className="rounded-xl border border-border bg-surface px-4 py-3 text-xs leading-relaxed text-text-muted">
-                脚本生成已移到下一步「口播脚本」。这里仅确认生成起点、平台、比例、产品和脚本数量。
+                脚本生成已移到下一步「口播脚本」。这里仅确认生成起点、平台、比例和企业中心导入的产品。
               </div>
             </div>
           </div>
