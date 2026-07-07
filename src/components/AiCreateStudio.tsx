@@ -317,6 +317,7 @@ interface VideoKickoff {
 
 interface ProductOption { id: string; label: string; info: string }
 interface ModeScriptOutput { id: string; title: string; script: string; mode: 'material' | 'product' | 'clone' }
+type EnterpriseProductItem = NonNullable<NonNullable<EnterpriseProfileLite['products']>['items']>[number];
 
 const compact = (value?: string) => String(value || '').trim();
 const uniqueLangs = (primary: string, count: number) => {
@@ -330,7 +331,7 @@ function buildAiProductOptions(profile: EnterpriseProfileLite): ProductOption[] 
     .split(/[、,，\n]/)
     .map(item => item.trim())
     .filter(Boolean);
-  const rawItems = profile.products?.items?.length
+  const rawItems: EnterpriseProductItem[] = profile.products?.items?.length
     ? profile.products.items
     : fallbackNames.map(name => ({ name }));
   return rawItems

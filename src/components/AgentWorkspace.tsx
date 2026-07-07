@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { motion } from 'motion/react';
 import { Compass, Zap, MessageSquare, TrendingUp, Users, BarChart2, Sparkles, ChevronRight, Activity, CalendarDays } from 'lucide-react';
-import type { AgentType, ConversationContext } from '../App';
+import type { AgentType } from '../App';
 import { authHeader } from '../lib/auth';
 
 const AGENTS = [
@@ -141,7 +141,7 @@ function getBeijingMonthPlan() {
   };
 }
 
-export default function AgentWorkspace({ onEnterConversation }: { onEnterConversation: (ctx: ConversationContext) => void }) {
+export default function AgentWorkspace() {
   const monthPlan = useMemo(() => getBeijingMonthPlan(), []);
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
   const [agentTokens, setAgentTokens] = useState<Record<AgentType, number>>(() => readAgentTokenUsage());
@@ -169,11 +169,28 @@ export default function AgentWorkspace({ onEnterConversation }: { onEnterConvers
     () => [...monthPlan.rows.slice(0, 1), ...taskRows(tasks), ...monthPlan.rows.slice(1)],
     [monthPlan.rows, tasks],
   );
+  const openAssistant = (agent: (typeof AGENTS)[number]) => {
+    window.dispatchEvent(new CustomEvent('lingshu-assistant-open', {
+      detail: {
+        context: {
+          agent: agent.type,
+          label: agent.name,
+          summary: `当前在首页 AI 智囊团，刚选择了${agent.name}。适合围绕${agent.desc}继续拆解动作，并结合当前经营数据给出下一步建议。`,
+          suggestions: [
+            `围绕${agent.name}给我下一步建议`,
+            '把当前重点拆成今日任务',
+            '生成可直接执行的清单',
+            '同步到相关模块的工作流',
+          ],
+        },
+      },
+    }));
+  };
   return (
     <div className="p-6 h-full overflow-y-auto">
       <div className="mb-6">
         <h2 className="text-lg font-bold text-text-primary font-display">你的 AI 智囊团</h2>
-        <p className="text-sm text-text-muted mt-0.5">4 位 AI 专家实时运行 · 点击卡片进入对话</p>
+        <p className="text-sm text-text-muted mt-0.5">一张脸，四个脑子 · 点击卡片唤起灵枢助手</p>
       </div>
       <section className="mb-6 rounded-2xl border border-border bg-surface overflow-hidden">
         <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border">
@@ -231,7 +248,7 @@ export default function AgentWorkspace({ onEnterConversation }: { onEnterConvers
             <motion.button key={agent.type} type="button" data-agent-card={agent.type}
               initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.07 }}
               className="card p-4 cursor-pointer flex flex-col gap-3 hover:border-border-bright text-left"
-              onClick={() => onEnterConversation({ agent: agent.type })}>
+              onClick={() => openAssistant(agent)}>
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-2.5">
                   <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0" style={{ background: agent.bg, color: agent.color }}><Icon size={18} /></div>
