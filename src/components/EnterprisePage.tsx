@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { Building2, Package, Megaphone, BookOpen, Save, CheckCircle2, Loader2, Compass, Zap, MessageSquare, RefreshCw, RotateCcw, Plus, Upload, X, Image, Video, FileText } from 'lucide-react';
+import { Building2, Package, Megaphone, BookOpen, Save, CheckCircle2, Loader2, Compass, Zap, MessageSquare, RefreshCw, RotateCcw, Plus, Upload, X, Image, Video, FileText, KeyRound, Copy, ExternalLink } from 'lucide-react';
+import { authHeader } from '../lib/auth';
 import { completeDemoStep } from '../lib/demoProgress';
 
 interface ProductAsset {
@@ -35,21 +36,17 @@ interface Profile {
 }
 
 const DEFAULT: Profile = {
-  company: { name: '', industry: '', companyType: '', mainMarkets: '', primaryLanguages: '英语、阿拉伯语', founded: '', description: '' },
+  company: { name: '', industry: '', companyType: '', mainMarkets: '', primaryLanguages: '', founded: '', description: '' },
   products: {
     categories: '',
     priceRange: '',
     moq: '',
     certifications: '',
     highlights: '',
-    items: [
-      { name: '产品1', images: [], videos: [], documents: [] },
-      { name: '产品2', images: [], videos: [], documents: [] },
-      { name: '产品3', images: [], videos: [], documents: [] },
-    ],
+    items: [],
   },
-  brand: { tone: '', style: '专业', taboos: '', usp: '', preferredLanguages: '英语、阿拉伯语' },
-  strategy: { currentGoal: '', focusProducts: '', focusMarkets: '', excludedMarkets: '', pricingStrategy: '', minMargin: '', agentAutonomy: '建议优先，关键动作需确认' },
+  brand: { tone: '', style: '', taboos: '', usp: '', preferredLanguages: '' },
+  strategy: { currentGoal: '', focusProducts: '', focusMarkets: '', excludedMarkets: '', pricingStrategy: '', minMargin: '', agentAutonomy: '' },
   customers: { targetProfiles: '', highValueSignals: '', lowQualitySignals: '', commonQuestions: '', followupStyle: '' },
   operations: { leadTime: '', customization: '', logistics: '', paymentTerms: '', riskNotes: '' },
   agentLearning: { provenAngles: '', weakAngles: '', pendingAssumptions: '', userCorrections: '' },
@@ -64,6 +61,8 @@ const AGENTS = [
 ];
 
 interface DemoTemplate { id: string; name: string; description: string; profile?: Profile }
+interface ProductApiInfo { apiKey: string; tenantId: string; docsUrl: string; createdAt?: string; lastIngestedAt?: string; lastProductName?: string }
+interface ProductApiStatus { count: number; lastIngestedAt?: string; lastProductName?: string }
 
 function matchTemplateId(profile: Profile, templates: DemoTemplate[]): string {
   const matched = templates.find(t =>
@@ -95,7 +94,10 @@ function emptyProduct(index: number): ProductItem {
 function normalizeProductItems(products: Profile['products']): ProductItem[] {
   const existing = Array.isArray(products.items) ? products.items : [];
   if (existing.length) {
-    return existing.map((item, index) => ({
+    return existing.filter(item =>
+      item.name || item.category || item.priceRange || item.moq || item.certifications || item.highlights ||
+      item.images?.length || item.videos?.length || item.documents?.length
+    ).map((item, index) => ({
       ...emptyProduct(index),
       ...item,
       name: item.name || `产品${index + 1}`,
@@ -104,16 +106,7 @@ function normalizeProductItems(products: Profile['products']): ProductItem[] {
       documents: Array.isArray(item.documents) ? item.documents : [],
     }));
   }
-  const names = products.categories.split(/[、,，\n]/).map(s => s.trim()).filter(Boolean).slice(0, 3);
-  return Array.from({ length: Math.max(3, names.length) }, (_, index) => ({
-    ...emptyProduct(index),
-    name: names[index] || `产品${index + 1}`,
-    category: products.categories,
-    priceRange: products.priceRange,
-    moq: products.moq,
-    certifications: products.certifications,
-    highlights: products.highlights,
-  }));
+  return [];
 }
 
 function formatSize(size: number): string {
@@ -150,13 +143,17 @@ export default function EnterprisePage() {
   const [templates, setTemplates] = useState<DemoTemplate[]>([]);
   const [templateId, setTemplateId] = useState('');
   const [demoBusy, setDemoBusy] = useState(false);
+  const [apiInfo, setApiInfo] = useState<ProductApiInfo | null>(null);
+  const [apiStatus, setApiStatus] = useState<ProductApiStatus>({ count: 0 });
 
   useEffect(() => {
     Promise.all([
       fetch('/api/overseas/enterprise/profile').then(r => r.json()).catch(() => ({})),
       fetch('/api/overseas/enterprise/demo/templates').then(r => r.json()).catch(() => []),
+      fetch('/api/overseas/enterprise/product-api', { headers: authHeader() }).then(r => r.json()).catch(() => null),
+      fetch('/api/overseas/enterprise/product-api/status', { headers: authHeader() }).then(r => r.json()).catch(() => ({ count: 0 })),
     ])
-      .then(([data, list]: [Partial<Profile>, DemoTemplate[]]) => {
+      .then(([data, list, productApi, productApiStatus]: [Partial<Profile>, DemoTemplate[], ProductApiInfo | null, ProductApiStatus]) => {
         const next: Profile = {
           ...DEFAULT,
           ...data,
@@ -173,9 +170,21 @@ export default function EnterprisePage() {
         setProfile(next);
         setTemplates(safeTemplates);
         setTemplateId(matchTemplateId(next, safeTemplates));
+        if (productApi) setApiInfo(productApi);
+        setApiStatus(productApiStatus);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      fetch('/api/overseas/enterprise/product-api/status', { headers: authHeader() })
+        .then(r => r.json())
+        .then(setApiStatus)
+        .catch(() => {});
+    }, 5000);
+    return () => window.clearInterval(timer);
   }, []);
 
   const set = <K extends keyof Profile>(section: K) =>
@@ -227,6 +236,14 @@ export default function EnterprisePage() {
     } finally {
       setDemoBusy(false);
     }
+  };
+
+  const rotateProductApiKey = async () => {
+    const next = await fetch('/api/overseas/enterprise/product-api/rotate', {
+      method: 'POST',
+      headers: authHeader(),
+    }).then(r => r.json());
+    setApiInfo(next);
   };
 
   const updateProduct = (index: number, patch: Partial<ProductItem>) => {
@@ -327,10 +344,44 @@ export default function EnterprisePage() {
           </div>
 
           <section className="card p-4">
+            <div className="flex items-start gap-3">
+              <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-green-50 text-green-700">
+                <KeyRound size={16} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold text-text-primary">产品 API 接入</p>
+                    <p className="mt-1 text-[11px] leading-relaxed text-text-muted">给 ERP 服务商使用：批量 upsert、查询、删除。服装自由属性统一放 attributes JSON。</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <a href={apiInfo?.docsUrl || '/api/overseas/enterprise/product-api/docs'} target="_blank" rel="noreferrer"
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs font-semibold text-text-secondary hover:text-text-primary">
+                      文档 <ExternalLink size={12} />
+                    </a>
+                    <button type="button" onClick={rotateProductApiKey}
+                      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs font-semibold text-text-secondary hover:text-text-primary">
+                      重置Key
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-3 flex items-center gap-2">
+                  <code className="min-w-0 flex-1 truncate rounded-lg border border-border bg-white px-3 py-2 text-xs text-text-primary">{apiInfo?.apiKey || '正在生成...'}</code>
+                  <button type="button" onClick={() => apiInfo?.apiKey && navigator.clipboard?.writeText(apiInfo.apiKey)}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-950 text-xs font-semibold text-white">
+                    <Copy size={12} />复制
+                  </button>
+                </div>
+                <p className="mt-2 text-[11px] text-text-muted">已接入商品：{apiStatus.count}{apiStatus.lastIngestedAt ? ` · 最近接入 ${apiStatus.lastProductName || '商品'}` : ''}</p>
+              </div>
+            </div>
+          </section>
+
+          <section className="card p-4">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0">
                 <p className="text-xs font-semibold text-text-primary">测试号行业模板</p>
-                <p className="text-[11px] text-text-muted mt-0.5">默认提供 A 美妆、B 灯具、C 小家电三套企业画像，可在这里替换企业中心资料。</p>
+                <p className="text-[11px] text-text-muted mt-0.5">可主动选择 A 美妆、B 灯具、C 小家电三套企业画像；未选择时不会自动套模板。</p>
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
                 <select className={inputCls} value={templateId} onChange={e => setTemplateId(e.target.value)}>
