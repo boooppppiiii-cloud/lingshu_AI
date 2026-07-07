@@ -1,13 +1,16 @@
-import { useState, useEffect, useRef } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
-  MessageSquare, LayoutGrid, AlertTriangle, Clock, TrendingUp,
-  CheckCircle2, Circle, ChevronLeft, Bot, User, Send,
-  Sparkles, ChevronDown, Languages, Loader2, Users, RefreshCw, Filter,
+  AlertTriangle, BellRing, Bot, CalendarClock, CheckCircle2, ChevronLeft, Clock,
+  FileText, Filter, Languages, MessageSquare, Mic, Phone, RefreshCw, Send,
+  Sparkles, StickyNote, TrendingUp, UserRound, Users,
 } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
-import type { ConversationContext, RestoreSignal, KickoffSignal, AgentAction } from '../App';
+import { AnimatePresence, motion } from 'motion/react';
+import type { AgentAction, ConversationContext, KickoffSignal, RestoreSignal } from '../App';
 
-type ViewMode = 'dashboard' | 'qualified' | 'reactivation' | 'customer-chat';
+type CustomerView = 'inbox' | 'leads' | 'won' | 'silent';
+type CustomerStage = '潜客' | '询盘中' | '已报价' | '成交' | '沉默30' | '沉默60';
+type AutomationLevel = 'auto' | 'confirm' | 'manual';
+type TimelineEventType = 'whatsapp' | 'ai' | 'call' | 'note' | 'quote' | 'task';
 
 interface Props {
   onEnterConversation: (ctx: ConversationContext) => void;
@@ -19,921 +22,648 @@ interface Props {
   onSessionRefresh?: () => void;
 }
 
-// ─── Static mock data ────────────────────────────────────────────────────────
-
-const INQUIRIES = [
-  { id: '1', buyer: 'Ahmed Al-Rashid', country: '🇸🇦', product: '假发定制 500件',  amount: '$2,400', status: 'hot',     time: '10分钟前', lang: 'EN' },
-  { id: '2', buyer: 'Maria Santos',    country: '🇧🇷', product: '艾灸贴 200件',    amount: '$380',   status: 'pending', time: '1小时前',  lang: 'ES' },
-  { id: '3', buyer: 'John Thompson',   country: '🇺🇸', product: '义乌小商品样品',  amount: '$120',   status: 'replied', time: '3小时前',  lang: 'EN' },
-  { id: '4', buyer: 'Fatima Hassan',   country: '🇦🇪', product: '香皂礼盒 1000套', amount: '$1,800', status: 'hot',     time: '昨天',     lang: 'AR' },
-  { id: '5', buyer: 'Nguyen Van A',    country: '🇻🇳', product: '发饰批发',        amount: '$260',   status: 'pending', time: '昨天',     lang: 'EN' },
-];
-
-const STATUS_META = {
-  hot:     { label: '⚠️ 大单', color: '#d97706', bg: 'rgba(217,119,6,0.08)' },
-  pending: { label: '待回复',  color: '#0891b2', bg: 'rgba(8,145,178,0.08)' },
-  replied: { label: '已回复',  color: '#16a34a', bg: 'rgba(22,163,74,0.08)' },
-};
-
-const TASKS = [
-  { label: '回复 Ahmed 假发定制询盘（大单）', done: false, urgent: true },
-  { label: '发送 Maria 艾灸贴报价单',        done: false, urgent: false },
-  { label: '跟进 John 样品寄送进度',          done: true,  urgent: false },
-  { label: '更新 WhatsApp 阿语话术模板',      done: true,  urgent: false },
-];
-
-const QUALIFIED_CUSTOMERS = [
-  { buyer: 'Ahmed Al-Rashid', source: 'WhatsApp', product: '假发定制', score: 96, reason: '500件 OEM + 明确交期问题', action: '自动首响后转人工报价' },
-  { buyer: 'Fatima Hassan', source: 'WhatsApp', product: '香皂礼盒', score: 91, reason: '1000套礼盒 + 中东节日前采购', action: '推送阿语报价模板' },
-  { buyer: 'Maria Santos', source: '站内 DM', product: '艾灸贴', score: 74, reason: '小批量试单，适合样品转化', action: '发送样品政策' },
-  { buyer: 'Nguyen Van A', source: 'Instagram', product: '发饰批发', score: 69, reason: '询问目录，需判断复购潜力', action: '自动发送目录并追踪点击' },
-];
-
-const REACTIVATION_CUSTOMERS = [
-  { buyer: 'Khalid Mohammed', tier: '高价值老客', last: '68天未互动', channel: 'WhatsApp', product: '新款棕色直发14寸', action: '发新品目录 + 老客价' },
-  { buyer: 'Carlos Rivera', tier: '沉睡客', last: '55天未复购', channel: 'WhatsApp', product: '升级版热敷贴', action: '发西语包装样图' },
-  { buyer: 'Omar Hassan', tier: '沉睡客', last: '74天未互动', channel: 'WhatsApp', product: '防摔磁吸壳', action: '按机型发库存表' },
-  { buyer: 'Aisha Rahman', tier: 'VIP', last: '18天前下单', channel: 'WhatsApp', product: '斋月礼盒套装', action: '确认补货窗口' },
-];
-
-// zh = 中文注释，AI模式下每条消息下方显示
-interface ChatMsg {
-  role: 'buyer' | 'seller';
-  content: string;
+interface TimelineEvent {
+  id: string;
+  type: TimelineEventType;
+  actor: 'buyer' | 'seller' | 'ai' | 'owner';
+  title: string;
+  body: string;
   time: string;
-  byAi?: boolean;
-  zh?: string;
 }
 
-const MOCK_THREADS: Record<string, ChatMsg[]> = {
-  '1': [
-    {
-      role: 'buyer',  time: '09:42',
-      content: 'Hello, I am interested in custom hair wigs, 500 pieces. Can you provide OEM service?',
-      zh: '你好，我对定制假发感兴趣，需要500件，能做OEM吗？',
-    },
-    {
-      role: 'seller', time: '09:43', byAi: true,
-      content: 'Hi Ahmed! We support OEM from 200 pcs. 500 pcs gets you a 5% discount. What hair type and style do you need?',
-      zh: '已告知支持200件起OEM、500件享9.5折，询问发质款式',
-    },
-    {
-      role: 'buyer',  time: '10:15',
-      content: 'Human hair, straight style, natural black. What is your MOQ and lead time?',
-      zh: '需要人发直发天然黑色，请问最小起订量和交货期？',
-    },
-    {
-      role: 'seller', time: '10:16', byAi: true,
-      content: 'Human hair straight natural black is our hero SKU. MOQ 200 pcs, 500 pcs at 95折. Standard lead time 25 days, rush 18 days (+8%). Generating a full quote now — could you share your company name and shipping address?',
-      zh: '已报价：MOQ 200件，500件95折，标准25天/加急18天（+8%）。已索取公司名和收货地址生成报价单',
-    },
-  ],
-  '2': [
-    {
-      role: 'buyer',  time: '昨天 14:30',
-      content: 'Hola, me interesa el parche de moxibustión, 200 piezas. ¿Cuál es el precio unitario?',
-      zh: '你好，我对艾灸贴感兴趣，需要200件，单价是多少？',
-    },
-    {
-      role: 'seller', time: '昨天 14:31', byAi: true,
-      content: '¡Hola Maria! Precio unitario para 200 pcs: $1.90/ud con packaging personalizado incluido. ¿Le enviamos una muestra gratis? (Solo cubre el envío, ~$8)',
-      zh: '已报价 $1.90/件含定制包装，并提出免费寄样（仅付运费约$8）',
-    },
-  ],
-  '3': [
-    {
-      role: 'buyer',  time: '今天 08:00',
-      content: 'Hi, I need some sample products from Yiwu, mainly small accessories. Budget around $120.',
-      zh: '你好，我需要义乌的样品，主要是小配件，预算约120美元',
-    },
-    {
-      role: 'seller', time: '今天 08:01', byAi: true,
-      content: 'Hi John! $120 covers a curated sample box of 8–10 accessory categories (bestsellers). Standard shipping 7–12 days, DHL Express 3–5 days (+fee). Which do you prefer?',
-      zh: '已说明 $120 可配 8–10 品类精选样品盒，询问运输偏好（标准 vs DHL）',
-    },
-    {
-      role: 'buyer',  time: '今天 08:45',
-      content: 'Curated selection sounds great! Standard shipping is fine.',
-      zh: '精选搭配听起来不错，选择标准运输',
-    },
-    {
-      role: 'seller', time: '今天 08:46', byAi: true,
-      content: 'Perfect! Processing your sample box now. Tracking number will be sent in 2 business days. Can you confirm your shipping address?',
-      zh: '已告知正在配盒，2个工作日内发快递单号，请确认收货地址',
-    },
-  ],
-  '4': [
-    {
-      role: 'buyer',  time: '昨天 16:00',
-      content: 'السلام عليكم، أريد طلب 1000 مجموعة من صناديق الصابون. ما هي أفضل سعر؟',
-      zh: '您好，我想订购1000套香皂礼盒，最优价格是多少？',
-    },
-    {
-      role: 'seller', time: '昨天 16:02', byAi: true,
-      content: 'وعليكم السلام فاطمة! 1000 مجموعة بسعر $1.80/مجموعة شاملاً التغليف المخصص بشعارك. هل تودين الاطلاع على كتالوج التصاميم المتاحة؟',
-      zh: '已报价 $1.80/套含定制LOGO包装，并询问是否需要查看设计模板',
-    },
-  ],
-  '5': [
-    {
-      role: 'buyer',  time: '昨天 11:00',
-      content: 'Hi, interested in wholesale hair accessories. What collections do you have?',
-      zh: '你好，对批发发饰感兴趣，你们有哪些系列？',
-    },
-    {
-      role: 'seller', time: '昨天 11:01', byAi: true,
-      content: 'Hi Nguyen! We carry clips, bands, scrunchies, pins, and headbands. Our bestseller wholesale pack: 50 mixed pcs from $4.80/set. Want me to send the full catalog PDF?',
-      zh: '已介绍发夹/发带/螺旋圈/发针/发箍等系列，畅销批发包$4.80/50件混款，询问是否需要发目录PDF',
-    },
-  ],
+interface CustomerProfile {
+  id: string;
+  name: string;
+  country: string;
+  countryName: string;
+  language: string;
+  timezone: string;
+  localTime: string;
+  source: string;
+  product: string;
+  estimatedValue: string;
+  stage: CustomerStage;
+  intentScore: number;
+  intentSignals: string[];
+  automation: AutomationLevel;
+  priority: number;
+  inboxReason?: 'call' | 'large' | 'draft' | 'overdue' | 'reply';
+  lastActive: string;
+  lastOrder?: string;
+  orderHistory: string[];
+  tags: string[];
+  summary: string;
+  nextStep: string;
+  sla?: string;
+  timeline: TimelineEvent[];
+}
+
+const STAGE_META: Record<CustomerStage, { color: string; bg: string }> = {
+  潜客: { color: '#0891b2', bg: 'rgba(8,145,178,0.08)' },
+  询盘中: { color: '#4f46e5', bg: 'rgba(79,70,229,0.08)' },
+  已报价: { color: '#d97706', bg: 'rgba(217,119,6,0.08)' },
+  成交: { color: '#16a34a', bg: 'rgba(22,163,74,0.08)' },
+  沉默30: { color: '#ca8a04', bg: 'rgba(202,138,4,0.08)' },
+  沉默60: { color: '#dc2626', bg: 'rgba(220,38,38,0.08)' },
 };
 
-// AI 建议（人工模式折叠条内）
-const AI_SUGGESTIONS: Record<string, string> = {
-  '1': 'Thank you Ahmed! Could you please share your company name and shipping address so we can prepare the formal quotation?',
-  '2': '¡Gracias Maria! ¿A qué dirección le enviamos la muestra gratuita? Tenemos 3 diseños de packaging disponibles.',
-  '4': 'متابعة: مرحباً فاطمة، هل تحتاجين مزيداً من المعلومات حول التصاميم؟ يسعدنا إرسال الكتالوج الكامل.',
-  '5': 'Hi Nguyen! The catalog PDF has been sent to your email. We also have new arrivals this season — shall I include those?',
+const AUTOMATION_META: Record<AutomationLevel, { label: string; desc: string; color: string; bg: string }> = {
+  auto: { label: 'AI 自动回', desc: '低风险潜客，自动首响和目录跟进', color: '#16a34a', bg: 'rgba(22,163,74,0.08)' },
+  confirm: { label: '草稿待确认', desc: '中高意向，AI 出草稿，人点发送', color: '#d97706', bg: 'rgba(217,119,6,0.08)' },
+  manual: { label: '老板接管', desc: '高价值/想通话，停止自动回复', color: '#dc2626', bg: 'rgba(220,38,38,0.08)' },
 };
 
-// AI 托管看板数据
-const AI_MANAGED = [
-  { id: '1', buyer: 'Ahmed Al-Rashid', flag: '🇸🇦', status: 'waiting'     as const, stage: 2, alert: '⚠️ 大单'    },
-  { id: '4', buyer: 'Fatima Hassan',   flag: '🇦🇪', status: 'needs_human' as const, stage: 2, alert: '45min 未回' },
-  { id: '5', buyer: 'Nguyen Van A',    flag: '🇻🇳', status: 'sent'        as const, stage: 0, alert: null          },
+const CUSTOMERS: CustomerProfile[] = [
+  {
+    id: 'c1',
+    name: 'Ahmed Al-Rashid',
+    country: '🇸🇦',
+    countryName: '沙特',
+    language: 'English / Arabic',
+    timezone: 'Asia/Riyadh',
+    localTime: '15:20',
+    source: 'WhatsApp',
+    product: '假发定制 500件',
+    estimatedValue: '$2,400',
+    stage: '询盘中',
+    intentScore: 96,
+    intentSignals: ['问价格 +2', '问MOQ/船期 +3', '明确500件 +4', '想通电话 +6'],
+    automation: 'manual',
+    priority: 100,
+    inboxReason: 'call',
+    lastActive: '10分钟前',
+    orderHistory: ['2025-11 样品单 $180'],
+    tags: ['大单', 'OEM', '中东', '想通电话'],
+    summary: '询问500件起订价，关心船期，态度积极，要求和经理语音沟通。',
+    nextStep: '立即确认可通话时间，老板接管报价。',
+    sla: '1小时45分后升级提醒',
+    timeline: [
+      { id: '1', type: 'whatsapp', actor: 'buyer', title: '客户消息', body: 'Can we talk with your manager today? I need 500 pcs custom hair wigs.', time: '10:15' },
+      { id: '2', type: 'ai', actor: 'ai', title: 'AI 熔断', body: '识别 call_request，已停止自动回复，只发送预约时间确认。', time: '10:16' },
+      { id: '3', type: 'whatsapp', actor: 'seller', title: '稳单确认', body: 'Our manager will call you shortly. What time works best for you?', time: '10:16' },
+    ],
+  },
+  {
+    id: 'c2',
+    name: 'Fatima Hassan',
+    country: '🇦🇪',
+    countryName: '阿联酋',
+    language: 'Arabic',
+    timezone: 'Asia/Dubai',
+    localTime: '16:20',
+    source: 'WhatsApp',
+    product: '香皂礼盒 1000套',
+    estimatedValue: '$1,800',
+    stage: '已报价',
+    intentScore: 91,
+    intentSignals: ['问价格 +2', '明确数量 +3', '节日前采购 +2', '要求设计目录 +2'],
+    automation: 'confirm',
+    priority: 88,
+    inboxReason: 'large',
+    lastActive: '45分钟前',
+    orderHistory: ['2025-09 礼盒试单 $420'],
+    tags: ['大单预警', '阿语', '礼盒', '已报价'],
+    summary: '1000套香皂礼盒，已给初步报价，等待确认LOGO和包装方案。',
+    nextStep: '发送阿语报价单和三套包装图。',
+    sla: '45分钟未回',
+    timeline: [
+      { id: '1', type: 'whatsapp', actor: 'buyer', title: '客户询价', body: 'أريد طلب 1000 مجموعة من صناديق الصابون. ما هو أفضل سعر؟', time: '昨天 16:00' },
+      { id: '2', type: 'quote', actor: 'seller', title: '报价草稿', body: '$1.80/套，含定制LOGO包装，交期18天。', time: '昨天 16:02' },
+    ],
+  },
+  {
+    id: 'c3',
+    name: 'Maria Santos',
+    country: '🇧🇷',
+    countryName: '巴西',
+    language: 'Spanish',
+    timezone: 'America/Sao_Paulo',
+    localTime: '10:20',
+    source: '站内 DM',
+    product: '艾灸贴 200件',
+    estimatedValue: '$380',
+    stage: '潜客',
+    intentScore: 74,
+    intentSignals: ['问价格 +2', '问样品 +2', '数量偏小 +1'],
+    automation: 'confirm',
+    priority: 62,
+    inboxReason: 'draft',
+    lastActive: '1小时前',
+    orderHistory: [],
+    tags: ['样品', '西语', '可培育'],
+    summary: '小批量试单，适合走样品政策和复购培育。',
+    nextStep: '确认收货地址，发送样品政策。',
+    timeline: [
+      { id: '1', type: 'whatsapp', actor: 'buyer', title: '客户询价', body: 'Me interesa el parche de moxibustión, 200 piezas. ¿Cuál es el precio unitario?', time: '昨天 14:30' },
+      { id: '2', type: 'ai', actor: 'ai', title: 'AI 草稿', body: '建议发送样品政策，询问收货地址。', time: '昨天 14:31' },
+    ],
+  },
+  {
+    id: 'c4',
+    name: 'John Thompson',
+    country: '🇺🇸',
+    countryName: '美国',
+    language: 'English',
+    timezone: 'America/New_York',
+    localTime: '09:20',
+    source: 'Alibaba',
+    product: '义乌小商品样品盒',
+    estimatedValue: '$120',
+    stage: '成交',
+    intentScore: 82,
+    intentSignals: ['给收货地址 +5', '确认样品 +2', '接受标准运输 +1'],
+    automation: 'confirm',
+    priority: 45,
+    lastActive: '3小时前',
+    lastOrder: '样品盒 $120',
+    orderHistory: ['2026-07 样品盒 $120'],
+    tags: ['已下单', '样品', '待寄样'],
+    summary: '已确认样品盒和标准运输，等待寄样单号。',
+    nextStep: '同步仓库寄样，三天后提醒查收。',
+    timeline: [
+      { id: '1', type: 'whatsapp', actor: 'buyer', title: '确认订单', body: 'Curated selection sounds great. Standard shipping is fine.', time: '今天 08:45' },
+      { id: '2', type: 'task', actor: 'ai', title: '自动跟进任务', body: '创建寄样跟进任务，2个工作日内发送单号。', time: '今天 08:46' },
+    ],
+  },
+  {
+    id: 'c5',
+    name: 'Khalid Mohammed',
+    country: '🇸🇦',
+    countryName: '沙特',
+    language: 'Arabic',
+    timezone: 'Asia/Riyadh',
+    localTime: '15:20',
+    source: 'WhatsApp',
+    product: '新款棕色直发14寸',
+    estimatedValue: '$3,600',
+    stage: '沉默60',
+    intentScore: 89,
+    intentSignals: ['历史大额采购 +4', '68天未互动', '新品匹配度高 +2'],
+    automation: 'confirm',
+    priority: 70,
+    inboxReason: 'reply',
+    lastActive: '68天未互动',
+    lastOrder: '直发批量单 $3,600',
+    orderHistory: ['2026-03 直发批量单 $3,600', '2025-12 补货 $1,900'],
+    tags: ['高价值老客', '沉默60', '新品可唤醒'],
+    summary: '高价值老客，历史采购直发类目，适合用新品目录和老客价唤醒。',
+    nextStep: '发新品目录 + 老客价，若回复则流回询盘中。',
+    timeline: [
+      { id: '1', type: 'note', actor: 'owner', title: '历史偏好', body: '偏好自然黑/棕色直发，关注现货和补货速度。', time: '68天前' },
+      { id: '2', type: 'task', actor: 'ai', title: '沉默雷达', body: '进入沉默60状态，建议触达新品目录。', time: '今天 09:00' },
+    ],
+  },
+  {
+    id: 'c6',
+    name: 'Nguyen Van A',
+    country: '🇻🇳',
+    countryName: '越南',
+    language: 'English',
+    timezone: 'Asia/Ho_Chi_Minh',
+    localTime: '19:20',
+    source: 'Instagram',
+    product: '发饰批发',
+    estimatedValue: '$260',
+    stage: '潜客',
+    intentScore: 46,
+    intentSignals: ['只问目录 +1', '未给数量 +0', '社媒来源 +1'],
+    automation: 'auto',
+    priority: 30,
+    inboxReason: 'reply',
+    lastActive: '昨天',
+    orderHistory: [],
+    tags: ['低分潜客', '自动回复', '目录'],
+    summary: '只问产品目录，暂未表现明确采购意图，AI 自动发送目录并追踪点击。',
+    nextStep: '自动发送目录，若点击高价款再转人工。',
+    timeline: [
+      { id: '1', type: 'whatsapp', actor: 'buyer', title: '客户消息', body: 'Hi, interested in wholesale hair accessories. What collections do you have?', time: '昨天 11:00' },
+      { id: '2', type: 'ai', actor: 'ai', title: '自动首响', body: '已自动发送发饰目录和50件混款批发包。', time: '昨天 11:01' },
+    ],
+  },
 ];
 
-const MANAGED_STATUS_META = {
-  waiting:     { label: '等待回复', color: '#0891b2', bg: 'rgba(8,145,178,0.08)' },
-  sent:        { label: '已发送',   color: '#16a34a', bg: 'rgba(22,163,74,0.08)' },
-  needs_human: { label: '需人工',   color: '#dc2626', bg: 'rgba(220,38,38,0.08)' },
+const VIEW_META: Record<CustomerView, { label: string; icon: typeof MessageSquare; desc: string }> = {
+  inbox: { label: '收件箱', icon: BellRing, desc: '所有待处理会话，按紧急度排序' },
+  leads: { label: '潜客', icon: Filter, desc: '新询盘、未成交，带AI意向评分' },
+  won: { label: '成交客户', icon: CheckCircle2, desc: '已下单客户和跟单任务' },
+  silent: { label: '沉默客户', icon: RefreshCw, desc: '30/60天雷达与老客唤醒' },
 };
 
-const FUNNEL = ['刚建联', '意向', '报价', '谈判', '下单'];
-const CONVERSION_STAGES = ['进线', '意向', '询价', '样品', '首购'];
-const DEFAULT_CONVERSION_STAGE: Record<string, string> = {
-  '1': '询价',
-  '2': '询价',
-  '3': '样品',
-  '4': '询价',
-  '5': '意向',
-};
-
-// 目标语言元数据（人工模式显示）
-const LANG_META: Record<string, { name: string; full: string }> = {
-  EN: { name: 'EN', full: 'English'  },
-  ES: { name: 'ES', full: 'Español'  },
-  AR: { name: 'AR', full: 'العربية'  },
-};
-
-// 基于关键词的模拟翻译（中文 → 目标语言）
-function mockTranslate(lang: string, text: string): string {
-  if (lang === 'AR') {
-    if (/报价|价格|多少钱/.test(text)) return 'سنرسل لك عرض الأسعار التفصيلي خلال ساعتين إن شاء الله.';
-    if (/谢谢|感谢/.test(text))       return 'شكراً جزيلاً! يسعدنا التعاون معكم.';
-    if (/样品|打样/.test(text))        return 'يمكننا إرسال عينة مجانية. هل يمكنك تزويدنا بعنوان الشحن؟';
-    if (/跟进|确认|催/.test(text))     return 'مرحباً، أردنا فقط التأكد من أنكم تلقيتم رسالتنا. نحن في انتظار ردكم الكريم.';
-    return 'شكراً لتواصلك معنا. سنرد عليك في أقرب وقت ممكن.';
-  }
-  if (lang === 'ES') {
-    if (/报价|价格|多少钱/.test(text)) return 'Le enviaremos el presupuesto detallado en menos de 2 horas.';
-    if (/谢谢|感谢/.test(text))       return '¡Muchas gracias! Será un placer colaborar con usted.';
-    if (/样品|打样/.test(text))        return 'Podemos enviar una muestra gratuita. ¿Podría compartir su dirección de envío?';
-    if (/跟进|确认|催/.test(text))     return 'Hola, solo queríamos confirmar que recibió nuestro mensaje anterior. Quedamos a su disposición.';
-    return 'Gracias por contactarnos. Le responderemos a la brevedad posible.';
-  }
-  // EN default
-  if (/报价|价格|多少钱/.test(text)) return 'We will send you a detailed quotation within 2 hours.';
-  if (/谢谢|感谢/.test(text))       return "Thank you! It's a pleasure working with you.";
-  if (/样品|打样/.test(text))        return 'We can arrange a free sample. Could you share your shipping address?';
-  if (/跟进|确认|催/.test(text))     return "Hi, just following up to make sure you received our previous message. Looking forward to hearing from you!";
-  return 'Thank you for reaching out. We will get back to you shortly.';
+function reasonLabel(reason?: CustomerProfile['inboxReason']) {
+  if (reason === 'call') return { label: '⚡ 想通电话', color: '#dc2626', bg: 'rgba(220,38,38,0.1)' };
+  if (reason === 'large') return { label: '大单预警', color: '#d97706', bg: 'rgba(217,119,6,0.1)' };
+  if (reason === 'draft') return { label: 'AI草稿待确认', color: '#4f46e5', bg: 'rgba(79,70,229,0.1)' };
+  if (reason === 'overdue') return { label: '45分钟未回', color: '#dc2626', bg: 'rgba(220,38,38,0.1)' };
+  return { label: '待回复', color: '#0891b2', bg: 'rgba(8,145,178,0.1)' };
 }
 
-// ─── AI 托管看板 ─────────────────────────────────────────────────────────────
+function filterCustomers(view: CustomerView) {
+  if (view === 'inbox') return CUSTOMERS.filter(c => c.inboxReason).sort((a, b) => b.priority - a.priority);
+  if (view === 'leads') return CUSTOMERS.filter(c => c.stage === '潜客' || c.stage === '询盘中' || c.stage === '已报价').sort((a, b) => b.intentScore - a.intentScore);
+  if (view === 'won') return CUSTOMERS.filter(c => c.stage === '成交');
+  return CUSTOMERS.filter(c => c.stage === '沉默30' || c.stage === '沉默60').sort((a, b) => b.intentScore - a.intentScore);
+}
 
-function AiManagedCard({ onSelect }: { onSelect: (id: string) => void }) {
-  const needsHuman = AI_MANAGED.filter(s => s.status === 'needs_human').length;
+function openGlobalAssistant(customer: CustomerProfile, text?: string) {
+  window.dispatchEvent(new CustomEvent('lingshu-assistant-open', {
+    detail: {
+      text,
+      context: {
+        agent: 'conversion',
+        label: `我的客户 / ${customer.name}`,
+        summary: `当前在客户详情页：${customer.name}，${customer.countryName}，语言${customer.language}，阶段${customer.stage}，意向分${customer.intentScore}，产品${customer.product}，预估单值${customer.estimatedValue}。客户摘要：${customer.summary}`,
+        suggestions: ['生成下一条回复建议', '生成报价草稿', '翻译最近消息', '整理通话简报'],
+      },
+    },
+  }));
+}
+
+function CustomerRow({ customer, selected, onOpen }: { customer: CustomerProfile; selected?: boolean; onOpen: () => void }) {
+  const stage = STAGE_META[customer.stage];
+  const automation = AUTOMATION_META[customer.automation];
+  const reason = reasonLabel(customer.inboxReason);
   return (
-    <div className="card overflow-hidden">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-        <div className="flex items-center gap-2">
-          <Bot size={14} style={{ color: '#0891b2' }} />
-          <span className="text-sm font-semibold text-text-primary">AI 正在托管</span>
-          <span className="text-[11px] font-bold px-1.5 py-0.5 rounded-full text-white" style={{ background: '#0891b2' }}>
-            {AI_MANAGED.length}
-          </span>
+    <button
+      type="button"
+      onClick={onOpen}
+      className={`w-full rounded-xl border px-4 py-3 text-left transition-all hover:border-slate-300 hover:bg-surface-2 ${selected ? 'border-[#0891b2] bg-[#0891b2]/5' : 'border-border bg-white'}`}
+    >
+      <div className="flex items-start gap-3">
+        <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-full border border-border bg-surface-2 text-lg">
+          {customer.country}
         </div>
-        {needsHuman > 0 && (
-          <span className="text-[11px] font-medium px-2 py-0.5 rounded-full"
-            style={{ background: 'rgba(220,38,38,0.08)', color: '#dc2626' }}>
-            ⚠️ {needsHuman} 需人工介入
-          </span>
-        )}
-      </div>
-      <div className="divide-y divide-border">
-        {AI_MANAGED.map(item => {
-          const st = MANAGED_STATUS_META[item.status];
-          return (
-            <button key={item.id} onClick={() => onSelect(item.id)}
-              className="w-full flex items-center gap-3 px-4 py-3 hover:bg-surface-2 transition-colors text-left">
-              <span className="text-lg leading-none">{item.flag}</span>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1.5">
-                  <span className="text-sm font-medium text-text-primary">{item.buyer}</span>
-                  {item.alert && (
-                    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded"
-                      style={{
-                        background: item.status === 'needs_human' ? 'rgba(220,38,38,0.08)' : 'rgba(217,119,6,0.08)',
-                        color:      item.status === 'needs_human' ? '#dc2626'               : '#d97706',
-                      }}>
-                      {item.alert}
-                    </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-0.5">
-                  {FUNNEL.map((stage, i) => (
-                    <div key={i} className="flex items-center gap-0.5">
-                      <div className="w-1.5 h-1.5 rounded-full flex-shrink-0"
-                        style={{ background: i <= item.stage ? '#0891b2' : 'rgba(107,114,128,0.25)' }} />
-                      <span className={`text-[10px] ${i === item.stage ? 'font-medium text-text-secondary' : 'text-text-muted'}`}>
-                        {stage}
-                      </span>
-                      {i < FUNNEL.length - 1 && (
-                        <div className="w-3 h-px mx-0.5 flex-shrink-0"
-                          style={{ background: i < item.stage ? '#0891b2' : 'rgba(107,114,128,0.2)' }} />
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-              <span className="text-[11px] font-medium px-2 py-0.5 rounded-full flex-shrink-0"
-                style={{ background: st.bg, color: st.color }}>
-                {st.label}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="truncate text-sm font-bold text-text-primary">{customer.name}</p>
+            {customer.inboxReason && (
+              <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ color: reason.color, background: reason.bg }}>
+                {reason.label}
               </span>
-            </button>
-          );
-        })}
+            )}
+            <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ color: stage.color, background: stage.bg }}>
+              {customer.stage}
+            </span>
+          </div>
+          <p className="mt-1 truncate text-xs text-text-muted">{customer.product} · {customer.estimatedValue} · {customer.source}</p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <span className="text-xs font-bold text-text-primary">意向 {customer.intentScore}</span>
+            <div className="h-1.5 w-24 overflow-hidden rounded-full bg-surface-2">
+              <div className="h-full rounded-full bg-[#0891b2]" style={{ width: `${customer.intentScore}%` }} />
+            </div>
+            <span className="rounded-full px-2 py-0.5 text-[10px] font-bold" style={{ color: automation.color, background: automation.bg }}>
+              {automation.label}
+            </span>
+          </div>
+        </div>
+        <div className="flex-shrink-0 text-right">
+          <p className="text-xs font-semibold text-text-secondary">{customer.lastActive}</p>
+          <p className="mt-1 text-[10px] text-text-muted">当地 {customer.localTime}</p>
+        </div>
+      </div>
+    </button>
+  );
+}
+
+function CustomerListView({ view, selectedId, onOpen }: { view: CustomerView; selectedId: string; onOpen: (id: string) => void }) {
+  const list = filterCustomers(view);
+  const stats = [
+    { label: '待处理', value: String(filterCustomers('inbox').length), color: '#dc2626' },
+    { label: '想通话', value: String(CUSTOMERS.filter(c => c.inboxReason === 'call').length), color: '#dc2626' },
+    { label: '高意向', value: String(CUSTOMERS.filter(c => c.intentScore >= 85).length), color: '#16a34a' },
+    { label: '沉默客户', value: String(filterCustomers('silent').length), color: '#d97706' },
+  ];
+  return (
+    <div className="h-full overflow-y-auto bg-surface">
+      <div className="mx-auto max-w-5xl px-6 py-5">
+        <div className="mb-4 grid grid-cols-4 gap-3">
+          {stats.map(item => (
+            <div key={item.label} className="rounded-xl border border-border bg-white p-4">
+              <p className="text-[11px] font-semibold text-text-muted">{item.label}</p>
+              <p className="mt-2 text-2xl font-black font-display" style={{ color: item.color }}>{item.value}</p>
+            </div>
+          ))}
+        </div>
+        {view === 'silent' && (
+          <div className="mb-4 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3">
+            <div className="flex items-center gap-2 text-sm font-bold text-amber-800">
+              <RefreshCw size={14} />
+              沉默客户回复后自动流回“询盘中”，重新进入收件箱
+            </div>
+          </div>
+        )}
+        <div className="space-y-2">
+          {list.map(customer => (
+            <CustomerRow key={customer.id} customer={customer} selected={customer.id === selectedId} onOpen={() => onOpen(customer.id)} />
+          ))}
+        </div>
       </div>
     </div>
   );
 }
 
-// ─── Dashboard ───────────────────────────────────────────────────────────────
-
-function Dashboard({ onInquiryClick }: { onInquiryClick: (id: string) => void }) {
-  const topId = INQUIRIES.find(i => i.status === 'hot')?.id ?? INQUIRIES[0].id;
+function ProfileCard({ customer }: { customer: CustomerProfile }) {
+  const stage = STAGE_META[customer.stage];
   return (
-    <div className="h-full overflow-y-auto">
-      <div className="max-w-3xl mx-auto px-6 py-5 space-y-5">
-
-        <div className="grid grid-cols-4 gap-3">
-          {[
-            { label: '今日询盘',    value: '23',  icon: <MessageSquare size={14} />, color: '#0891b2' },
-            { label: '待回复',      value: '5',   icon: <Clock size={14} />,         color: '#d97706' },
-            { label: '转报价率',    value: '35%', icon: <TrendingUp size={14} />,    color: '#16a34a' },
-            { label: '⚠️ 大单预警', value: '2',   icon: <AlertTriangle size={14} />, color: '#dc2626' },
-          ].map(s => (
-            <div key={s.label} className="card p-4">
-              <div className="flex items-center gap-1.5 mb-2" style={{ color: s.color }}>
-                {s.icon}
-                <span className="text-[11px] font-medium text-text-muted">{s.label}</span>
-              </div>
-              <p className="text-2xl font-bold font-display text-text-primary">{s.value}</p>
-            </div>
+    <aside className="w-72 flex-shrink-0 overflow-y-auto border-r border-border bg-surface px-4 py-4">
+      <div className="rounded-2xl border border-border bg-white p-4">
+        <div className="flex items-center gap-3">
+          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-surface-2 text-2xl">{customer.country}</div>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-black text-text-primary">{customer.name}</p>
+            <p className="text-xs text-text-muted">{customer.countryName} · {customer.source}</p>
+          </div>
+        </div>
+        <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
+          <div className="rounded-xl bg-surface-2 p-3">
+            <p className="text-text-muted">阶段</p>
+            <p className="mt-1 font-bold" style={{ color: stage.color }}>{customer.stage}</p>
+          </div>
+          <div className="rounded-xl bg-surface-2 p-3">
+            <p className="text-text-muted">意向分</p>
+            <p className="mt-1 font-bold text-text-primary">{customer.intentScore}</p>
+          </div>
+          <div className="rounded-xl bg-surface-2 p-3">
+            <p className="text-text-muted">语言</p>
+            <p className="mt-1 font-bold text-text-primary">{customer.language}</p>
+          </div>
+          <div className="rounded-xl bg-surface-2 p-3">
+            <p className="text-text-muted">当地时间</p>
+            <p className="mt-1 font-bold text-text-primary">{customer.localTime}</p>
+          </div>
+        </div>
+      </div>
+      <div className="mt-3 rounded-2xl border border-border bg-white p-4">
+        <p className="text-xs font-bold text-text-primary">历史订单</p>
+        <div className="mt-2 space-y-2">
+          {customer.orderHistory.length ? customer.orderHistory.map(order => (
+            <div key={order} className="rounded-lg bg-surface-2 px-3 py-2 text-xs font-semibold text-text-secondary">{order}</div>
+          )) : <p className="text-xs text-text-muted">暂无订单</p>}
+        </div>
+      </div>
+      <div className="mt-3 rounded-2xl border border-border bg-white p-4">
+        <p className="text-xs font-bold text-text-primary">意向信号</p>
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {customer.intentSignals.map(signal => (
+            <span key={signal} className="rounded-full bg-surface-2 px-2 py-1 text-[10px] font-semibold text-text-secondary">{signal}</span>
           ))}
         </div>
+      </div>
+      <div className="mt-3 rounded-2xl border border-border bg-white p-4">
+        <p className="text-xs font-bold text-text-primary">标签</p>
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {customer.tags.map(tag => (
+            <span key={tag} className="rounded-full border border-border px-2 py-1 text-[10px] font-semibold text-text-muted">{tag}</span>
+          ))}
+        </div>
+      </div>
+    </aside>
+  );
+}
 
-        <AiManagedCard onSelect={onInquiryClick} />
+function eventIcon(type: TimelineEventType) {
+  if (type === 'ai') return Bot;
+  if (type === 'call') return Phone;
+  if (type === 'note') return StickyNote;
+  if (type === 'quote') return FileText;
+  if (type === 'task') return CalendarClock;
+  return MessageSquare;
+}
 
-        <div className="card overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-            <p className="text-sm font-semibold text-text-primary">近期询盘</p>
-            <button
-              data-demo-target="conversion_reply"
-              onClick={() => {
-                onInquiryClick(topId);
-              }}
-              className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg transition-all text-white"
-              style={{ background: '#0891b2' }}>
-              <MessageSquare size={12} />生成回复建议
-            </button>
+function Timeline({ customer }: { customer: CustomerProfile }) {
+  return (
+    <section className="min-w-0 flex-1 overflow-y-auto px-5 py-4">
+      <div className="mb-4 rounded-2xl border border-border bg-white p-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-sm font-black text-text-primary">{customer.product}</p>
+            <p className="mt-1 text-sm leading-relaxed text-text-muted">{customer.summary}</p>
           </div>
-          <div className="divide-y divide-border">
-            {INQUIRIES.map(inq => {
-              const st = STATUS_META[inq.status as keyof typeof STATUS_META];
+          <div className="flex-shrink-0 rounded-xl bg-surface-2 px-3 py-2 text-right">
+            <p className="text-[10px] font-semibold text-text-muted">预估单值</p>
+            <p className="text-lg font-black text-text-primary">{customer.estimatedValue}</p>
+          </div>
+        </div>
+      </div>
+      <div className="space-y-3">
+        {customer.timeline.map(event => {
+          const Icon = eventIcon(event.type);
+          const isBuyer = event.actor === 'buyer';
+          return (
+            <div key={event.id} className="flex gap-3">
+              <div className={`mt-1 flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full ${isBuyer ? 'bg-surface-2 text-text-secondary' : 'bg-[#0891b2]/10 text-[#0891b2]'}`}>
+                <Icon size={14} />
+              </div>
+              <div className="min-w-0 flex-1 rounded-2xl border border-border bg-white px-4 py-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="text-xs font-bold text-text-primary">{event.title}</p>
+                  <span className="text-[10px] text-text-muted">{event.time}</span>
+                </div>
+                <p className="mt-1 text-sm leading-relaxed text-text-secondary">{event.body}</p>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
+function AssistantRail({ customer }: { customer: CustomerProfile }) {
+  const automation = AUTOMATION_META[customer.automation];
+  const [callNoteOpen, setCallNoteOpen] = useState(false);
+  const [callResult, setCallResult] = useState('有意向');
+  const [note, setNote] = useState('');
+  const isCallLead = customer.inboxReason === 'call';
+  return (
+    <aside className="w-80 flex-shrink-0 overflow-y-auto border-l border-border bg-white px-4 py-4">
+      <div className="rounded-2xl border border-border bg-surface p-4">
+        <div className="flex items-center gap-2">
+          <Bot size={15} className="text-[#0891b2]" />
+          <p className="text-sm font-black text-text-primary">AI助手栏</p>
+        </div>
+        <p className="mt-2 text-xs leading-relaxed text-text-muted">{automation.desc}</p>
+        <span className="mt-3 inline-flex rounded-full px-2.5 py-1 text-[11px] font-bold" style={{ color: automation.color, background: automation.bg }}>
+          {automation.label}
+        </span>
+      </div>
+
+      {isCallLead && (
+        <div className="mt-3 rounded-2xl border border-red-100 bg-red-50 p-4">
+          <div className="flex items-center gap-2 text-red-700">
+            <Phone size={15} />
+            <p className="text-sm font-black">想通电话 · 已熔断自动回复</p>
+          </div>
+          <p className="mt-2 text-xs leading-relaxed text-red-700/80">
+            当地时间 {customer.localTime}，建议现在接。{customer.sla}
+          </p>
+          <button className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-red-600 px-3 py-2 text-xs font-bold text-white">
+            <Phone size={13} />拉起 WhatsApp 通话
+          </button>
+        </div>
+      )}
+
+      <div className="mt-3 grid gap-2">
+        {[
+          { icon: MessageSquare, label: '回复建议', text: `请基于${customer.name}当前阶段，生成下一条WhatsApp回复。` },
+          { icon: Languages, label: '翻译润色', text: `把给${customer.name}的回复翻译成${customer.language}并润色。` },
+          { icon: FileText, label: '报价草稿', text: `为${customer.product}生成报价草稿，预估单值${customer.estimatedValue}。` },
+          { icon: RefreshCw, label: '唤醒话术', text: `为${customer.name}生成老客唤醒话术，结合历史订单和偏好。` },
+        ].map(action => {
+          const Icon = action.icon;
+          return (
+            <button
+              key={action.label}
+              type="button"
+              onClick={() => openGlobalAssistant(customer, action.text)}
+              className="flex items-center gap-2 rounded-xl border border-border bg-white px-3 py-2 text-left text-xs font-bold text-text-secondary hover:border-slate-300 hover:bg-surface-2"
+            >
+              <Icon size={13} className="text-[#0891b2]" />
+              {action.label}
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mt-3 rounded-2xl border border-border bg-surface p-4">
+        <div className="flex items-center gap-2">
+          <Sparkles size={14} className="text-amber-600" />
+          <p className="text-sm font-black text-text-primary">下一步</p>
+        </div>
+        <p className="mt-2 text-sm leading-relaxed text-text-secondary">{customer.nextStep}</p>
+      </div>
+
+      <div className="mt-3 rounded-2xl border border-border bg-white p-4">
+        <button type="button" onClick={() => setCallNoteOpen(v => !v)} className="flex w-full items-center justify-between text-left">
+          <span className="flex items-center gap-2 text-sm font-black text-text-primary"><Mic size={14} />通话后15秒记录</span>
+          <span className="text-xs text-text-muted">{callNoteOpen ? '收起' : '记录'}</span>
+        </button>
+        <AnimatePresence>
+          {callNoteOpen && (
+            <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
+              <div className="mt-3 space-y-2">
+                <div className="grid grid-cols-2 gap-1.5">
+                  {['有意向', '要样品', '再联系', '无效'].map(item => (
+                    <button key={item} type="button" onClick={() => setCallResult(item)}
+                      className={`rounded-lg border px-2 py-1.5 text-xs font-bold ${callResult === item ? 'border-[#0891b2] bg-[#0891b2]/10 text-text-primary' : 'border-border text-text-muted'}`}>
+                      {item}
+                    </button>
+                  ))}
+                </div>
+                <textarea value={note} onChange={event => setNote(event.target.value)} rows={2} placeholder="一句话备注，或粘贴语音转写..."
+                  className="w-full resize-none rounded-xl border border-border bg-surface px-3 py-2 text-xs outline-none" />
+                <button type="button" className="flex w-full items-center justify-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white">
+                  <Send size={12} />保存并生成下一步
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+    </aside>
+  );
+}
+
+function CustomerDetail({ customer, onBack }: { customer: CustomerProfile; onBack: () => void }) {
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex h-12 flex-shrink-0 items-center justify-between border-b border-border px-4">
+        <div className="flex items-center gap-2.5">
+          <button onClick={onBack} className="rounded-lg p-1.5 text-text-muted hover:bg-surface-2">
+            <ChevronLeft size={16} />
+          </button>
+          <div>
+            <p className="text-sm font-black text-text-primary">{customer.name}</p>
+            <p className="text-[10px] text-text-muted">{customer.stage} · {customer.source} · {customer.lastActive}</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 rounded-xl border border-border bg-surface px-3 py-1.5 text-xs font-bold text-text-secondary">
+          <Clock size={12} />对方当地 {customer.localTime}
+        </div>
+      </div>
+      <div className="flex min-h-0 flex-1">
+        <ProfileCard customer={customer} />
+        <Timeline customer={customer} />
+        <AssistantRail customer={customer} />
+      </div>
+    </div>
+  );
+}
+
+export default function ConversionPage({ onLeaveConversation }: Props) {
+  const [view, setView] = useState<CustomerView>('inbox');
+  const [selectedId, setSelectedId] = useState(CUSTOMERS[0].id);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const selected = CUSTOMERS.find(customer => customer.id === selectedId) ?? CUSTOMERS[0];
+  const activeView = VIEW_META[view];
+
+  const openCustomer = (id: string) => {
+    setSelectedId(id);
+    setDetailOpen(true);
+  };
+
+  useEffect(() => {
+    const viewLabel = detailOpen ? `客户详情 / ${selected.name}` : activeView.label;
+    const summary = detailOpen
+      ? `当前在我的客户详情页：${selected.name}，阶段${selected.stage}，意向分${selected.intentScore}，产品${selected.product}，预估单值${selected.estimatedValue}。${selected.summary}`
+      : `当前在我的客户 - ${activeView.label}视图。${activeView.desc}。默认按“现在该回谁”处理客户。`;
+    window.dispatchEvent(new CustomEvent('lingshu-assistant-context', {
+      detail: {
+        agent: 'conversion',
+        label: viewLabel,
+        summary,
+        suggestions: detailOpen
+          ? ['生成下一条回复建议', '生成通话前简报', '整理报价草稿', '生成通话后跟进任务']
+          : ['告诉我现在该先回谁', '筛选想通电话客户', '解释意向评分', '生成沉默客户唤醒批次'],
+      },
+    }));
+  }, [view, detailOpen, selected.id]);
+
+  const handleBack = () => {
+    onLeaveConversation();
+    setDetailOpen(false);
+  };
+
+  return (
+    <div className="flex h-full flex-col bg-white">
+      {!detailOpen && (
+        <div className="flex h-12 flex-shrink-0 items-center justify-between border-b border-border px-5">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-[#0891b2]/10 text-[#0891b2]">
+              <Users size={13} />
+            </div>
+            <div>
+              <p className="text-sm font-black text-text-primary">我的客户</p>
+              <p className="text-[10px] text-text-muted">一张客户列表 · 一条完整时间线</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-0.5 rounded-lg border border-border bg-surface-2 p-0.5">
+            {(Object.entries(VIEW_META) as [CustomerView, typeof VIEW_META[CustomerView]][]).map(([key, item]) => {
+              const Icon = item.icon;
               return (
-                <button key={inq.id} onClick={() => onInquiryClick(inq.id)}
-                  className="w-full flex items-center gap-3 px-4 py-3 hover:bg-surface-2 transition-colors text-left">
-                  <div className="w-8 h-8 rounded-full bg-surface-2 border border-border flex items-center justify-center text-sm flex-shrink-0">
-                    {inq.country}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <p className="text-sm font-medium text-text-primary truncate">{inq.buyer}</p>
-                      <span className="text-[10px] px-1.5 py-0.5 rounded font-mono bg-surface-2 border border-border text-text-muted">{inq.lang}</span>
-                    </div>
-                    <p className="text-xs text-text-muted truncate">{inq.product}</p>
-                  </div>
-                  <div className="text-right flex-shrink-0">
-                    <p className="text-sm font-semibold text-text-primary">{inq.amount}</p>
-                    <p className="text-[10px] text-text-muted">{inq.time}</p>
-                  </div>
-                  <span className="text-[11px] font-medium px-2 py-0.5 rounded-full flex-shrink-0"
-                    style={{ background: st.bg, color: st.color }}>
-                    {st.label}
-                  </span>
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setView(key)}
+                  className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-bold transition-all ${view === key ? 'bg-white text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'}`}
+                >
+                  <Icon size={12} />
+                  {item.label}
                 </button>
               );
             })}
           </div>
         </div>
-
-        <div className="card p-4">
-          <p className="text-sm font-semibold text-text-primary mb-3">今日待办</p>
-          <div className="space-y-2">
-            {TASKS.map((t, i) => (
-              <div key={i} className="flex items-center gap-2.5">
-                {t.done
-                  ? <CheckCircle2 size={15} className="text-accent flex-shrink-0" />
-                  : <Circle size={15} className="text-text-muted flex-shrink-0" />}
-                <span className={`text-sm flex-1 ${t.done ? 'text-text-muted line-through' : 'text-text-secondary'}`}>
-                  {t.label}
-                </span>
-                {t.urgent && !t.done && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded font-medium"
-                    style={{ background: 'rgba(220,38,38,0.08)', color: '#dc2626' }}>
-                    紧急
-                  </span>
-                )}
-              </div>
-            ))}
-          </div>
-        </div>
-
-      </div>
-    </div>
-  );
-}
-
-function QualifiedCustomersPanel({ onOpenInquiry }: { onOpenInquiry: (id: string) => void }) {
-  return (
-    <div className="h-full overflow-y-auto">
-      <div className="max-w-4xl mx-auto px-6 py-5 space-y-5">
-        <div className="grid grid-cols-4 gap-3">
-          {[
-            { label: '今日进线', value: '23', color: '#0891b2' },
-            { label: '高质量询盘', value: '8', color: '#16a34a' },
-            { label: '已自动首响', value: '17', color: '#4f46e5' },
-            { label: '需人工介入', value: '3', color: '#dc2626' },
-          ].map(item => (
-            <div key={item.label} className="card p-4">
-              <p className="text-[11px] font-medium text-text-muted">{item.label}</p>
-              <p className="mt-2 text-2xl font-bold font-display" style={{ color: item.color }}>{item.value}</p>
-            </div>
-          ))}
-        </div>
-
-        <div className="card overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-            <div className="flex items-center gap-2">
-              <Filter size={14} className="text-accent" />
-              <p className="text-sm font-semibold text-text-primary">成交客资自动筛选</p>
-            </div>
-            <span className="text-[11px] font-semibold px-2 py-1 rounded-md bg-green-50 text-green-700">自动回复开启</span>
-          </div>
-          <div className="divide-y divide-border">
-            {QUALIFIED_CUSTOMERS.map((item, index) => (
-              <button key={item.buyer} onClick={() => onOpenInquiry(index === 1 ? '4' : index === 2 ? '2' : index === 3 ? '5' : '1')}
-                className="w-full grid grid-cols-[minmax(160px,1fr)_120px_90px_minmax(180px,1fr)_150px] gap-3 px-4 py-3 text-left hover:bg-surface-2 transition-colors">
-                <div>
-                  <p className="text-sm font-semibold text-text-primary">{item.buyer}</p>
-                  <p className="text-xs text-text-muted">{item.source} · {item.product}</p>
-                </div>
-                <div>
-                  <p className="text-[11px] text-text-muted">质量分</p>
-                  <p className="text-lg font-bold text-text-primary">{item.score}</p>
-                </div>
-                <span className={`mt-2 h-fit rounded-full px-2 py-1 text-[11px] font-bold ${item.score >= 90 ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>
-                  {item.score >= 90 ? '高意向' : '可培育'}
-                </span>
-                <p className="text-xs leading-relaxed text-text-secondary">{item.reason}</p>
-                <p className="text-xs font-semibold text-accent">{item.action}</p>
-              </button>
-            ))}
-          </div>
-        </div>
-
-        <div className="rounded-xl border border-border bg-surface p-4">
-          <p className="text-sm font-semibold text-text-primary">自动回复规则</p>
-          <div className="mt-3 grid grid-cols-3 gap-3">
-            {['新询盘 2 分钟内自动首响', '高分询盘推送人工报价', '低分询盘自动发目录/样品政策'].map(rule => (
-              <div key={rule} className="rounded-lg border border-border bg-white px-3 py-3 text-xs font-semibold text-text-secondary">{rule}</div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-function ReactivationPanel({ onChatClick }: { onChatClick: () => void }) {
-  return (
-    <div className="h-full overflow-y-auto">
-      <div className="max-w-4xl mx-auto px-6 py-5 space-y-5">
-        <div className="grid grid-cols-4 gap-3">
-          {[
-            { label: '老客总数', value: '632', color: '#16a34a' },
-            { label: '60天沉默', value: '65', color: '#d97706' },
-            { label: 'VIP待跟进', value: '18', color: '#4f46e5' },
-            { label: '本月复购率', value: '34%', color: '#0891b2' },
-          ].map(item => (
-            <div key={item.label} className="card p-4">
-              <p className="text-[11px] font-medium text-text-muted">{item.label}</p>
-              <p className="mt-2 text-2xl font-bold font-display" style={{ color: item.color }}>{item.value}</p>
-            </div>
-          ))}
-        </div>
-
-        <div className="card overflow-hidden">
-          <div className="flex items-center justify-between px-4 py-3 border-b border-border">
-            <div className="flex items-center gap-2">
-              <RefreshCw size={14} className="text-green-700" />
-              <p className="text-sm font-semibold text-text-primary">老客唤醒 · 今日优先</p>
-            </div>
-            <button type="button" onClick={onChatClick} className="rounded-lg bg-slate-950 px-3 py-1.5 text-xs font-bold text-white">生成唤醒话术</button>
-          </div>
-          <div className="divide-y divide-border">
-            {REACTIVATION_CUSTOMERS.map(item => (
-              <div key={item.buyer} className="grid grid-cols-[minmax(160px,1fr)_120px_120px_minmax(160px,1fr)_150px] gap-3 px-4 py-3">
-                <div>
-                  <p className="text-sm font-semibold text-text-primary">{item.buyer}</p>
-                  <p className="text-xs text-text-muted">{item.channel} · {item.tier}</p>
-                </div>
-                <p className="text-xs font-semibold text-amber-700">{item.last}</p>
-                <p className="text-xs text-text-secondary">{item.product}</p>
-                <p className="text-xs leading-relaxed text-text-muted">基于历史采购偏好自动匹配新品/补货理由</p>
-                <button type="button" className="h-fit rounded-lg border border-border px-3 py-2 text-xs font-bold text-text-secondary hover:bg-surface-2">{item.action}</button>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── Customer Chat View ───────────────────────────────────────────────────────
-
-function CustomerChatView({
-  selectedId,
-  onSelectInquiry,
-  onBack,
-  onLeaveConversation,
-}: {
-  selectedId: string;
-  onSelectInquiry: (id: string) => void;
-  onBack: () => void;
-  onLeaveConversation: () => void;
-}) {
-  const [aiMode, setAiMode]             = useState(true);
-  const [humanInput, setHumanInput]     = useState('');
-  const [suggestionOpen, setSuggestionOpen] = useState(false);
-  const [translating, setTranslating]   = useState(false);
-  const [sentMessages, setSentMessages] = useState<ChatMsg[]>([]);
-  const [stageByCustomer, setStageByCustomer] = useState<Record<string, string>>(DEFAULT_CONVERSION_STAGE);
-  const bottomRef = useRef<HTMLDivElement>(null);
-
-  const inquiry      = INQUIRIES.find(i => i.id === selectedId)!;
-  const thread       = [...(MOCK_THREADS[selectedId] ?? []), ...sentMessages];
-  const aiSuggestion = AI_SUGGESTIONS[selectedId];
-  const langMeta     = LANG_META[inquiry.lang] ?? LANG_META.EN;
-  const hasChinese   = /[一-鿿]/.test(humanInput);
-  const currentStage  = stageByCustomer[selectedId] ?? CONVERSION_STAGES[0];
-
-  // Reset local conversation state on inquiry change.
-  useEffect(() => {
-    setAiMode(true);
-    setHumanInput('');
-    setSuggestionOpen(false);
-    setSentMessages([]);
-    bottomRef.current?.scrollIntoView({ behavior: 'instant' });
-  }, [selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const switchToHuman = () => {
-    setAiMode(false);
-    if (aiSuggestion) setHumanInput(aiSuggestion);
-  };
-
-  const switchToAi = () => {
-    setAiMode(true);
-    setHumanInput('');
-    setSuggestionOpen(false);
-  };
-
-  const handleBack = () => {
-    onLeaveConversation();
-    onBack();
-  };
-
-  const handleTranslate = () => {
-    if (!hasChinese || translating) return;
-    setTranslating(true);
-    setTimeout(() => {
-      setHumanInput(mockTranslate(inquiry.lang, humanInput));
-      setTranslating(false);
-    }, 700);
-  };
-
-  const handleSend = () => {
-    const text = humanInput.trim();
-    if (!text) return;
-    setSentMessages(prev => [...prev, {
-      role: 'seller',
-      time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }),
-      content: text,
-      byAi: false,
-      zh: '发送成功；系统将通过已连接渠道外发并记录送达状态',
-    }]);
-    setHumanInput('');
-    setSuggestionOpen(false);
-    setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: 'smooth' }), 50);
-  };
-
-  return (
-    <div className="flex h-full">
-
-      {/* Left: inquiry queue */}
-      <div className="w-52 border-r border-border flex flex-col flex-shrink-0">
-        <div className="px-3 py-2.5 border-b border-border">
-          <p className="text-[10px] font-semibold text-text-muted uppercase tracking-widest">询盘队列</p>
-        </div>
-        <div className="flex-1 overflow-y-auto">
-          {INQUIRIES.map(inq => {
-            const st = STATUS_META[inq.status as keyof typeof STATUS_META];
-            const isSelected = inq.id === selectedId;
-            return (
-              <button key={inq.id} onClick={() => onSelectInquiry(inq.id)}
-                className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-left transition-colors border-l-2 ${
-                  isSelected ? 'bg-surface-2 border-l-[#0891b2]' : 'hover:bg-surface-2 border-l-transparent'
-                }`}>
-                <span className="text-base leading-none">{inq.country}</span>
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium text-text-primary truncate">{inq.buyer.split(' ')[0]}</p>
-                  <p className="text-[10px] text-text-muted truncate mt-0.5">{inq.product}</p>
-                </div>
-                <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: st.color }} />
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {/* Right: chat */}
-      <div className="flex-1 flex flex-col min-w-0">
-
-        {/* Chat header */}
-        <div className="h-12 flex items-center justify-between px-4 border-b border-border flex-shrink-0">
-          <div className="flex items-center gap-2.5">
-            <button onClick={handleBack}
-              className="p-1 rounded-md hover:bg-surface-2 text-text-muted transition-colors flex-shrink-0">
-              <ChevronLeft size={16} />
-            </button>
-            <span className="text-base leading-none">{inquiry.country}</span>
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-text-primary leading-none truncate">{inquiry.buyer}</p>
-              <p className="text-[10px] text-text-muted mt-0.5 truncate">{inquiry.product} · {inquiry.amount}</p>
-            </div>
-          </div>
-
-          {/* AI / Human toggle */}
-          <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-surface-2 border border-border flex-shrink-0">
-            <button onClick={switchToAi}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold transition-all ${
-                aiMode ? 'bg-surface text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'
-              }`}>
-              <Bot size={11} />AI 托管
-            </button>
-            <button onClick={switchToHuman}
-              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold transition-all ${
-                !aiMode ? 'bg-surface text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'
-              }`}>
-              <User size={11} />人工接入
-            </button>
-          </div>
-        </div>
-
-        {/* Messages */}
-        <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
-          {thread.map((msg, i) => (
-            <div key={i} className={`flex gap-2 ${msg.role === 'seller' ? 'flex-row-reverse' : ''}`}>
-              {/* Avatar */}
-              <div className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 text-sm mt-0.5"
-                style={{
-                  background: msg.role === 'buyer'
-                    ? 'rgba(107,114,128,0.12)'
-                    : msg.byAi ? 'rgba(8,145,178,0.15)' : 'rgba(107,114,128,0.15)',
-                }}>
-                {msg.role === 'buyer'
-                  ? inquiry.country
-                  : msg.byAi
-                    ? <Bot size={13} style={{ color: '#0891b2' }} />
-                    : <User size={13} style={{ color: '#6b7280' }} />}
-              </div>
-
-              <div className="max-w-[72%]">
-                {/* Bubble */}
-                <div className={`px-3 py-2 rounded-2xl text-sm leading-relaxed ${
-                  msg.role === 'buyer'
-                    ? 'bg-surface-2 border border-border text-text-primary rounded-tl-sm'
-                    : 'text-white rounded-tr-sm'
-                }`} style={msg.role === 'seller' ? { background: msg.byAi ? '#0891b2' : '#374151' } : {}}>
-                  {msg.content}
-                </div>
-
-                {/* Timestamp + AI badge */}
-                <div className={`flex items-center gap-1.5 mt-1 px-1 ${msg.role === 'seller' ? 'flex-row-reverse' : ''}`}>
-                  <span className="text-[10px] text-text-muted">{msg.time}</span>
-                  {msg.byAi && msg.role === 'seller' && (
-                    <span className="flex items-center gap-0.5 text-[10px]" style={{ color: '#0891b2' }}>
-                      <Sparkles size={9} />AI 自动发送
-                    </span>
-                  )}
-                </div>
-
-                {/* 中文注释 — AI 托管模式下显示 */}
-                {aiMode && msg.zh && (
-                  <div className={`flex items-start gap-1 mt-1 px-1 ${msg.role === 'seller' ? 'justify-end' : ''}`}>
-                    <span className="text-[10px] leading-relaxed text-text-muted"
-                      style={{ fontStyle: 'italic' }}>
-                      中：{msg.zh}
-                    </span>
-                  </div>
-                )}
-              </div>
-            </div>
-          ))}
-          <div ref={bottomRef} />
-        </div>
-
-        {/* Bottom bar */}
-        {aiMode ? (
-          <div className="px-4 py-3 border-t border-border flex-shrink-0 flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <div className="w-1.5 h-1.5 rounded-full animate-pulse" style={{ background: '#0891b2' }} />
-              <span className="text-xs text-text-muted">AI 托管中 · 自动回复已开启</span>
-            </div>
-            <button onClick={switchToHuman}
-              className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-border hover:border-border-bright hover:text-text-primary text-text-muted transition-all">
-              <User size={11} />立即接入
-            </button>
-          </div>
-        ) : (
-          <div className="px-4 pb-4 pt-2 flex-shrink-0 space-y-2">
-
-            {/* AI 建议折叠条 */}
-            {aiSuggestion && (
-              <div className="rounded-xl border border-dashed overflow-hidden"
-                style={{ borderColor: 'rgba(8,145,178,0.35)', background: 'rgba(8,145,178,0.04)' }}>
-                <button onClick={() => setSuggestionOpen(v => !v)}
-                  className="w-full flex items-center justify-between px-3 py-2">
-                  <div className="flex items-center gap-1.5">
-                    <Sparkles size={11} style={{ color: '#0891b2' }} />
-                    <span className="text-xs font-medium" style={{ color: '#0891b2' }}>AI 建议回复</span>
-                  </div>
-                  <ChevronDown size={12} style={{ color: '#0891b2' }}
-                    className={`transition-transform duration-200 ${suggestionOpen ? 'rotate-180' : ''}`} />
-                </button>
-                <AnimatePresence>
-                  {suggestionOpen && (
-                    <motion.div key="sugg"
-                      initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }}
-                      exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.18 }}
-                      className="overflow-hidden">
-                      <div className="px-3 pb-3 space-y-2.5">
-                        <p className="text-xs text-text-secondary leading-relaxed">{aiSuggestion}</p>
-                        <button onClick={() => { setHumanInput(aiSuggestion); setSuggestionOpen(false); }}
-                          className="text-xs font-medium px-2.5 py-1 rounded-lg text-white"
-                          style={{ background: '#0891b2' }}>
-                          采用此建议
-                        </button>
-                      </div>
-                    </motion.div>
-                  )}
-                </AnimatePresence>
-              </div>
-            )}
-
-            {/* Input box */}
-            <div className="rounded-2xl border border-border bg-surface-2 overflow-hidden focus-within:border-border-bright transition-colors">
-              <textarea
-                value={humanInput}
-                onChange={e => setHumanInput(e.target.value)}
-                onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) e.preventDefault(); }}
-                placeholder={`用中文或 ${langMeta.full} 输入回复…`}
-                rows={2}
-                className="w-full px-4 pt-3 pb-1 bg-transparent text-sm text-text-primary placeholder:text-text-muted resize-none outline-none" />
-
-              <div className="flex items-center justify-between px-3 pb-3 pt-1">
-                <div className="flex items-center gap-2">
-                  {/* 目标语言徽章 */}
-                  <div className="flex items-center gap-1 px-2 py-1 rounded-md bg-surface border border-border">
-                    <Languages size={10} style={{ color: '#0891b2' }} />
-                    <span className="text-[11px] font-medium" style={{ color: '#0891b2' }}>
-                      → {langMeta.name}
-                    </span>
-                    <span className="text-[10px] text-text-muted ml-0.5">已自动识别</span>
-                  </div>
-                  {/* 一键翻译按钮 */}
-                  <button onClick={handleTranslate}
-                    disabled={!hasChinese || translating}
-                    className="flex items-center gap-1 text-xs font-medium px-2.5 py-1 rounded-lg border transition-all disabled:opacity-40"
-                    style={{
-                      borderColor: hasChinese && !translating ? 'rgba(8,145,178,0.4)' : undefined,
-                      color:       hasChinese && !translating ? '#0891b2' : undefined,
-                      background:  hasChinese && !translating ? 'rgba(8,145,178,0.06)' : undefined,
-                    }}>
-                    {translating
-                      ? <><Loader2 size={10} className="animate-spin" />翻译中…</>
-                      : <><Languages size={10} />一键翻译</>}
-                  </button>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <button onClick={switchToAi}
-                    className="flex items-center gap-1 text-xs text-text-muted hover:text-text-secondary transition-colors">
-                    <Bot size={11} />切回 AI 托管
-                  </button>
-                  <button onClick={handleSend} disabled={!humanInput.trim()}
-                    className="w-8 h-8 rounded-xl flex items-center justify-center transition-all disabled:opacity-40"
-                    style={{ background: '#0891b2', boxShadow: '0 2px 8px rgba(8,145,178,0.3)' }}>
-                    <Send size={13} className="text-white" />
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-      </div>
-
-      <div className="w-60 border-l border-border bg-surface flex-shrink-0 px-4 py-4 overflow-y-auto">
-        <p className="text-[10px] font-semibold text-text-muted uppercase tracking-widest mb-2">客户阶段</p>
-        <div className="rounded-2xl border border-border bg-surface-2 p-3 mb-4">
-          <div className="flex items-center gap-2 mb-2">
-            <span className="text-base leading-none">{inquiry.country}</span>
-            <div className="min-w-0">
-              <p className="text-sm font-semibold text-text-primary truncate">{inquiry.buyer}</p>
-              <p className="text-[10px] text-text-muted truncate">{inquiry.product}</p>
-            </div>
-          </div>
-          <p className="text-xs text-text-muted">当前阶段</p>
-          <p className="text-xl font-bold font-display mt-1" style={{ color: '#0891b2' }}>{currentStage}</p>
-        </div>
-
-        <div className="space-y-2">
-          {CONVERSION_STAGES.map((stage, idx) => {
-            const active = stage === currentStage;
-            return (
-              <button
-                key={stage}
-                onClick={() => setStageByCustomer(prev => ({ ...prev, [selectedId]: stage }))}
-                className={`w-full flex items-center gap-2 px-3 py-2 rounded-xl border text-left transition-all ${
-                  active ? 'border-[#0891b2] bg-[#0891b2]/10 text-text-primary' : 'border-border hover:border-border-bright text-text-secondary'
-                }`}>
-                <span className="w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold"
-                  style={{ background: active ? '#0891b2' : 'rgba(107,114,128,0.12)', color: active ? '#fff' : '#6b7280' }}>
-                  {idx + 1}
-                </span>
-                <span className="text-sm font-semibold">{stage}</span>
-              </button>
-            );
-          })}
-        </div>
-
-        <div className="mt-4 rounded-xl bg-surface-2 border border-border p-3 space-y-2">
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-text-muted">语言</span>
-            <span className="font-medium text-text-secondary">{langMeta.full}</span>
-          </div>
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-text-muted">金额</span>
-            <span className="font-medium text-text-secondary">{inquiry.amount}</span>
-          </div>
-          <div className="flex items-center justify-between text-xs">
-            <span className="text-text-muted">最近进线</span>
-            <span className="font-medium text-text-secondary">{inquiry.time}</span>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ─── ConversionPage (root) ────────────────────────────────────────────────────
-
-export default function ConversionPage({
-  onLeaveConversation,
-}: Props) {
-  const [viewMode, setViewMode]                 = useState<ViewMode>('dashboard');
-  const [selectedInquiryId, setSelectedInquiryId] = useState('1');
-
-  const openCustomerChat = (id: string) => {
-    setSelectedInquiryId(id);
-    setViewMode('customer-chat');
-  };
-
-  const openAssistant = (text?: string) => {
-    window.dispatchEvent(new CustomEvent('lingshu-assistant-open', { detail: { text } }));
-  };
-
-  useEffect(() => {
-    const selected = INQUIRIES.find(item => item.id === selectedInquiryId) ?? INQUIRIES[0];
-    const status = STATUS_META[selected.status as keyof typeof STATUS_META]?.label ?? selected.status;
-    const contextByMode = {
-      dashboard: {
-        label: '潜客询盘',
-        summary: '当前在我的客户 - 潜客询盘页，适合筛选高质量询盘、判断回复优先级、生成首响和跟单话术。',
-        suggestions: ['筛选今天最高质量的询盘', '生成待回复询盘首响', '整理大单跟进顺序', '优化 WhatsApp 自动回复'],
-      },
-      qualified: {
-        label: '成交客资',
-        summary: '当前在我的客户 - 成交客资页，适合解释客资评分、完善自动筛选规则、安排人工报价和自动回复动作。',
-        suggestions: ['解释成交客资筛选逻辑', '优化高分询盘自动回复', '生成报价转人工规则', '整理今日重点客资'],
-      },
-      reactivation: {
-        label: '老客唤醒',
-        summary: '当前在我的客户 - 老客唤醒页，适合做沉睡客户分层、复购触达节奏、新品推荐和 WhatsApp 唤醒话术。',
-        suggestions: ['生成老客唤醒话术', '按价值分层老客', '规划三天触达节奏', '推荐复购加推组合'],
-      },
-      'customer-chat': {
-        label: '询盘跟进',
-        summary: `当前在询盘详情：买家 ${selected.buyer}，国家 ${selected.country}，产品 ${selected.product}，金额 ${selected.amount}，语言 ${selected.lang}，状态 ${status}。适合生成跟单回复、翻译客户消息、判断下一步成交动作。`,
-        suggestions: ['生成下一条 WhatsApp 回复', '翻译并润色当前回复', '判断这个询盘下一步怎么跟', '生成报价前确认问题'],
-      },
-    }[viewMode];
-    window.dispatchEvent(new CustomEvent('lingshu-assistant-context', {
-      detail: { agent: 'conversion', ...contextByMode },
-    }));
-  }, [viewMode, selectedInquiryId]);
-
-  return (
-    <div className="flex flex-col h-full">
-
-      {/* Outer header — hidden in customer-chat (the view has its own header) */}
-      {viewMode !== 'customer-chat' && (
-        <div className="h-12 flex items-center justify-between px-5 border-b border-border flex-shrink-0">
-          <div className="flex items-center gap-2.5">
-            <div className="w-6 h-6 rounded-lg flex items-center justify-center"
-              style={{ background: 'rgba(8,145,178,0.1)', color: '#0891b2' }}>
-              <Users size={13} />
-            </div>
-            <span className="text-sm font-semibold text-text-primary">我的客户</span>
-          </div>
-          <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-surface-2 border border-border">
-            {([
-              { mode: 'dashboard' as ViewMode, icon: <MessageSquare size={12} />, label: '潜客询盘' },
-              { mode: 'qualified' as ViewMode, icon: <Filter size={12} />, label: '成交客资' },
-              { mode: 'reactivation' as ViewMode, icon: <RefreshCw size={12} />, label: '老客唤醒' },
-            ] as const).map(({ mode, icon, label }) => (
-              <button key={mode}
-                onClick={() => setViewMode(mode)}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold transition-all ${
-                  viewMode === mode
-                    ? 'bg-surface text-text-primary shadow-sm'
-                    : 'text-text-muted hover:text-text-secondary'
-                }`}>
-                {icon}<span>{label}</span>
-              </button>
-            ))}
-          </div>
-        </div>
       )}
 
-      <div className="flex-1 min-h-0 overflow-hidden">
+      <div className="min-h-0 flex-1 overflow-hidden">
         <AnimatePresence mode="wait">
-          {viewMode === 'dashboard' && (
-            <motion.div key="dashboard" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
-              <Dashboard onInquiryClick={openCustomerChat} />
+          {detailOpen ? (
+            <motion.div key="detail" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
+              <CustomerDetail customer={selected} onBack={handleBack} />
             </motion.div>
-          )}
-          {viewMode === 'qualified' && (
-            <motion.div key="qualified" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
-              <QualifiedCustomersPanel onOpenInquiry={openCustomerChat} />
-            </motion.div>
-          )}
-          {viewMode === 'reactivation' && (
-            <motion.div key="reactivation" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
-              <ReactivationPanel onChatClick={() => openAssistant('请根据当前老客列表，生成老客唤醒分层、触达节奏和 WhatsApp 跟进话术。')} />
-            </motion.div>
-          )}
-          {viewMode === 'customer-chat' && (
-            <motion.div key="customer-chat" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
-              <CustomerChatView
-                selectedId={selectedInquiryId}
-                onSelectInquiry={setSelectedInquiryId}
-                onBack={() => setViewMode('dashboard')}
-                onLeaveConversation={onLeaveConversation}
-              />
+          ) : (
+            <motion.div key={view} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
+              <CustomerListView view={view} selectedId={selectedId} onOpen={openCustomer} />
             </motion.div>
           )}
         </AnimatePresence>
