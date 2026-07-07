@@ -45,7 +45,7 @@ const actionItems = [
   },
   {
     title: '拆 5 条热点素材脚本',
-    desc: '让流量专家围绕当前素材库提炼可发布脚本。',
+    desc: '让社媒流量围绕当前素材库提炼可发布脚本。',
     agent: 'traffic' as const,
     task: '基于当前素材库，筛选 5 个值得跟进的美妆内容角度，并生成短视频脚本。',
   },
@@ -60,7 +60,6 @@ const actionItems = [
 export default function BusinessDiagnosisModal({ open, session, onClose, onDismissToday, onNavigate, onAction }: Props) {
   const [expanded, setExpanded] = useState(false);
   const company = session.tenant?.name || session.user.name || '你的企业';
-  const displayName = session.user.name || session.tenant?.name || session.user.email.split('@')[0] || '你好';
 
   const runAction = (agent: Parameters<NonNullable<Props['onAction']>>[0], task: string) => {
     onAction?.(agent, task);
@@ -97,7 +96,7 @@ export default function BusinessDiagnosisModal({ open, session, onClose, onDismi
                   </span>
                   <div>
                     <p className="text-xs font-semibold text-text-muted">经营诊断</p>
-                    <h2 className="text-lg font-bold text-text-primary">你好，{displayName}，经营状态日报请查收～</h2>
+                    <h2 className="text-lg font-bold text-text-primary">经营状态日报</h2>
                   </div>
                 </div>
                 <p className="mt-2 text-sm text-text-muted">{company} · 今日异常、机会、任务和待确认动作</p>

@@ -58,7 +58,7 @@ const DEFAULT: Profile = {
 
 const AGENTS = [
   { icon: Compass, label: '策略专家', color: '#4f46e5' },
-  { icon: Zap, label: '流量专家', color: '#d97706' },
+  { icon: Zap, label: '社媒流量', color: '#d97706' },
   { icon: MessageSquare, label: '转化专家', color: '#0891b2' },
   { icon: RefreshCw, label: '留存专家', color: '#16a34a' },
 ];

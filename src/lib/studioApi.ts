@@ -200,6 +200,8 @@ export const studioApi = {
   // 配音 TTS
   tts: (b: { script?: string; text?: string; voice: string; language: string }) =>
     post<{ ok: boolean; url?: string; duration?: number; error?: string }>('tts', b, { ok: false }),
+  uploadVoiceover: (b: { name: string; dataBase64: string; mimeType?: string; duration?: number }) =>
+    post<{ ok: boolean; url?: string; duration?: number; error?: string }>('voiceover', b, { ok: false }),
 
   // 封面 SVG
   cover: (b: { title: string; ratio: string; accent: string; bgImageUrl?: string } & Partial<CoverStyle>) =>
@@ -244,6 +246,9 @@ export const studioApi = {
       return { source: 'local', token: null, expiresAt: null, manifest: localManifest(spec) };
     }
   },
+
+  openCapcut: (payload: Record<string, unknown>) =>
+    post<{ ok: boolean; dir?: string; appOpened?: boolean; folderOpened?: boolean; error?: string }>('capcut/open', payload, { ok: false, error: '剪映跳转失败' }),
 
   // 草稿 / 作品
   listProjects: async (): Promise<StudioProject[]> => {

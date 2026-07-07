@@ -12,7 +12,7 @@ interface Props {
 
 const AGENT_META = {
   strategy:   { label: '策略专家', Icon: Compass,       color: '#4f46e5', bg: 'rgba(79,70,229,0.08)' },
-  traffic:    { label: '流量专家', Icon: Zap,           color: '#d97706', bg: 'rgba(217,119,6,0.08)' },
+  traffic:    { label: '社媒流量', Icon: Zap,           color: '#d97706', bg: 'rgba(217,119,6,0.08)' },
   conversion: { label: '转化专家', Icon: MessageSquare, color: '#0891b2', bg: 'rgba(8,145,178,0.08)' },
   retention:  { label: '留存专家', Icon: RefreshCw,     color: '#16a34a', bg: 'rgba(22,163,74,0.08)' },
 };

@@ -7,8 +7,14 @@ import type { AgentType } from '../App';
    支持 Markdown 表格、引用/话术块、代码块复制。
    并把"建议触发 [X专家] 执行：任务"识别成「一键执行」按钮。 */
 
-const AGENT_BY_NAME: Record<string, AgentType> = { 流量专家: 'traffic', 转化专家: 'conversion', 留存专家: 'retention', 策略专家: 'strategy' };
-const ACTION_RE = /建议触发\s*[【[]?\s*(流量专家|转化专家|留存专家|策略专家)\s*[】\]]?\s*执行[:：]\s*(.+)/;
+const AGENT_BY_NAME: Record<string, AgentType> = {
+  社媒流量: 'traffic',
+  流量专家: 'traffic',
+  转化专家: 'conversion',
+  留存专家: 'retention',
+  策略专家: 'strategy',
+};
+const ACTION_RE = /建议触发\s*[【[]?\s*(社媒流量|流量专家|转化专家|留存专家|策略专家)\s*[】\]]?\s*执行[:：]\s*(.+)/;
 
 function cleanLooseMarkdown(text: string): string {
   let out = text.replace(/<br\s*\/?>/gi, '\n');

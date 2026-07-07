@@ -59,13 +59,13 @@ interface NextAction {
 }
 
 const AGENT_GROUPS: { id: AgentTaskGroup; label: string; desc: string }[] = [
-  { id: 'social', label: '社媒 Agent 定时任务', desc: '内容采集、趋势监控、社媒素材分析' },
+  { id: 'social', label: '社媒 Agent 定时任务', desc: '内容采集、趋势监控、社媒素材分析、待拍摄素材池刷新' },
   { id: 'conversion', label: '销转 Agent 定时任务', desc: '报价、询盘、经营复盘和转化动作' },
   { id: 'customer', label: '客户管理 Agent 定时任务', desc: '老客分层、沉默唤醒、复购触达' },
 ];
 
 function taskAgentGroup(taskType: string): AgentTaskGroup {
-  if (['video_keyword_crawl', 'trend_report', 'holiday_push'].includes(taskType)) return 'social';
+  if (['video_keyword_crawl', 'shooting_material_gap_refresh', 'trend_report', 'holiday_push'].includes(taskType)) return 'social';
   if (['crm_wakeup'].includes(taskType)) return 'customer';
   return 'conversion';
 }
@@ -92,6 +92,17 @@ const TASK_TEMPLATES = [
     icon: '🎵',
     desc: '每天凌晨自动采集 TikTok 热点关键词视频，并排队获取真实视频 / Gemini 分析',
     config: { platforms: 'tiktok', keywords: 'skincare', limit: '5', dateWindowDays: '7' },
+  },
+  {
+    templateId: 'shooting_material_gap_refresh',
+    taskType: 'shooting_material_gap_refresh',
+    name: '待拍摄素材池刷新',
+    category: 'daily' as const,
+    cronExpr: '30 1 * * *',
+    cronLabel: '每天 01:30（北京时间）',
+    icon: '🎬',
+    desc: '基于最新抓取视频和本地素材库，自动汇总待补拍素材、拍摄建议和优先级',
+    config: { source: 'trend_videos', output: 'social_material_pool', priority: 'opening_frequency' },
   },
   { templateId: 'trend_report', taskType: 'trend_report', name: 'TikTok 爆款日报', category: 'daily' as const, cronExpr: '0 8 * * *', cronLabel: '每天 08:00', icon: '🔥', desc: '每日生成 TikTok 跨境电商热门趋势简报' },
   { templateId: 'exchange_rate', taskType: 'exchange_rate', name: '汇率日报', category: 'daily' as const, cronExpr: '0 9 * * *', cronLabel: '每天 09:00', icon: '💱', desc: '实时获取 USD/SAR/AED/VND/MYR 等汇率并发送' },
@@ -303,7 +314,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
         {
           label: '生成社媒预热脚本和短视频内容方向',
           agent: 'traffic',
-          agentLabel: '流量专家',
+          agentLabel: '社媒流量',
           prompt: `基于节日推品提醒，生成可直接使用的社媒预热脚本、短视频钩子和多语言内容方向，重点适配企业中心主要市场。${context}`,
         },
         {
@@ -319,13 +330,13 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
         {
           label: '把高频话题转成 3 条 TikTok 脚本方向',
           agent: 'traffic',
-          agentLabel: '流量专家',
+          agentLabel: '社媒流量',
           prompt: `把爆款日报中的高频话题转成 3 条 TikTok 脚本方向，包含钩子、镜头结构和口播重点。${context}`,
         },
         {
           label: '挑选 2 个产品卖点做 A/B 内容测试',
           agent: 'traffic',
-          agentLabel: '流量专家',
+          agentLabel: '社媒流量',
           prompt: `基于爆款日报，挑选 2 个产品卖点设计 A/B 内容测试方案，输出标题、素材形式和判断指标。${context}`,
         },
         {
@@ -341,13 +352,13 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
         {
           label: '查看新入库视频并筛选可复用素材',
           agent: 'traffic',
-          agentLabel: '流量专家',
+          agentLabel: '社媒流量',
           prompt: `根据视频采集结果，筛选新入库视频里最值得复用的素材方向，并说明筛选标准。${context}`,
         },
         {
           label: '选择高互动视频生成克隆脚本',
           agent: 'traffic',
-          agentLabel: '流量专家',
+          agentLabel: '社媒流量',
           prompt: `从视频采集结果中挑选高互动视频方向，生成 3 条去重后的克隆脚本。${context}`,
         },
         {
@@ -385,7 +396,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
         {
           label: '拆解下周社媒内容任务',
           agent: 'traffic',
-          agentLabel: '流量专家',
+          agentLabel: '社媒流量',
           prompt: `根据每周经营复盘，拆解下周社媒内容任务，输出选题、脚本方向和优先级。${context}`,
         },
         {
@@ -419,7 +430,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
         {
           label: '生成复购内容素材方向',
           agent: 'traffic',
-          agentLabel: '流量专家',
+          agentLabel: '社媒流量',
           prompt: `根据沉默客户唤醒任务，生成适合老客复购的内容素材方向和短视频脚本钩子。${context}`,
         },
       ];
@@ -647,9 +658,9 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
           <div className="mb-6">
             <div className="flex items-center justify-between mb-3">
               <div>
-                <h2 className="text-sm font-semibold text-gray-900">社媒爬虫定时任务 / 视频采集实时看板</h2>
+                <h2 className="text-sm font-semibold text-gray-900">社媒爬虫定时任务 / 视频采集与待拍摄素材池</h2>
                 <p className="text-xs text-gray-500 mt-0.5">
-                  {crawlTasks.length > 0 ? `${crawlTasks.map(task => task.name).join(' / ')} · ${CRAWLER_CRON_PRESET.label}` : '自动采集任务未创建'} · 更新时间 {formatTime(stats?.updatedAt)}
+                  {crawlTasks.length > 0 ? `${crawlTasks.map(task => task.name).join(' / ')} · ${CRAWLER_CRON_PRESET.label}` : '自动采集任务未创建'} · 自动刷新素材缺口优先级 · 更新时间 {formatTime(stats?.updatedAt)}
                 </p>
               </div>
               <button

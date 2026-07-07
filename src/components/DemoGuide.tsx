@@ -30,7 +30,7 @@ const STEPS: GuideStep[] = [
   {
     id: 'traffic',
     title: '第三步 生成脚本',
-    body: '在流量专家里点击高亮的生成按钮，体验一次爆款素材脚本生成。生成后我会直接带你进入第四步。',
+    body: '在社媒流量里点击高亮的生成按钮，体验一次爆款素材脚本生成。生成后我会直接带你进入第四步。',
     target: 'traffic_script_generate',
     page: 'traffic',
   },
@@ -58,7 +58,7 @@ const STEPS: GuideStep[] = [
   {
     id: 'automation_workflow',
     title: '第七步 体验自动化工作流',
-    body: '右侧会打开任务详情抽屉。找到“建议下一步”区域，点击高亮的“去流量专家/去策略专家”按钮，我会带着任务上下文自动跳到对应 Agent。',
+    body: '右侧会打开任务详情抽屉。找到“建议下一步”区域，点击高亮的“去社媒流量/去策略专家”按钮，我会带着任务上下文自动跳到对应 Agent。',
     target: 'automation_workflow_agent',
     page: 'scheduled',
   },

@@ -287,7 +287,7 @@ const PLUGIN_INTERACTIONS: Record<string, PluginAction[]> = {
   ],
   tiktok: [
     { label: '视频数据', desc: '读取账号视频、播放和互动数据，供社媒账号页展示' },
-    { label: '一键发布', desc: '流量专家生成视频后，可发布到已连接的 TikTok 账号' },
+    { label: '一键发布', desc: '社媒流量生成视频后，可发布到已连接的 TikTok 账号' },
   ],
   whatsapp_business: [
     { label: '询盘消息', desc: '接收 WhatsApp 对话，供转化专家识别意向和生成回复' },
@@ -295,11 +295,11 @@ const PLUGIN_INTERACTIONS: Record<string, PluginAction[]> = {
   ],
   instagram: [
     { label: '主页内容', desc: '读取主页基础信息、帖子和互动数据' },
-    { label: '发布入口', desc: '将流量专家生成内容整理为 Reels 或帖子草稿' },
+    { label: '发布入口', desc: '将社媒流量生成内容整理为 Reels 或帖子草稿' },
   ],
   facebook: [
     { label: '主页帖子', desc: '读取主页帖子、评论和基础互动数据' },
-    { label: '内容分发', desc: '把流量专家生成内容映射成主页帖子草稿' },
+    { label: '内容分发', desc: '把社媒流量生成内容映射成主页帖子草稿' },
   ],
   pinterest: [
     { label: 'Idea Pin', desc: '生成 Pin 标题、描述和落地页建议' },

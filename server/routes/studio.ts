@@ -3,7 +3,8 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
+import { createRequire } from 'node:module';
+import { execFile, spawn } from 'node:child_process';
 import ffmpegStatic from 'ffmpeg-static';
 import { GoogleGenAI } from '@google/genai';
 import { callLLM } from '../agents/llm.js';
@@ -25,7 +26,11 @@ import { consumeDemoQuota, isDemoMode } from '../lib/demo.js';
 ─────────────────────────────────────────────────────────────────────────── */
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
 const ENTERPRISE_FILE = path.join(__dirname, '../../data/enterprise.json');
+const { exportCapcutPackage } = require('../../desktop/render.cjs') as {
+  exportCapcutPackage: (payload: unknown) => Promise<{ ok: boolean; dir?: string; error?: string }>;
+};
 
 function enterpriseCtx(): string {
   try {
@@ -1065,6 +1070,24 @@ studioRouter.post('/tts', async (req, res) => {
   }
 });
 
+// POST /studio/voiceover  Body: { name, dataBase64, mimeType?, duration? } → 上传本地口播音频
+studioRouter.post('/voiceover', async (req, res) => {
+  const { name = 'voiceover.wav', dataBase64, mimeType, duration = 0 } = req.body ?? {};
+  if (!dataBase64) { res.status(400).json({ ok: false, error: 'dataBase64 required' }); return; }
+  try { fs.mkdirSync(TTS_DIR, { recursive: true }); } catch { /* ignore */ }
+  try {
+    const extFromMime = (mimeType as string | undefined)?.split('/')[1]?.replace('mpeg', 'mp3').replace('x-wav', 'wav');
+    const extFromName = String(name).split('.').pop();
+    const ext = (extFromMime || extFromName || 'wav').replace(/[^\w]+/g, '').slice(0, 8) || 'wav';
+    const file = `${randomUUID()}.${ext}`;
+    const buf = Buffer.from(String(dataBase64).replace(/^data:[^,]+,/, ''), 'base64');
+    fs.writeFileSync(path.join(TTS_DIR, file), buf);
+    res.json({ ok: true, url: `/tts/${file}`, duration: Number(duration) || 0 });
+  } catch (e: any) {
+    res.status(500).json({ ok: false, error: String(e?.message || e).slice(0, 200) });
+  }
+});
+
 /* ── ④ BGM 曲库（本地磁盘，开箱自带种子曲）─────────────────────────────────
    种子曲用 Node 直接合成 WAV（无需 ffmpeg/外部下载），浏览器可播、ffmpeg 可混音。
    用户也可上传真实音乐。渲染时 buildManifest 把选中 BGM 映射成真实 URL。
@@ -1259,6 +1282,52 @@ studioRouter.delete('/projects/:id', (req, res) => {
   if (next.length === list.length) { res.status(404).json({ ok: false, error: 'Project not found' }); return; }
   persistProjects(next);
   res.json({ ok: true });
+});
+
+// POST /studio/capcut/open → 网页端兜底：导出剪映精修包，并尝试打开剪映/CapCut
+studioRouter.post('/capcut/open', async (req, res) => {
+  try {
+    const pkg = await exportCapcutPackage(req.body);
+    if (!pkg.ok || !pkg.dir) {
+      res.status(500).json({ ok: false, error: pkg.error || '剪映精修包导出失败' });
+      return;
+    }
+
+    let folderOpened = false;
+    let appOpened = false;
+    const errors: string[] = [];
+    const openCommand = (args: string[]) => new Promise<void>((resolve, reject) => {
+      execFile('open', args, { timeout: 5000 }, err => (err ? reject(err) : resolve()));
+    });
+
+    try {
+      await openCommand([pkg.dir]);
+      folderOpened = true;
+    } catch (err: any) {
+      errors.push(`打开精修包失败：${err?.message || err}`);
+    }
+
+    for (const appName of ['剪映专业版', '剪映', 'CapCut', 'JianyingPro', 'Jianying']) {
+      try {
+        await openCommand(['-a', appName]);
+        appOpened = true;
+        break;
+      } catch {
+        // Try next known app name.
+      }
+    }
+
+    res.json({
+      ok: folderOpened || appOpened,
+      dir: pkg.dir,
+      appOpened,
+      folderOpened,
+      error: appOpened ? undefined : '本机没有找到剪映/CapCut 应用，已导出精修包文件夹，请安装剪映后手动导入。',
+      details: errors,
+    });
+  } catch (err: any) {
+    res.status(500).json({ ok: false, error: err?.message || '剪映跳转失败' });
+  }
 });
 
 /* ── 本地降级生成 ──────────────────────────────────────────────────────── */

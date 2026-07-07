@@ -17,7 +17,7 @@ interface NavSection {
 const PRIMARY_NAV: NavSection = {
   items: [
     { id: 'strategy',   label: '策略专家', icon: <Compass size={16} /> },
-    { id: 'traffic',    label: '流量专家', icon: <Zap size={16} /> },
+    { id: 'traffic',    label: '社媒流量', icon: <Zap size={16} /> },
     { id: 'conversion', label: '转化专家', icon: <MessageSquare size={16} /> },
     { id: 'retention',  label: '留存专家', icon: <RefreshCw size={16} /> },
   ],
@@ -33,7 +33,7 @@ const SECONDARY_NAV: NavSection = {
 
 const AGENT_COLORS: Record<string, string> = {
   strategy: '#4f46e5',
-  traffic:  '#d97706',
+  traffic:  '#16a34a',
   conversion: '#0891b2',
   retention: '#16a34a',
 };
