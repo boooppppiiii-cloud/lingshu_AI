@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { CheckCircle2, ChevronLeft, ChevronRight, Copy, ExternalLink, FileSpreadsheet, ImagePlus, KeyRound, Loader2, Upload, X } from 'lucide-react';
+import { CheckCircle2, ChevronLeft, ChevronRight, Copy, ExternalLink, FileSpreadsheet, ImagePlus, KeyRound, Loader2, MessageCircle, ShieldCheck, Upload, X } from 'lucide-react';
 import type { Page } from '../App';
 import type { AuthSession } from '../lib/auth';
 import { authHeader } from '../lib/auth';
@@ -68,6 +68,25 @@ interface ProductApiStatus {
   lastProductName?: string;
 }
 
+interface ChannelInfo {
+  id: string;
+  type: string;
+  label: string;
+  enabled: boolean;
+  config: Record<string, string>;
+  status: 'connected' | 'disconnected' | 'error';
+  connectedAt?: string;
+  lastActivity?: string;
+  stats?: { sent: number; received: number };
+}
+
+interface CustomerImportStatus {
+  count: number;
+  inboxCount: number;
+  received: number;
+  lastActivity?: string;
+}
+
 const CATEGORIES: Category[] = ['服装', '家居', '饰品', '五金', '美妆', '玩具', '消费电子', '其他'];
 const MARKETS: Market[] = ['中东', '东南亚', '欧美', '拉美'];
 const PLATFORM_OPTIONS: PlatformStatus[] = ['做过', '没做过', '正在准备'];
@@ -121,7 +140,7 @@ async function uploadManualImage(file: File) {
 }
 
 export default function BusinessDiagnosisModal({ open, session, onClose, onDismissToday, onNavigate }: Props) {
-  const [step, setStep] = useState<1 | 2>(1);
+  const [step, setStep] = useState<1 | 2 | 3>(1);
   const [path, setPath] = useState<ProductImportPath>('upload');
   const [companyName, setCompanyName] = useState(session.tenant?.name || '');
   const [category, setCategory] = useState<Category | ''>('');
@@ -142,6 +161,14 @@ export default function BusinessDiagnosisModal({ open, session, onClose, onDismi
   const [apiStatus, setApiStatus] = useState<ProductApiStatus>({ count: 0 });
   const [apiBaseline, setApiBaseline] = useState<ProductApiStatus | null>(null);
   const [apiLoading, setApiLoading] = useState(false);
+  const [whatsAppChannel, setWhatsAppChannel] = useState<ChannelInfo | null>(null);
+  const [whatsAppPhoneNumberId, setWhatsAppPhoneNumberId] = useState('');
+  const [whatsAppAccessToken, setWhatsAppAccessToken] = useState('');
+  const [whatsAppVerifyToken, setWhatsAppVerifyToken] = useState(() => `lingshu_${Math.random().toString(36).slice(2, 10)}`);
+  const [whatsAppSaving, setWhatsAppSaving] = useState(false);
+  const [whatsAppTesting, setWhatsAppTesting] = useState(false);
+  const [whatsAppMessage, setWhatsAppMessage] = useState('');
+  const [customerImportStatus, setCustomerImportStatus] = useState<CustomerImportStatus>({ count: 0, inboxCount: 0, received: 0 });
 
   const language = defaultLanguage(markets);
   const selectedSheet = useMemo(
@@ -155,6 +182,10 @@ export default function BusinessDiagnosisModal({ open, session, onClose, onDismi
     apiStatus.count > apiBaseline.count ||
     (apiStatus.lastIngestedAt && apiStatus.lastIngestedAt !== apiBaseline.lastIngestedAt)
   ));
+  const whatsAppWebhookUrl = whatsAppChannel
+    ? `${window.location.origin}/api/overseas/channels/webhook/whatsapp/${whatsAppChannel.id}`
+    : '保存配置后自动生成 Webhook 地址';
+  const whatsAppConnected = whatsAppChannel?.status === 'connected' || customerImportStatus.received > 0 || customerImportStatus.count > 0;
 
   useEffect(() => {
     if (!open) return;
@@ -290,7 +321,7 @@ export default function BusinessDiagnosisModal({ open, session, onClose, onDismi
       videos: [],
       documents: [],
     }]);
-    onDismissToday();
+    setStep(3);
   };
 
   const refreshProductApiStatus = useCallback(async () => {
@@ -322,6 +353,88 @@ export default function BusinessDiagnosisModal({ open, session, onClose, onDismi
     return () => window.clearInterval(timer);
   }, [loadProductApiInfo, open, path, refreshProductApiStatus, step]);
 
+  const refreshWhatsAppChannel = useCallback(async () => {
+    const channels = await fetch('/api/overseas/channels', { headers: authHeader() }).then(r => r.json()).catch(() => []);
+    const channel = Array.isArray(channels) ? channels.find((item: ChannelInfo) => item.type === 'whatsapp') : null;
+    if (channel) {
+      setWhatsAppChannel(channel);
+      if (!whatsAppChannel || whatsAppChannel.id !== channel.id) {
+        setWhatsAppPhoneNumberId(channel.config?.phoneNumberId || '');
+        setWhatsAppAccessToken(channel.config?.accessToken || '');
+        setWhatsAppVerifyToken(channel.config?.verifyToken || whatsAppVerifyToken);
+      }
+    }
+    const inbox = await fetch('/api/overseas/customers?view=inbox', { headers: authHeader() }).then(r => r.json()).catch(() => ({ items: [] }));
+    const leads = await fetch('/api/overseas/customers?view=leads', { headers: authHeader() }).then(r => r.json()).catch(() => ({ items: [] }));
+    setCustomerImportStatus({
+      count: Array.isArray(leads.items) ? leads.items.length : 0,
+      inboxCount: Array.isArray(inbox.items) ? inbox.items.length : 0,
+      received: Number(channel?.stats?.received ?? 0),
+      lastActivity: channel?.lastActivity,
+    });
+    return channel as ChannelInfo | null;
+  }, [whatsAppChannel, whatsAppVerifyToken]);
+
+  const saveWhatsAppConfig = useCallback(async () => {
+    setWhatsAppSaving(true);
+    setWhatsAppMessage('');
+    try {
+      const config = {
+        ...(whatsAppChannel?.config ?? {}),
+        phoneNumberId: whatsAppPhoneNumberId.trim(),
+        accessToken: whatsAppAccessToken.trim(),
+        verifyToken: whatsAppVerifyToken.trim(),
+        tenantId: session.tenant?.id || session.user.tenantId,
+        autoSyncCustomers: 'true',
+        onboardingMode: 'cloud_api_manual',
+      };
+      const body = JSON.stringify({
+        type: 'whatsapp',
+        label: 'WhatsApp Business',
+        enabled: true,
+        config,
+      });
+      const response = await fetch(whatsAppChannel ? `/api/overseas/channels/${whatsAppChannel.id}` : '/api/overseas/channels', {
+        method: whatsAppChannel ? 'PUT' : 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeader() },
+        body,
+      });
+      if (!response.ok) throw new Error('保存失败');
+      const saved = await response.json() as ChannelInfo;
+      setWhatsAppChannel(saved);
+      setWhatsAppMessage('已保存。把 Webhook 地址填到 Meta 后，新客户消息会自动进入“我的客户”。');
+      return saved;
+    } finally {
+      setWhatsAppSaving(false);
+    }
+  }, [session.tenant?.id, session.user.tenantId, whatsAppAccessToken, whatsAppChannel, whatsAppPhoneNumberId, whatsAppVerifyToken]);
+
+  const testWhatsAppConfig = useCallback(async () => {
+    setWhatsAppTesting(true);
+    setWhatsAppMessage('');
+    try {
+      const channel = await saveWhatsAppConfig();
+      const response = await fetch(`/api/overseas/channels/${channel.id}/test`, { method: 'POST', headers: authHeader() });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok || data.ok === false) throw new Error(data.error || '连接测试失败');
+      setWhatsAppMessage('连接测试通过。收到客户消息后，系统会自动建档并进入“我的客户”。');
+      await refreshWhatsAppChannel();
+    } catch (err) {
+      setWhatsAppMessage(err instanceof Error ? err.message : '连接测试失败');
+    } finally {
+      setWhatsAppTesting(false);
+    }
+  }, [refreshWhatsAppChannel, saveWhatsAppConfig, whatsAppChannel]);
+
+  useEffect(() => {
+    if (!open || step !== 3) return;
+    void refreshWhatsAppChannel();
+    const timer = window.setInterval(() => {
+      void refreshWhatsAppChannel();
+    }, 3000);
+    return () => window.clearInterval(timer);
+  }, [open, refreshWhatsAppChannel, step]);
+
   return (
     <AnimatePresence>
       {open && (
@@ -341,7 +454,7 @@ export default function BusinessDiagnosisModal({ open, session, onClose, onDismi
               <div>
                 <p className="text-xs font-semibold text-green-700">首次登录 · 全程可跳过</p>
                 <h2 className="text-xl font-bold text-text-primary">3分钟出海诊断</h2>
-                <p className="mt-1 text-sm text-text-muted">先建立生意画像，再接入一个或一批主推商品。</p>
+                <p className="mt-1 text-sm text-text-muted">先建立生意画像，再接入主推商品，最后连上 WhatsApp 客户入口。</p>
               </div>
               <button type="button" onClick={() => void finish(false)} className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-text-muted hover:bg-surface-2" title="跳过">
                 <X size={16} />
@@ -349,9 +462,10 @@ export default function BusinessDiagnosisModal({ open, session, onClose, onDismi
             </header>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-              <div className="mb-5 grid grid-cols-2 gap-2 text-sm font-bold">
+              <div className="mb-5 grid grid-cols-3 gap-2 text-sm font-bold">
                 <div className={`rounded-lg px-4 py-3 ${step === 1 ? 'bg-slate-950 text-white' : 'bg-surface text-text-muted'}`}>1. 生意画像（30秒）</div>
                 <div className={`rounded-lg px-4 py-3 ${step === 2 ? 'bg-slate-950 text-white' : 'bg-surface text-text-muted'}`}>2. 产品接入</div>
+                <div className={`rounded-lg px-4 py-3 ${step === 3 ? 'bg-slate-950 text-white' : 'bg-surface text-text-muted'}`}>3. WhatsApp账号</div>
               </div>
 
               {step === 1 ? (
@@ -393,7 +507,7 @@ export default function BusinessDiagnosisModal({ open, session, onClose, onDismi
                     </button>
                   </div>
                 </div>
-              ) : (
+              ) : step === 2 ? (
                 <div className="grid gap-5">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <button type="button" onClick={() => setStep(1)} className="inline-flex items-center gap-2 rounded-lg border border-border bg-white px-4 py-2 text-sm font-bold text-text-secondary hover:bg-surface">
@@ -408,6 +522,13 @@ export default function BusinessDiagnosisModal({ open, session, onClose, onDismi
 
                   {path === 'upload' ? (
                     <>
+                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-green-100 bg-green-50 px-4 py-3">
+                        <div>
+                          <p className="text-sm font-black text-green-800">已经有商品资料了？</p>
+                          <p className="mt-1 text-xs text-green-700">可以先去配置 WhatsApp，让新客户消息先进“我的客户”。</p>
+                        </div>
+                        <button type="button" className="rounded-xl bg-green-700 px-4 py-2 text-sm font-bold text-white" onClick={() => setStep(3)}>配置 WhatsApp</button>
+                      </div>
                       <label className="flex cursor-pointer flex-col items-center justify-center rounded-xl border border-dashed border-border bg-surface px-6 py-8 text-center hover:border-green-500 hover:bg-green-50/30">
                         <FileSpreadsheet className="mb-3 h-8 w-8 text-green-700" />
                         <span className="text-sm font-black text-text-primary">上传 xlsx / csv 商品表</span>
@@ -449,10 +570,11 @@ export default function BusinessDiagnosisModal({ open, session, onClose, onDismi
                             </div>
                           )}
                           <div className="flex flex-wrap justify-end gap-3">
-                            <button type="button" className="rounded-xl border border-border px-5 py-3 text-sm font-bold text-text-secondary" onClick={() => { void startImport(); onNavigate('enterprise'); onDismissToday(); }}>先导入，去下一步</button>
+                            <button type="button" className="rounded-xl border border-border px-5 py-3 text-sm font-bold text-text-secondary" onClick={() => { void startImport(); setStep(3); }}>先导入，去下一步</button>
                             <button type="button" className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-5 py-3 text-sm font-bold text-white disabled:opacity-40" disabled={importing} onClick={() => void startImport()}>
                               {importing ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />} 确认并批量入库
                             </button>
+                            <button type="button" className="rounded-xl bg-green-700 px-5 py-3 text-sm font-bold text-white" onClick={() => setStep(3)}>继续配置 WhatsApp</button>
                           </div>
                         </div>
                       )}
@@ -491,6 +613,9 @@ export default function BusinessDiagnosisModal({ open, session, onClose, onDismi
                           <button type="button" className="rounded-xl bg-slate-950 px-5 py-3 text-sm font-bold text-white" onClick={() => { onNavigate('enterprise'); onDismissToday(); }}>
                             去企业中心查看
                           </button>
+                          <button type="button" className="rounded-xl bg-green-700 px-5 py-3 text-sm font-bold text-white" onClick={() => setStep(3)}>
+                            继续配置 WhatsApp
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -507,9 +632,100 @@ export default function BusinessDiagnosisModal({ open, session, onClose, onDismi
                       <div className="flex justify-end gap-3">
                         <button type="button" className="rounded-xl border border-border px-5 py-3 text-sm font-bold text-text-secondary" onClick={() => void finish(false)}>跳过</button>
                         <button type="button" className="rounded-xl bg-slate-950 px-5 py-3 text-sm font-bold text-white disabled:opacity-40" disabled={!manualName.trim() || !manualSellingPoint.trim() || !manualImage} onClick={() => void addManualProduct()}>添加主推品</button>
+                        <button type="button" className="rounded-xl bg-green-700 px-5 py-3 text-sm font-bold text-white" onClick={() => setStep(3)}>配置 WhatsApp</button>
                       </div>
                     </div>
                   )}
+                </div>
+              ) : (
+                <div className="grid gap-5">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <button type="button" onClick={() => setStep(2)} className="inline-flex items-center gap-2 rounded-lg border border-border bg-white px-4 py-2 text-sm font-bold text-text-secondary hover:bg-surface">
+                      <ChevronLeft size={15} /> 返回产品接入
+                    </button>
+                    <button type="button" className="rounded-lg border border-border bg-white px-4 py-2 text-sm font-bold text-text-secondary" onClick={() => void finish(false)}>稍后再配置</button>
+                  </div>
+
+                  <div className="grid gap-4 lg:grid-cols-[1.05fr_0.95fr]">
+                    <section className="grid gap-4 rounded-xl border border-border p-5">
+                      <div className="flex items-start gap-3">
+                        <span className={`flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl ${whatsAppConnected ? 'bg-green-100 text-green-700' : 'bg-surface text-text-secondary'}`}>
+                          {whatsAppConnected ? <CheckCircle2 size={20} /> : <MessageCircle size={20} />}
+                        </span>
+                        <div>
+                          <p className="text-sm font-black text-text-primary">配置我的 WhatsApp Business 账号</p>
+                          <p className="mt-1 text-xs leading-relaxed text-text-muted">客户从网站点 WhatsApp 咨询后，聊天信息会自动进入“我的客户”，智能客服可在 24 小时服务窗口内帮你回复。</p>
+                        </div>
+                      </div>
+
+                      <div className="grid gap-3 rounded-xl bg-surface p-4">
+                        <div className="flex items-start gap-2 text-xs leading-relaxed text-text-muted">
+                          <ShieldCheck size={15} className="mt-0.5 flex-shrink-0 text-green-700" />
+                          <p>最简单的方式是 Meta 官方一键授权。当前自助授权入口审核中，先用 Cloud API 参数配置；审核通过后这里会变成登录 Meta、选择账号、确认授权三步。</p>
+                        </div>
+                        <button type="button" className="w-fit rounded-lg border border-border bg-white px-4 py-2 text-xs font-bold text-text-secondary" onClick={() => onNavigate('channels')}>去账号配置页</button>
+                      </div>
+
+                      <label className="grid gap-1.5">
+                        <span className="text-xs font-bold text-text-muted">Phone Number ID</span>
+                        <input className="rounded-xl border border-border px-4 py-3 font-mono text-sm outline-none focus:border-green-500" value={whatsAppPhoneNumberId} onChange={e => setWhatsAppPhoneNumberId(e.target.value)} placeholder="Meta WhatsApp Phone Number ID" />
+                      </label>
+                      <label className="grid gap-1.5">
+                        <span className="text-xs font-bold text-text-muted">Access Token</span>
+                        <input className="rounded-xl border border-border px-4 py-3 font-mono text-sm outline-none focus:border-green-500" type="password" value={whatsAppAccessToken} onChange={e => setWhatsAppAccessToken(e.target.value)} placeholder="永久 Token 或系统用户 Token" />
+                      </label>
+                      <label className="grid gap-1.5">
+                        <span className="text-xs font-bold text-text-muted">Verify Token</span>
+                        <input className="rounded-xl border border-border px-4 py-3 font-mono text-sm outline-none focus:border-green-500" value={whatsAppVerifyToken} onChange={e => setWhatsAppVerifyToken(e.target.value)} />
+                      </label>
+
+                      <div className="rounded-xl border border-border bg-white p-4">
+                        <p className="mb-2 text-xs font-bold text-text-muted">Webhook 地址</p>
+                        <div className="flex items-center gap-2">
+                          <code className="min-w-0 flex-1 truncate rounded-lg bg-surface px-3 py-2 text-xs text-text-primary">{whatsAppWebhookUrl}</code>
+                          <button type="button" className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold text-text-secondary" onClick={() => navigator.clipboard?.writeText(whatsAppWebhookUrl)}>
+                            <Copy size={13} />复制
+                          </button>
+                        </div>
+                      </div>
+
+                      {whatsAppMessage && <div className="rounded-xl border border-green-100 bg-green-50 px-4 py-3 text-sm font-bold text-green-800">{whatsAppMessage}</div>}
+
+                      <div className="flex flex-wrap justify-end gap-3">
+                        <button type="button" className="rounded-xl border border-border px-5 py-3 text-sm font-bold text-text-secondary" disabled={whatsAppSaving} onClick={() => void saveWhatsAppConfig()}>
+                          {whatsAppSaving ? '保存中...' : '保存配置'}
+                        </button>
+                        <button type="button" className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-5 py-3 text-sm font-bold text-white disabled:opacity-40" disabled={whatsAppTesting || !whatsAppPhoneNumberId.trim() || !whatsAppAccessToken.trim()} onClick={() => void testWhatsAppConfig()}>
+                          {whatsAppTesting ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />} 测试并完成
+                        </button>
+                        <button type="button" className="rounded-xl bg-green-700 px-5 py-3 text-sm font-bold text-white" onClick={() => void finish(false)}>完成</button>
+                      </div>
+                    </section>
+
+                    <aside className="grid gap-4">
+                      <div className={`rounded-xl border p-5 ${whatsAppConnected ? 'border-green-200 bg-green-50' : 'border-border bg-white'}`}>
+                        <p className={`text-sm font-black ${whatsAppConnected ? 'text-green-800' : 'text-text-primary'}`}>{whatsAppConnected ? 'WhatsApp 已接通' : '等待第一条 WhatsApp 客户消息'}</p>
+                        <p className="mt-2 text-xs leading-relaxed text-text-muted">
+                          {whatsAppConnected
+                            ? `已收到 ${customerImportStatus.received} 条 WhatsApp 事件，“我的客户”里已有 ${customerImportStatus.count} 个潜客，${customerImportStatus.inboxCount} 个待处理。`
+                            : '配置完成后，客户发来的新消息会自动建档、写入对话时间线，并触发 AI 回复建议。'}
+                        </p>
+                        {customerImportStatus.lastActivity && <p className="mt-2 text-xs text-text-muted">最近活动：{new Date(customerImportStatus.lastActivity).toLocaleString('zh-CN')}</p>}
+                      </div>
+                      <div className="rounded-xl border border-border bg-white p-5">
+                        <p className="text-sm font-black text-text-primary">接入后会发生什么</p>
+                        <div className="mt-3 grid gap-3 text-xs leading-relaxed text-text-muted">
+                          <p>1. 新聊天自动上传到“我的客户”，按手机号去重生成客户档案。</p>
+                          <p>2. AI 识别询价、寄样、想通电话等信号，给出回复草稿或暂停自动回复。</p>
+                          <p>3. 你在工具里确认后，可直接通过 WhatsApp Cloud API 发回客户。</p>
+                        </div>
+                      </div>
+                      <div className="rounded-xl border border-amber-200 bg-amber-50 p-5 text-xs leading-relaxed text-amber-800">
+                        <p className="font-black">注意</p>
+                        <p className="mt-2">官方 Cloud API 不支持绕过授权限制；如果把现有手机 App 账号迁移成 API 号码，通常会影响手机端登录。建议使用专门的 WhatsApp Business API 号码，或等待官方 Embedded Signup 一键授权。</p>
+                      </div>
+                    </aside>
+                  </div>
                 </div>
               )}
             </div>
