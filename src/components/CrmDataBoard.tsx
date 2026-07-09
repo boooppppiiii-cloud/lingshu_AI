@@ -81,7 +81,7 @@ export default function CrmDataBoard({ windowDays = 30 }: { windowDays?: number 
 
   return (
     <div className="h-full overflow-y-auto px-6 py-5">
-      <div className="max-w-5xl mx-auto">
+      <div className="w-full">
         {/* AI 结论 */}
         <div className="rounded-xl p-3.5 mb-5 flex items-start gap-2.5" style={{ background: 'var(--color-accent-glow)' }}>
           <Sparkles size={16} className="flex-shrink-0 mt-0.5" style={{ color: 'var(--color-accent)' }} />
