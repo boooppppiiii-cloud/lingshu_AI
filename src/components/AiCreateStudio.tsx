@@ -1846,10 +1846,6 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                       </div>
                     )}
                   </div>
-                  <div className="rounded-xl border border-border bg-surface-2 px-3 py-2">
-                    <p className="mb-1 text-[11px] font-bold text-text-muted">已导入产品信息</p>
-                    <pre className="max-h-28 overflow-y-auto whitespace-pre-wrap text-sm leading-relaxed text-text-primary">{productInfo || '暂无产品信息'}</pre>
-                  </div>
                 </div>
               </Field>
               <div className="rounded-xl border border-border bg-surface px-4 py-3 text-xs leading-relaxed text-text-muted">
