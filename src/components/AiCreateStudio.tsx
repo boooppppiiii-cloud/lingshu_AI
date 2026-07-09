@@ -359,6 +359,49 @@ function buildAiProductOptions(profile: EnterpriseProfileLite): ProductOption[] 
     .filter(Boolean) as ProductOption[];
 }
 
+function parseProductBrief(productInfo: string) {
+  const lines = String(productInfo || '').split('\n').map(line => line.trim()).filter(Boolean);
+  const pick = (label: string) => {
+    const line = lines.find(item => item.startsWith(`${label}：`) || item.startsWith(`${label}:`));
+    return compact(line?.replace(new RegExp(`^${label}[：:]\\s*`), ''));
+  };
+  const first = compact(lines[0]?.replace(/^[^：:]+[：:]\s*/, ''));
+  return {
+    name: pick('产品名称') || pick('主推品') || first || '主推产品',
+    category: pick('所属类目') || pick('产品类目') || '待补充类目',
+    highlights: pick('产品卖点') || pick('核心优势') || '待补充真实卖点',
+    price: pick('价格区间'),
+    moq: pick('起订量'),
+    certifications: pick('认证资质'),
+  };
+}
+
+function zhVoiceLineForShot(index: number, product: ReturnType<typeof parseProductBrief>, visual: string) {
+  const proofParts = [product.moq ? `起订量 ${product.moq}` : '', product.certifications ? `认证 ${product.certifications}` : '', product.price ? `价格区间 ${product.price}` : ''].filter(Boolean);
+  const proof = proofParts.length ? proofParts.join('，') : '样品、尺寸、颜色和包装细节';
+  const lines = [
+    `这款${product.name}适合${product.category}采购，先看实物细节和使用场景。`,
+    `${product.highlights}，画面里要直接展示材质、容量、承重或工艺细节。`,
+    `客户下单前最关心${proof}，这几个信息要放进字幕里。`,
+    `如果你要做同类采购，可以留言要样品、报价和包装方案。`,
+  ];
+  const visualHint = compact(visual).slice(0, 28);
+  return visualHint && index === 0 ? `${lines[0]}参考镜头节奏：${visualHint}。` : lines[index % lines.length]!;
+}
+
+function enVoiceLineForShot(index: number, product: ReturnType<typeof parseProductBrief>, visual: string) {
+  const proofParts = [product.moq ? `MOQ ${product.moq}` : '', product.certifications ? `certifications ${product.certifications}` : '', product.price ? `price range ${product.price}` : ''].filter(Boolean);
+  const proof = proofParts.length ? proofParts.join(', ') : 'sample, size, color, and packaging details';
+  const lines = [
+    `This ${product.name} is for ${product.category} sourcing. Start with the real product detail and use case.`,
+    `${product.highlights}. Show the material, capacity, load-bearing point, or workmanship clearly on screen.`,
+    `Before ordering, buyers need ${proof}. Put those facts in the caption.`,
+    `Message us for samples, a quote, and packaging options for this ${product.name}.`,
+  ];
+  const visualHint = compact(visual).slice(0, 36);
+  return visualHint && index === 0 ? `${lines[0]} Follow the reference rhythm: ${visualHint}.` : lines[index % lines.length]!;
+}
+
 function buildReferenceScript(kickoff: VideoKickoff, productInfo: string, languageCode: string, variantIndex: number, mode: 'ideas' | 'languages') {
   const ref = kickoff.referenceAnalysis;
   const details = ref?.details?.length ? ref.details : [
@@ -367,20 +410,20 @@ function buildReferenceScript(kickoff: VideoKickoff, productInfo: string, langua
     { time: '8s-15s', shot: '信任证明', camera: '特写', visual: '展示包装、资质、样品或客户反馈', subtitle: '引导询盘' },
   ];
   const langLabel = LANGS.find(l => l.code === languageCode)?.label || languageCode;
-  const product = compact(productInfo) || '企业主推产品组合';
+  const product = parseProductBrief(productInfo);
   const ideaName = mode === 'ideas' ? `创意 ${variantIndex + 1}` : langLabel;
-  const hook = variantIndex % 3 === 0 ? '痛点开场' : variantIndex % 3 === 1 ? '对比开场' : '结果开场';
+  const hook = variantIndex % 3 === 0 ? '实物细节开场' : variantIndex % 3 === 1 ? '采购顾虑开场' : '场景结果开场';
   const zh = languageCode === 'zh';
   const header = zh
-    ? `对标脚本｜${ideaName}｜${hook}\n产品替换：${product}\n参考爆款：${kickoff.video?.title || ref?.title || '已选爆款视频'}`
-    : `Reference Script | ${ideaName} | ${hook}\nProduct replacement: ${product}\nReference video: ${kickoff.video?.title || ref?.title || 'selected viral video'}\nOutput language: ${langLabel}`;
+    ? `对标脚本｜${ideaName}｜${hook}\n产品替换：${product.name}\n所属类目：${product.category}\n产品卖点：${product.highlights}\n参考爆款：${kickoff.video?.title || ref?.title || '已选爆款视频'}`
+    : `Reference Script | ${ideaName} | ${hook}\nProduct replacement: ${product.name}\nCategory: ${product.category}\nProduct facts: ${product.highlights}\nReference video: ${kickoff.video?.title || ref?.title || 'selected viral video'}\nOutput language: ${langLabel}`;
   const body = details.map((item, index) => {
     const line = zh
-      ? `人物说：“这不是普通产品，第 ${index + 1} 个镜头直接证明它为什么值得询盘。”`
-      : `Voiceover: "This is not just another product. Shot ${index + 1} shows why buyers should ask for details now."`;
+      ? `人物说：“${zhVoiceLineForShot(index, product, item.visual)}”`
+      : `Voiceover: "${enVoiceLineForShot(index, product, item.visual)}"`;
     return zh
-      ? `[${item.time}] ${item.shot}；${item.camera}；复用原视频节奏：${item.visual}；替换为我方产品画面与卖点；${line}`
-      : `[${item.time}] ${item.shot}; ${item.camera}; keep the reference rhythm: ${item.visual}; replace visuals and benefits with our product; ${line}`;
+      ? `[${item.time}] ${item.shot}；${item.camera}；参考节奏：${item.visual}；我方画面：展示「${product.name}」的真实细节、使用场景和${product.highlights}；${line}`
+      : `[${item.time}] ${item.shot}; ${item.camera}; reference rhythm: ${item.visual}; our visual: show real details, use case, and ${product.highlights} for ${product.name}; ${line}`;
   }).join('\n\n');
   return `${header}\n\n${body}`;
 }
