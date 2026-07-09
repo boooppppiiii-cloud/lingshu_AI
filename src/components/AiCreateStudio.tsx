@@ -1196,6 +1196,46 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     }
   };
 
+  const optimizeCurrentTimestampScript = async () => {
+    const currentScript = script.trim();
+    if (!currentScript || modeActionLoading) return;
+    setModeActionLoading(true);
+    setModeNotice('');
+    try {
+      const { script: optimized } = await studioApi.script(
+        {
+          materials: matNames,
+          productInfo,
+          language: 'zh',
+          platform,
+          duration,
+          scriptType: 'storyboard',
+          generationMode: mode,
+          provider,
+          audience,
+          sellingPoints,
+          tone: [
+            tone,
+            '优化当前时间戳脚本',
+            '保留原有时间段结构',
+            '每段必须包含时间/画面/人物说/字幕',
+            '人物说必须是真人能直接说出口的话',
+            '不得加入镜头、画面、字幕、参考节奏等制作指令到人物说',
+            '不得编造未提供的数据',
+          ].filter(Boolean).join(' · '),
+        },
+        currentScript,
+      );
+      applyTimestampScript(optimized);
+      setModeNotice('已按当前产品信息和口播约束优化脚本。');
+      setModeScripts(prev => prev.map((item, index) => index === 0 ? { ...item, script: optimized, title: `${item.title}（已优化）` } : item));
+    } catch (err: any) {
+      setModeNotice(err?.message || '脚本优化失败，请稍后重试。');
+    } finally {
+      setModeActionLoading(false);
+    }
+  };
+
   const extractVoiceoverText = (value: string) => {
     const quoted = Array.from(value.matchAll(/[“"]([^”"]{2,})[”"]/g)).map(m => m[1]?.trim()).filter(Boolean) as string[];
     if (quoted.length) return quoted.join('\n');
@@ -2038,9 +2078,9 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                     </button>
                   ))}
                 </div>
-                  <button onClick={() => void generateTimestampScriptsForMode()} disabled={modeActionLoading}
+                  <button onClick={() => void optimizeCurrentTimestampScript()} disabled={modeActionLoading || !script.trim()}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-border hover:border-border-bright disabled:opacity-50">
-                    {modeActionLoading ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />} 生成时间戳脚本
+                    {modeActionLoading ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />} 优化当前脚本
                   </button>
               </div>
             </div>
