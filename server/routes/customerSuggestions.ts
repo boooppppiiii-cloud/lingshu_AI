@@ -1,0 +1,157 @@
+import { Router } from 'express';
+import { callLLM } from '../agents/llm.js';
+
+export const customerSuggestionsRouter = Router();
+
+interface CustomerHint {
+  name: string;
+  stage: string;
+  intentScore: number;
+  product: string;
+  timeline: string[];
+}
+
+const CUSTOMER_HINTS: Record<string, CustomerHint> = {
+  c1: {
+    name: 'Ahmed Al-Rashid',
+    stage: 'call_request',
+    intentScore: 96,
+    product: 'custom hair wigs',
+    timeline: [
+      'Buyer asked to talk with the manager today.',
+      'Buyer needs 500 pcs custom hair wigs.',
+      'AI stopped auto-reply and asked for a suitable call time.',
+    ],
+  },
+  c2: {
+    name: 'Fatima Hassan',
+    stage: 'quoted',
+    intentScore: 88,
+    product: 'logo packaging',
+    timeline: [
+      'Buyer discussed price and custom logo packaging.',
+      'Quote draft is ready but needs owner confirmation.',
+    ],
+  },
+  c3: {
+    name: 'Maria Santos',
+    stage: 'sample_followup',
+    intentScore: 78,
+    product: 'sample policy',
+    timeline: [
+      'Buyer is waiting for sample policy and shipping address confirmation.',
+      'AI suggested a sample policy reply.',
+    ],
+  },
+  c4: {
+    name: 'John Thompson',
+    stage: 'won',
+    intentScore: 82,
+    product: '义乌小商品样品盒',
+    timeline: [
+      'Customer has confirmed a sample order.',
+      'Next step is sending the tracking number and creating delivery follow-up.',
+    ],
+  },
+  c5: {
+    name: 'Khalid Mohammed',
+    stage: 'silent60',
+    intentScore: 89,
+    product: '棕色直发 14 寸',
+    timeline: [
+      'Existing high-value customer has been silent for more than 60 days.',
+      'Retention task suggests a new catalog wake-up message.',
+    ],
+  },
+  c6: {
+    name: 'Nguyen Van A',
+    stage: 'auto_reception',
+    intentScore: 31,
+    product: '发饰批发',
+    timeline: [
+      'Buyer only asked for a catalog.',
+      'AI has sent catalog and basic wholesale pack automatically.',
+    ],
+  },
+};
+
+const SYSTEM_PROMPT = `你是灵枢 AI「我的客户」里的转化助手。
+请返回 2 到 3 条给中国商家看的主动建议。
+每条建议一句话，动作明确，可以继续转成 WhatsApp 回复草稿。
+不要写完整的客户回复，不要编号、Markdown 或解释。`;
+
+customerSuggestionsRouter.get('/:id/suggestions', async (req, res) => {
+  const id = String(req.params.id ?? '');
+  const hint = CUSTOMER_HINTS[id] ?? fallbackHint(id);
+  const fallback = fallbackSuggestions(hint);
+
+  const prompt = [
+    `Customer: ${hint.name}`,
+    `Stage: ${hint.stage}`,
+    `Intent score: ${hint.intentScore}`,
+    `Product: ${hint.product}`,
+    'Recent timeline:',
+    hint.timeline.map(item => `- ${item}`).join('\n'),
+    '',
+    'Return only 2-3 short suggestions, one per line.',
+  ].join('\n');
+
+  try {
+    const raw = await callLLM(prompt, { systemPrompt: SYSTEM_PROMPT });
+    const items = parseSuggestions(raw);
+    res.json({ items: items.length > 0 ? items : fallback });
+  } catch {
+    res.json({ items: fallback });
+  }
+});
+
+function fallbackHint(id: string): CustomerHint {
+  return {
+    name: id || 'Current customer',
+    stage: 'inquiry',
+    intentScore: 50,
+    product: 'current product',
+    timeline: ['Customer has an active conversation and needs the next reply.'],
+  };
+}
+
+function fallbackSuggestions(hint: CustomerHint): string[] {
+  if (hint.stage === 'call_request') {
+    return [
+      `生成一条给 ${hint.name} 的通话承接回复，并询问方便通话的时间。`,
+      `整理一份围绕 ${hint.product} 和采购数量的简短通话简报。`,
+      '确认经理会亲自跟进，先把客户稳住。',
+    ];
+  }
+
+  if (hint.stage === 'silent60' || hint.stage === 'silent30') {
+    return [
+      `给 ${hint.name} 写一条自然的老客唤醒消息，给对方一个回复理由。`,
+      `围绕 ${hint.product} 推荐一个不催促的跟进角度。`,
+      '询问客户是否还需要样品或新版目录。',
+    ];
+  }
+
+  if (hint.intentScore >= 75) {
+    return [
+      `为 ${hint.product} 生成一条简洁的报价跟进。`,
+      '用一条消息确认数量、目的港和包装偏好。',
+      '把客户自然推进到样品确认，不要显得催促。',
+    ];
+  }
+
+  return [
+    `继续让 ${hint.name} 由 AI 自动接待，并补问一个客资问题。`,
+    `发送一条轻量目录回复，围绕 ${hint.product} 引导客户说出需求。`,
+    '先询问目标采购数量，再决定是否转人工跟进。',
+  ];
+}
+
+function parseSuggestions(raw: string): string[] {
+  return raw
+    .split(/\r?\n/)
+    .map(line => line.replace(/^\s*[-*0-9.)]+\s*/, '').trim())
+    .map(line => line.replace(/^["'`]+|["'`]+$/g, '').trim())
+    .filter(Boolean)
+    .slice(0, 3);
+}

@@ -100,6 +100,13 @@ const SKILL_AGENTS: Array<{
   { id: 'retention', label: '唤醒助手', agentType: 'retention', color: '#16A34A', bg: '#DCFCE7', Icon: ShoppingCart, position: { x: -1, y: 0 } },
 ];
 
+const AGENT_DISPLAY_NAME: Record<OrbitAgentId, string> = {
+  strategy: '策略助手',
+  content: '内容助手',
+  customer: '客户助手',
+  retention: '唤醒助手',
+};
+
 function pageKey(page: Page) {
   if (page === 'youtube' || page === 'channels') return 'plugins';
   if (page === 'retention') return 'conversion';
@@ -436,9 +443,9 @@ export default function GlobalAssistant({
                 <motion.button
                   key={agent.id}
                   type="button"
-                  title={agent.label}
+                  title={AGENT_DISPLAY_NAME[agent.id]}
                   onClick={() => openAgent(agent.id)}
-                  className="pointer-events-auto absolute bottom-2 right-2 flex h-12 w-12 items-center justify-center rounded-full border bg-white shadow-[0_12px_28px_rgba(15,23,42,0.14)]"
+                  className="group pointer-events-auto absolute bottom-2 right-2 flex h-12 w-12 items-center justify-center rounded-full border bg-white shadow-[0_12px_28px_rgba(15,23,42,0.14)]"
                   style={{ borderColor: agent.color, color: agent.color, backgroundColor: agent.bg }}
                   initial={{ x: 0, y: 0, opacity: 0, scale: 0.72 }}
                   animate={reduceMotion ? { opacity: 1, scale: 1 } : { x, y, opacity: 1, scale: 1 }}
@@ -446,6 +453,9 @@ export default function GlobalAssistant({
                   transition={reduceMotion ? { duration: 0.16 } : { type: 'spring', stiffness: 260, damping: 18, delay: index * 0.06 }}
                 >
                   <Icon size={20} />
+                  <span className="pointer-events-none absolute bottom-full left-1/2 mb-2 -translate-x-1/2 whitespace-nowrap rounded-full bg-slate-950 px-2.5 py-1 text-[11px] font-bold text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
+                    {AGENT_DISPLAY_NAME[agent.id]}
+                  </span>
                   {unread > 0 && <span className="absolute -right-1 -top-1 min-w-5 rounded-full bg-red px-1 text-[11px] font-bold text-white">{unread}</span>}
                 </motion.button>
               );
