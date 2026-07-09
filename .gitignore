@@ -14,6 +14,7 @@ data/materials.json
 data/studio-projects.json
 data/demo-usage.json
 data/oauth-config.json
+data/product-api.json
 data/bgm/
 data/bgm.json
 data/tts/
