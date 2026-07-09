@@ -15,7 +15,8 @@ async function post<T>(path: string, body: unknown, fallback: T): Promise<T & { 
     if (!r.ok) throw new Error(String(r.status));
     return (await r.json()) as T & { source?: string };
   } catch (err: any) {
-    if (String(err?.message || '').includes('Demo')) throw err;
+    const message = String(err?.message || '');
+    if (message.includes('Demo') || message.includes('试用') || message.includes('额度') || message.includes('到期')) throw err;
     return { ...fallback, source: 'local' };
   }
 }
