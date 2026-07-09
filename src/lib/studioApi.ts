@@ -172,6 +172,7 @@ export const studioApi = {
     platform: string;
     duration: number;
     scriptType?: 'voiceover' | 'storyboard';
+    generationMode?: 'material' | 'product' | 'clone';
     provider?: 'gemini' | 'qwen';
     audience?: string;
     sellingPoints?: string;

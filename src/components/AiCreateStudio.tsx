@@ -1048,6 +1048,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
             platform,
             duration,
             scriptType: 'storyboard',
+            generationMode: 'product',
             provider,
             audience,
             sellingPoints,

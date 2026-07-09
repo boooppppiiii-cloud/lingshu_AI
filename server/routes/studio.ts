@@ -518,6 +518,7 @@ studioRouter.post('/script', async (req, res) => {
     platform = 'tiktok',
     duration = 20,
     scriptType = 'voiceover',
+    generationMode = '',
     audience = '',
     sellingPoints = '',
     tone = 'high-converting',
@@ -535,7 +536,42 @@ studioRouter.post('/script', async (req, res) => {
     : '- No reliable highlights. Infer a simple product-first structure from title, platform, and product info.';
   const providerOpt = provider === 'qwen' || provider === 'gemini' ? provider : undefined;
 
-  const prompt = scriptType === 'storyboard'
+  const productScriptRules = `你是在为我方产品重新创作一条外贸社媒口播视频脚本。
+
+输出必须满足：
+1. 每段包含：时间 / 画面 / 人物说 / 字幕。
+2. 人物说必须是镜头里真人能直接说出口的话，不得包含“镜头、画面、字幕、参考节奏、展示卖点”等制作指令。
+3. 每段画面必须是具体可拍动作，必须包含手部动作、产品动作、对比测试、包装/定制展示或使用场景之一。
+4. 第一段必须是痛点、对比、测试或结果 hook，不能用“这款产品适合……”平铺开场。
+5. 至少包含两个 B2B 采购信息：MOQ、尺寸、克重、承重、logo 定制、打样、包装、交期、报价。未提供具体值时写“可按需求确认”，不要编具体数字。
+6. 结尾 CTA 必须要求买家提供具体采购信息，例如尺寸、数量、logo 文件、目标克重、包装方式或交期。
+7. 不得出现参考视频原品类/原场景词；如果没有参考视频，也不要提参考视频。
+8. 不得编造未提供的数据；缺失时写“可按需求确认”。禁止新增任何未提供的数字、单位或周期，例如瓶数、重量、容量、天数、秒数、百分比、价格、MOQ 数量。
+9. 不得输出制作说明，不得解释规则，只输出成稿。
+10. 原始卖点如果包含夸张绝对化表达，必须降级成可验证表述，例如“不易撕裂”“抗拉表现可打样测试”“承重可按需求确认”，不得写“不破、不裂、纹丝不动、吹不烂”等绝对承诺。
+
+固定格式：
+[0-2s]
+画面：<具体可拍动作>
+人物说：“<真人口播，只说给买家听的话>”
+字幕：<短字幕>
+
+请生成 5 段左右，总时长约 ${duration} 秒，语言为${lang}。`;
+
+  const prompt = generationMode === 'product'
+    ? `${productScriptRules}
+
+产品信息：
+${product}
+
+目标平台：${platform}
+目标受众：${audience || '海外 B2B 买家、小批量试单买家、渠道采购商'}
+补充卖点：${sellingPoints || '仅使用产品信息中已提供的卖点'}
+风格：${tone || '真实、可拍、询盘导向'}
+素材信息：${clips}
+
+请直接输出脚本。`
+    : scriptType === 'storyboard'
     ? `You are a senior short-video director for a Chinese cross-border e-commerce seller.
 Write a practical ${duration}-second ${platform} storyboard in ${lang}, broken into 5-6 timestamped scenes.
 
@@ -589,7 +625,20 @@ Requirements:
 
   try {
     const text = await callLLM(prompt, { backend: providerOpt, systemPrompt: enterpriseCtx() || undefined });
-    res.json({ ok: true, source: 'ai', script: text.trim() });
+    const script = text.trim();
+    const unsupportedNumberClaims = Array.from(script.matchAll(/\d+(?:\.\d+)?\s*(?:瓶|ml|ML|毫升|kg|KG|g|克|斤|cm|厘米|mm|毫米|天|day|days|Days|秒|%|个|pcs|件|箱|元|美元)/g))
+      .map(match => match[0])
+      .filter(claim => !String(productInfo).includes(claim));
+    const invalidProductScript = generationMode === 'product'
+      && (/人物说[：:][^\n]*(镜头|画面|字幕|参考节奏|展示卖点|制作)/.test(script)
+        || /参考节奏|Reference video|Scene N|<具体|不得|必须满足/.test(script)
+        || /不破|不裂|纹丝不动|吹不烂|保证|最快|最低价|全网/.test(script)
+        || unsupportedNumberClaims.length > 0);
+    res.json({
+      ok: true,
+      source: invalidProductScript ? 'fallback' : 'ai',
+      script: invalidProductScript ? fallbackStoryboard(duration, productInfo) : script,
+    });
   } catch {
     res.json({ ok: true, source: 'fallback', script: scriptType === 'storyboard' ? fallbackStoryboard(duration, productInfo) : fallbackScript(productInfo, duration) });
   }
@@ -1398,8 +1447,21 @@ studioRouter.post('/capcut/open', async (req, res) => {
 /* ── 本地降级生成 ──────────────────────────────────────────────────────── */
 
 function compactProductLabel(productInfo: string): string {
-  const match = String(productInfo || '').match(/(?:主推品|产品类目|Product|product)\s*[：:]\s*([^\n]+)/i);
+  const match = String(productInfo || '').match(/(?:产品名称|主推品|产品类目|所属类目|Product|product)\s*[：:]\s*([^\n]+)/i);
   return (match?.[1] || String(productInfo || '').split('\n')[0] || 'this product').slice(0, 80);
+}
+
+function productField(productInfo: string, label: string): string {
+  const match = String(productInfo || '').match(new RegExp(`${label}[：:]\\s*([^\\n]+)`));
+  return match?.[1]?.trim() || '';
+}
+
+function conservativeClaim(value: string): string {
+  return String(value || '')
+    .replace(/大风吹不烂/g, '不易撕裂，抗拉表现可打样测试')
+    .replace(/吹不烂|不破|不裂|纹丝不动/g, '不易撕裂')
+    .replace(/最耐用|最便宜|全网|保证/g, '可按需求确认')
+    .trim();
 }
 
 function fallbackScript(productInfo: string, duration: number): string {
@@ -1416,30 +1478,34 @@ Message us for the sample list, packaging options, and a fast quote.`;
 
 function fallbackStoryboard(duration: number, productInfo = ''): string {
   const p = compactProductLabel(productInfo);
-  const mid = Math.round(duration / 2);
-  return `Scene 1 (0-3s)
-Shot: close-up | Camera: static
-Visual: Hand places ${p} close to the camera; show the most visible texture, color, size, or package detail.
-Voiceover: Buyers always ask to see the real detail first.
-Subtitle: Real sample detail
+  const category = productField(productInfo, '所属类目') || productField(productInfo, '产品类目') || '目标采购场景';
+  const highlights = conservativeClaim(productField(productInfo, '产品卖点') || productField(productInfo, '核心优势') || '真实材质和使用细节');
+  const moq = productField(productInfo, '起订量') || '可按需求确认';
+  const cert = productField(productInfo, '认证资质') || '可按需求确认';
+  return `[0-2s]
+画面：一只手把「${p}」装入日用品并轻轻提起，开场直接给承重/容量结果。
+人物说：“这种袋子最怕一装货就变形？先看它装起来的效果。”
+字幕：先看装货效果
 
-Scene 2 (3-${mid}s)
-Shot: medium | Camera: push
-Visual: Demonstrate one use case or open the package so the viewer understands what is included.
-Voiceover: Here is what they get before confirming a bulk order.
-Subtitle: What is included
+[2-5s]
+画面：近景拍袋口、车线、底部折角和材质纹理，手指按压并拉开袋身。
+人物说：“这款${p}主打${highlights}，适合${category}采购和批量使用。”
+字幕：${highlights}
 
-Scene 3 (${mid}-${duration - 4}s)
-Shot: close-up | Camera: pan
-Visual: Point to MOQ, sample, private-label, certification, or delivery details as text overlays.
-Voiceover: We can confirm samples, packaging, and quote details before production.
-Subtitle: Sample, package, quote
+[5-9s]
+画面：把不同颜色/尺寸样品平铺，旁边放上 logo 定制示意和包装样。
+人物说：“尺寸、颜色、logo 和包装方式都可以按需求确认，起订量 ${moq}。”
+字幕：尺寸 / LOGO / 包装可确认
 
-Scene 4 (${duration - 4}-${duration}s)
-Shot: wide | Camera: static
-Visual: Full product set on table with a message prompt for catalog, color list, or MOQ.
-Voiceover: Send a message for the catalog, color list, and MOQ quote.
-Subtitle: Ask for catalog and quote`;
+[9-12s]
+画面：展示样品、外箱或出货包装，字幕标注认证和交期信息。
+人物说：“打样、认证和交期可以按你的市场要求确认，认证信息 ${cert}。”
+字幕：打样 / 认证 / 交期
+
+[12-${duration}s]
+画面：全套样品摆放在桌面，手指指向询盘提示。
+人物说：“把你要的尺寸、数量和 logo 文件发我，我给你报价和打样方案。”
+字幕：发尺寸和数量拿报价`;
 }
 
 const FALLBACK_COVERS = ['You NEED this in 2026', 'Factory price, 24h ship', 'Why everyone is obsessed'];
