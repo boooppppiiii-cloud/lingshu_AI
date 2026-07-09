@@ -550,7 +550,7 @@ export default function GlobalAssistant({ page, restore, kickoff, suppressForRig
             animate={{ opacity: 1, x: 0, y: 0, scale: 1 }}
             exit={{ opacity: 0, x: 10, y: 6, scale: 0.96 }}
             transition={{ duration: 0.2 }}
-            className={`fixed bottom-5 right-20 z-[74] max-w-[min(320px,calc(100vw-112px))] rounded-2xl border px-3 py-2 pr-8 text-left shadow-[0_14px_36px_rgba(15,23,42,0.14)] backdrop-blur ${proactiveToneClass}`}
+            className={`fixed bottom-24 right-20 z-[74] max-w-[min(320px,calc(100vw-112px))] rounded-2xl border px-3 py-2 pr-8 text-left shadow-[0_14px_36px_rgba(15,23,42,0.14)] backdrop-blur ${proactiveToneClass}`}
           >
             <button
               type="button"
@@ -589,7 +589,7 @@ export default function GlobalAssistant({ page, restore, kickoff, suppressForRig
           type="button"
           data-global-assistant="launcher"
           onClick={() => setOpen(true)}
-          className="fixed bottom-5 right-5 z-[75] flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-[0_16px_38px_rgba(15,23,42,0.22)] transition-transform hover:scale-105"
+          className="fixed bottom-24 right-5 z-[75] flex h-12 w-12 items-center justify-center rounded-2xl bg-slate-950 text-white shadow-[0_16px_38px_rgba(15,23,42,0.22)] transition-transform hover:scale-105"
           title="灵枢助手"
         >
           <Bot size={21} />
@@ -604,7 +604,7 @@ export default function GlobalAssistant({ page, restore, kickoff, suppressForRig
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 18, scale: 0.97 }}
             transition={{ duration: 0.18 }}
-            className="fixed bottom-20 right-5 z-[76] flex h-[min(720px,calc(100vh-112px))] w-[420px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-2xl border border-border bg-white shadow-2xl"
+            className="fixed bottom-40 right-5 z-[76] flex h-[min(720px,calc(100vh-192px))] w-[420px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-2xl border border-border bg-white shadow-2xl"
           >
             <header className="flex h-12 flex-shrink-0 items-center justify-between border-b border-border px-4">
               <div className="min-w-0">
