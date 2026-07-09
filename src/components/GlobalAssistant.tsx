@@ -39,6 +39,7 @@ const API_PATH: Record<AgentType, string> = {
 const TIP_FIRST_DELAY_MS = 6_000;
 const TIP_VISIBLE_MS = 8_000;
 const TIP_REAPPEAR_DELAY_MS = 24_000;
+const ASSISTANT_BUBBLE_CLASS = 'border-emerald-100 bg-emerald-50/95 text-emerald-950';
 
 const DEFAULT_CONTEXT: Record<string, AssistantContext> = {
   strategy: {
@@ -280,13 +281,6 @@ export default function GlobalAssistant({ page, restore, kickoff, suppressForRig
   const [greeting, setGreeting] = useState(() => localGreeting());
   const quickQuestions = useMemo(() => buildQuickQuestions(context, enterpriseContext), [context, enterpriseContext]);
   const proactiveTitle = userName ? `hi，${displayUserName(userName)}` : 'hi';
-  const proactiveToneClass = proactiveTip?.tone === 'news'
-    ? 'border-blue-100 bg-blue-50/95 text-blue-950'
-    : proactiveTip?.tone === 'risk'
-      ? 'border-amber-100 bg-amber-50/95 text-amber-950'
-      : proactiveTip?.tone === 'encourage'
-        ? 'border-emerald-100 bg-emerald-50/95 text-emerald-950'
-        : 'border-border bg-white/95 text-text-primary';
   const assistantSuppressed = suppressForRightSidebar || assistantHiddenByRightSidebar;
 
   useEffect(() => {
@@ -550,7 +544,7 @@ export default function GlobalAssistant({ page, restore, kickoff, suppressForRig
             animate={{ opacity: 1, x: 0, y: 0, scale: 1 }}
             exit={{ opacity: 0, x: 10, y: 6, scale: 0.96 }}
             transition={{ duration: 0.2 }}
-            className={`fixed bottom-24 right-20 z-[74] max-w-[min(320px,calc(100vw-112px))] rounded-2xl border px-3 py-2 pr-8 text-left shadow-[0_14px_36px_rgba(15,23,42,0.14)] backdrop-blur ${proactiveToneClass}`}
+            className={`fixed bottom-24 right-20 z-[74] max-w-[min(320px,calc(100vw-112px))] rounded-2xl border px-3 py-2 pr-8 text-left shadow-[0_14px_36px_rgba(15,23,42,0.14)] backdrop-blur ${ASSISTANT_BUBBLE_CLASS}`}
           >
             <button
               type="button"
@@ -637,7 +631,7 @@ export default function GlobalAssistant({ page, restore, kickoff, suppressForRig
                   {messages.map((msg, index) => (
                     <div key={index} className={`flex gap-2 ${msg.role === 'user' ? 'justify-end' : ''}`}>
                       {msg.role === 'assistant' && <div className="mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-slate-950 text-white"><Bot size={13} /></div>}
-                      <div className={`max-w-[82%] rounded-2xl px-3 py-2 text-sm leading-relaxed ${msg.role === 'user' ? 'rounded-tr-sm bg-accent text-white whitespace-pre-line' : 'rounded-tl-sm border border-border bg-surface-2 text-text-primary'}`}>
+                      <div className={`max-w-[82%] rounded-2xl px-3 py-2 text-sm leading-relaxed ${msg.role === 'user' ? 'rounded-tr-sm bg-accent text-white whitespace-pre-line' : `rounded-tl-sm border ${ASSISTANT_BUBBLE_CLASS}`}`}>
                         {msg.role === 'assistant'
                           ? (msg.content ? <AgentReply content={msg.content} sources={msg.sources} onAction={onAction} /> : <span className="opacity-40">...</span>)
                           : msg.content}
@@ -647,7 +641,7 @@ export default function GlobalAssistant({ page, restore, kickoff, suppressForRig
                   {loading && (
                     <div className="flex gap-2">
                       <div className="mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-slate-950 text-white"><Loader2 size={13} className="animate-spin" /></div>
-                      <div className="rounded-2xl rounded-tl-sm border border-border bg-surface-2 px-3 py-2 text-sm text-text-muted">思考中...</div>
+                      <div className={`rounded-2xl rounded-tl-sm border px-3 py-2 text-sm ${ASSISTANT_BUBBLE_CLASS}`}>思考中...</div>
                     </div>
                   )}
                   <div ref={bottomRef} />
