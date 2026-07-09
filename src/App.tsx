@@ -370,6 +370,7 @@ export default function App() {
         page={page}
         restore={restore}
         kickoff={kickoff}
+        suppressForRightSidebar={scriptPanelOpen || conversation !== null}
         onKickoffConsumed={() => setKickoff(null)}
         onAction={startAgentTask}
         onSessionRefresh={() => void refreshSession()}

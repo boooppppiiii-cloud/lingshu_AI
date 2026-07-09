@@ -176,6 +176,9 @@ export const studioApi = {
     audience?: string;
     sellingPoints?: string;
     tone?: string;
+    referenceTitle?: string;
+    referenceAnalysis?: string;
+    referenceHighlights?: string[];
   }, fb: string) =>
     post<{ script: string }>('script', b, { script: fb }),
 

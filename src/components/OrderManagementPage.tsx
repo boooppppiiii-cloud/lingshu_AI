@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -40,24 +40,15 @@ interface OrderRecord {
   status: OrderStatus;
   orderDate: string;
   owner: string;
+  source?: string;
+  sourceRef?: string;
+  importedAt?: string;
+  updatedAt?: string;
 }
 
 type DraftOrder = Omit<OrderRecord, 'id' | 'orderNo'>;
 
-const STORAGE_KEY = 'lingshu_order_records';
 const today = new Date().toISOString().slice(0, 10);
-
-const INITIAL_ORDERS: OrderRecord[] = [
-  { id: 'o1', orderNo: 'LS-20260701-001', buyer: 'Aisha Trading', market: '中东', channel: 'WhatsApp', product: '斋月礼盒', quantity: 1200, amount: 38400, cost: 24600, status: '已完成', orderDate: '2026-07-01', owner: 'Mia' },
-  { id: 'o2', orderNo: 'LS-20260702-002', buyer: 'Linh Home Mart', market: '东南亚', channel: 'TikTok Shop', product: '家居收纳套装', quantity: 860, amount: 18920, cost: 12140, status: '已发货', orderDate: '2026-07-02', owner: 'Chen' },
-  { id: 'o3', orderNo: 'LS-20260703-003', buyer: 'Carlos Import', market: '拉美', channel: 'Facebook', product: '艾灸热敷贴', quantity: 500, amount: 11250, cost: 6950, status: '生产中', orderDate: '2026-07-03', owner: 'Iris' },
-  { id: 'o4', orderNo: 'LS-20260704-004', buyer: 'Noor Beauty', market: '中东', channel: 'Instagram', product: '假发护理套装', quantity: 320, amount: 26800, cost: 15800, status: '已付款', orderDate: '2026-07-04', owner: 'Mia' },
-  { id: 'o5', orderNo: 'LS-20260705-005', buyer: 'Pacific Deals', market: '北美', channel: 'Shopify', product: '桌面灯带', quantity: 740, amount: 16280, cost: 10100, status: '待付款', orderDate: '2026-07-05', owner: 'Leo' },
-  { id: 'o6', orderNo: 'LS-20260705-006', buyer: 'Sofia Retail', market: '欧洲', channel: 'Email', product: '美甲贴组合', quantity: 980, amount: 21560, cost: 13380, status: '已发货', orderDate: '2026-07-05', owner: 'Iris' },
-  { id: 'o7', orderNo: 'LS-20260706-007', buyer: 'Dubai Gift House', market: '中东', channel: 'WhatsApp', product: '香薰蜡烛礼盒', quantity: 640, amount: 44800, cost: 27600, status: '生产中', orderDate: '2026-07-06', owner: 'Mia' },
-  { id: 'o8', orderNo: 'LS-20260706-008', buyer: 'Mexico Bazar', market: '拉美', channel: 'TikTok', product: '厨房沥水架', quantity: 420, amount: 9240, cost: 5960, status: '退款', orderDate: '2026-07-06', owner: 'Chen' },
-  { id: 'o9', orderNo: 'LS-20260707-009', buyer: 'Korea Style Lab', market: '东亚', channel: 'Instagram', product: '化妆刷套装', quantity: 560, amount: 19040, cost: 11620, status: '已付款', orderDate: '2026-07-07', owner: 'Leo' },
-];
 
 const EMPTY_DRAFT: DraftOrder = {
   buyer: '',
@@ -89,14 +80,7 @@ const money = (value: number) => `$${Math.round(value).toLocaleString('en-US')}`
 const pct = (value: number) => `${value.toFixed(1)}%`;
 const tooltipNumber = (value: unknown) => Number(value ?? 0);
 
-function loadOrders(): OrderRecord[] {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) || '[]');
-    return Array.isArray(parsed) && parsed.length ? parsed : INITIAL_ORDERS;
-  } catch {
-    return INITIAL_ORDERS;
-  }
-}
+function loadOrders(): OrderRecord[] { return []; }
 
 function nextOrderNo(date: string, length: number) {
   const compact = date.replaceAll('-', '');
@@ -105,16 +89,20 @@ function nextOrderNo(date: string, length: number) {
 
 export default function OrderManagementPage() {
   const [orders, setOrders] = useState<OrderRecord[]>(loadOrders);
+  const [loading, setLoading] = useState(true);
   const [draft, setDraft] = useState<DraftOrder>(EMPTY_DRAFT);
   const [query, setQuery] = useState('');
   const [market, setMarket] = useState('全部');
   const [channel, setChannel] = useState('全部');
   const [status, setStatus] = useState<'全部' | OrderStatus>('全部');
 
-  const persist = (next: OrderRecord[]) => {
-    setOrders(next);
-    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch { /* ignore */ }
-  };
+  useEffect(() => {
+    fetch('/api/overseas/enterprise/orders')
+      .then(r => r.json())
+      .then((data: { items?: OrderRecord[] }) => setOrders(Array.isArray(data.items) ? data.items : []))
+      .catch(() => setOrders([]))
+      .finally(() => setLoading(false));
+  }, []);
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -167,27 +155,37 @@ export default function OrderManagementPage() {
 
   const canSave = draft.buyer.trim() && draft.product.trim() && draft.amount > 0;
 
-  const addOrder = () => {
+  const addOrder = async () => {
     if (!canSave) return;
-    const next: OrderRecord = {
+    const payload = {
       ...draft,
-      id: crypto.randomUUID ? crypto.randomUUID() : `o-${Date.now()}`,
       orderNo: nextOrderNo(draft.orderDate, orders.length),
       quantity: Math.max(1, Number(draft.quantity) || 1),
       amount: Math.max(0, Number(draft.amount) || 0),
       cost: Math.max(0, Number(draft.cost) || 0),
+      source: '手工录入',
     };
-    persist([next, ...orders]);
+    const next = await fetch('/api/overseas/enterprise/orders', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    }).then(r => r.json());
+    setOrders(prev => [next, ...prev.filter(order => order.orderNo !== next.orderNo)]);
     setDraft(EMPTY_DRAFT);
   };
 
-  const setOrderStatus = (id: string, nextStatus: OrderStatus) => {
-    persist(orders.map(order => order.id === id ? { ...order, status: nextStatus } : order));
+  const setOrderStatus = async (id: string, nextStatus: OrderStatus) => {
+    const updated = await fetch(`/api/overseas/enterprise/orders/${id}/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: nextStatus }),
+    }).then(r => r.json());
+    setOrders(prev => prev.map(order => order.id === id ? updated : order));
   };
 
   const exportCsv = () => {
-    const headers = ['订单号', '客户', '市场', '渠道', '商品', '数量', 'GMV', '成本', '状态', '日期', '负责人'];
-    const rows = filtered.map(order => [order.orderNo, order.buyer, order.market, order.channel, order.product, order.quantity, order.amount, order.cost, order.status, order.orderDate, order.owner]);
+    const headers = ['订单号', '客户', '市场', '渠道', '商品', '数量', 'GMV', '成本', '状态', '日期', '负责人', '来源', '来源凭证'];
+    const rows = filtered.map(order => [order.orderNo, order.buyer, order.market, order.channel, order.product, order.quantity, order.amount, order.cost, order.status, order.orderDate, order.owner, order.source || '', order.sourceRef || '']);
     const csv = [headers, ...rows].map(row => row.map(cell => `"${String(cell).replaceAll('"', '""')}"`).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
     const url = URL.createObjectURL(blob);
@@ -202,26 +200,31 @@ export default function OrderManagementPage() {
   const smallInput = `${input} w-full`;
 
   return (
-    <div className="h-full overflow-y-auto bg-white">
-      <div className="mx-auto max-w-6xl px-6 py-5">
-        <div className="mb-5 flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-green-50 text-green-700">
-                <ShoppingCart size={17} />
-              </span>
+    <div className="flex h-full flex-col bg-white">
+      <div className="flex h-12 flex-shrink-0 items-center justify-between border-b border-border px-5">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-green-50 text-green-700">
+            <ShoppingCart size={13} />
+          </div>
+          <p className="text-sm font-black text-text-primary">我的订单</p>
+        </div>
+        <button type="button" onClick={exportCsv} className="btn-ghost flex items-center gap-2 !px-3 !py-2">
+          <Download size={14} />
+          导出 CSV
+        </button>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="mx-auto max-w-6xl px-6 py-5">
+          <div className="mb-5 rounded-xl border border-border bg-surface px-4 py-3">
+            <div className="flex items-start gap-2.5">
+              <PackageCheck size={15} className="mt-0.5 text-green-700" />
               <div>
-                <p className="text-xs font-semibold text-text-muted">业务中台</p>
-                <h1 className="text-lg font-bold font-display text-text-primary">我的订单</h1>
+                <p className="text-sm font-semibold text-text-primary">订单经营数据</p>
+                <p className="mt-1 text-xs leading-relaxed text-text-muted">记录真实订单、GMV、毛利、渠道来源和履约状态；数据来自企业中心导入或手工录入。</p>
               </div>
             </div>
-            <p className="mt-2 text-sm text-text-muted">记录商家订单、GMV、毛利、渠道来源和履约状态，沉淀经营数据。</p>
           </div>
-          <button type="button" onClick={exportCsv} className="btn-ghost flex items-center gap-2 !px-3 !py-2">
-            <Download size={14} />
-            导出 CSV
-          </button>
-        </div>
 
         <div className="mb-5 grid gap-3 md:grid-cols-4">
           {[
@@ -374,7 +377,7 @@ export default function OrderManagementPage() {
                     <td colSpan={11} className="px-4 py-10 text-center text-text-muted">
                       <div className="flex items-center justify-center gap-2">
                         <AlertTriangle size={14} />
-                        当前筛选下暂无订单记录
+                        {loading ? '正在读取真实订单数据…' : '暂无真实订单记录，请先在企业中心导入 CSV 或手工录入订单'}
                       </div>
                     </td>
                   </tr>
@@ -386,7 +389,8 @@ export default function OrderManagementPage() {
 
         <div className="mt-4 flex flex-wrap items-center gap-2 text-[11px] text-text-muted">
           <CheckCircle2 size={12} />
-          说明：当前版本先使用浏览器本地存储记录订单，后续可对接 Shopify、1688、ERP 或 PocketBase 订单集合。
+          说明：当前版本使用服务端真实订单库 data/orders.json；企业中心支持 CSV 导入，订单页支持手工补录，后续可对接 Shopify、ERP、支付和履约系统自动同步。
+        </div>
         </div>
       </div>
     </div>

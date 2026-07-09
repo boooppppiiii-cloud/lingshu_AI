@@ -14,9 +14,10 @@ interface NavSection {
   items: { id: Page; label: string; icon: ReactNode }[];
 }
 
+const HOME_NAV_ITEM = { id: 'strategy' as Page, label: '首页', icon: <Home size={16} /> };
+
 const PRIMARY_NAV: NavSection = {
   items: [
-    { id: 'strategy',   label: '首页', icon: <Home size={16} /> },
     { id: 'traffic',    label: '我的社媒', icon: <Share2 size={16} /> },
     { id: 'conversion', label: '我的客户', icon: <Users size={16} /> },
     { id: 'orders',     label: '我的订单', icon: <LayoutGrid size={16} /> },
@@ -197,6 +198,15 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
             forceStart={Boolean(activeSession?.demo?.guideTrigger)}
           />
         )}
+
+        {/* Home nav */}
+        <nav className="px-3 pb-2">
+          <NavItem
+            item={HOME_NAV_ITEM}
+            active={page === HOME_NAV_ITEM.id}
+            onClick={() => onNavigate(HOME_NAV_ITEM.id)}
+          />
+        </nav>
 
         {/* Primary nav */}
         <nav className="px-3 space-y-0.5">

@@ -12,6 +12,30 @@ const DATA_FILE = path.join(__dirname, '../../data/enterprise.json');
 const TEMPLATES_FILE = path.join(__dirname, '../../data/demo-templates.json');
 const DATA_DIR = path.join(__dirname, '../../data');
 const ASSETS_DIR = path.join(DATA_DIR, 'enterprise-assets');
+const ORDERS_FILE = path.join(DATA_DIR, 'orders.json');
+
+type OrderStatus = '待付款' | '已付款' | '生产中' | '已发货' | '已完成' | '退款';
+
+interface OrderRecord {
+  id: string;
+  orderNo: string;
+  buyer: string;
+  market: string;
+  channel: string;
+  product: string;
+  quantity: number;
+  amount: number;
+  cost: number;
+  status: OrderStatus;
+  orderDate: string;
+  owner: string;
+  source: string;
+  sourceRef?: string;
+  importedAt: string;
+  updatedAt: string;
+}
+
+const ORDER_STATUSES: OrderStatus[] = ['待付款', '已付款', '生产中', '已发货', '已完成', '退款'];
 
 export interface EnterpriseProfile {
   company: {
@@ -138,6 +162,174 @@ function readTemplates(): DemoTemplate[] {
 
 function writeJson(file: string, value: unknown): void {
   fs.writeFileSync(path.join(DATA_DIR, file), JSON.stringify(value, null, 2), 'utf8');
+}
+
+function readOrders(): OrderRecord[] {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(ORDERS_FILE, 'utf8'));
+    return Array.isArray(parsed) ? parsed.map(normalizeOrder).filter(Boolean) as OrderRecord[] : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeOrders(orders: OrderRecord[]): void {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(ORDERS_FILE, JSON.stringify(orders, null, 2), 'utf8');
+}
+
+function parseNumber(value: unknown): number {
+  const n = Number(String(value ?? '').replace(/[$,\s]/g, ''));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function normalizeStatus(value: unknown): OrderStatus {
+  const raw = String(value || '').trim();
+  if (ORDER_STATUSES.includes(raw as OrderStatus)) return raw as OrderStatus;
+  const lower = raw.toLowerCase();
+  if (/paid|已付款|付款/.test(lower)) return '已付款';
+  if (/ship|fulfilled|已发|发货/.test(lower)) return '已发货';
+  if (/complete|done|完成/.test(lower)) return '已完成';
+  if (/refund|退款/.test(lower)) return '退款';
+  if (/production|生产/.test(lower)) return '生产中';
+  return '待付款';
+}
+
+function normalizeDate(value: unknown): string {
+  const raw = String(value || '').trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  if (/^\d{4}\/\d{1,2}\/\d{1,2}$/.test(raw)) {
+    const [y, m, d] = raw.split('/');
+    return `${y}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  }
+  const parsed = new Date(raw);
+  return Number.isNaN(parsed.getTime()) ? new Date().toISOString().slice(0, 10) : parsed.toISOString().slice(0, 10);
+}
+
+function normalizeOrder(input: Partial<OrderRecord>): OrderRecord | null {
+  const buyer = String(input.buyer || '').trim();
+  const product = String(input.product || '').trim();
+  const amount = parseNumber(input.amount);
+  if (!buyer || !product || amount <= 0) return null;
+  const now = new Date().toISOString();
+  const orderDate = normalizeDate(input.orderDate);
+  return {
+    id: String(input.id || randomUUID()),
+    orderNo: String(input.orderNo || `LS-${orderDate.replaceAll('-', '')}-${randomBytes(3).toString('hex').toUpperCase()}`),
+    buyer,
+    market: String(input.market || '未标注').trim(),
+    channel: String(input.channel || '手工录入').trim(),
+    product,
+    quantity: Math.max(1, parseNumber(input.quantity) || 1),
+    amount,
+    cost: Math.max(0, parseNumber(input.cost)),
+    status: normalizeStatus(input.status),
+    orderDate,
+    owner: String(input.owner || '').trim() || '未分配',
+    source: String(input.source || '手工录入').trim(),
+    sourceRef: String(input.sourceRef || '').trim(),
+    importedAt: input.importedAt || now,
+    updatedAt: now,
+  };
+}
+
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let cell = '';
+  let quoted = false;
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    const next = text[i + 1];
+    if (ch === '"' && quoted && next === '"') {
+      cell += '"';
+      i += 1;
+    } else if (ch === '"') {
+      quoted = !quoted;
+    } else if (ch === ',' && !quoted) {
+      row.push(cell.trim());
+      cell = '';
+    } else if ((ch === '\n' || ch === '\r') && !quoted) {
+      if (ch === '\r' && next === '\n') i += 1;
+      row.push(cell.trim());
+      if (row.some(Boolean)) rows.push(row);
+      row = [];
+      cell = '';
+    } else {
+      cell += ch;
+    }
+  }
+  row.push(cell.trim());
+  if (row.some(Boolean)) rows.push(row);
+  return rows;
+}
+
+const ORDER_HEADER_MAP: Record<string, keyof OrderRecord> = {
+  订单号: 'orderNo',
+  orderno: 'orderNo',
+  order_no: 'orderNo',
+  orderid: 'orderNo',
+  order_id: 'orderNo',
+  客户: 'buyer',
+  客户名称: 'buyer',
+  buyer: 'buyer',
+  customer: 'buyer',
+  market: 'market',
+  市场: 'market',
+  国家: 'market',
+  country: 'market',
+  渠道: 'channel',
+  channel: 'channel',
+  商品: 'product',
+  '商品/sku': 'product',
+  '商品 / sku': 'product',
+  产品: 'product',
+  sku: 'product',
+  product: 'product',
+  数量: 'quantity',
+  quantity: 'quantity',
+  qty: 'quantity',
+  gmv: 'amount',
+  金额: 'amount',
+  订单金额: 'amount',
+  amount: 'amount',
+  成本: 'cost',
+  cost: 'cost',
+  状态: 'status',
+  status: 'status',
+  日期: 'orderDate',
+  订单日期: 'orderDate',
+  date: 'orderDate',
+  orderdate: 'orderDate',
+  负责人: 'owner',
+  owner: 'owner',
+  销售: 'owner',
+  来源: 'source',
+  source: 'source',
+  来源凭证: 'sourceRef',
+  凭证: 'sourceRef',
+  sourceref: 'sourceRef',
+  platform_order_id: 'sourceRef',
+  平台订单号: 'sourceRef',
+};
+
+function importOrdersFromCsv(text: string): { imported: OrderRecord[]; skipped: number } {
+  const rows = parseCsv(text);
+  const [headers = [], ...body] = rows;
+  const keys = headers.map(header => ORDER_HEADER_MAP[String(header).trim().toLowerCase()] || ORDER_HEADER_MAP[String(header).trim()]);
+  const imported: OrderRecord[] = [];
+  let skipped = 0;
+  for (const row of body) {
+    const raw: Partial<OrderRecord> = {};
+    row.forEach((value, index) => {
+      const key = keys[index];
+      if (key) (raw as Record<string, unknown>)[key] = value;
+    });
+    const order = normalizeOrder({ ...raw, source: raw.source || 'CSV导入' });
+    if (order) imported.push(order);
+    else skipped += 1;
+  }
+  return { imported, skipped };
 }
 
 function ensureAssetsDir(): void {
@@ -375,6 +567,50 @@ export const enterpriseRouter = Router();
 
 enterpriseRouter.get('/profile', (_req, res) => {
   res.json(readProfile());
+});
+
+enterpriseRouter.get('/orders', (_req, res) => {
+  res.json({ items: readOrders() });
+});
+
+enterpriseRouter.post('/orders', (req, res) => {
+  const order = normalizeOrder({ ...(req.body || {}), source: req.body?.source || '手工录入' });
+  if (!order) {
+    res.status(400).json({ error: 'invalid order payload' });
+    return;
+  }
+  const orders = readOrders();
+  const next = [order, ...orders.filter(item => item.orderNo !== order.orderNo)];
+  writeOrders(next);
+  res.status(201).json(order);
+});
+
+enterpriseRouter.patch('/orders/:id/status', (req, res) => {
+  const status = normalizeStatus(req.body?.status);
+  const orders = readOrders();
+  const index = orders.findIndex(order => order.id === req.params.id);
+  if (index < 0) {
+    res.status(404).json({ error: 'order not found' });
+    return;
+  }
+  orders[index] = { ...orders[index], status, updatedAt: new Date().toISOString() };
+  writeOrders(orders);
+  res.json(orders[index]);
+});
+
+enterpriseRouter.post('/orders/import', (req, res) => {
+  const { csv } = req.body as { csv?: string };
+  if (!csv?.trim()) {
+    res.status(400).json({ error: 'csv is required' });
+    return;
+  }
+  const result = importOrdersFromCsv(csv);
+  const existing = readOrders();
+  const merged = new Map<string, OrderRecord>();
+  [...existing, ...result.imported].forEach(order => merged.set(order.orderNo, order));
+  const items = [...merged.values()].sort((a, b) => b.orderDate.localeCompare(a.orderDate));
+  writeOrders(items);
+  res.json({ ok: true, imported: result.imported.length, skipped: result.skipped, total: items.length });
 });
 
 enterpriseRouter.get('/product-api', async (req, res) => {

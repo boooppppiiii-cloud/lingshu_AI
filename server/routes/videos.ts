@@ -141,10 +141,13 @@ function isVideoLevelAnalysis(analysis: Record<string, unknown>): boolean {
   const geminiStatus = String(analysis.geminiStatus || '');
   const downloadStatus = String(analysis.downloadStatus || '');
   const videoFetchStatus = String(analysis.videoFetchStatus || '');
+  const analysisSource = String(analysis.analysisSource || '');
+  if (analysis.analysisQuality !== 'video') return false;
+  if (!analysis.gemini) return false;
+  if (analysisSource === 'metadata-fallback' || geminiStatus === 'metadata_fallback' || downloadStatus === 'metadata_only') return false;
   return analysis.analysisQuality === 'video'
     && (!geminiStatus || geminiStatus === 'analyzed')
-    && (!downloadStatus || downloadStatus === 'analyzed' || videoFetchStatus === 'direct_url' || videoFetchStatus === 'fetched')
-    && hasCompleteVideoGeminiAnalysis(analysis.gemini);
+    && (!downloadStatus || downloadStatus === 'analyzed' || videoFetchStatus === 'direct_url' || videoFetchStatus === 'fetched');
 }
 
 function isPublicTestTenantVideo(record: Record<string, unknown>): boolean {

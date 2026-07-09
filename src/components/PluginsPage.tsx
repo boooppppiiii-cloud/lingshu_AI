@@ -58,10 +58,6 @@ const PLUGIN_FIELDS: Record<string, { key: string; label: string; placeholder: s
     { key: 'pageId', label: 'Page ID', placeholder: '123456789012345' },
     { key: 'accessToken', label: 'Page Access Token', placeholder: 'EAABxxxxx...', secret: true },
   ],
-  pinterest: [
-    { key: 'adAccountId', label: 'Ad Account ID', placeholder: '549xxxxxxxxxx' },
-    { key: 'accessToken', label: 'Access Token', placeholder: 'pina_...', secret: true },
-  ],
 };
 
 // ── Skill types & data ────────────────────────────────────────────────────────
@@ -300,10 +296,6 @@ const PLUGIN_INTERACTIONS: Record<string, PluginAction[]> = {
   facebook: [
     { label: '主页帖子', desc: '读取主页帖子、评论和基础互动数据' },
     { label: '内容分发', desc: '把我的社媒生成内容映射成主页帖子草稿' },
-  ],
-  pinterest: [
-    { label: 'Idea Pin', desc: '生成 Pin 标题、描述和落地页建议' },
-    { label: '曝光回传', desc: '回传曝光、保存和点击数据，辅助内容复盘' },
   ],
   exchangerate: [
     { label: '汇率查询', desc: '给报价、策略和询盘回复提供 USD 美元、CNY 人民币、SAR 沙特里亚尔等汇率' },

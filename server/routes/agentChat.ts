@@ -40,9 +40,19 @@ const FORMAT_RULE = `
 - 结构清晰：先给结论，再展开；每节之间空一行
 - 禁止输出残缺 Markdown：不要单独输出 ###、####、#####；不要留下未闭合的 **；不要把标题符号和正文挤在同一行造成 "##### 1." 这种格式
 - 控制在 2-3 条核心建议，不要长篇大论
-- 【重要】用户系统里通常已有经营数据。**不要反问索取数据，也不要只讲通用原理/方法论**；若消息中已给数据就直接用它分析，若没给就用合理的示例数据，**直接给出可落地的具体结果**（具体数字、具体话术、具体名单）
+- 【数据真实性要求 · 必须遵守】所有经营判断、数字、客户名单、平台表现、转化结论必须来自以下来源之一：用户消息中明确提供的数据、企业中心知识库、已接入的真实社媒/WhatsApp/订单/客户接口、或联网检索到且可引用的公开行业来源。**禁止编造示例经营数据、假客户、假转化率、假平台表现**。
+- 当缺少真实数据时，必须明确说出“当前缺少哪些数据，因此不能判断什么”，然后给出可执行的数据接入/核验清单；可以给方法和模板，但不能把假设写成事实。
+- 涉及市场趋势、平台打法、行业规模、竞品变化时，若不是来自企业中心或用户提供的数据，必须标注公开来源或说明“需要联网核验后才能下结论”。
 - 结尾可以有一句自然的情绪价值，但必须根据用户上一轮语气和本次任务状态临场生成；不要套固定句式，不要复用示例话术，不要重复用户刚说过的话，不要每次都用"放心/稳稳推进/我帮你盯着/咱们"这类固定组合
 - 如果用户是在纠错、质疑或要求判断，先正面承认问题并给出具体修正，不要用安抚话术盖过去；emoji 只在语境自然时使用，默认不用`;
+
+const CONTEXT_RULE = `
+
+【上下文使用要求 · 必须遵守】
+- 用户消息里会带有【当前页面上下文】【当前模块】【企业中心摘要】。回答必须优先结合当前页面正在做的事，不要泛泛回答。
+- 企业中心知识库是租户业务资料来源；涉及主推品、市场、MOQ、交期、品牌语气、禁忌和客户画像时，优先引用企业中心信息。
+- 涉及外贸行业趋势、目标市场变化、平台打法、竞品/品类机会时，必须使用联网检索到的公开来源或明确说明需要联网核验；禁止编造来源和数字。
+- 支持连续对话：承接前文用户目标、已生成内容和上轮限制，不要每轮重新自我介绍。`;
 
 const SYSTEM_PROMPTS: Record<string, string> = {
   conversion: `你是灵枢AI的「我的客户」助手，服务于义乌跨境电商卖家，统一处理潜客询盘、成交客资筛选、自动回复、老客唤醒和跟单回复建议。
@@ -58,7 +68,7 @@ const SYSTEM_PROMPTS: Record<string, string> = {
 - 提供具体可用的话术，而非抽象建议
 - 大单预警用醒目标注：⚠️ 大单预警
 - 多语言内容标注语言代码，如 [AR] [EN] [ES]
-- 如需人工介入，明确说明原因和建议行动${FORMAT_RULE}`,
+- 如需人工介入，明确说明原因和建议行动${CONTEXT_RULE}${FORMAT_RULE}`,
 
   retention: `你是灵枢AI的「我的客户」老客唤醒助手，服务于义乌跨境电商卖家，负责老客户生命周期管理。
 
@@ -73,7 +83,7 @@ const SYSTEM_PROMPTS: Record<string, string> = {
 - 结合具体客户数据给出针对性建议
 - 唤醒话术需考虑文化差异（中东、东南亚、欧美）
 - 推品建议需说明推荐理由（历史偏好/季节/市场趋势）
-- 数据分析要有明确的行动建议${FORMAT_RULE}`,
+- 数据分析要有明确的行动建议${CONTEXT_RULE}${FORMAT_RULE}`,
 
   traffic: `你是灵枢AI的社媒Agent，服务于义乌跨境电商卖家，负责社交媒体内容和流量运营。
 
@@ -88,10 +98,21 @@ const SYSTEM_PROMPTS: Record<string, string> = {
 - 提供具体脚本而非框架
 - 标注平台适配要点（TikTok前3秒、Instagram Reels封面等）
 - 给出发布时间建议（基于目标市场时区）
-- 数据驱动，引用热度指标${FORMAT_RULE}`,
+- 数据驱动，引用热度指标${CONTEXT_RULE}${FORMAT_RULE}`,
 };
 
 export const agentChatRouter = Router();
+
+function extractJsonObject(raw: string): Record<string, unknown> | null {
+  const cleaned = raw.replace(/```json|```/g, '').trim();
+  const match = cleaned.match(/\{[\s\S]*\}/);
+  if (!match) return null;
+  try {
+    return JSON.parse(match[0]) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
 
 function formatStreamError(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
@@ -106,6 +127,54 @@ function formatStreamError(err: unknown): string {
   }
   return raw.slice(0, 300);
 }
+
+agentChatRouter.post('/assistant/proactive', async (req, res) => {
+  const { pageLabel = '当前页面', pageSummary = '', enterpriseSummary = '' } = req.body as {
+    pageLabel?: string;
+    pageSummary?: string;
+    enterpriseSummary?: string;
+  };
+  const enterpriseCtx = enterpriseSummary || getEnterpriseContext();
+  const prompt = `请为灵枢AI右下角小助手生成1条主动气泡提示。
+
+【当前页面】${pageLabel}
+【页面上下文】${pageSummary}
+【企业中心资料】${enterpriseCtx || '暂无企业中心资料'}
+
+要求：
+- 气泡要短、可爱、专业，适合外贸经营工作台。
+- 从这4类里选最适合当前场景的一类：互动引导、鼓励提醒、行业新闻、经营风险。
+- 如果选择“行业新闻”，必须联网搜索近期公开资讯，只写可核验的概括；不要编造新闻、公司名、数字。
+- 输出必须是严格 JSON，不要 Markdown，不要解释。
+- JSON 字段：
+  category: "互动引导" | "鼓励提醒" | "行业新闻" | "经营风险"
+  text: 18-42字的气泡正文
+  action: 用户点击后发送给助手的一句话问题
+  tone: "guide" | "encourage" | "news" | "risk"`;
+
+  try {
+    let text = '';
+    for await (const ev of callLLMChatStream([{ role: 'user', content: prompt }], {
+      systemPrompt: '你是外贸经营助手的主动提示生成器，只输出严格 JSON。',
+    })) {
+      if ('text' in ev) text += ev.text;
+    }
+    const obj = extractJsonObject(text);
+    const category = typeof obj?.category === 'string' ? obj.category : '互动引导';
+    const bubbleText = typeof obj?.text === 'string' ? obj.text.trim() : '';
+    const action = typeof obj?.action === 'string' ? obj.action.trim() : '';
+    const tone = typeof obj?.tone === 'string' ? obj.tone : 'guide';
+    if (!bubbleText || !action) throw new Error('empty proactive tip');
+    res.json({ category, text: bubbleText.slice(0, 80), action: action.slice(0, 160), tone });
+  } catch {
+    res.json({
+      category: '互动引导',
+      text: '我可以帮你把当前页面整理成下一步动作～',
+      action: `基于当前「${pageLabel}」页面，帮我整理3个下一步动作`,
+      tone: 'guide',
+    });
+  }
+});
 
 agentChatRouter.post('/:agentType/chat', async (req, res) => {
   const { agentType } = req.params;

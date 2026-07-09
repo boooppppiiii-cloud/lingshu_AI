@@ -31,8 +31,8 @@ export default function StrategyPage({ onAction }: Props) {
         </div>
         <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-surface-2 border border-border">
           {([
-            { mode: 'workspace' as ViewMode, icon: <LayoutGrid size={12} />, label: 'AI 智囊团' },
             { mode: 'board' as ViewMode, icon: <BarChart3 size={12} />, label: '数据大屏' },
+            { mode: 'workspace' as ViewMode, icon: <LayoutGrid size={12} />, label: 'AI 智囊团' },
           ]).map(({ mode, icon, label }) => (
             <button key={mode} onClick={() => setViewMode(mode)}
               className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-semibold transition-all ${viewMode === mode ? 'bg-surface text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'}`}>

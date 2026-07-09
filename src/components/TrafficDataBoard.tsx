@@ -31,7 +31,6 @@ const POSTS: Post[] = [
   { id: 'p6',  title: '$12 vs $200 — which wins',  hue: 280, platform: 'Instagram', account: '@yiwu.official', lang: '西语', postType: '自发', paid: true,  spend: 240, topic: '对比',     hook: '数字冲击', format: '纯混剪',   dur: '15-30s', daysAgo: 11, plays: 300000,  comp: 27, eng: 4.9, clicks: 1800, inq: 22,  orders: 58,  gmv: 1480 },
   { id: 'p11', title: 'The one home find',         hue: 100, platform: 'Facebook',  account: 'Yiwu Home',      lang: '英语', postType: '自发', paid: true,  spend: 180, topic: '测评',     hook: '痛点冲击', format: '纯混剪',   dur: '15-30s', daysAgo: 13, plays: 260000,  comp: 22, eng: 3.4, clicks: 1200, inq: 19,  orders: 47,  gmv: 980 },
   { id: 'p4',  title: 'Unboxing the viral kit',    hue: 20,  platform: 'YouTube',   account: 'Yiwu Trading',   lang: '英语', postType: '自发', paid: false, spend: 0,   topic: '开箱',     hook: '悬念',     format: '真人口播', dur: '30-60s', daysAgo: 15, plays: 420000,  comp: 21, eng: 4.8, clicks: 1600, inq: 24,  orders: 53,  gmv: 1520 },
-  { id: 'p10', title: 'Pin this for later',        hue: 0,   platform: 'Pinterest', account: 'Yiwu Home',      lang: '西语', postType: '自发', paid: false, spend: 0,   topic: '场景演示', hook: '反常识',   format: '图文',     dur: '<15s',   daysAgo: 18, plays: 330000,  comp: 0,  eng: 3.1, clicks: 2400, inq: 19,  orders: 47,  gmv: 1180 },
   { id: 'p8',  title: 'How to set up in 60s',      hue: 170, platform: 'YouTube',   account: 'Yiwu Trading',   lang: '英语', postType: '自发', paid: false, spend: 0,   topic: '教程',     hook: '提问',     format: '真人口播', dur: '30-60s', daysAgo: 22, plays: 180000,  comp: 24, eng: 4.1, clicks: 900,  inq: 14,  orders: 31,  gmv: 880 },
   { id: 'p14', title: 'Tutorial: pro setup',       hue: 190, platform: 'YouTube',   account: 'Yiwu Trading',   lang: '英语', postType: '自发', paid: false, spend: 0,   topic: '教程',     hook: '数字冲击', format: '真人口播', dur: '>60s',   daysAgo: 27, plays: 120000,  comp: 19, eng: 3.6, clicks: 600,  inq: 9,   orders: 21,  gmv: 560 },
 ];
@@ -43,7 +42,7 @@ const SERIES = Array.from({ length: 30 }, (_, i) => {
   return { day: `${d.getMonth() + 1}/${d.getDate()}`, daysAgo: 29 - i, gmv: Math.round(620 * wave + 180), plays: Math.round(120000 * wave + 30000) };
 });
 
-const PLATFORMS = ['全部', 'TikTok', 'Instagram', 'YouTube', 'Facebook', 'Pinterest'];
+const PLATFORMS = ['全部', 'TikTok', 'Instagram', 'YouTube', 'Facebook'];
 const LANGS = ['全部', '英语', '阿语', '西语'];
 const POST_TYPES = ['全部', '自发', '达人'] as const;
 const TOPIC_COLORS: Record<string, string> = {
@@ -163,7 +162,7 @@ export default function TrafficDataBoard({ windowDays = 30 }: { windowDays?: num
 
   return (
     <div className="h-full overflow-y-auto px-6 py-5">
-      <div className="max-w-5xl mx-auto">
+      <div className="w-full">
         {/* 控件（日期维度在数据大屏壳层统一控制） */}
         <div className="flex items-center gap-2.5 flex-wrap mb-4">
           <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-surface-2 border border-border">

@@ -1,32 +1,49 @@
 {
   "company": {
-    "name": "",
-    "industry": "",
+    "name": "本地演示租户",
+    "industry": "家居",
     "companyType": "",
-    "mainMarkets": "",
-    "primaryLanguages": "",
+    "mainMarkets": "东南亚",
+    "primaryLanguages": "英语",
     "founded": "",
     "description": ""
   },
   "products": {
-    "categories": "",
+    "categories": "家居",
     "priceRange": "",
     "moq": "",
     "certifications": "",
     "highlights": "",
-    "items": []
+    "items": [
+      {
+        "name": "无纺布包包",
+        "category": "家居",
+        "highlights": "超轻无纺布 大风吹不烂",
+        "images": [
+          {
+            "name": "截屏2026-07-07 上午1.09.42.png",
+            "type": "image/png",
+            "size": 61785,
+            "updatedAt": "2026-07-08T15:08:31.713Z",
+            "url": "/api/overseas/enterprise/assets/1783523311702-7314e706-2f8b-4e2d-a4c9-acefaf2b9340.png"
+          }
+        ],
+        "videos": [],
+        "documents": []
+      }
+    ]
   },
   "brand": {
     "tone": "",
     "style": "",
     "taboos": "",
     "usp": "",
-    "preferredLanguages": ""
+    "preferredLanguages": "英语"
   },
   "strategy": {
     "currentGoal": "",
-    "focusProducts": "",
-    "focusMarkets": "",
+    "focusProducts": "家居",
+    "focusMarkets": "东南亚",
     "excludedMarkets": "",
     "pricingStrategy": "",
     "minMargin": "",
@@ -52,5 +69,5 @@
     "pendingAssumptions": "",
     "userCorrections": ""
   },
-  "knowledge": ""
+  "knowledge": "公司：lingshu-admin\n主营品类：家居\n目标市场：东南亚\n海外平台经验：做过\n默认创作语言：英语\n\n公司：lingshu-admin\n主营品类：家居\n目标市场：东南亚\n海外平台经验：做过\n默认创作语言：英语\n\n公司：local-demo\n\n公司：本地演示租户"
 }

@@ -68,9 +68,9 @@ const STAGE_META: Record<CustomerStage, { color: string; bg: string }> = {
 };
 
 const AUTOMATION_META: Record<AutomationLevel, { label: string; desc: string; color: string; bg: string }> = {
-  auto: { label: 'AI 自动回', desc: '低风险潜客，自动首响和目录跟进', color: '#16a34a', bg: 'rgba(22,163,74,0.08)' },
-  confirm: { label: '草稿待确认', desc: '中高意向，AI 出草稿，人点发送', color: '#d97706', bg: 'rgba(217,119,6,0.08)' },
-  manual: { label: '老板接管', desc: '高价值/想通话，停止自动回复', color: '#dc2626', bg: 'rgba(220,38,38,0.08)' },
+  auto: { label: 'AI首响', desc: '低风险新进线，自动发欢迎语、目录和基础问题澄清', color: '#16a34a', bg: 'rgba(22,163,74,0.08)' },
+  confirm: { label: '人审草稿', desc: '有采购信号，AI 生成回复/报价草稿，人工确认后发送', color: '#d97706', bg: 'rgba(217,119,6,0.08)' },
+  manual: { label: '销售接管', desc: '线上通话、大单、投诉或高价值客户，暂停自动回复', color: '#dc2626', bg: 'rgba(220,38,38,0.08)' },
 };
 
 const CUSTOMERS: CustomerProfile[] = [
@@ -87,19 +87,19 @@ const CUSTOMERS: CustomerProfile[] = [
     estimatedValue: '$2,400',
     stage: '询盘中',
     intentScore: 96,
-    intentSignals: ['问价格 +2', '问MOQ/船期 +3', '明确500件 +4', '想通电话 +6'],
+    intentSignals: ['问价格 +2', '问MOQ/船期 +3', '明确500件 +4', '想线上通话 +6'],
     automation: 'manual',
     priority: 100,
     inboxReason: 'call',
     lastActive: '10分钟前',
     orderHistory: ['2025-11 样品单 $180'],
-    tags: ['大单', 'OEM', '中东', '想通电话'],
+    tags: ['大单', 'OEM', '中东', '线上通话'],
     summary: '询问500件起订价，关心船期，态度积极，要求和经理语音沟通。',
-    nextStep: '立即确认可通话时间，老板接管报价。',
+    nextStep: '立即确认线上通话时间，销售接管报价。',
     sla: '1小时45分后升级提醒',
     timeline: [
       { id: '1', type: 'whatsapp', actor: 'buyer', title: '客户消息', body: 'Can we talk with your manager today? I need 500 pcs custom hair wigs.', time: '10:15' },
-      { id: '2', type: 'ai', actor: 'ai', title: 'AI 熔断', body: '识别 call_request，已停止自动回复，只发送预约时间确认。', time: '10:16' },
+      { id: '2', type: 'ai', actor: 'ai', title: 'AI 熔断', body: '识别 live_call_request，已停止自动回复，只发送线上通话时间确认。', time: '10:16' },
       { id: '3', type: 'whatsapp', actor: 'seller', title: '稳单确认', body: 'Our manager will call you shortly. What time works best for you?', time: '10:16' },
     ],
   },
@@ -124,7 +124,7 @@ const CUSTOMERS: CustomerProfile[] = [
     orderHistory: ['2025-09 礼盒试单 $420'],
     tags: ['大单预警', '阿语', '礼盒', '已报价'],
     summary: '1000套香皂礼盒，已给初步报价，等待确认LOGO和包装方案。',
-    nextStep: '发送阿语报价单和三套包装图。',
+    nextStep: '确认商机信息，发送阿语报价单和三套包装图。',
     sla: '45分钟未回',
     timeline: [
       { id: '1', type: 'whatsapp', actor: 'buyer', title: '客户询价', body: 'أريد طلب 1000 مجموعة من صناديق الصابون. ما هو أفضل سعر؟', time: '昨天 16:00' },
@@ -152,7 +152,7 @@ const CUSTOMERS: CustomerProfile[] = [
     orderHistory: [],
     tags: ['样品', '西语', '可培育'],
     summary: '小批量试单，适合走样品政策和复购培育。',
-    nextStep: '确认收货地址，发送样品政策。',
+    nextStep: '完成客资筛选，确认收货地址并发送样品政策。',
     timeline: [
       { id: '1', type: 'whatsapp', actor: 'buyer', title: '客户询价', body: 'Me interesa el parche de moxibustión, 200 piezas. ¿Cuál es el precio unitario?', time: '昨天 14:30' },
       { id: '2', type: 'ai', actor: 'ai', title: 'AI 草稿', body: '建议发送样品政策，询问收货地址。', time: '昨天 14:31' },
@@ -179,7 +179,7 @@ const CUSTOMERS: CustomerProfile[] = [
     orderHistory: ['2026-07 样品盒 $120'],
     tags: ['已下单', '样品', '待寄样'],
     summary: '已确认样品盒和标准运输，等待寄样单号。',
-    nextStep: '同步仓库寄样，三天后提醒查收。',
+    nextStep: '创建成交跟进，三天后提醒查收并询问复购计划。',
     timeline: [
       { id: '1', type: 'whatsapp', actor: 'buyer', title: '确认订单', body: 'Curated selection sounds great. Standard shipping is fine.', time: '今天 08:45' },
       { id: '2', type: 'task', actor: 'ai', title: '自动跟进任务', body: '创建寄样跟进任务，2个工作日内发送单号。', time: '今天 08:46' },
@@ -207,7 +207,7 @@ const CUSTOMERS: CustomerProfile[] = [
     orderHistory: ['2026-03 直发批量单 $3,600', '2025-12 补货 $1,900'],
     tags: ['高价值老客', '沉默60', '新品可唤醒'],
     summary: '高价值老客，历史采购直发类目，适合用新品目录和老客价唤醒。',
-    nextStep: '发新品目录 + 老客价，若回复则流回询盘中。',
+    nextStep: '进入复购唤醒，发送新品目录 + 老客价，回复后流回询盘中。',
     timeline: [
       { id: '1', type: 'note', actor: 'owner', title: '历史偏好', body: '偏好自然黑/棕色直发，关注现货和补货速度。', time: '68天前' },
       { id: '2', type: 'task', actor: 'ai', title: '沉默雷达', body: '进入沉默60状态，建议触达新品目录。', time: '今天 09:00' },
@@ -234,7 +234,7 @@ const CUSTOMERS: CustomerProfile[] = [
     orderHistory: [],
     tags: ['低分潜客', '自动回复', '目录'],
     summary: '只问产品目录，暂未表现明确采购意图，AI 自动发送目录并追踪点击。',
-    nextStep: '自动发送目录，若点击高价款再转人工。',
+    nextStep: 'AI首响发送目录，若点击高价款或补充数量再进入人审草稿。',
     timeline: [
       { id: '1', type: 'whatsapp', actor: 'buyer', title: '客户消息', body: 'Hi, interested in wholesale hair accessories. What collections do you have?', time: '昨天 11:00' },
       { id: '2', type: 'ai', actor: 'ai', title: '自动首响', body: '已自动发送发饰目录和50件混款批发包。', time: '昨天 11:01' },
@@ -243,18 +243,18 @@ const CUSTOMERS: CustomerProfile[] = [
 ];
 
 const VIEW_META: Record<CustomerView, { label: string; icon: typeof MessageSquare; desc: string }> = {
-  inbox: { label: '收件箱', icon: BellRing, desc: '所有待处理会话，按紧急度排序' },
-  leads: { label: '潜客', icon: Filter, desc: '新询盘、未成交，带AI意向评分' },
-  won: { label: '成交客户', icon: CheckCircle2, desc: '已下单客户和跟单任务' },
-  silent: { label: '沉默客户', icon: RefreshCw, desc: '30/60天雷达与老客唤醒' },
+  inbox: { label: '收件箱', icon: BellRing, desc: '所有待处理会话，支持按最新消息、紧急客户和商机客户排序' },
+  leads: { label: '新进线', icon: Filter, desc: '社媒私信、WhatsApp、站内DM等新客资，先做有效性筛选' },
+  won: { label: '成交跟进', icon: CheckCircle2, desc: '已下单客户、寄样交付、复购推进和跟单任务' },
+  silent: { label: '复购唤醒', icon: RefreshCw, desc: '沉默老客、历史高价值客户和新品匹配唤醒' },
 };
 
 function reasonLabel(reason?: CustomerProfile['inboxReason']) {
-  if (reason === 'call') return { label: '⚡ 想通电话', color: '#dc2626', bg: 'rgba(220,38,38,0.1)' };
-  if (reason === 'large') return { label: '大单预警', color: '#d97706', bg: 'rgba(217,119,6,0.1)' };
-  if (reason === 'draft') return { label: 'AI草稿待确认', color: '#4f46e5', bg: 'rgba(79,70,229,0.1)' };
-  if (reason === 'overdue') return { label: '45分钟未回', color: '#dc2626', bg: 'rgba(220,38,38,0.1)' };
-  return { label: '待回复', color: '#0891b2', bg: 'rgba(8,145,178,0.1)' };
+  if (reason === 'call') return { label: '⚡ 线上通话', color: '#dc2626', bg: 'rgba(220,38,38,0.1)' };
+  if (reason === 'large') return { label: '商机客户', color: '#d97706', bg: 'rgba(217,119,6,0.1)' };
+  if (reason === 'draft') return { label: '人审草稿', color: '#4f46e5', bg: 'rgba(79,70,229,0.1)' };
+  if (reason === 'overdue') return { label: '跟进超时', color: '#dc2626', bg: 'rgba(220,38,38,0.1)' };
+  return { label: '待筛选', color: '#0891b2', bg: 'rgba(8,145,178,0.1)' };
 }
 
 function filterCustomers(view: CustomerView) {
@@ -272,7 +272,7 @@ function openGlobalAssistant(customer: CustomerProfile, text?: string) {
         agent: 'conversion',
         label: `我的客户 / ${customer.name}`,
         summary: `当前在客户详情页：${customer.name}，${customer.countryName}，语言${customer.language}，阶段${customer.stage}，意向分${customer.intentScore}，产品${customer.product}，预估单值${customer.estimatedValue}。客户摘要：${customer.summary}`,
-        suggestions: ['生成下一条回复建议', '生成报价草稿', '翻译最近消息', '整理通话简报'],
+        suggestions: ['判定客资有效性', '生成报价草稿', '翻译最近消息', '整理线上通话简报'],
       },
     },
   }));
@@ -328,9 +328,9 @@ function CustomerListView({ view, selectedId, onOpen }: { view: CustomerView; se
   const list = filterCustomers(view);
   const stats = [
     { label: '待处理', value: String(filterCustomers('inbox').length), color: '#dc2626' },
-    { label: '想通话', value: String(CUSTOMERS.filter(c => c.inboxReason === 'call').length), color: '#dc2626' },
-    { label: '高意向', value: String(CUSTOMERS.filter(c => c.intentScore >= 85).length), color: '#16a34a' },
-    { label: '沉默客户', value: String(filterCustomers('silent').length), color: '#d97706' },
+    { label: '线上通话', value: String(CUSTOMERS.filter(c => c.inboxReason === 'call').length), color: '#dc2626' },
+    { label: '商机客户', value: String(CUSTOMERS.filter(c => c.intentScore >= 85 || c.inboxReason === 'large').length), color: '#16a34a' },
+    { label: '复购唤醒', value: String(filterCustomers('silent').length), color: '#d97706' },
   ];
   return (
     <div className="h-full overflow-y-auto bg-surface">
@@ -347,7 +347,7 @@ function CustomerListView({ view, selectedId, onOpen }: { view: CustomerView; se
           <div className="mb-4 rounded-xl border border-amber-100 bg-amber-50 px-4 py-3">
             <div className="flex items-center gap-2 text-sm font-bold text-amber-800">
               <RefreshCw size={14} />
-              沉默客户回复后自动流回“询盘中”，重新进入收件箱
+              复购唤醒客户回复后自动流回“询盘中”，重新进入收件箱
             </div>
           </div>
         )}
@@ -491,23 +491,23 @@ function AssistantRail({ customer }: { customer: CustomerProfile }) {
         <div className="mt-3 rounded-2xl border border-red-100 bg-red-50 p-4">
           <div className="flex items-center gap-2 text-red-700">
             <Phone size={15} />
-            <p className="text-sm font-black">想通电话 · 已熔断自动回复</p>
+            <p className="text-sm font-black">线上通话 · 已熔断自动回复</p>
           </div>
           <p className="mt-2 text-xs leading-relaxed text-red-700/80">
-            当地时间 {customer.localTime}，建议现在接。{customer.sla}
+            当地时间 {customer.localTime}，建议现在发起线上通话。{customer.sla}
           </p>
           <button className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl bg-red-600 px-3 py-2 text-xs font-bold text-white">
-            <Phone size={13} />拉起 WhatsApp 通话
+            <Phone size={13} />发起线上通话
           </button>
         </div>
       )}
 
       <div className="mt-3 grid gap-2">
         {[
-          { icon: MessageSquare, label: '回复建议', text: `请基于${customer.name}当前阶段，生成下一条WhatsApp回复。` },
+          { icon: MessageSquare, label: '客资筛选回复', text: `请基于${customer.name}当前阶段，生成下一条WhatsApp回复，用于确认采购数量、用途、目标市场和时间要求。` },
           { icon: Languages, label: '翻译润色', text: `把给${customer.name}的回复翻译成${customer.language}并润色。` },
-          { icon: FileText, label: '报价草稿', text: `为${customer.product}生成报价草稿，预估单值${customer.estimatedValue}。` },
-          { icon: RefreshCw, label: '唤醒话术', text: `为${customer.name}生成老客唤醒话术，结合历史订单和偏好。` },
+          { icon: FileText, label: '报价推进', text: `为${customer.product}生成报价推进草稿，预估单值${customer.estimatedValue}，包含MOQ、交期、样品和下一步确认问题。` },
+          { icon: RefreshCw, label: '跟进唤醒', text: `为${customer.name}生成跟进或老客唤醒话术，结合历史订单、当前阶段和下一步动作。` },
         ].map(action => {
           const Icon = action.icon;
           return (
@@ -534,7 +534,7 @@ function AssistantRail({ customer }: { customer: CustomerProfile }) {
 
       <div className="mt-3 rounded-2xl border border-border bg-white p-4">
         <button type="button" onClick={() => setCallNoteOpen(v => !v)} className="flex w-full items-center justify-between text-left">
-          <span className="flex items-center gap-2 text-sm font-black text-text-primary"><Mic size={14} />通话后15秒记录</span>
+          <span className="flex items-center gap-2 text-sm font-black text-text-primary"><Mic size={14} />线上通话后15秒记录</span>
           <span className="text-xs text-text-muted">{callNoteOpen ? '收起' : '记录'}</span>
         </button>
         <AnimatePresence>
@@ -542,7 +542,7 @@ function AssistantRail({ customer }: { customer: CustomerProfile }) {
             <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden">
               <div className="mt-3 space-y-2">
                 <div className="grid grid-cols-2 gap-1.5">
-                  {['有意向', '要样品', '再联系', '无效'].map(item => (
+                  {['有效客资', '要样品', '待报价', '无效'].map(item => (
                     <button key={item} type="button" onClick={() => setCallResult(item)}
                       className={`rounded-lg border px-2 py-1.5 text-xs font-bold ${callResult === item ? 'border-[#0891b2] bg-[#0891b2]/10 text-text-primary' : 'border-border text-text-muted'}`}>
                       {item}
@@ -612,8 +612,8 @@ export default function ConversionPage({ onLeaveConversation }: Props) {
         label: viewLabel,
         summary,
         suggestions: detailOpen
-          ? ['生成下一条回复建议', '生成通话前简报', '整理报价草稿', '生成通话后跟进任务']
-          : ['告诉我现在该先回谁', '筛选想通电话客户', '解释意向评分', '生成沉默客户唤醒批次'],
+          ? ['生成下一条回复建议', '生成线上通话前简报', '整理报价推进草稿', '生成线上通话后跟进任务']
+          : ['告诉我现在该先回谁', '筛选紧急客户', '筛选商机客户', '生成复购唤醒批次'],
       },
     }));
   }, [view, detailOpen, selected.id]);

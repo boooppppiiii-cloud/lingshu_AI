@@ -521,50 +521,77 @@ studioRouter.post('/script', async (req, res) => {
     audience = '',
     sellingPoints = '',
     tone = 'high-converting',
+    referenceTitle = '',
+    referenceAnalysis = '',
+    referenceHighlights = [],
     provider,
   } = req.body ?? {};
   const lang = langName(language);
   const clips = (materials as string[]).join(', ') || '(generic product clips)';
   const product = productInfo || '(use the enterprise profile)';
+  const reference = String(referenceAnalysis || '').slice(0, 2500) || '(no detailed reference analysis provided)';
+  const highlights = Array.isArray(referenceHighlights) && referenceHighlights.length
+    ? referenceHighlights.slice(0, 8).map((item: unknown) => `- ${String(item).slice(0, 180)}`).join('\n')
+    : '- No reliable highlights. Infer a simple product-first structure from title, platform, and product info.';
   const providerOpt = provider === 'qwen' || provider === 'gemini' ? provider : undefined;
 
   const prompt = scriptType === 'storyboard'
-    ? `You are a short-video director for a Chinese cross-border (overseas) e-commerce seller.
-Write a ${duration}-second ${platform} storyboard in ${lang}, broken into 4-6 scenes.
+    ? `You are a senior short-video director for a Chinese cross-border e-commerce seller.
+Write a practical ${duration}-second ${platform} storyboard in ${lang}, broken into 5-6 timestamped scenes.
 
 Selected clips: ${clips}
 Product info: ${product}
 Target audience: ${audience || '(infer from product and platform)'}
 Key selling points: ${sellingPoints || '(infer from product info)'}
 Tone/style: ${tone}
+Reference video title: ${referenceTitle || '(unknown)'}
+Reference video analysis:
+${reference}
+Reference highlights to reuse:
+${highlights}
 
 For EACH scene use this exact block format (no markdown symbols):
 Scene N (start-end s)
 Shot: <close-up/medium/wide> | Camera: <static/push/pan>
-Visual: <what's on screen>
-Voiceover: <spoken line>
+Visual: <specific shootable action, object, hand movement, product detail, or on-screen proof>
+Voiceover: <one spoken line in ${lang}>
+Subtitle: <short on-screen caption in ${lang}>
 
-Strong scroll-stopping opener; clear ending with a call to action. Output ONLY the storyboard.`
-    : `You are a short-video copywriter for a Chinese cross-border (overseas) e-commerce seller.
-Write a ${duration}-second ${platform} voiceover script in ${lang}.
+Rules:
+- Do NOT write generic phrases like "premium quality", "high conversion", "boost sales", "worth buying", unless tied to a concrete product detail.
+- Reuse the reference video's rhythm, but replace the product, claims, visual proof, subtitles, and CTA with the seller's product.
+- Every scene must be filmable with a phone camera by a small merchant.
+- If data is missing, write a conservative B2B sample/quote CTA instead of fake claims.
+- Output ONLY the storyboard.`
+    : `You are a senior short-video copywriter for a Chinese cross-border e-commerce seller.
+Write a practical ${duration}-second ${platform} voiceover script in ${lang}.
 
 Selected clips: ${clips}
 Product info: ${product}
 Target audience: ${audience || '(infer from product and platform)'}
 Key selling points: ${sellingPoints || '(infer from product info)'}
 Tone/style: ${tone}
+Reference video title: ${referenceTitle || '(unknown)'}
+Reference video analysis:
+${reference}
+Reference highlights to reuse:
+${highlights}
 
 Requirements:
 - Exactly three sections, each on its own block, labelled like "[Hook · 0-3s]", "[Body · 3-${duration - 5}s]", "[CTA · ${duration - 5}-${duration}s]".
-- A scroll-stopping hook in the first 3 seconds.
-- Punchy, spoken, conversion-oriented. No markdown symbols.
+- Each section must contain 1-3 short spoken lines only, in ${lang}.
+- The hook must mention a concrete buyer pain, use case, visible product result, or sourcing problem in the first line.
+- The body must include at least two concrete details from product info, such as MOQ, material, packaging, certification, market, sample speed, shade/range, usage result, or delivery condition.
+- The CTA must ask for a specific B2B action: sample, quote, catalog, color list, packaging plan, or MOQ confirmation.
+- Do NOT write generic phrases like "premium quality", "stable solution", "high conversion", "everyone is asking", unless backed by a concrete detail.
+- Reuse the reference video's rhythm, not its exact product or claims.
 - Output ONLY the script text.`;
 
   try {
     const text = await callLLM(prompt, { backend: providerOpt, systemPrompt: enterpriseCtx() || undefined });
     res.json({ ok: true, source: 'ai', script: text.trim() });
   } catch {
-    res.json({ ok: true, source: 'fallback', script: scriptType === 'storyboard' ? fallbackStoryboard(duration) : fallbackScript(productInfo, duration) });
+    res.json({ ok: true, source: 'fallback', script: scriptType === 'storyboard' ? fallbackStoryboard(duration, productInfo) : fallbackScript(productInfo, duration) });
   }
 });
 
@@ -1370,39 +1397,49 @@ studioRouter.post('/capcut/open', async (req, res) => {
 
 /* ── 本地降级生成 ──────────────────────────────────────────────────────── */
 
-function fallbackScript(productInfo: string, duration: number): string {
-  const p = productInfo || 'this product';
-  return `[Hook · 0-3s]
-Stop scrolling — this is the one everyone keeps asking about.
-
-[Body · 3-${duration - 5}s]
-Straight from our factory, ${p} delivers premium quality at factory-direct prices, shipped worldwide in 24 hours. Thousands of buyers already made the switch.
-
-[CTA · ${duration - 5}-${duration}s]
-Tap the link to grab yours before they sell out again.`;
+function compactProductLabel(productInfo: string): string {
+  const match = String(productInfo || '').match(/(?:主推品|产品类目|Product|product)\s*[：:]\s*([^\n]+)/i);
+  return (match?.[1] || String(productInfo || '').split('\n')[0] || 'this product').slice(0, 80);
 }
 
-function fallbackStoryboard(duration: number): string {
+function fallbackScript(productInfo: string, duration: number): string {
+  const p = compactProductLabel(productInfo);
+  return `[Hook · 0-3s]
+If your buyers ask for ${p} samples before placing a bulk order, show them the real details first.
+
+[Body · 3-${duration - 5}s]
+Film the product texture, packaging, color or size options, then show the MOQ, sample plan, and any certification or private-label support clearly on screen.
+
+[CTA · ${duration - 5}-${duration}s]
+Message us for the sample list, packaging options, and a fast quote.`;
+}
+
+function fallbackStoryboard(duration: number, productInfo = ''): string {
+  const p = compactProductLabel(productInfo);
   const mid = Math.round(duration / 2);
   return `Scene 1 (0-3s)
 Shot: close-up | Camera: static
-Visual: Product hero shot, bright lighting, hands enter frame.
-Voiceover: Stop scrolling — you need to see this.
+Visual: Hand places ${p} close to the camera; show the most visible texture, color, size, or package detail.
+Voiceover: Buyers always ask to see the real detail first.
+Subtitle: Real sample detail
 
 Scene 2 (3-${mid}s)
 Shot: medium | Camera: push
-Visual: Product in use, before/after comparison.
-Voiceover: Factory-direct quality, a fraction of the price.
+Visual: Demonstrate one use case or open the package so the viewer understands what is included.
+Voiceover: Here is what they get before confirming a bulk order.
+Subtitle: What is included
 
 Scene 3 (${mid}-${duration - 4}s)
 Shot: close-up | Camera: pan
-Visual: Key feature demo, detail texture.
-Voiceover: This is the detail everyone's talking about.
+Visual: Point to MOQ, sample, private-label, certification, or delivery details as text overlays.
+Voiceover: We can confirm samples, packaging, and quote details before production.
+Subtitle: Sample, package, quote
 
 Scene 4 (${duration - 4}-${duration}s)
 Shot: wide | Camera: static
-Visual: Packaging + brand, link sticker pops in.
-Voiceover: Tap the link before they sell out again.`;
+Visual: Full product set on table with a message prompt for catalog, color list, or MOQ.
+Voiceover: Send a message for the catalog, color list, and MOQ quote.
+Subtitle: Ask for catalog and quote`;
 }
 
 const FALLBACK_COVERS = ['You NEED this in 2026', 'Factory price, 24h ship', 'Why everyone is obsessed'];

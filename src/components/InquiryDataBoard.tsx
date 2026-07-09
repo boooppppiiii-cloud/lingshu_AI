@@ -20,12 +20,10 @@ const RECORDS: Rec[] = [
   { id: 'i4',  customer: 'Fatima Z.', channel: 'WhatsApp',   platform: 'TikTok',    lang: '阿语', intent: '高', product: '', firstResp: 6,    status: '已成交', amount: 2740, daysAgo: 2 },
   { id: 'i5',  customer: 'Diego R.',  channel: '站内 DM',     platform: 'Instagram', lang: '西语', intent: '低', product: '', firstResp: 22,   status: '流失',   amount: 0,    daysAgo: 3 },
   { id: 'i6',  customer: 'Sara M.',   channel: 'WhatsApp',   platform: 'TikTok',    lang: '阿语', intent: '高', product: '', firstResp: 5,    status: '已成交', amount: 1980, daysAgo: 4 },
-  { id: 'i7',  customer: 'Tom W.',    channel: '独立站表单',  platform: 'Pinterest', lang: '英语', intent: '中', product: '', firstResp: null, status: '待响应', amount: 0,    daysAgo: 5 },
   { id: 'i8',  customer: 'Layla H.',  channel: 'WhatsApp',   platform: 'Instagram', lang: '阿语', intent: '中', product: '', firstResp: 9,    status: '已报价', amount: 0,    daysAgo: 6 },
   { id: 'i9',  customer: 'Chen Y.',   channel: '邮件',        platform: 'YouTube',   lang: '英语', intent: '低', product: '', firstResp: 41,   status: '待跟进', amount: 0,    daysAgo: 8 },
   { id: 'i10', customer: 'Noor A.',   channel: 'WhatsApp',   platform: 'TikTok',    lang: '阿语', intent: '高', product: '', firstResp: 7,    status: '已成交', amount: 3400, daysAgo: 9 },
   { id: 'i11', customer: 'Pablo S.',  channel: '站内 DM',     platform: 'Instagram', lang: '西语', intent: '中', product: '', firstResp: 14,   status: '已报价', amount: 0,    daysAgo: 11 },
-  { id: 'i12', customer: 'Emma D.',   channel: '独立站表单',  platform: 'Pinterest', lang: '英语', intent: '低', product: '', firstResp: null, status: '待响应', amount: 0,    daysAgo: 13 },
   { id: 'i13', customer: 'Yusuf B.',  channel: 'WhatsApp',   platform: 'TikTok',    lang: '阿语', intent: '高', product: '', firstResp: 8,    status: '已成交', amount: 2200, daysAgo: 15 },
   { id: 'i14', customer: 'Anna K.',   channel: '邮件',        platform: 'YouTube',   lang: '英语', intent: '中', product: '', firstResp: 35,   status: '流失',   amount: 0,    daysAgo: 22 },
 ];

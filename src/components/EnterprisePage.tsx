@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { Building2, Package, Megaphone, BookOpen, Save, CheckCircle2, Loader2, Compass, Zap, MessageSquare, RotateCcw, Plus, Upload, X, Image, Video, FileText, KeyRound, Copy, ExternalLink } from 'lucide-react';
+import { Building2, Package, Megaphone, BookOpen, Save, CheckCircle2, Loader2, Compass, Zap, MessageSquare, RotateCcw, Plus, Upload, X, Image, Video, FileText, KeyRound, Copy, ExternalLink, Download as DownloadIcon } from 'lucide-react';
 import { authHeader } from '../lib/auth';
 import { completeDemoStep } from '../lib/demoProgress';
 
@@ -144,6 +144,8 @@ export default function EnterprisePage() {
   const [demoBusy, setDemoBusy] = useState(false);
   const [apiInfo, setApiInfo] = useState<ProductApiInfo | null>(null);
   const [apiStatus, setApiStatus] = useState<ProductApiStatus>({ count: 0 });
+  const [orderImporting, setOrderImporting] = useState(false);
+  const [orderImportMessage, setOrderImportMessage] = useState('');
 
   useEffect(() => {
     Promise.all([
@@ -243,6 +245,38 @@ export default function EnterprisePage() {
       headers: authHeader(),
     }).then(r => r.json());
     setApiInfo(next);
+  };
+
+  const importOrderCsv = async (file: File | null) => {
+    if (!file) return;
+    setOrderImporting(true);
+    setOrderImportMessage('');
+    try {
+      const csv = await file.text();
+      const result = await fetch('/api/overseas/enterprise/orders/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ csv }),
+      }).then(r => r.json());
+      if (result.error) throw new Error(result.error);
+      setOrderImportMessage(`已导入 ${result.imported} 条真实订单${result.skipped ? `，跳过 ${result.skipped} 条无效行` : ''}`);
+    } catch (e) {
+      setOrderImportMessage(e instanceof Error ? e.message : '订单导入失败，请检查 CSV 字段');
+    } finally {
+      setOrderImporting(false);
+    }
+  };
+
+  const downloadOrderTemplate = () => {
+    const headers = ['订单号', '客户名称', '商品/SKU', '市场', '渠道', '数量', 'GMV', '成本', '状态', '订单日期', '负责人', '来源', '来源凭证'];
+    const csv = `${headers.join(',')}\n`;
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'lingshu-orders-template.csv';
+    link.click();
+    URL.revokeObjectURL(url);
   };
 
   const updateProduct = (index: number, patch: Partial<ProductItem>) => {
@@ -372,6 +406,40 @@ export default function EnterprisePage() {
                   </button>
                 </div>
                 <p className="mt-2 text-[11px] text-text-muted">已接入商品：{apiStatus.count}{apiStatus.lastIngestedAt ? ` · 最近接入 ${apiStatus.lastProductName || '商品'}` : ''}</p>
+              </div>
+            </div>
+          </section>
+
+          <section className="card p-4">
+            <div className="flex items-start gap-3">
+              <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-green-50 text-green-700">
+                <FileText size={16} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-semibold text-text-primary">真实订单数据导入</p>
+                    <p className="mt-1 text-[11px] leading-relaxed text-text-muted">上传 ERP、Shopify、财务表或人工整理的 CSV。我的订单页只基于导入/录入的真实订单聚合 GMV、毛利和履约状态。</p>
+                  </div>
+                  <button type="button" onClick={downloadOrderTemplate}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs font-semibold text-text-secondary hover:text-text-primary">
+                    模板 <DownloadIcon />
+                  </button>
+                </div>
+                <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-slate-950 px-3 py-2 text-xs font-semibold text-white">
+                    {orderImporting ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+                    上传订单 CSV
+                    <input type="file" accept=".csv,text/csv" className="hidden" disabled={orderImporting}
+                      onChange={e => {
+                        const file = e.target.files?.[0] || null;
+                        e.currentTarget.value = '';
+                        void importOrderCsv(file);
+                      }} />
+                  </label>
+                  <span className="text-[11px] text-text-muted">必填：客户名称、商品/SKU、GMV；建议填写来源和来源凭证。</span>
+                </div>
+                {orderImportMessage && <p className="mt-2 text-[11px] font-semibold text-green-700">{orderImportMessage}</p>}
               </div>
             </div>
           </section>
