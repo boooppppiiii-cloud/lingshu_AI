@@ -703,7 +703,14 @@ studioRouter.post('/translate', async (req, res) => {
   if (!src) { res.json({ ok: true, source: 'noop', text: '' }); return; }
   const targetLang = langName(target);
 
-  const prompt = `Translate the following text into ${targetLang}. Return ONLY the translation, no quotes, no explanation.
+  const prompt = `Translate the following voiceover lines into ${targetLang}.
+Rules:
+- Preserve every timestamp label exactly, such as [0-3s].
+- Translate only the spoken text after each timestamp.
+- Keep one output line per input line.
+- Do not merge lines, repeat lines, add quotes, or add explanations.
+- If the input has no timestamp, still translate line by line.
+Return ONLY the translated lines.
 Text: ${src}`;
 
   try {
@@ -1123,6 +1130,8 @@ function spokenText(script: string): string {
     line = line.trim();
     if (!line) continue;
     if (/^\[.*\]$/.test(line)) continue;
+    line = line.replace(/^\[[^\]]*?\d+(?:\.\d+)?\s*(?:s|秒)?\s*[-–]\s*\d+(?:\.\d+)?\s*(?:s|秒)?[^\]]*\]\s*/i, '').trim();
+    if (!line) continue;
     if (/^scene\s*\d/i.test(line)) continue;
     const vo = line.match(/^(voiceover|vo)\s*[:：]\s*(.+)$/i);
     if (vo) { out.push(vo[2]); continue; }

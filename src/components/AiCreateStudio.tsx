@@ -523,6 +523,82 @@ function translateVoiceoverLineFallback(line: string, target: string, product: s
   return list[Math.min(index, list.length - 1)];
 }
 
+function normalizeTimeLabel(value: string, fallbackIndex: number): string {
+  const match = String(value || '').match(/(\d+(?:\.\d+)?)\s*(?:s|秒)?\s*[-–]\s*(\d+(?:\.\d+)?)\s*(?:s|秒)?/i);
+  if (match) return `[${match[1]}-${match[2]}s]`;
+  const ranges = ['0-3s', '3-8s', '8-15s', '15-20s', '20-25s', '25-30s'];
+  return `[${ranges[fallbackIndex] || `${fallbackIndex * 4}-${(fallbackIndex + 1) * 4}s`}]`;
+}
+
+function cleanVoiceoverLine(value: string): string {
+  return String(value || '')
+    .replace(/^\s*\[[^\]]+\]\s*/g, '')
+    .replace(/^(Hook|Body|CTA|口播|字幕|人物说|Voiceover|VO|Caption)\s*[：:·-]?\s*/i, '')
+    .replace(/^["“”]+|["“”]+$/g, '')
+    .replace(/^[\d一二三四五六七八九十]+[.、]\s*/, '')
+    .trim();
+}
+
+function parseTimestampedVoiceover(value: string): Array<{ time: string; text: string }> {
+  const lines = String(value || '').split(/\n+/);
+  const segments: Array<{ time: string; text: string }> = [];
+  let currentTime = '';
+  let fallbackIndex = 0;
+  for (const raw of lines) {
+    const line = raw.trim();
+    if (!line) continue;
+    const timeMatch = line.match(/\[([^\]]*?\d+(?:\.\d+)?\s*(?:s|秒)?\s*[-–]\s*\d+(?:\.\d+)?\s*(?:s|秒)?[^\]]*)\]/i);
+    if (timeMatch) currentTime = normalizeTimeLabel(timeMatch[1], fallbackIndex);
+
+    const quoted = line.match(/[“"]([^”"]{2,})[”"]/);
+    const prefixed = line.match(/(?:人物说|Voiceover|VO|口播)\s*[：:]\s*(.+)$/i);
+    const sameLine = timeMatch ? line.replace(timeMatch[0], '').trim() : '';
+    let text = quoted?.[1] || prefixed?.[1] || sameLine;
+    text = cleanVoiceoverLine(text);
+    if (!text || /^(分镜|镜头|画面|音频|注|Creative style|Core emotion|Goal|Storyboard|Product replacement)/i.test(text)) continue;
+    segments.push({ time: currentTime || normalizeTimeLabel('', fallbackIndex), text });
+    fallbackIndex += 1;
+  }
+  if (segments.length) return segments;
+  return Array.from(String(value || '').matchAll(/[“"]([^”"]{2,})[”"]/g))
+    .map((match, index) => ({ time: normalizeTimeLabel('', index), text: cleanVoiceoverLine(match[1] || '') }))
+    .filter(item => item.text);
+}
+
+function formatVoiceoverWithTimestamps(value: string): string {
+  const parsed = parseTimestampedVoiceover(value);
+  if (parsed.length) return parsed.map(item => `${item.time} ${item.text}`).join('\n');
+  return cleanVoiceoverLine(value);
+}
+
+function stripVoiceoverTimestamps(value: string): string {
+  return String(value || '')
+    .split(/\n+/)
+    .map(line => cleanVoiceoverLine(line))
+    .filter(Boolean)
+    .join('\n');
+}
+
+function normalizeTranslatedVoiceover(base: string, translated: string, target: string): string {
+  const source = parseTimestampedVoiceover(base);
+  const parsed = parseTimestampedVoiceover(translated);
+  if (!source.length) return translated.trim();
+  const uniqueTranslatedLines = new Set(parsed.map(item => item.text.replace(/\s+/g, ' ').trim().toLowerCase()).filter(Boolean));
+  const looksRepeated = parsed.length >= 3 && uniqueTranslatedLines.size <= Math.ceil(parsed.length / 2);
+  if (parsed.length !== source.length || looksRepeated) {
+    const product = inferProductName(base, target);
+    return source.map((item, index) => `${item.time} ${translateVoiceoverLineFallback(item.text, target, product, index)}`).join('\n');
+  }
+  return parsed.map((item, index) => `${source[index]!.time} ${item.text}`).join('\n');
+}
+
+function localizeTimestampedVoiceoverFallback(base: string, target: string): string {
+  const source = parseTimestampedVoiceover(base);
+  const product = inferProductName(base, target);
+  const list = source.length ? source : parseTimestampedVoiceover(localizeVoiceoverFallback(base, 'zh'));
+  return list.map((item, index) => `${item.time} ${translateVoiceoverLineFallback(item.text, target, product, index)}`).join('\n');
+}
+
 const SAMPLE_SCRIPT = `[开场 · 0-3s]
 先别划走，这就是最近客户一直在问的那款产品。
 
@@ -672,6 +748,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   const [voiceoverMode, setVoiceoverMode] = useState<'none' | 'ai' | 'upload'>('ai');
   const [uploadedVoiceName, setUploadedVoiceName] = useState('');
   const [ttsLoading, setTtsLoading] = useState(false);
+  const [ttsNotice, setTtsNotice] = useState('');
   const [ttsPlaying, setTtsPlaying] = useState(false);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const voiceoverInputRef = useRef<HTMLInputElement>(null);
@@ -1237,17 +1314,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   };
 
   const extractVoiceoverText = (value: string) => {
-    const quoted = Array.from(value.matchAll(/[“"]([^”"]{2,})[”"]/g)).map(m => m[1]?.trim()).filter(Boolean) as string[];
-    if (quoted.length) return quoted.join('\n');
-    return value
-      .split(/\n+/)
-      .map(line => line
-        .replace(/^\s*\[[^\]]+\]\s*/g, '')
-        .replace(/^(Hook|Body|CTA|口播|字幕|人物说|Voiceover|Caption)\s*[：:·-]?\s*/i, '')
-        .replace(/^[\d一二三四五六七八九十]+[.、]\s*/, '')
-        .trim())
-      .filter(line => line && !/^(分镜|镜头|画面|音频|注|Creative style|Core emotion|Goal|Storyboard|Product replacement)/i.test(line))
-      .join('\n');
+    return formatVoiceoverWithTimestamps(value);
   };
 
   const generateVoiceDrafts = async () => {
@@ -1260,8 +1327,8 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         if (code === 'zh') continue;
         const translated = await studioApi.translate({ text: base, target: code, source: 'zh' });
         next[code] = translated.ok && translated.text?.trim()
-          ? translated.text
-          : localizeVoiceoverFallback(base, code);
+          ? normalizeTranslatedVoiceover(base, translated.text, code)
+          : localizeTimestampedVoiceoverFallback(base, code);
       }
       setVoiceDrafts(next);
       setActiveVoiceLang(voiceLangs[0] || 'zh');
@@ -1592,6 +1659,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     setVoiceoverDur(0);
     setVoiceoverAudios({});
     setUploadedVoiceName('');
+    setTtsNotice('');
     setTtsPlaying(false);
     if (ttsAudioRef.current) ttsAudioRef.current.pause();
   };
@@ -1620,6 +1688,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
 
   const genTts = async () => {
     setTtsLoading(true);
+    setTtsNotice(`正在生成 ${voiceLangs.length || 1} 个语种配音...`);
     setVoiceoverUrl(null);
     setVoiceoverAudios({});
     try {
@@ -1633,34 +1702,44 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         } else {
           const translated = await studioApi.translate({ text: base, target: code, source: 'zh' });
           drafts[code] = translated.ok && translated.text?.trim()
-            ? translated.text
-            : localizeVoiceoverFallback(base, code);
+            ? normalizeTranslatedVoiceover(base, translated.text, code)
+            : localizeTimestampedVoiceoverFallback(base, code);
         }
       }
       setVoiceoverLines(base);
       setVoiceDrafts(drafts);
 
       const audios: Record<string, { url: string; duration: number }> = {};
+      const failures: string[] = [];
       for (const code of langs) {
         const text = drafts[code] || base;
-        const r = await studioApi.tts({ text, voice, language: code });
-        if (r.ok && r.url) audios[code] = { url: r.url, duration: r.duration ?? 0 };
+        const r = await studioApi.tts({ text: stripVoiceoverTimestamps(text), voice, language: code });
+        if (r.ok && r.url) {
+          audios[code] = { url: r.url, duration: r.duration ?? 0 };
+        } else {
+          const label = LANGS.find(item => item.code === code)?.label || code;
+          failures.push(`${label}：${r.error || (r.source === 'local' ? '后端连接失败或额度不可用' : '未返回音频')}`);
+        }
       }
       const activeCode = langs.includes(activeVoiceLang) ? activeVoiceLang : langs[0] || 'zh';
       const activeAudio = audios[activeCode] || Object.values(audios)[0];
-      if (activeAudio) {
-        setVoiceoverMode('ai');
-        setVoiceoverAudios(audios);
-        setActiveVoiceLang(activeCode);
-        setLang(activeCode);
-        setVoiceoverUrl(activeAudio.url);
-        setVoiceoverDur(activeAudio.duration);
-        setUploadedVoiceName('');
-        setSubtitlesOn(true);
-        setSubMode('target');
+      if (!activeAudio) {
+        throw new Error(failures[0] || '没有生成可用配音，请检查 TTS Key 或试用额度。');
       }
+      setVoiceoverMode('ai');
+      setVoiceoverAudios(audios);
+      setActiveVoiceLang(activeCode);
+      setLang(activeCode);
+      setVoiceoverUrl(activeAudio.url);
+      setVoiceoverDur(activeAudio.duration);
+      setUploadedVoiceName('');
+      setSubtitlesOn(true);
+      setSubMode('target');
+      setTtsNotice(failures.length
+        ? `已生成 ${Object.keys(audios).length}/${langs.length} 个语种配音；${failures.join('；')}`
+        : `已生成 ${langs.length} 个语种配音。`);
     } catch (err: any) {
-      alert(err?.message || '配音生成失败，请稍后重试。');
+      setTtsNotice(err?.message || '配音生成失败，请稍后重试。');
     } finally {
       setTtsLoading(false);
     }
@@ -1700,7 +1779,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     setTtsPlaying(false);
   };
   // 换音色 / 改脚本类型后，旧配音失效
-  const pickVoice = (id: string) => { setVoice(id); setVoiceoverUrl(null); setVoiceoverAudios({}); setTtsPlaying(false); };
+  const pickVoice = (id: string) => { setVoice(id); setVoiceoverUrl(null); setVoiceoverAudios({}); setTtsNotice(''); setTtsPlaying(false); };
   // 离开脚本步时停止试听
   useEffect(() => {
     if (step !== 'script' && ttsAudioRef.current) { ttsAudioRef.current.pause(); setTtsPlaying(false); }
@@ -2064,7 +2143,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         return (
           <div className="max-w-3xl">
             <div className="flex items-center justify-between mb-4">
-              <SectionTitle title="口播脚本" desc="先生成带时间戳脚本，再提取纯口播台词" noMargin />
+              <SectionTitle title="口播脚本" desc="先生成带时间戳脚本，再提取带时间戳的口播台词" noMargin />
               <div className="flex items-center gap-2">
                 <div className="flex items-center gap-0.5 p-0.5 rounded-lg bg-surface-2 border border-border">
                   {([
@@ -2092,7 +2171,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                     {mode === 'material' ? '素材库脚本生成' : mode === 'product' ? '产品脚本生成' : '爆款复刻脚本生成'}
                   </p>
                   <p className="mt-1 text-xs text-text-muted">
-                    {mode === 'product' ? '生成时间戳脚本后，会用第一条脚本同步生成 Seedance 2.0 素材。' : '生成结果会先保留时间戳结构，再自动提取纯口播台词。'}
+                    {mode === 'product' ? '生成时间戳脚本后，会用第一条脚本同步生成 Seedance 2.0 素材。' : '生成结果会先保留时间戳结构，再自动提取带时间戳口播台词。'}
                   </p>
                 </div>
                 <button
@@ -2152,7 +2231,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
               <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-black text-text-primary">提取口播与多语种字幕</p>
-                  <p className="mt-1 text-xs text-text-muted">从时间戳脚本里提取口播台词，再生成不同语种版本。</p>
+                  <p className="mt-1 text-xs text-text-muted">从时间戳脚本里提取口播台词，保留时间段，再生成不同语种版本。</p>
                 </div>
                 <button
                   onClick={() => void generateVoiceDrafts()}
@@ -2167,17 +2246,17 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                 {['zh', 'en', 'es', 'ar', 'pt', 'id'].map(code => {
                   const active = voiceLangs.includes(code);
                   return (
-	                    <button
-	                      key={code}
-	                      type="button"
-	                      onClick={() => setVoiceLangs(list => {
-	                        const next = active ? list.filter(item => item !== code) : [...list, code];
-	                        if (!next.includes(activeVoiceLang)) setActiveVoiceLang(next[0] || 'zh');
-	                        return next.length ? next : ['zh'];
-	                      })}
-	                      className={`rounded-lg border px-3 py-1.5 text-xs font-bold transition ${active ? 'border-accent bg-accent-glow text-accent' : 'border-border text-text-muted hover:text-text-secondary'}`}
-	                    >
-	                      {LANGS.find(l => l.code === code)?.label.split(' - ')[1] || code}
+                    <button
+                      key={code}
+                      type="button"
+                      onClick={() => setVoiceLangs(list => {
+                        const next = active ? list.filter(item => item !== code) : [...list, code];
+                        if (!next.includes(activeVoiceLang)) setActiveVoiceLang(next[0] || 'zh');
+                        return next.length ? next : ['zh'];
+                      })}
+                      className={`rounded-lg border px-3 py-1.5 text-xs font-bold transition ${active ? 'border-accent bg-accent-glow text-accent' : 'border-border text-text-muted hover:text-text-secondary'}`}
+                    >
+                      {LANGS.find(l => l.code === code)?.label.split(' - ')[1] || code}
                     </button>
                   );
                 })}
@@ -2185,23 +2264,24 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
               {Object.keys(voiceDrafts).length > 0 && (
                 <div className="mt-4 space-y-3">
                   <div className="flex flex-wrap gap-2">
-	                    {voiceLangs.map(code => (
-	                      <button
-	                        key={code}
-	                        type="button"
-	                        onClick={() => { setActiveVoiceLang(code); setLang(code); }}
-	                        className={`rounded-lg px-3 py-1.5 text-xs font-bold transition ${activeVoiceLang === code ? 'bg-accent text-white' : 'bg-surface-2 text-text-muted hover:text-text-secondary'}`}
-	                      >
-	                        {LANGS.find(l => l.code === code)?.label || code}
-	                        {voiceoverAudios[code] && <span className="ml-1 opacity-80">已配音</span>}
-	                      </button>
-	                    ))}
+                    {voiceLangs.map(code => (
+                      <button
+                        key={code}
+                        type="button"
+                        onClick={() => { setActiveVoiceLang(code); setLang(code); }}
+                        className={`rounded-lg px-3 py-1.5 text-xs font-bold transition ${activeVoiceLang === code ? 'bg-accent text-white' : 'bg-surface-2 text-text-muted hover:text-text-secondary'}`}
+                      >
+                        {LANGS.find(l => l.code === code)?.label || code}
+                        {voiceoverAudios[code] && <span className="ml-1 opacity-80">已配音</span>}
+                      </button>
+                    ))}
                   </div>
                   <textarea
                     value={voiceDrafts[activeVoiceLang] || ''}
                     onChange={e => setVoiceDrafts(drafts => ({ ...drafts, [activeVoiceLang]: e.target.value }))}
-                    rows={5}
-                    className="w-full rounded-xl border border-border bg-surface-2 p-3 text-sm leading-relaxed text-text-secondary outline-none focus:border-accent resize-none"
+                    rows={6}
+                    dir={activeVoiceLang === 'ar' ? 'rtl' : 'ltr'}
+                    className="w-full rounded-xl border border-border bg-surface-2 p-3 font-mono text-sm leading-7 text-text-secondary outline-none focus:border-accent resize-none"
                   />
                 </div>
               )}
@@ -2298,6 +2378,11 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                 <span className="text-xs text-text-muted">
                   {voiceoverMode === 'none' ? '当前成片不会混入口播音频，但仍可保留字幕。' : '音频会用于后续成片预览与导出。'}
                 </span>
+                {ttsNotice && (
+                  <span className={`basis-full text-xs font-semibold ${voiceoverUrl ? 'text-accent' : 'text-red-500'}`}>
+                    {ttsNotice}
+                  </span>
+                )}
               </div>
               <audio ref={ttsAudioRef} onEnded={() => setTtsPlaying(false)} className="hidden" />
             </Field>

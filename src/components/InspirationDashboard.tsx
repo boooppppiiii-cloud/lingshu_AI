@@ -2544,9 +2544,9 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
       <div className="transition-all duration-300">
         <div className="pointer-events-none absolute left-0 top-48 z-30 flex flex-col gap-2">
           {([
-            { id: 'inspiration' as const, label: '爆款灵感', short: '爆款', count: visibleVideos.length, icon: <Flame size={14} /> },
-            { id: 'library' as const, label: '社媒素材库', short: '素材', count: localMaterials.length, icon: <Film size={14} /> },
-            { id: 'shooting' as const, label: '待拍摄素材', short: '待拍', count: shootingNeeds.length, icon: <Lightbulb size={14} /> },
+            { id: 'inspiration' as const, label: '爆款灵感', short: '爆款', count: visibleVideos.length, icon: <Flame size={18} /> },
+            { id: 'library' as const, label: '社媒素材库', short: '素材', count: localMaterials.length, icon: <Film size={18} /> },
+            { id: 'shooting' as const, label: '待拍摄素材', short: '待拍', count: shootingNeeds.length, icon: <Lightbulb size={18} /> },
           ]).map(item => {
             const active = innerView === item.id;
             return (
@@ -2555,14 +2555,14 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
                 type="button"
                 title={`${item.label} · ${item.count}`}
                 onClick={() => setInnerView(item.id)}
-                className={`pointer-events-auto flex h-24 w-12 flex-col items-center justify-center gap-1 rounded-r-2xl border border-l-0 text-[11px] font-black shadow-sm transition-all ${
+                className={`pointer-events-auto flex h-28 w-14 flex-col items-center justify-center gap-1.5 rounded-r-2xl border border-l-0 text-[14px] font-black shadow-md transition-all ${
                   active
                     ? 'border-accent/30 bg-accent text-white'
-                    : 'border-border bg-white/95 text-text-muted hover:bg-accent-glow hover:text-accent'
+                    : 'border-border bg-white/95 text-slate-500 hover:bg-accent-glow hover:text-accent'
                 }`}
               >
                 {item.icon}
-                <span className="[writing-mode:vertical-rl] tracking-[0.14em]">{item.short}</span>
+                <span className="[writing-mode:vertical-rl] tracking-[0.16em] leading-none">{item.short}</span>
               </button>
             );
           })}

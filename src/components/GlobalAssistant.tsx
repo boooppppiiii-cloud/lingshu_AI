@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { ArrowUp, Bot, Brain, Loader2, X } from 'lucide-react';
+import { ArrowUp, Bot, Brain, FileText, Loader2, Paperclip, UploadCloud, X } from 'lucide-react';
 import type { AgentAction, AgentType, Message, Page } from '../App';
 import AgentReply from './AgentReply';
 import { authApi, authHeader } from '../lib/auth';
@@ -70,7 +70,7 @@ const DEFAULT_CONTEXT: Record<string, AssistantContext> = {
     agent: 'strategy',
     label: '企业中心',
     summary: '当前在企业中心，适合完善企业资料、产品画像和全局知识。',
-    suggestions: ['检查企业资料缺口', '整理产品卖点', '生成客户画像字段', '优化品牌禁忌话题'],
+    suggestions: ['AI帮我填写企业资料', '从文件提取企业字段', '检查企业资料缺口', '生成客户画像字段'],
   },
   scheduled: {
     agent: 'strategy',
@@ -119,6 +119,15 @@ function buildQuickQuestions(context: AssistantContext, enterpriseContext: strin
     : '先提示我企业中心还缺哪些资料';
   const industryHint = '联网核验外贸行业趋势';
   const pageHint = `基于当前「${context.label}」页面`;
+
+  if (context.label === '企业中心') {
+    return [
+      '开启企业资料采集模式，用3轮以内问完必要信息并帮我整理可写入字段',
+      '我会拖入产品表、报价表或公司资料，请提取企业中心可填写的信息',
+      `${enterpriseHint}，按企业中心字段列出已完整、待确认和缺失的信息`,
+      '根据企业中心现有资料，生成客户画像、高价值客户信号和跟进偏好',
+    ];
+  }
 
   if (context.agent === 'traffic') {
     return [
@@ -257,11 +266,88 @@ function mergeConsecutiveAssistant(list: Message[]): Message[] {
   return merged;
 }
 
+const FILE_TEXT_LIMIT = 12_000;
+const FILE_TOTAL_LIMIT = 32_000;
+
+function fileExt(name: string) {
+  return name.split('.').pop()?.toLowerCase() || '';
+}
+
+function readFileAsText(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ''));
+    reader.onerror = () => reject(reader.error || new Error('file_read_failed'));
+    reader.readAsText(file);
+  });
+}
+
+async function extractSpreadsheetText(file: File): Promise<string> {
+  const XLSX = await import('xlsx');
+  const workbook = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+  return workbook.SheetNames.slice(0, 4).map(sheetName => {
+    const sheet = workbook.Sheets[sheetName];
+    const csv = sheet ? XLSX.utils.sheet_to_csv(sheet, { FS: ',', RS: '\n' }) : '';
+    return `# Sheet: ${sheetName}\n${csv}`;
+  }).join('\n\n');
+}
+
+async function extractAssistantFileText(file: File): Promise<{ name: string; type: string; text: string; supported: boolean }> {
+  const ext = fileExt(file.name);
+  const isSpreadsheet = ['xlsx', 'xls', 'csv', 'tsv'].includes(ext);
+  const isText = file.type.startsWith('text/')
+    || ['txt', 'md', 'markdown', 'json', 'csv', 'tsv', 'html', 'htm', 'xml', 'log'].includes(ext);
+  try {
+    const raw = isSpreadsheet && ext !== 'csv' && ext !== 'tsv'
+      ? await extractSpreadsheetText(file)
+      : isText || isSpreadsheet
+        ? await readFileAsText(file)
+        : '';
+    const text = raw.replace(/\u0000/g, '').trim();
+    return { name: file.name, type: file.type || ext || 'unknown', text: text.slice(0, FILE_TEXT_LIMIT), supported: Boolean(text) };
+  } catch {
+    return { name: file.name, type: file.type || ext || 'unknown', text: '', supported: false };
+  }
+}
+
+function buildEnterpriseFilePrompt(files: Array<{ name: string; type: string; text: string; supported: boolean }>) {
+  const supported = files.filter(file => file.supported && file.text);
+  const unsupported = files.filter(file => !file.supported);
+  const body = supported.map(file => {
+    const header = `【文件】${file.name}\n【类型】${file.type}`;
+    return `${header}\n【内容节选】\n${file.text}`;
+  }).join('\n\n---\n\n').slice(0, FILE_TOTAL_LIMIT);
+  const unsupportedLine = unsupported.length
+    ? `\n\n【未能解析的文件】${unsupported.map(file => file.name).join('、')}。请提醒用户换成 xlsx/csv/txt/json/md 或直接复制关键内容。`
+    : '';
+
+  return `【企业中心资料采集模式】
+用户刚拖入文件，希望你从文件里智能分析并捕捉可写入企业中心的信息。
+
+请按企业中心字段输出：
+1. 可直接写入：字段名 / 建议值 / 来源文件 / 可信度。
+2. 待确认推断：字段名 / 推断值 / 为什么需要用户确认。
+3. 缺失信息：还需要用户补充什么表格、文件或必要信息。
+4. 下一轮只问最关键的 2-3 个问题，把对话压缩在 3 轮以内。
+
+字段范围包括：公司基础、主营产品、价格区间、MOQ、认证资质、产品优势、目标市场、业务语言、客户画像、高价值客户信号、低质量询盘、常见问题、跟进偏好、交期、定制能力、物流、付款条款、品牌语气、禁忌话题、Agent 执行权限。
+
+要求：
+- 不要把没有来源的内容写成事实。
+- 每条建议都标注来源文件。
+- 暂时不要说“已经写入系统”，只输出可确认的回填草案。
+${unsupportedLine}
+
+${body || '没有解析到可用文本。'}`;
+}
+
 export default function GlobalAssistant({ page, restore, kickoff, suppressForRightSidebar = false, onKickoffConsumed, onAction, onSessionRefresh }: Props) {
   const [open, setOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
+  const [fileReading, setFileReading] = useState(false);
+  const [draggingFile, setDraggingFile] = useState(false);
   const [deepThinking, setDeepThinking] = useState(false);
   const [liveContext, setLiveContext] = useState<AssistantContext | null>(null);
   const [enterpriseContext, setEnterpriseContext] = useState('');
@@ -272,6 +358,7 @@ export default function GlobalAssistant({ page, restore, kickoff, suppressForRig
   const [userName, setUserName] = useState('');
   const latestMessagesRef = useRef<Message[]>([]);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const inFlightRef = useRef(false);
   const abortRef = useRef<AbortController | null>(null);
   const handledKickoffs = useRef(new Set<string>());
@@ -282,6 +369,7 @@ export default function GlobalAssistant({ page, restore, kickoff, suppressForRig
   const quickQuestions = useMemo(() => buildQuickQuestions(context, enterpriseContext), [context, enterpriseContext]);
   const proactiveTitle = userName ? `hi，${displayUserName(userName)}` : 'hi';
   const assistantSuppressed = suppressForRightSidebar || assistantHiddenByRightSidebar;
+  const enterpriseAssistMode = context.label === '企业中心';
 
   useEffect(() => {
     let cancelled = false;
@@ -401,9 +489,10 @@ export default function GlobalAssistant({ page, restore, kickoff, suppressForRig
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [messages, open]);
   useEffect(() => { latestMessagesRef.current = messages; }, [messages]);
 
-  const send = async (text: string, base?: Message[], forcedContext?: AssistantContext) => {
-    const visibleText = text.trim();
-    if (!visibleText || loading || inFlightRef.current) return;
+  const send = async (text: string, base?: Message[], forcedContext?: AssistantContext, visibleOverride?: string) => {
+    const modelText = text.trim();
+    const visibleText = (visibleOverride ?? text).trim();
+    if (!modelText || !visibleText || loading || inFlightRef.current) return;
     const activeContext = forcedContext ?? context;
     const enterpriseBrief = compactText(enterpriseContext);
     inFlightRef.current = true;
@@ -419,7 +508,7 @@ export default function GlobalAssistant({ page, restore, kickoff, suppressForRig
           enterpriseBrief ? `【企业中心摘要】${enterpriseBrief}` : '【企业中心摘要】当前未读取到企业中心资料；回答时请提示需要补齐的企业信息。',
           '【联网要求】涉及外贸行业趋势、目标市场、平台规则、竞品或品类机会时，请联网检索公开来源，并在回答中保留可核验来源；不要把假设当成事实。',
           '【连续对话要求】请承接本窗口已有上下文回答，必要时先说明缺少哪些真实数据，再给可执行下一步。',
-          `用户问题：${visibleText}`,
+          `用户问题：${modelText}`,
         ].join('\n'),
       },
     ];
@@ -516,6 +605,23 @@ export default function GlobalAssistant({ page, restore, kickoff, suppressForRig
     }
   };
 
+  const handleAssistantFiles = async (fileList: FileList | File[]) => {
+    const picked = Array.from(fileList).slice(0, 6);
+    if (!picked.length || fileReading || loading) return;
+    setOpen(true);
+    setDraggingFile(false);
+    setFileReading(true);
+    try {
+      const extracted = await Promise.all(picked.map(extractAssistantFileText));
+      const prompt = buildEnterpriseFilePrompt(extracted);
+      const visible = `已拖入 ${picked.length} 个文件：${picked.map(file => file.name).join('、')}\n请帮我分析并捕捉企业中心可填写信息。`;
+      void send(prompt, undefined, DEFAULT_CONTEXT.enterprise, visible);
+    } finally {
+      setFileReading(false);
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
   useEffect(() => {
     if (!kickoff || handledKickoffs.current.has(kickoff.key)) return;
     handledKickoffs.current.add(kickoff.key);
@@ -544,7 +650,7 @@ export default function GlobalAssistant({ page, restore, kickoff, suppressForRig
             animate={{ opacity: 1, x: 0, y: 0, scale: 1 }}
             exit={{ opacity: 0, x: 10, y: 6, scale: 0.96 }}
             transition={{ duration: 0.2 }}
-            className={`fixed bottom-24 right-20 z-[74] max-w-[min(320px,calc(100vw-112px))] rounded-2xl border px-3 py-2 pr-8 text-left shadow-[0_14px_36px_rgba(15,23,42,0.14)] backdrop-blur ${ASSISTANT_BUBBLE_CLASS}`}
+            className={`fixed bottom-24 right-20 z-[74] max-w-[min(560px,calc(100vw-112px))] rounded-2xl border px-4 py-3 pr-10 text-left shadow-[0_14px_36px_rgba(15,23,42,0.14)] backdrop-blur ${ASSISTANT_BUBBLE_CLASS}`}
           >
             <button
               type="button"
@@ -570,8 +676,10 @@ export default function GlobalAssistant({ page, restore, kickoff, suppressForRig
               }}
               className="block w-full text-left"
             >
-              <span className="mb-1 block text-[10px] font-black">{proactiveTitle}</span>
-              <span className="block text-xs font-semibold leading-relaxed">{proactiveTip.text}</span>
+              <span className="block text-xs font-black leading-5">{proactiveTitle}</span>
+              <span className="block max-w-full overflow-hidden text-ellipsis whitespace-nowrap text-xs font-semibold leading-5">
+                {proactiveTip.text}
+              </span>
             </button>
             <span className="absolute -right-1.5 bottom-4 h-3 w-3 rotate-45 border-r border-t bg-inherit" />
           </motion.div>
@@ -599,7 +707,30 @@ export default function GlobalAssistant({ page, restore, kickoff, suppressForRig
             exit={{ opacity: 0, y: 18, scale: 0.97 }}
             transition={{ duration: 0.18 }}
             className="fixed bottom-40 right-5 z-[76] flex h-[min(720px,calc(100vh-192px))] w-[420px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-2xl border border-border bg-white shadow-2xl"
+            onDragOver={event => {
+              if (!enterpriseAssistMode) return;
+              event.preventDefault();
+              setDraggingFile(true);
+            }}
+            onDragLeave={event => {
+              if (!enterpriseAssistMode) return;
+              if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDraggingFile(false);
+            }}
+            onDrop={event => {
+              if (!enterpriseAssistMode) return;
+              event.preventDefault();
+              void handleAssistantFiles(event.dataTransfer.files);
+            }}
           >
+            {enterpriseAssistMode && draggingFile && (
+              <div className="absolute inset-0 z-10 flex items-center justify-center bg-white/88 p-6 backdrop-blur-sm">
+                <div className="flex max-w-xs flex-col items-center rounded-2xl border border-emerald-200 bg-emerald-50 px-5 py-4 text-center text-emerald-950 shadow-xl">
+                  <UploadCloud size={24} />
+                  <p className="mt-2 text-sm font-black">松开文件，开始分析企业资料</p>
+                  <p className="mt-1 text-xs leading-relaxed text-emerald-800">支持 xlsx、csv、txt、json、md 等文本资料，会按企业中心字段提取可写入信息。</p>
+                </div>
+              </div>
+            )}
             <header className="flex h-12 flex-shrink-0 items-center justify-between border-b border-border px-4">
               <div className="min-w-0">
                 <p className="text-sm font-black text-text-primary">灵枢助手</p>
@@ -615,8 +746,22 @@ export default function GlobalAssistant({ page, restore, kickoff, suppressForRig
                 <div className="flex h-full flex-col justify-center gap-4">
                   <div>
                     <p className="text-sm font-bold text-text-primary">{greeting}，我是你的外贸智脑灵小枢～</p>
-                    <p className="mt-1 text-sm leading-relaxed text-text-muted">我会结合当前页面、企业中心资料和可联网核验的外贸行业信息来回答。</p>
+                    <p className="mt-1 text-sm leading-relaxed text-text-muted">
+                      {enterpriseAssistMode
+                        ? '你可以直接说企业信息，也可以把产品表、报价表、公司资料拖进来，我会捕捉可回填字段。'
+                        : '我会结合当前页面、企业中心资料和可联网核验的外贸行业信息来回答。'}
+                    </p>
                   </div>
+                  {enterpriseAssistMode && (
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="flex items-center gap-2 rounded-xl border border-dashed border-emerald-200 bg-emerald-50/80 px-3 py-2 text-left text-xs font-semibold text-emerald-900 hover:border-emerald-300"
+                    >
+                      <FileText size={14} />
+                      拖入产品表/报价表/公司资料，或点击选择文件
+                    </button>
+                  )}
                   <div className="grid gap-2">
                     {quickQuestions.map(item => (
                       <button key={item} type="button" onClick={() => void send(item)}
@@ -650,6 +795,30 @@ export default function GlobalAssistant({ page, restore, kickoff, suppressForRig
             </div>
 
             <div className="flex-shrink-0 border-t border-border p-3">
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                accept=".xlsx,.xls,.csv,.tsv,.txt,.md,.markdown,.json,.html,.htm,.xml,.log,text/*,application/json"
+                className="hidden"
+                onChange={event => { if (event.target.files) void handleAssistantFiles(event.target.files); }}
+              />
+              {enterpriseAssistMode && (
+                <div className="mb-2 flex items-center justify-between rounded-xl border border-dashed border-border bg-white px-3 py-2 text-xs text-text-muted">
+                  <span className="inline-flex min-w-0 items-center gap-1.5">
+                    <UploadCloud size={13} className="text-emerald-600" />
+                    <span className="truncate">{fileReading ? '正在读取文件...' : '可拖入表格/文档，自动提取企业中心字段'}</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={fileReading || loading}
+                    className="ml-2 rounded-lg px-2 py-1 font-bold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+                  >
+                    选择
+                  </button>
+                </div>
+              )}
               <div className="rounded-2xl border border-border bg-surface-2">
                 <textarea
                   value={input}
@@ -660,10 +829,23 @@ export default function GlobalAssistant({ page, restore, kickoff, suppressForRig
                   className="w-full resize-none bg-transparent px-3 pt-3 text-sm outline-none placeholder:text-text-muted"
                 />
                 <div className="flex items-center justify-between px-2 pb-2">
-                  <button type="button" onClick={() => setDeepThinking(v => !v)}
-                    className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-bold ${deepThinking ? 'bg-white text-text-primary shadow-sm' : 'text-text-muted'}`}>
-                    <Brain size={12} />深度思考
-                  </button>
+                  <div className="flex items-center gap-1">
+                    {enterpriseAssistMode && (
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        disabled={fileReading || loading}
+                        className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-bold text-text-muted hover:bg-white hover:text-text-primary disabled:opacity-50"
+                        title="上传资料"
+                      >
+                        <Paperclip size={12} />资料
+                      </button>
+                    )}
+                    <button type="button" onClick={() => setDeepThinking(v => !v)}
+                      className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-xs font-bold ${deepThinking ? 'bg-white text-text-primary shadow-sm' : 'text-text-muted'}`}>
+                      <Brain size={12} />深度思考
+                    </button>
+                  </div>
                   <button type="button" onClick={() => void send(input)} disabled={!input.trim() || loading}
                     className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-950 text-white disabled:opacity-40">
                     {loading ? <Loader2 size={13} className="animate-spin" /> : <ArrowUp size={13} />}
