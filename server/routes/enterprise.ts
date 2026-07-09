@@ -13,6 +13,8 @@ const TEMPLATES_FILE = path.join(__dirname, '../../data/demo-templates.json');
 const DATA_DIR = path.join(__dirname, '../../data');
 const ASSETS_DIR = path.join(DATA_DIR, 'enterprise-assets');
 const ORDERS_FILE = path.join(DATA_DIR, 'orders.json');
+// 生成的 productApi 密钥单独存放，不进 data/enterprise.json（避免和会被提交/覆盖的企业资料文件混在一起）。
+const PRODUCT_API_FILE = path.join(DATA_DIR, 'product-api.json');
 
 type OrderStatus = '待付款' | '已付款' | '生产中' | '已发货' | '已完成' | '退款';
 
@@ -108,22 +110,46 @@ export interface EnterpriseProfile {
     pendingAssumptions?: string;
     userCorrections?: string;
   };
-  integrations?: {
-    productApi?: {
-      tenantId: string;
-      apiKey: string;
-      createdAt: string;
-      lastIngestedAt?: string;
-      lastProductName?: string;
-    };
-  };
   knowledge: string;
+}
+
+interface ProductApiSecret {
+  tenantId: string;
+  apiKey: string;
+  createdAt: string;
+  lastIngestedAt?: string;
+  lastProductName?: string;
+}
+
+function readProductApiSecret(): ProductApiSecret | null {
+  try {
+    return JSON.parse(fs.readFileSync(PRODUCT_API_FILE, 'utf8')) as ProductApiSecret;
+  } catch {
+    return null;
+  }
+}
+
+function writeProductApiSecret(secret: ProductApiSecret): void {
+  fs.mkdirSync(DATA_DIR, { recursive: true });
+  fs.writeFileSync(PRODUCT_API_FILE, JSON.stringify(secret, null, 2), 'utf8');
+}
+
+// 兼容旧数据：老版本把 productApi 密钥写进了 data/enterprise.json 的 integrations 字段。
+// 首次读取到这种旧格式时，把密钥迁移到独立文件，并从企业资料里彻底删除，避免它再被写回 enterprise.json。
+function migrateLegacyProductApiSecret(parsed: Record<string, unknown>): void {
+  const legacy = (parsed?.integrations as { productApi?: ProductApiSecret } | undefined)?.productApi;
+  if (legacy?.apiKey && !fs.existsSync(PRODUCT_API_FILE)) {
+    writeProductApiSecret(legacy);
+  }
+  delete parsed.integrations;
 }
 
 function readProfile(): EnterpriseProfile {
   try {
     const raw = fs.readFileSync(DATA_FILE, 'utf8');
-    return normalizeProfile(JSON.parse(raw));
+    const parsed = JSON.parse(raw);
+    migrateLegacyProductApiSecret(parsed);
+    return normalizeProfile(parsed);
   } catch {
     return normalizeProfile({
       company: { name: '', industry: '', companyType: '', mainMarkets: '', primaryLanguages: '', founded: '', description: '' },
@@ -365,7 +391,9 @@ function normalizeProfile(profile: EnterpriseProfile): EnterpriseProfile {
 }
 
 function writeProfile(profile: EnterpriseProfile): void {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(normalizeProfile(profile), null, 2), 'utf8');
+  const clean = normalizeProfile(profile) as EnterpriseProfile & { integrations?: unknown };
+  delete clean.integrations;
+  fs.writeFileSync(DATA_FILE, JSON.stringify(clean, null, 2), 'utf8');
 }
 
 async function resolveTenantId(req: Request): Promise<string> {
@@ -373,32 +401,27 @@ async function resolveTenantId(req: Request): Promise<string> {
   return id?.tenantId || String(req.query.tenantId || req.headers['x-tenant-id'] || 'local_tenant_default');
 }
 
-function publicProductApiInfo(profile: EnterpriseProfile) {
-  const productApi = profile.integrations?.productApi;
+function publicProductApiInfo(secret: ProductApiSecret | null) {
   return {
-    apiKey: productApi?.apiKey || '',
-    tenantId: productApi?.tenantId || '',
-    createdAt: productApi?.createdAt || '',
-    lastIngestedAt: productApi?.lastIngestedAt || '',
-    lastProductName: productApi?.lastProductName || '',
+    apiKey: secret?.apiKey || '',
+    tenantId: secret?.tenantId || '',
+    createdAt: secret?.createdAt || '',
+    lastIngestedAt: secret?.lastIngestedAt || '',
+    lastProductName: secret?.lastProductName || '',
     docsUrl: '/api/overseas/enterprise/product-api/docs',
   };
 }
 
-function ensureProductApiKey(profile: EnterpriseProfile, tenantId: string): EnterpriseProfile {
-  const current = profile.integrations?.productApi;
-  if (current?.apiKey && current.tenantId === tenantId) return profile;
-  return {
-    ...profile,
-    integrations: {
-      ...profile.integrations,
-      productApi: {
-        tenantId,
-        apiKey: `ls_prod_${randomBytes(24).toString('base64url')}`,
-        createdAt: new Date().toISOString(),
-      },
-    },
+function ensureProductApiKey(tenantId: string): ProductApiSecret {
+  const current = readProductApiSecret();
+  if (current?.apiKey && current.tenantId === tenantId) return current;
+  const next: ProductApiSecret = {
+    tenantId,
+    apiKey: `ls_prod_${randomBytes(24).toString('base64url')}`,
+    createdAt: new Date().toISOString(),
   };
+  writeProductApiSecret(next);
+  return next;
 }
 
 function productApiDocs(origin = '') {
@@ -449,10 +472,10 @@ function readApiKey(req: Request) {
 }
 
 function verifyProductApiKey(req: Request) {
-  const profile = readProfile();
-  const expected = profile.integrations?.productApi?.apiKey;
+  const expected = readProductApiSecret()?.apiKey;
   const provided = readApiKey(req);
-  return expected && provided && expected === provided ? profile : null;
+  if (!expected || !provided || expected !== provided) return null;
+  return readProfile();
 }
 
 type ApiProductInput = {
@@ -615,26 +638,18 @@ enterpriseRouter.post('/orders/import', (req, res) => {
 
 enterpriseRouter.get('/product-api', async (req, res) => {
   const tenantId = await resolveTenantId(req);
-  const profile = ensureProductApiKey(readProfile(), tenantId);
-  writeProfile(profile);
-  res.json(publicProductApiInfo(profile));
+  const secret = ensureProductApiKey(tenantId);
+  res.json(publicProductApiInfo(secret));
 });
 
 enterpriseRouter.post('/product-api/rotate', async (req, res) => {
   const tenantId = await resolveTenantId(req);
-  const profile = readProfile();
-  const next: EnterpriseProfile = {
-    ...profile,
-    integrations: {
-      ...profile.integrations,
-      productApi: {
-        tenantId,
-        apiKey: `ls_prod_${randomBytes(24).toString('base64url')}`,
-        createdAt: new Date().toISOString(),
-      },
-    },
+  const next: ProductApiSecret = {
+    tenantId,
+    apiKey: `ls_prod_${randomBytes(24).toString('base64url')}`,
+    createdAt: new Date().toISOString(),
   };
-  writeProfile(next);
+  writeProductApiSecret(next);
   res.json(publicProductApiInfo(next));
 });
 
@@ -645,10 +660,11 @@ enterpriseRouter.get('/product-api/docs', (req, res) => {
 enterpriseRouter.get('/product-api/status', (_req, res) => {
   const profile = readProfile();
   const items = profile.products.items ?? [];
+  const secret = readProductApiSecret();
   res.json({
     count: items.length,
-    lastIngestedAt: profile.integrations?.productApi?.lastIngestedAt || '',
-    lastProductName: profile.integrations?.productApi?.lastProductName || items.at(-1)?.name || '',
+    lastIngestedAt: secret?.lastIngestedAt || '',
+    lastProductName: secret?.lastProductName || items.at(-1)?.name || '',
   });
 });
 
@@ -743,17 +759,9 @@ productApiRouter.post('/bulk', (req, res) => {
   const existing = profile.products.items ?? [];
   const nextItems = upsertProductItems(existing, products);
   const last = products.at(-1);
-  const next: EnterpriseProfile = {
-    ...profile,
-    products: { ...profile.products, items: nextItems },
-    integrations: {
-      ...profile.integrations,
-      productApi: profile.integrations?.productApi
-        ? { ...profile.integrations.productApi, lastIngestedAt: new Date().toISOString(), lastProductName: last?.name || '' }
-        : undefined,
-    },
-  };
-  writeProfile(next);
+  writeProfile({ ...profile, products: { ...profile.products, items: nextItems } });
+  const secret = readProductApiSecret();
+  if (secret) writeProductApiSecret({ ...secret, lastIngestedAt: new Date().toISOString(), lastProductName: last?.name || '' });
   res.json({ ok: true, received: payload.length, upserted: products.length, total: nextItems.length });
 });
 
