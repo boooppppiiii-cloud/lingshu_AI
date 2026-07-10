@@ -1,5 +1,4 @@
 import { Router, type Request } from 'express';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -28,9 +27,10 @@ import {
 } from '../integrations/social.js';
 import {
   advancedManualConnectEnabled as readAdvancedManualConnectEnabled,
-  getMetaOAuthClient,
   getTikTokOAuthClient,
+  getTenantAwareMetaOAuthClient,
 } from '../lib/oauthConfig.js';
+import { parseOAuthState, signOAuthState } from '../lib/tenantPlatformApps.js';
 
 const COL = 'social_accounts';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -95,8 +95,8 @@ function getTikTokClient() {
   return getTikTokOAuthClient();
 }
 
-function getMetaClient() {
-  return getMetaOAuthClient();
+async function getMetaClient(tenantId?: string) {
+  return getTenantAwareMetaOAuthClient(tenantId);
 }
 
 function advancedManualConnectEnabled() {
@@ -369,7 +369,7 @@ async function connectTikTok(pending: PendingOAuthState, code: string, req: Requ
 }
 
 async function connectMeta(pending: PendingOAuthState, code: string, req: Request) {
-  const client = getMetaClient();
+  const client = await getMetaClient(pending.tenantId);
   if (!client) throw new Error('Meta 一键授权暂未开启，请联系服务顾问配置平台应用和回调地址。');
   const userToken = await exchangeMetaCode({
     appId: client.appId,
@@ -448,7 +448,14 @@ socialRouter.get('/oauth/:platform/callback', async (req, res) => {
   cleanupOAuthStates();
   const state = String(req.query.state || '');
   const code = typeof req.query.code === 'string' ? req.query.code : '';
-  const pending = pendingOAuthStates.get(state);
+  const signedState = parseOAuthState(state);
+  const pending = pendingOAuthStates.get(state) || (signedState && signedState.platform === platform ? {
+    userId: signedState.userId,
+    tenantId: signedState.tenantId,
+    platform,
+    returnTo: signedState.returnTo,
+    expiresAt: signedState.expiresAt,
+  } : undefined);
   const returnTo = pending?.returnTo || '/';
   if (!pending || pending.platform !== platform) {
     res.status(400).type('html').send(callbackHtml({ ok: false, title: '授权已失效', message: '请回到系统重新连接账号。', returnTo, platform }));
@@ -468,13 +475,14 @@ socialRouter.get('/oauth/:platform/callback', async (req, res) => {
 
 socialRouter.use(requireAuth);
 
-socialRouter.get('/oauth/:platform/status', (req, res) => {
+socialRouter.get('/oauth/:platform/status', async (req, res) => {
   const platform = String(req.params.platform);
   if (!isPlatform(platform)) {
     res.status(404).json({ error: 'Unknown platform' });
     return;
   }
-  const configured = platform === 'tiktok' ? Boolean(getTikTokClient()) : Boolean(getMetaClient());
+  const { tenantId } = res.locals as AuthLocals;
+  const configured = platform === 'tiktok' ? Boolean(getTikTokClient()) : Boolean(await getMetaClient(tenantId));
   res.json({
     configured,
     redirectUri: redirectUri(req, platform),
@@ -483,20 +491,26 @@ socialRouter.get('/oauth/:platform/status', (req, res) => {
   });
 });
 
-socialRouter.post('/oauth/:platform/start', (req, res) => {
+socialRouter.post('/oauth/:platform/start', async (req, res) => {
   const platform = String(req.params.platform);
   if (!isPlatform(platform)) {
     res.status(404).json({ error: 'Unknown platform' });
     return;
   }
-  const configured = platform === 'tiktok' ? getTikTokClient() : getMetaClient();
-  if (!configured) {
+  const { userId, tenantId } = res.locals as AuthLocals;
+  const tiktokClient = platform === 'tiktok' ? getTikTokClient() : null;
+  const metaClient = platform === 'tiktok' ? null : await getMetaClient(tenantId);
+  if (platform === 'tiktok' ? !tiktokClient : !metaClient) {
     res.status(503).json({ error: `${platform} 一键授权暂未开启，请联系服务顾问配置平台应用和回调地址。` });
     return;
   }
-  const { userId, tenantId } = res.locals as AuthLocals;
   cleanupOAuthStates();
-  const state = crypto.randomBytes(24).toString('hex');
+  const state = signOAuthState({
+    userId,
+    tenantId,
+    platform,
+    returnTo: normalizeReturnTo(req.body?.returnTo),
+  });
   pendingOAuthStates.set(state, {
     userId,
     tenantId,
@@ -506,9 +520,8 @@ socialRouter.post('/oauth/:platform/start', (req, res) => {
   });
 
   if (platform === 'tiktok') {
-    const client = configured as ReturnType<typeof getTikTokClient>;
     const url = new URL(TIKTOK_AUTH_URL);
-    url.searchParams.set('client_key', client!.clientKey);
+    url.searchParams.set('client_key', tiktokClient!.clientKey);
     url.searchParams.set('response_type', 'code');
     url.searchParams.set('scope', TIKTOK_SCOPES.join(','));
     url.searchParams.set('redirect_uri', redirectUri(req, platform));
@@ -517,9 +530,8 @@ socialRouter.post('/oauth/:platform/start', (req, res) => {
     return;
   }
 
-  const client = configured as ReturnType<typeof getMetaClient>;
   const url = new URL(`${META_AUTH_URL}/${graphVersion()}/dialog/oauth`);
-  url.searchParams.set('client_id', client!.appId);
+  url.searchParams.set('client_id', metaClient!.appId);
   url.searchParams.set('redirect_uri', redirectUri(req, platform));
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('scope', META_SCOPES.join(','));

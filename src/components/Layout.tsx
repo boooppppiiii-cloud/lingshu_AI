@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Home, Share2, Users, LayoutGrid,
   Building2, PlugZap, Clock,
-  ChevronRight, LogOut, Loader2, RefreshCcw, X, ShieldCheck,
+  ChevronRight, LogOut, Loader2, RefreshCcw, X, ShieldCheck, BookOpen,
 } from 'lucide-react';
 import type { Page, ConversationContext, Conversation, AgentAction } from '../App';
 import { authApi, type AuthSession } from '../lib/auth';
@@ -48,6 +48,7 @@ interface LayoutProps {
   onSessionUpdate?: (session: AuthSession | null) => void;
   demoGuideActive?: boolean;
   onDemoGuideShown?: () => void;
+  onOpenBusinessDiagnosis?: () => void;
 }
 
 const relTime = (ts: number) => {
@@ -121,7 +122,7 @@ const isAdminSession = (session?: AuthSession | null) => (
   session?.subscription?.plan === 'admin'
 );
 
-export default function Layout({ page, onNavigate, conversation, children, session, onLogout, suppressRightPanel, onAction, onSessionUpdate, demoGuideActive, onDemoGuideShown }: LayoutProps) {
+export default function Layout({ page, onNavigate, conversation, children, session, onLogout, suppressRightPanel, onAction, onSessionUpdate, demoGuideActive, onDemoGuideShown, onOpenBusinessDiagnosis }: LayoutProps) {
   const isInConversation = conversation !== null && !suppressRightPanel;
   const [quotaOpen, setQuotaOpen] = useState(false);
   const [quotaLoading, setQuotaLoading] = useState(false);
@@ -136,7 +137,11 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
     setLiveSession(null);
   }, [session?.user?.id, sessionScope]);
   const secondaryItems = isAdminSession(activeSession)
-    ? [...SECONDARY_NAV.items, { id: 'admin' as Page, label: '账号总控', icon: <ShieldCheck size={16} /> }]
+    ? [
+      ...SECONDARY_NAV.items,
+      { id: 'admin' as Page, label: '账号总控', icon: <ShieldCheck size={16} /> },
+      { id: 'adminDelivery' as Page, label: '交付工作台', icon: <PlugZap size={16} /> },
+    ]
     : SECONDARY_NAV.items;
   const tenantName = activeSession?.tenant?.name || activeSession?.user?.name || activeSession?.user?.email?.split('@')[0] || '未命名';
   const subStatus = activeSession?.tenant?.subscriptionStatus || activeSession?.subscription?.status || 'none';
@@ -245,6 +250,20 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
         <div className="mx-4 my-3 border-t border-border" />
 
         <div className="flex-1 min-h-0" />
+
+        {onOpenBusinessDiagnosis && (
+          <div className="px-3 pb-2">
+            <button
+              type="button"
+              onClick={onOpenBusinessDiagnosis}
+              className="flex w-full items-center gap-2 rounded-xl border border-emerald-100 bg-white px-3 py-2 text-left text-xs font-bold text-emerald-700 shadow-sm transition-colors hover:border-emerald-200 hover:bg-emerald-50"
+              title="打开 3 分钟出海诊断"
+            >
+              <BookOpen size={14} />
+              <span className="min-w-0 flex-1 truncate">3分钟出海诊断</span>
+            </button>
+          </div>
+        )}
 
         {/* Bottom user */}
         <div className="relative px-3 py-3 border-t border-border flex-shrink-0">

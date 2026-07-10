@@ -28,7 +28,9 @@ import { socialRouter } from './routes/social.js';
 import { platformIntegrationsRouter } from './routes/platformIntegrations.js';
 import { adminRouter } from './routes/admin.js';
 import { assistantThreadsRouter } from './routes/assistantThreads.js';
+import { webhookRouter } from './routes/webhooks.js';
 import { isDemoMode, demoLimits } from './lib/demo.js';
+import { initTenantPlatformTokenMonitor } from './routes/tenantPlatformTokenMonitor.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
@@ -74,7 +76,12 @@ app.use(compression({
   filter: (req, res) => res.getHeader('Content-Type') === 'text/event-stream' ? false : compression.filter(req, res),
 }));
 // Supports base64-encoded admin/manual video uploads (≈90MB raw video).
-app.use(express.json({ limit: '120mb' }));
+app.use(express.json({
+  limit: '120mb',
+  verify: (req, _res, buf) => {
+    (req as any).rawBody = Buffer.from(buf);
+  },
+}));
 
 app.get('/api/overseas/health', (_req, res) => {
   res.json({
@@ -117,9 +124,11 @@ app.use('/api/overseas/studio', studioRouter);
 app.use('/api/overseas/platform-integrations', platformIntegrationsRouter);
 app.use('/api/overseas/assistant-threads', assistantThreadsRouter);
 app.use('/api/v1/products', productApiRouter);
+app.use('/api/webhooks', webhookRouter);
 
 initScheduler();
 initCrawlerOpsWorker();
+initTenantPlatformTokenMonitor();
 
 // 素材库本地文件托管（POST /studio/materials 上传到 data/media/）
 const mediaDir = path.join(__dirname, '..', 'data', 'media');

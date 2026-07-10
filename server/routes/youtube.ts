@@ -1,5 +1,4 @@
 import { Router, type Request } from 'express';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -22,8 +21,9 @@ import {
 } from '../integrations/youtube.js';
 import {
   advancedManualConnectEnabled as readAdvancedManualConnectEnabled,
-  getYouTubeOAuthClient,
+  getTenantAwareGoogleOAuthClient,
 } from '../lib/oauthConfig.js';
+import { parseOAuthState, signOAuthState } from '../lib/tenantPlatformApps.js';
 
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || '';
 const GOOGLE_OAUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -76,8 +76,8 @@ function youtubeConfig(record: YouTubeAccountRecord): YouTubeConfig {
   };
 }
 
-function getOAuthClient() {
-  return getYouTubeOAuthClient();
+async function getOAuthClient(tenantId?: string) {
+  return getTenantAwareGoogleOAuthClient(tenantId);
 }
 
 function advancedManualConnectEnabled() {
@@ -318,7 +318,13 @@ youtubeRouter.get('/oauth/callback', async (req, res) => {
   const oauthErrorDescription = typeof req.query.error_description === 'string' ? req.query.error_description : '';
 
   cleanupOAuthStates();
-  const pending = pendingOAuthStates.get(state);
+  const signedState = parseOAuthState(state);
+  const pending = pendingOAuthStates.get(state) || (signedState && signedState.platform === 'youtube' ? {
+    userId: signedState.userId,
+    tenantId: signedState.tenantId,
+    returnTo: signedState.returnTo,
+    expiresAt: signedState.expiresAt,
+  } : undefined);
   const returnTo = pending?.returnTo ?? '/';
 
   if (!pending) {
@@ -353,7 +359,7 @@ youtubeRouter.get('/oauth/callback', async (req, res) => {
     return;
   }
 
-  const client = getOAuthClient();
+  const client = await getOAuthClient(pending.tenantId);
   if (!client) {
     res.status(503).type('html').send(callbackHtml({
       ok: false,
@@ -405,8 +411,9 @@ youtubeRouter.use(requireAuth);
  * GET /youtube/oauth/status
  * Let the UI know whether one-click YouTube OAuth is ready.
  */
-youtubeRouter.get('/oauth/status', (req, res) => {
-  const client = getOAuthClient();
+youtubeRouter.get('/oauth/status', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const client = await getOAuthClient(tenantId);
   res.json({
     configured: Boolean(client),
     redirectUri: getYouTubeRedirectUri(req),
@@ -419,8 +426,9 @@ youtubeRouter.get('/oauth/status', (req, res) => {
  * POST /youtube/oauth/start
  * Creates a short-lived state and returns the Google authorization URL.
  */
-youtubeRouter.post('/oauth/start', (req, res) => {
-  const client = getOAuthClient();
+youtubeRouter.post('/oauth/start', async (req, res) => {
+  const { userId, tenantId } = res.locals as AuthLocals;
+  const client = await getOAuthClient(tenantId);
   if (!client) {
     res.status(503).json({
       error: 'YouTube 一键授权暂未开启，请联系服务顾问配置平台应用和回调地址。',
@@ -428,9 +436,13 @@ youtubeRouter.post('/oauth/start', (req, res) => {
     return;
   }
 
-  const { userId, tenantId } = res.locals as AuthLocals;
   cleanupOAuthStates();
-  const state = crypto.randomBytes(24).toString('hex');
+  const state = signOAuthState({
+    userId,
+    tenantId,
+    platform: 'youtube',
+    returnTo: normalizeReturnTo(req.body?.returnTo),
+  });
   pendingOAuthStates.set(state, {
     userId,
     tenantId,
@@ -467,7 +479,7 @@ youtubeRouter.post('/connect', async (req, res) => {
     return;
   }
 
-  const client = getOAuthClient();
+  const client = await getOAuthClient(tenantId);
   const clientId = String(req.body?.clientId || client?.clientId || '').trim();
   const clientSecret = String(req.body?.clientSecret || client?.clientSecret || '').trim();
   const refreshToken = String(req.body?.refreshToken || '').trim();

@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import { isDemoMode } from '../lib/demo.js';
+import { requireAuth, type AuthLocals } from '../middleware/auth.js';
+import { getTenantPlatformApp } from '../lib/tenantPlatformApps.js';
 
 export const platformIntegrationsRouter = Router();
 
@@ -33,9 +35,27 @@ platformIntegrationsRouter.post('/:provider/connect', (req, res) => {
   res.status(501).json({ error: 'not_implemented', provider, expectedOwner: 'platform-integrations' });
 });
 
-platformIntegrationsRouter.get('/:provider/status', (req, res) => {
+platformIntegrationsRouter.get('/:provider/status', requireAuth, async (req, res) => {
   const { provider } = req.params;
   if (!SUPPORTED.includes(provider as any)) { res.status(404).json({ error: 'unsupported_provider' }); return; }
+  const { tenantId } = res.locals as AuthLocals;
+  const appPlatform = ['whatsapp', 'facebook', 'instagram'].includes(provider)
+    ? 'meta'
+    : provider === 'youtube'
+      ? 'google'
+      : null;
+  if (appPlatform) {
+    const app = await getTenantPlatformApp(tenantId, appPlatform);
+    if (app?.status === 'active') {
+      res.json({
+        provider,
+        connected: true,
+        source: 'tenant_platform_app',
+        account: { id: app.id, name: '已由专属顾问配置 ✓' },
+      });
+      return;
+    }
+  }
   res.json({
     provider,
     connected: isDemoMode(),

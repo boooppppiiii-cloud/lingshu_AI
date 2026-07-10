@@ -16,6 +16,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import {
   Bot,
+  Eye,
   FileText,
   Filter,
   GripVertical,
@@ -39,6 +40,7 @@ type CustomerStage = 'lead' | 'inquiry' | 'quoted' | 'won' | 'silent30' | 'silen
 type HandlingMode = 'ai_auto' | 'ai_draft' | 'human_needed';
 type AutomationLevel = 'auto' | 'confirm' | 'manual';
 type TimelineType = 'whatsapp' | 'call' | 'note' | 'quote' | 'task';
+type DraftIntent = 'reply' | 'opener' | 'followup' | 'reactivate' | 'post_call' | 'polish';
 
 interface Props {
   onEnterConversation: (ctx: ConversationContext) => void;
@@ -48,6 +50,7 @@ interface Props {
   kickoff?: KickoffSignal;
   onAction?: AgentAction;
   onSessionRefresh?: () => void;
+  isDemo?: boolean;
 }
 
 interface TimelineEvent {
@@ -78,6 +81,7 @@ export interface CustomerProfile {
   handlingReason: string;
   aiAutoCount?: number;
   needCall?: boolean;
+  hasUnread?: boolean;
   priority: number;
   inboxReason?: 'call' | 'large' | 'draft' | 'overdue' | 'reply';
   lastActive: string;
@@ -193,8 +197,9 @@ const CUSTOMERS: CustomerProfile[] = [
     intentScore: 96,
     intentSignals: ['问价格 +2', '问MOQ/船期 +3', '明确500件 +4', '想通电话 +6'],
     handlingMode: 'human_needed',
-    handlingReason: '客户明确要求和经理通话，AI 已暂停自动回复',
+    handlingReason: '客户询价数量较大，建议销售主动邀约一次通话确认细节',
     needCall: true,
+    hasUnread: true,
     priority: 100,
     inboxReason: 'call',
     lastActive: '10 min',
@@ -202,13 +207,13 @@ const CUSTOMERS: CustomerProfile[] = [
     orders: [
       { id: '#1001', status: 'paid', total: 'US $180.00', createdAt: '2025年11月18日 16:20', items: [{ name: '假发样品包', qty: 1 }] },
     ],
-    tags: ['大单', 'OEM', '中东', '想通电话'],
-    summary: '询问 500 件价格和船期，希望和经理通电话。',
-    nextStep: 'Our manager will call you shortly. What time works best for you?',
+    tags: ['大单', 'OEM', '中东', '建议通话'],
+    summary: '询问 500 件价格、定制方案和船期，适合由销售主动邀约通话。',
+    nextStep: 'I can ask our manager to walk you through the options by a short call. What time works for you?',
     timeline: [
-      { id: '1', type: 'whatsapp', actor: 'buyer', title: '客户消息', body: 'Can we talk with your manager today? I need 500 pcs custom hair wigs.', time: '10:15' },
-      { id: '2', type: 'call', actor: 'ai', title: '识别到通话意图', body: '已暂停自动回复，只保留预约通话时间确认。', time: '10:16' },
-      { id: '3', type: 'whatsapp', actor: 'seller', title: '销售回复', body: 'Our manager will call you shortly. What time works best for you?', time: '10:16' },
+      { id: '1', type: 'whatsapp', actor: 'buyer', title: '客户消息', body: 'Hi, I need 500 pcs custom hair wigs. Please share MOQ, best price, and delivery time.', time: '10:15' },
+      { id: '2', type: 'call', actor: 'ai', title: '建议主动通话', body: '采购数量较大，建议由销售主动邀约通话，确认发质、长度、包装和交期。', time: '10:16' },
+      { id: '3', type: 'whatsapp', actor: 'seller', title: '销售回复', body: 'I can ask our manager to walk you through the options by a short call. What time works for you?', time: '10:16' },
     ],
   },
   {
@@ -226,6 +231,7 @@ const CUSTOMERS: CustomerProfile[] = [
     intentSignals: ['问价格 +2', '明确数量 +3', '节日前采购 +2'],
     handlingMode: 'ai_draft',
     handlingReason: '客户询价并明确数量，需要你确认报价草稿',
+    hasUnread: true,
     priority: 88,
     inboxReason: 'large',
     lastActive: '45 min',
@@ -377,6 +383,24 @@ function replyLanguage(customer: CustomerProfile): string {
   return customer.language;
 }
 
+function latestBuyerMessage(customer: CustomerProfile): string {
+  return [...customer.timeline].reverse().find(event => event.type === 'whatsapp' && event.actor === 'buyer')?.body || '';
+}
+
+function inferMessageLanguage(text: string): 'Arabic' | 'Spanish' | 'English' | null {
+  const body = text.trim();
+  if (!body) return null;
+  if (/[\u0600-\u06ff]/.test(body)) return 'Arabic';
+  const lower = body.toLowerCase();
+  if (/[????????]/i.test(body) || /\b(hola|gracias|precio|envio|env?o|cuanto|cu?nto|piezas|interesa)\b/.test(lower)) return 'Spanish';
+  if (/[a-z]/i.test(body)) return 'English';
+  return null;
+}
+
+function customerConversationLanguage(customer: CustomerProfile): string {
+  return inferMessageLanguage(latestBuyerMessage(customer)) || replyLanguage(customer);
+}
+
 function fallbackCustomerReply(customer: CustomerProfile): string {
   if (replyLanguage(customer) === 'Arabic') {
     return `Thanks for your message. I will confirm the MOQ, best price, and delivery time for ${customer.outboundProduct}, then send you the details shortly.`;
@@ -387,7 +411,54 @@ function fallbackCustomerReply(customer: CustomerProfile): string {
   return `Thanks for your message. I will confirm the MOQ, best price, and delivery time for ${customer.outboundProduct}, then send you the details shortly.`;
 }
 
-async function requestDraft(customer: CustomerProfile, instruction?: string, mode?: 'draft' | 'polish'): Promise<string> {
+function fallbackCustomerReplyZh(customer: CustomerProfile): string {
+  if (customer.needCall || customer.inboxReason === 'call') {
+    return `您好，我们可以根据您要的${customer.product}快速确认规格、价格和交期。为了避免信息来回确认，我可以安排经理和您做一个简短通话，您今天哪个时间方便？`;
+  }
+  if (customer.stage === 'silent30' || customer.stage === 'silent60') {
+    return `您好，之前您关注过${customer.product}，我们最近有新款和更适合批量采购的方案。如果您还在看这类产品，我可以发一份最新目录给您参考。`;
+  }
+  return `您好，感谢您的咨询。我先为您确认${customer.product}的起订量、最优价格和交期，稍后把完整信息发给您。`;
+}
+
+function containsChinese(text: string): boolean {
+  return /[\u4e00-\u9fff]/.test(text);
+}
+
+function normalizeDraftForChineseEditing(draft: string, customer: CustomerProfile): string {
+  if (containsChinese(draft)) return draft;
+  const normalized = draft.toLowerCase();
+  if (normalized.includes('call') || normalized.includes('manager')) {
+    return fallbackCustomerReplyZh({ ...customer, needCall: true });
+  }
+  return fallbackCustomerReplyZh(customer);
+}
+
+function translateChineseReplyForCustomer(customer: CustomerProfile, text: string): string {
+  const body = text.trim();
+  if (!containsChinese(body)) return body;
+
+  const product = customer.outboundProduct;
+  const language = customerConversationLanguage(customer);
+  const wantsCall = body.includes('通话') || body.includes('电话') || customer.needCall || customer.inboxReason === 'call';
+  const isWakeup = body.includes('最新目录') || body.includes('新款');
+
+  if (language === 'Arabic') {
+    if (wantsCall) return `شكرًا لرسالتك. بخصوص ${product}، يمكن لمديرنا شرح الخيارات والسعر ومدة التسليم في مكالمة قصيرة. ما الوقت المناسب لك اليوم؟`;
+    if (isWakeup) return `مرحبًا، لدينا خيارات جديدة من ${product}. إذا كنت لا تزال مهتمًا، يمكنني إرسال الكتالوج الأحدث لك.`;
+    return `شكرًا لرسالتك. سأؤكد لك الحد الأدنى للطلب وأفضل سعر ومدة التسليم لـ ${product}، ثم أرسل لك التفاصيل قريبًا.`;
+  }
+  if (language === 'Spanish') {
+    if (wantsCall) return `Gracias por tu mensaje. Para ${product}, nuestro gerente puede explicarte las opciones, el precio y el plazo de entrega en una llamada breve. ¿Qué horario te conviene hoy?`;
+    if (isWakeup) return `Hola, tenemos nuevas opciones de ${product}. Si todavía te interesa, puedo enviarte el catálogo actualizado.`;
+    return `Gracias por tu mensaje. Voy a confirmar el MOQ, el mejor precio y el tiempo de entrega de ${product}, y te enviaré los detalles pronto.`;
+  }
+  if (wantsCall) return `Thanks for your message. For ${product}, our manager can explain the options, price, and delivery time in a short call. What time works for you today?`;
+  if (isWakeup) return `Hi, we have new options for ${product}. If you are still interested, I can send you the latest catalog for review.`;
+  return `Thanks for your message. I will confirm the MOQ, best price, and delivery time for ${product}, then send you the details shortly.`;
+}
+
+async function requestDraft(customer: CustomerProfile, instruction?: string, mode?: 'draft' | 'polish', intent: DraftIntent = mode === 'polish' ? 'polish' : 'reply'): Promise<string> {
   try {
     const resp = await fetch('/api/overseas/agents/conversion/draft', {
       method: 'POST',
@@ -397,20 +468,21 @@ async function requestDraft(customer: CustomerProfile, instruction?: string, mod
         timeline: customer.timeline.slice(-8),
         product: customer.outboundProduct,
         internalProduct: customer.product,
-        language: replyLanguage(customer),
+        language: customerConversationLanguage(customer),
         stage: STAGE_LABEL[customer.stage],
         instruction,
         mode,
+        intent,
       }),
     });
     if (resp.ok) {
       const data = await resp.json();
-      if (typeof data?.draft === 'string' && data.draft.trim()) return data.draft.trim();
+      if (typeof data?.draft === 'string' && data.draft.trim()) return normalizeDraftForChineseEditing(data.draft.trim(), customer);
     }
   } catch {
     // Use local fallback when the API is unavailable in local preview.
   }
-  return fallbackCustomerReply(customer);
+  return fallbackCustomerReplyZh(customer);
 }
 
 function fallbackCustomerSuggestions(customer: CustomerProfile): string[] {
@@ -502,6 +574,7 @@ function CompactCustomerList({
         {list.map(customer => {
           const lastMessage = customer.timeline[customer.timeline.length - 1];
           const statusColor = HANDLING_COLOR[customer.handlingMode];
+          const hasUnread = Boolean(customer.hasUnread);
           return (
             <button
               key={customer.id}
@@ -511,7 +584,7 @@ function CompactCustomerList({
             >
               <div className="flex items-start gap-3">
                 <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border bg-surface-2 text-sm font-black text-text-secondary">
-                  <span className="absolute -left-0.5 -top-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-white" style={{ backgroundColor: statusColor }} />
+                  <span className="absolute -left-0.5 -top-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-white transition-opacity" style={{ backgroundColor: hasUnread ? '#dc2626' : statusColor, opacity: hasUnread ? 1 : 0 }} />
                   {customer.avatar}
                 </div>
                 <div className="min-w-0 flex-1">
@@ -532,29 +605,42 @@ function CompactCustomerList({
 
 function DraftSuggestionBar({
   draft,
+  translatedDraft,
+  isTemplate,
   onSend,
   onEdit,
   onDismiss,
+  onRegenerate,
 }: {
   draft: string;
+  translatedDraft: string;
+  isTemplate: boolean;
   onSend: () => void;
   onEdit: () => void;
   onDismiss: () => void;
+  onRegenerate: () => void;
 }) {
   return (
-    <div className="relative rounded-xl border border-[#0891b2]/20 bg-[#0891b2]/[0.08] px-3 py-2">
+    <div className="relative ml-auto max-w-[74%] rounded-2xl rounded-tr-sm border border-dashed border-[#0891b2]/35 bg-[#0891b2]/[0.08] px-4 py-3 shadow-sm">
       <button type="button" onClick={onDismiss} className="absolute right-2 top-2 rounded-full p-1 text-text-muted hover:bg-white/70">
         <X size={12} />
       </button>
-      <div className="flex items-start gap-3 pr-6">
-        <div className="mt-0.5 flex shrink-0 items-center gap-1.5 text-xs font-black text-[#0891b2]">
+      <div className="pr-6">
+        <div className="flex shrink-0 items-center gap-1.5 text-xs font-black text-[#0891b2]">
           <Bot size={14} />
-          AI 建议回复
+          {'AI \u5efa\u8bae\u56de\u590d'}
+          {isTemplate && <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-black text-amber-700">{'\u6a21\u677f'}</span>}
+          <button type="button" onClick={onRegenerate} className="ml-1 rounded-full p-1 text-[#0891b2] hover:bg-white" title="\u6362\u4e00\u7248">
+            <RefreshCw size={12} />
+          </button>
         </div>
-        <p className="line-clamp-2 min-w-0 flex-1 text-xs leading-5 text-text-secondary">{draft}</p>
-        <div className="flex shrink-0 items-center gap-1.5">
-          <button type="button" onClick={onSend} className="rounded-lg bg-[#0891b2] px-3 py-1.5 text-xs font-bold text-white">直接发送</button>
-          <button type="button" onClick={onEdit} className="rounded-lg border border-border bg-white px-3 py-1.5 text-xs font-bold text-text-secondary">去修改</button>
+        <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-text-primary">{translatedDraft}</p>
+        <div className="mt-2 rounded-xl border border-[#0891b2]/15 bg-white/70 px-3 py-2 text-xs leading-relaxed text-text-secondary">
+          <span className="font-bold text-text-primary">{'\u4e2d\u6587\u8349\u7a3f\uff1a'}</span>{draft}
+        </div>
+        <div className="mt-3 flex justify-end gap-1.5">
+          <button type="button" onClick={onSend} className="rounded-lg bg-[#0891b2] px-3 py-1.5 text-xs font-bold text-white">{'\u76f4\u63a5\u53d1\u9001'}</button>
+          <button type="button" onClick={onEdit} className="rounded-lg border border-border bg-white px-3 py-1.5 text-xs font-bold text-text-secondary">{'\u4fee\u6539'}</button>
         </div>
       </div>
     </div>
@@ -566,8 +652,8 @@ function chineseMessageTranslation(body: string, customer: CustomerProfile): str
   const normalized = body.replace(/\s+/g, ' ').trim().toLowerCase();
 
   const exact: Record<string, string> = {
-    'can we talk with your manager today? i need 500 pcs custom hair wigs.': '今天可以和你们经理通话吗？我需要 500 件定制假发。',
-    'our manager will call you shortly. what time works best for you?': '我们的经理很快会联系您。您什么时间方便？',
+    'hi, i need 500 pcs custom hair wigs. please share moq, best price, and delivery time.': '你好，我需要 500 件定制假发。请提供起订量、最优价格和交期。',
+    'i can ask our manager to walk you through the options by a short call. what time works for you?': '我可以安排经理通过一次简短通话为您说明方案。您什么时间方便？',
     'need 1000 gift boxes with custom logo. what is the best price?': '需要 1000 套定制 LOGO 礼盒，最优惠价格是多少？',
     'we can support custom logo gift boxes. i will confirm the best price and packaging options for you.': '我们可以支持定制 LOGO 礼盒。我会为您确认最优价格和包装方案。',
     'me interesa el parche de moxibustion, 200 piezas. cual es el precio unitario?': '我对艾灸贴感兴趣，200 件。单价是多少？',
@@ -586,30 +672,71 @@ function chineseMessageTranslation(body: string, customer: CustomerProfile): str
   return null;
 }
 
+function timelineEventAgeHours(event?: TimelineEvent): number {
+  const time = String(event?.time || '').trim();
+  if (!time) return 0;
+  const hourMatch = time.match(/(\d+)\s*(?:h|\u5c0f\u65f6|\u5c0f\u6642)/i);
+  if (hourMatch) return Number(hourMatch[1]);
+  const dayMatch = time.match(/(\d+)\s*(?:d|\u5929)/i);
+  if (dayMatch) return Number(dayMatch[1]) * 24;
+  if (time.includes('\u6628\u5929')) return 30;
+  return 0;
+}
+
+function lastBuyerEvent(customer: CustomerProfile): TimelineEvent | undefined {
+  return [...customer.timeline].reverse().find(event => event.type === 'whatsapp' && event.actor === 'buyer');
+}
+
+function sceneChips(customer: CustomerProfile): { intent: DraftIntent; label: string }[] {
+  const chips: { intent: DraftIntent; label: string }[] = [];
+  const hasSellerOrAi = customer.timeline.some(event => event.type === 'whatsapp' && (event.actor === 'seller' || event.actor === 'ai'));
+  const last = customer.timeline[customer.timeline.length - 1];
+  const lastBuyer = lastBuyerEvent(customer);
+  if (customer.stage === 'lead' && !hasSellerOrAi) chips.push({ intent: 'opener', label: '\u5199\u4e00\u6761\u5f00\u573a\u767d' });
+  if (customer.stage === 'quoted' && timelineEventAgeHours(lastBuyer) > 72) chips.push({ intent: 'followup', label: '\u5199\u4e00\u6761\u8ddf\u8fdb' });
+  if (customer.stage === 'silent30' || customer.stage === 'silent60') chips.push({ intent: 'reactivate', label: '\u5199\u4e00\u6761\u5524\u9192\u6d88\u606f' });
+  if (last?.type === 'call') chips.push({ intent: 'post_call', label: '\u6309\u901a\u8bdd\u7ed3\u679c\u5199\u8ddf\u8fdb' });
+  return chips.slice(0, 3);
+}
+
 function ChatThread({
   customer,
   draftSuggestion,
   input,
+  translatedInput,
   onInputChange,
+  onTranslatedInputChange: _onTranslatedInputChange,
   onSend,
   onEditDraft,
   onSendDraft,
   onDismissDraft,
   onPolishInput,
+  onRegenerateDraft,
+  onSceneDraft,
+  onPreviewTranslate,
   isPolishing,
 }: {
   customer: CustomerProfile | null;
   draftSuggestion: string | null;
   input: string;
+  translatedInput: string;
   onInputChange: (value: string) => void;
-  onSend: (text: string) => void;
+  onTranslatedInputChange: (value: string) => void;
+  onSend: () => void;
   onEditDraft: () => void;
   onSendDraft: () => void;
   onDismissDraft: () => void;
   onPolishInput: () => void;
+  onRegenerateDraft: () => void;
+  onSceneDraft: (intent: DraftIntent) => void;
+  onPreviewTranslate: () => void;
   isPolishing: boolean;
 }) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const composerState = draftSuggestion ? 'draft' : input.trim() ? 'typing' : 'idle';
+  const isOutsideWindow = customer ? timelineEventAgeHours(lastBuyerEvent(customer)) > 24 : false;
+  const chips = customer && composerState === 'idle' ? sceneChips(customer) : [];
 
   useEffect(() => {
     if (!inputRef.current) return;
@@ -617,13 +744,19 @@ function ChatThread({
     inputRef.current.selectionEnd = inputRef.current.value.length;
   }, [input]);
 
+  useEffect(() => {
+    if (!previewOpen || !input.trim()) return;
+    const timer = window.setTimeout(() => onPreviewTranslate(), 800);
+    return () => window.clearTimeout(timer);
+  }, [previewOpen, input, onPreviewTranslate]);
+
   if (!customer) {
     return (
       <section className="flex min-w-0 flex-1 items-center justify-center bg-white">
         <div className="text-center">
           <MessageSquare size={26} className="mx-auto text-text-muted" />
-          <p className="mt-3 text-sm font-black text-text-primary">选择左侧一个客户开始</p>
-          <p className="mt-1 text-xs text-text-muted">客户列表会一直保留，方便你快速切换处理。</p>
+          <p className="mt-3 text-sm font-black text-text-primary">{'\u9009\u62e9\u5de6\u4fa7\u4e00\u4e2a\u5ba2\u6237\u5f00\u59cb'}</p>
+          <p className="mt-1 text-xs text-text-muted">{'\u67e5\u770b\u5bf9\u8bdd\u3001\u7f16\u8f91 AI \u8349\u7a3f\u5e76\u53d1\u9001\u56de\u590d'}</p>
         </div>
       </section>
     );
@@ -636,9 +769,7 @@ function ChatThread({
           <p className="text-sm font-black text-text-primary">{customer.name}</p>
           <p className="text-[11px] text-text-muted">{STAGE_LABEL[customer.stage]} · {customer.source} · {customer.lastActive}</p>
         </div>
-        <div className="rounded-xl border border-border bg-surface px-3 py-1.5 text-xs font-bold text-text-secondary">
-          对方当地 {customer.localTime}
-        </div>
+        <div className="rounded-xl border border-border bg-surface px-3 py-1.5 text-xs font-bold text-text-secondary">{'\u5f53\u5730\u65f6\u95f4'} {customer.localTime}</div>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
         <div className="mx-auto max-w-3xl space-y-4">
@@ -668,54 +799,39 @@ function ChatThread({
                   <p className={`mt-1 whitespace-pre-line text-sm leading-relaxed ${isBuyer ? 'text-text-secondary' : 'text-white'}`}>{event.body}</p>
                   {translation && (
                     <div className={`mt-2 border-t pt-2 text-xs leading-relaxed ${isBuyer ? 'border-border text-text-muted' : 'border-white/20 text-white/80'}`}>
-                      <span className="font-bold">中文翻译：</span>{translation}
+                      <span className="font-bold">{'\u4e2d\u6587\u7ffb\u8bd1\uff1a'}</span>{translation}
                     </div>
                   )}
-                  {event.autoSent && (
-                    <div className="mt-2 flex justify-end">
-                      <span className="rounded-full bg-white/15 px-2 py-0.5 text-[10px] font-bold text-white/85">AI 自动回复</span>
-                    </div>
-                  )}
+                  {event.autoSent && <div className="mt-2 flex justify-end"><span className="rounded-full bg-white/15 px-2 py-0.5 text-[10px] font-bold text-white/85">{'AI \u81ea\u52a8\u56de\u590d'}</span></div>}
                 </div>
               </div>
             );
           })}
+          {draftSuggestion && (
+            <DraftSuggestionBar draft={draftSuggestion} translatedDraft={translateChineseReplyForCustomer(customer, draftSuggestion)} isTemplate={isOutsideWindow} onSend={onSendDraft} onEdit={onEditDraft} onDismiss={onDismissDraft} onRegenerate={onRegenerateDraft} />
+          )}
         </div>
       </div>
       <div className="shrink-0 space-y-2 border-t border-border bg-white p-4">
-        {draftSuggestion && (
-          <div className="mx-auto max-w-3xl">
-            <DraftSuggestionBar draft={draftSuggestion} onSend={onSendDraft} onEdit={onEditDraft} onDismiss={onDismissDraft} />
-          </div>
-        )}
-        <div className="mx-auto max-w-3xl rounded-xl border border-border bg-surface-2 p-3">
-          <textarea
-            ref={inputRef}
-            data-customer-reply-input
-            rows={3}
-            value={input}
-            onChange={event => onInputChange(event.target.value)}
-            placeholder="输入回复..."
-            className="w-full resize-none bg-transparent text-sm leading-relaxed text-text-primary outline-none placeholder:text-text-muted"
-          />
-          <div className="mt-2 flex items-center justify-between gap-2">
-            <button
-              type="button"
-              onClick={onPolishInput}
-              disabled={!input.trim() || isPolishing}
-              className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted hover:bg-white hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
-              title="翻译润色"
-            >
-              <Languages size={15} />
-            </button>
-            <button
-              type="button"
-              onClick={() => onSend(input)}
-              disabled={!input.trim()}
-              className="flex items-center gap-1.5 rounded-xl bg-[#0891b2] px-4 py-2 text-xs font-bold text-white disabled:opacity-40"
-            >
-              <Send size={13} /> 发送
-            </button>
+        <div className="mx-auto max-w-3xl space-y-2">
+          {isOutsideWindow && <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">{'\u8ddd\u5ba2\u6237\u4e0a\u6b21\u6d88\u606f\u5df2\u8d85\u8fc724\u5c0f\u65f6\uff0cWhatsApp \u8981\u6c42\u4ee5\u6a21\u677f\u6d88\u606f\u53d1\u9001'}</div>}
+          {composerState === 'idle' && chips.length > 0 && (
+            <div className="flex flex-wrap gap-2">
+              {chips.map(chip => <button key={chip.intent} type="button" onClick={() => onSceneDraft(chip.intent)} className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface-2 px-3 py-1.5 text-xs font-bold text-text-secondary hover:border-primary/30 hover:bg-primary/5 hover:text-primary"><Sparkles size={13} /> {chip.label}</button>)}
+            </div>
+          )}
+          <div className="rounded-xl border border-border bg-surface-2 p-3">
+            {previewOpen && translatedInput && <div className="mb-3 rounded-xl border border-border bg-white px-3 py-2 text-xs leading-relaxed text-text-secondary"><span className="font-black text-text-primary">{'\u8bd1\u6587\u9884\u89c8\uff1a'}</span>{translatedInput}</div>}
+            <textarea ref={inputRef} data-customer-reply-input rows={3} value={input} onChange={event => onInputChange(event.target.value)} placeholder="\u8f93\u5165\u4e2d\u6587\u56de\u590d..." className="w-full resize-none bg-transparent text-sm leading-relaxed text-text-primary outline-none placeholder:text-text-muted" />
+            <div className="mt-2 flex items-center justify-between gap-2">
+              {composerState === 'typing' ? (
+                <div className="flex items-center gap-1.5">
+                  <button type="button" onClick={onPolishInput} disabled={!input.trim() || isPolishing} className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted hover:bg-white hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40" title="\u7ffb\u8bd1\u6da6\u8272"><Languages size={15} /></button>
+                  <button type="button" onClick={() => { setPreviewOpen(open => !open); if (!previewOpen) onPreviewTranslate(); }} disabled={!input.trim()} className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted hover:bg-white hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40" title="\u8bd1\u6587\u9884\u89c8"><Eye size={15} /></button>
+                </div>
+              ) : <span />}
+               <button type="button" onClick={onSend} disabled={!input.trim()} className="flex items-center gap-1.5 rounded-xl bg-[#0891b2] px-4 py-2 text-xs font-bold text-white disabled:opacity-40"><Send size={13} /> {'\u53d1\u9001'}</button>
+            </div>
           </div>
         </div>
       </div>
@@ -794,7 +910,7 @@ function HandlingStatusCard({
     return (
       <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4">
         <p className="text-sm font-black text-amber-800">等你审核</p>
-        <p className="mt-2 text-xs leading-relaxed text-amber-700">{customer.handlingReason} · 草稿已备好，在下方聊天区确认</p>
+        <p className="mt-2 text-xs leading-relaxed text-amber-700">{customer.handlingReason} · 中文草稿已备好，可在聊天区修改后翻译发送</p>
         <div className="mt-3 flex gap-2">
           <button type="button" onClick={() => switchMode('human_needed', '已转为你亲自接手')} className="rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs font-bold text-amber-800 hover:bg-amber-100">
             转我接手
@@ -809,7 +925,7 @@ function HandlingStatusCard({
 
   return (
     <div className="rounded-2xl border border-red-100 bg-red-50 p-4">
-      <p className="text-sm font-black text-red-700">{customer.needCall ? '需要你通话 · 最高优先级' : '需要你出面'}</p>
+      <p className="text-sm font-black text-red-700">{customer.needCall ? '建议你主动通话 · 高优先级' : '需要你出面'}</p>
       <p className="mt-2 text-xs leading-relaxed text-red-700/80">
         {customer.needCall ? `对方当地 ${customer.localTime}，${customer.handlingReason}` : customer.handlingReason}
       </p>
@@ -967,13 +1083,19 @@ function CustomerInfoRail({
 
   return (
     <aside className="h-full w-[340px] shrink-0 overflow-y-auto border-l border-border bg-surface px-4 py-4">
+      <div className="mb-2 px-1">
+        <p className="text-xs font-black text-text-primary">今日处理</p>
+        <p className="mt-0.5 text-[11px] text-text-muted">先看是否需要你接手，再看客户资料。</p>
+      </div>
       <div className="grid gap-3">
         <HandlingStatusCard customer={customer} onModeChange={onHandlingModeChange} onToast={onToast} />
         <AdoptionPrompt onToast={onToast} />
-        <RulesDisclosure />
       </div>
 
       <div className="mt-3">
+        <div className="mb-2 px-1">
+          <p className="text-xs font-black text-text-primary">客户资料</p>
+        </div>
         <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
           <SortableContext items={widgetOrder} strategy={verticalListSortingStrategy}>
             <div className="grid gap-3">
@@ -983,6 +1105,9 @@ function CustomerInfoRail({
             </div>
           </SortableContext>
         </DndContext>
+      </div>
+      <div className="mt-3">
+        <RulesDisclosure />
       </div>
     </aside>
   );
@@ -1104,12 +1229,13 @@ function appendMessage(customer: CustomerProfile, body: string, actor: 'seller' 
   };
 }
 
-export default function ConversionPage({ onLeaveConversation: _onLeaveConversation }: Props) {
+export default function ConversionPage({ onLeaveConversation: _onLeaveConversation, isDemo = false }: Props) {
   const [view, setView] = useState<CustomerView>('inbox');
   const [customers, setCustomers] = useState<CustomerProfile[]>(CUSTOMERS);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [draftSuggestion, setDraftSuggestion] = useState<string | null>(null);
   const [input, setInput] = useState('');
+  const [translatedInput, setTranslatedInput] = useState('');
   const [isPolishing, setIsPolishing] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [lastDraftKey, setLastDraftKey] = useState('');
@@ -1121,6 +1247,7 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
   useEffect(() => {
     setDraftSuggestion(null);
     setInput('');
+    setTranslatedInput('');
   }, [selectedId]);
 
   useEffect(() => {
@@ -1169,18 +1296,34 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
     }));
   };
 
-  const sendReply = (text: string, actor: 'seller' | 'ai' = 'seller') => {
-    const body = text.trim();
+  const sendReply = () => {
+    if (!selected) return;
+    const body = (translatedInput.trim() || (containsChinese(input) ? translateChineseReplyForCustomer(selected, input) : input.trim()));
     if (!body) return;
-    updateSelectedCustomer(customer => appendMessage(customer, body, actor));
+    updateSelectedCustomer(customer => appendMessage(customer, body, 'seller'));
     setInput('');
+    setTranslatedInput('');
     setDraftSuggestion(null);
   };
 
-  const generateManualDraft = async (instruction: string) => {
+  const sendDraftDirectly = () => {
+    if (!selected || !draftSuggestion) return;
+    updateSelectedCustomer(customer => appendMessage(customer, translateChineseReplyForCustomer(selected, draftSuggestion), 'seller'));
+    setDraftSuggestion(null);
+    setInput('');
+    setTranslatedInput('');
+  };
+
+  const generateManualDraft = async (instruction: string, intent: DraftIntent = 'reply') => {
     if (!selected) return;
     setDraftSuggestion(null);
-    const draft = await requestDraft(selected, instruction);
+    const draft = await requestDraft(selected, instruction, undefined, intent);
+    setDraftSuggestion(draft);
+  };
+
+  const regenerateDraft = async () => {
+    if (!selected) return;
+    const draft = await requestDraft(selected, undefined, undefined, 'reply');
     setDraftSuggestion(draft);
   };
 
@@ -1188,39 +1331,67 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
     if (!selected || !input.trim() || isPolishing) return;
     setIsPolishing(true);
     try {
-      const polished = await requestDraft(selected, `Polish this seller reply without changing its meaning: ${input}`, 'polish');
+      const polished = await requestDraft(selected, input, 'polish', 'polish');
       setInput(polished);
+      setTranslatedInput('');
     } finally {
       setIsPolishing(false);
     }
   };
 
+  const previewTranslate = () => {
+    if (!selected || !input.trim()) return;
+    setTranslatedInput(translateChineseReplyForCustomer(selected, input));
+  };
+
   const simulateBuyerMessage = () => {
-    updateSelectedCustomer(customer => appendMessage(customer, 'Can you confirm the MOQ, delivery time, and best price today?', 'buyer'));
+    updateSelectedCustomer(customer => ({
+      ...appendMessage(customer, 'Can you confirm the MOQ, delivery time, and best price today?', 'buyer'),
+      hasUnread: true,
+    }));
+  };
+
+  const openCustomer = (id: string) => {
+    setSelectedId(id);
+    setCustomers(list => list.map(customer => (
+      customer.id === id ? { ...customer, hasUnread: false } : customer
+    )));
   };
 
   const editDraft = () => {
-    if (!draftSuggestion) return;
+    if (!selected || !draftSuggestion) return;
     setInput(draftSuggestion);
+    setTranslatedInput(translateChineseReplyForCustomer(selected, draftSuggestion));
     setDraftSuggestion(null);
     window.setTimeout(() => {
-      document.querySelector<HTMLTextAreaElement>('[data-customer-reply-input]')?.focus();
+      const inputEl = document.querySelector<HTMLTextAreaElement>('[data-customer-reply-input]');
+      inputEl?.focus();
+      if (inputEl) {
+        inputEl.selectionStart = inputEl.value.length;
+        inputEl.selectionEnd = inputEl.value.length;
+      }
     }, 0);
   };
 
+
   return (
     <div className="flex h-full min-w-0 bg-white">
-      <CompactCustomerList view={view} selectedId={selectedId} customers={customers} onOpen={setSelectedId} onViewChange={setView} />
+      <CompactCustomerList view={view} selectedId={selectedId} customers={customers} onOpen={openCustomer} onViewChange={setView} />
       <ChatThread
         customer={selected}
         draftSuggestion={draftSuggestion}
         input={input}
-        onInputChange={setInput}
+        translatedInput={translatedInput}
+        onInputChange={(value) => { setInput(value); setTranslatedInput(''); }}
+        onTranslatedInputChange={setTranslatedInput}
         onSend={sendReply}
         onEditDraft={editDraft}
-        onSendDraft={() => draftSuggestion && sendReply(draftSuggestion, 'ai')}
+        onSendDraft={sendDraftDirectly}
         onDismissDraft={() => setDraftSuggestion(null)}
         onPolishInput={polishInput}
+        onRegenerateDraft={regenerateDraft}
+        onSceneDraft={(intent) => void generateManualDraft('', intent)}
+        onPreviewTranslate={previewTranslate}
         isPolishing={isPolishing}
       />
       <CustomerInfoRail customer={selected} onGenerateDraft={generateManualDraft} onHandlingModeChange={updateHandlingMode} onToast={showToast} />
@@ -1229,7 +1400,7 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
           {toast}
         </div>
       )}
-      {selected && (
+      {isDemo && selected && (
         <button
           type="button"
           onClick={simulateBuyerMessage}

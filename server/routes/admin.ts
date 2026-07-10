@@ -15,6 +15,17 @@ import {
 } from '../lib/demoAccounts.js';
 import { getVideoAdminAlert, listVideoAdminAlerts } from '../lib/videoAdminAlerts.js';
 import { attachManualVideoUploadAndQueue } from './videos.js';
+import {
+  decryptSecret,
+  getTenantPlatformApp,
+  listTenantPlatformApps,
+  publicTenantPlatformApp,
+  tenantWebhookUrl,
+  upsertTenantPlatformApp,
+  type TenantPlatform,
+} from '../lib/tenantPlatformApps.js';
+import { store } from '../storage/index.js';
+import axios from 'axios';
 
 export const adminRouter = Router();
 
@@ -44,6 +55,15 @@ async function safePbGet(collection: string, id?: string | null) {
 
 function bodyText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function platformParam(value: unknown): TenantPlatform | null {
+  const platform = bodyText(value);
+  return platform === 'meta' || platform === 'google' ? platform : null;
+}
+
+function graphVersion() {
+  return process.env.META_GRAPH_VERSION?.trim() || 'v25.0';
 }
 
 function publicOAuthConfig(req: Parameters<typeof oauthCallbackUrls>[0], adminEmail: string) {
@@ -192,4 +212,157 @@ adminRouter.put('/oauth-config', async (req, res) => {
 
   writeOAuthConfig(patch);
   res.json(publicOAuthConfig(req, admin.email));
+});
+
+adminRouter.get('/delivery/platform-apps', async (req, res) => {
+  const admin = await requireAdminUser(req);
+  if (!admin) {
+    res.status(403).json({ error: 'admin_required' });
+    return;
+  }
+
+  const [tenants, apps] = await Promise.all([
+    store.list<Record<string, any>>('tenants', { perPage: 200 }).catch(() => ({ items: [], totalItems: 0, totalPages: 0, page: 1, perPage: 200 })),
+    listTenantPlatformApps(),
+  ]);
+  const tenantIds = new Set<string>([
+    ...tenants.items.map(item => String(item.id || item.tenantId || '')).filter(Boolean),
+    ...apps.map(app => app.tenant_id),
+  ]);
+
+  res.json({
+    admin: admin.email,
+    tenants: Array.from(tenantIds).map(tenantId => {
+      const tenant = tenants.items.find(item => item.id === tenantId || item.tenantId === tenantId);
+      return {
+        tenantId,
+        name: String(tenant?.name || tenant?.companyName || tenant?.company || tenantId),
+        apps: (['meta', 'google'] as TenantPlatform[]).map(platform => {
+          const app = apps.find(item => item.tenant_id === tenantId && item.platform === platform);
+          return app ? publicTenantPlatformApp(req, app) : {
+            id: '',
+            tenantId,
+            platform,
+            appId: '',
+            appSecretSet: false,
+            waConfigId: '',
+            webhookVerifyToken: '',
+            webhookUrl: platform === 'meta' ? tenantWebhookUrl(req, tenantId) : '',
+            tokenType: 'user_60d',
+            accessTokenSet: false,
+            tokenExpiresAt: '',
+            status: 'pending',
+            notes: '',
+          };
+        }),
+      };
+    }),
+  });
+});
+
+adminRouter.put('/delivery/platform-apps/:tenantId/:platform', async (req, res) => {
+  const admin = await requireAdminUser(req);
+  if (!admin) {
+    res.status(403).json({ error: 'admin_required' });
+    return;
+  }
+  const platform = platformParam(req.params.platform);
+  if (!platform) {
+    res.status(400).json({ error: 'invalid_platform' });
+    return;
+  }
+  try {
+    const app = await upsertTenantPlatformApp({
+      tenantId: bodyText(req.params.tenantId),
+      platform,
+      appId: bodyText(req.body?.appId),
+      appSecret: bodyText(req.body?.appSecret),
+      waConfigId: bodyText(req.body?.waConfigId),
+      tokenType: req.body?.tokenType === 'system_user_permanent' ? 'system_user_permanent' : 'user_60d',
+      accessToken: bodyText(req.body?.accessToken),
+      tokenExpiresAt: bodyText(req.body?.tokenExpiresAt),
+      status: bodyText(req.body?.status) as any || 'pending',
+      notes: bodyText(req.body?.notes),
+    });
+    res.json({ ok: true, app: publicTenantPlatformApp(req, app) });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : 'platform_app_save_failed' });
+  }
+});
+
+adminRouter.post('/delivery/platform-apps/:tenantId/:platform/complete', async (req, res) => {
+  const admin = await requireAdminUser(req);
+  if (!admin) {
+    res.status(403).json({ error: 'admin_required' });
+    return;
+  }
+  const platform = platformParam(req.params.platform);
+  if (!platform) {
+    res.status(400).json({ error: 'invalid_platform' });
+    return;
+  }
+  const app = await upsertTenantPlatformApp({
+    tenantId: bodyText(req.params.tenantId),
+    platform,
+    status: 'active',
+    notes: bodyText(req.body?.notes),
+  });
+  res.json({ ok: true, app: publicTenantPlatformApp(req, app) });
+});
+
+adminRouter.post('/delivery/platform-apps/:tenantId/:platform/test/:kind', async (req, res) => {
+  const admin = await requireAdminUser(req);
+  if (!admin) {
+    res.status(403).json({ error: 'admin_required' });
+    return;
+  }
+  const tenantId = bodyText(req.params.tenantId);
+  const platform = platformParam(req.params.platform);
+  const kind = bodyText(req.params.kind);
+  if (!platform) {
+    res.status(400).json({ ok: false, error: 'invalid_platform' });
+    return;
+  }
+
+  const app = await getTenantPlatformApp(tenantId, platform);
+  const token = decryptSecret(app?.access_token);
+  const appSecret = decryptSecret(app?.app_secret);
+  try {
+    if (!app) throw new Error('请先保存该租户的平台应用配置');
+    if (kind === 'pages') {
+      if (platform !== 'meta') throw new Error('主页列表自检仅适用于 Meta');
+      if (!token) throw new Error('请先录入访问 token');
+      const resp = await axios.get(`https://graph.facebook.com/${graphVersion()}/me/accounts`, {
+        params: { access_token: token, fields: 'id,name', limit: 10 },
+      });
+      res.json({ ok: true, message: `已拉取 ${resp.data?.data?.length ?? 0} 个主页`, data: resp.data?.data ?? [] });
+      return;
+    }
+    if (kind === 'webhook') {
+      if (platform !== 'meta') throw new Error('Webhook 自检仅适用于 Meta');
+      if (!app.app_id || !token) throw new Error('请先录入 App ID 和访问 token');
+      const resp = await axios.get(`https://graph.facebook.com/${graphVersion()}/${app.app_id}/subscriptions`, {
+        params: { access_token: token },
+      });
+      res.json({ ok: true, message: 'Webhook 订阅状态已返回', data: resp.data?.data ?? [] });
+      return;
+    }
+    if (kind === 'whatsapp') {
+      if (platform !== 'meta') throw new Error('WhatsApp 自检仅适用于 Meta');
+      if (!token) throw new Error('请先录入访问 token');
+      if (!app.wa_config_id) throw new Error('请先录入 WhatsApp Embedded Signup config id 或在备注中记录 phone_number_id');
+      res.json({ ok: true, message: 'WhatsApp 配置已存在。真实测试发送需要 phone_number_id 和测试收件手机号，后续可继续扩展。' });
+      return;
+    }
+    if (kind === 'google') {
+      if (platform !== 'google') throw new Error('Google 自检仅适用于 Google');
+      if (!app.app_id || !appSecret) throw new Error('请先录入 Google Client ID / Secret');
+      res.json({ ok: true, message: 'Google OAuth 应用信息已保存，等待用户授权验证。' });
+      return;
+    }
+    throw new Error('未知自检项');
+  } catch (error: any) {
+    const msg = error?.response?.data?.error?.message || error?.message || '自检失败';
+    res.status(400).json({ ok: false, error: msg });
+  }
 });

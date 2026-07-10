@@ -118,3 +118,13 @@ export function oauthCallbackUrls(req: Request) {
     tiktok: `${origin}/api/overseas/social/oauth/tiktok/callback`,
   };
 }
+
+export async function getTenantAwareMetaOAuthClient(tenantId?: string): Promise<{ appId: string; appSecret: string } | null> {
+  const { getTenantMetaOAuthClient } = await import('./tenantPlatformApps.js');
+  return getTenantMetaOAuthClient(tenantId);
+}
+
+export async function getTenantAwareGoogleOAuthClient(tenantId?: string): Promise<{ clientId: string; clientSecret: string } | null> {
+  const { getTenantGoogleOAuthClient } = await import('./tenantPlatformApps.js');
+  return getTenantGoogleOAuthClient(tenantId);
+}

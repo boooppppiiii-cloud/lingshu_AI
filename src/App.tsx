@@ -15,6 +15,7 @@ import EnterprisePage from './components/EnterprisePage';
 import IntegrationsPage from './components/IntegrationsPage';
 import ScheduledPage from './components/ScheduledPage';
 import AdminDashboard from './components/AdminDashboard';
+import AdminDeliveryPage from './components/AdminDeliveryPage';
 
 export type Page =
   | 'strategy'
@@ -26,6 +27,7 @@ export type Page =
   | 'plugins'
   | 'scheduled'
   | 'admin'
+  | 'adminDelivery'
   | 'channels'
   | 'youtube';
 
@@ -55,7 +57,7 @@ export interface KickoffSignal { text: string; key: string }
 export type AgentAction = (agent: AgentType, task: string) => void;
 
 const AGENT_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention'];
-const ALL_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention', 'orders', 'enterprise', 'plugins', 'scheduled', 'admin', 'channels', 'youtube'];
+const ALL_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention', 'orders', 'enterprise', 'plugins', 'scheduled', 'admin', 'adminDelivery', 'channels', 'youtube'];
 const BUSINESS_DIAGNOSIS_SEEN_KEY = 'ow_business_diagnosis_seen_scope_v2';
 const firstUserText = (msgs?: Message[]) => (msgs?.find(m => m.role === 'user')?.content ?? '新会话').slice(0, 24);
 const customerUnifiedAgent = (agent: AgentType): AgentType => (agent === 'retention' ? 'conversion' : agent);
@@ -64,6 +66,7 @@ const loadConvs = (): Conversation[] => {
 };
 const loadPage = (): Page => {
   try {
+    if (window.location.pathname === '/admin/delivery') return 'adminDelivery';
     const saved = localStorage.getItem('ow_page') as Page | null;
     if (saved && !ALL_PAGES.includes(saved)) localStorage.removeItem('ow_page');
     return 'strategy';
@@ -277,6 +280,8 @@ export default function App() {
     setConversation(null); setRestore(null); setKickoff(null);
     activeIdRef.current = null; setActiveConvId(null);
     setPage(p === 'retention' ? 'conversion' : p);
+    if (p === 'adminDelivery') window.history.replaceState(null, '', '/admin/delivery');
+    else if (window.location.pathname === '/admin/delivery') window.history.replaceState(null, '', '/');
   }, []);
   const restoreFor = (a: AgentType) => (restore && restore.agent === a ? restore : undefined);
   const kickoffFor = (a: AgentType) => (kickoff && kickoff.agent === a ? { text: kickoff.text, key: kickoff.key } : undefined);
@@ -332,6 +337,7 @@ export default function App() {
   return (
     <Layout page={page} onNavigate={handleNavigate} conversation={conversation} session={session} onLogout={handleLogout}
       onSessionUpdate={setSession}
+      onOpenBusinessDiagnosis={reopenBusinessDiagnosis}
       demoGuideActive={false}
       conversations={conversations} activeConvId={activeConvId} onOpenConversation={openConversation} onNewConversation={newConversation}
       suppressRightPanel={scriptPanelOpen} onAction={startAgentTask}>
@@ -411,6 +417,7 @@ export default function App() {
               kickoff={kickoffFor('conversion')}
               onAction={startAgentTask}
               onSessionRefresh={() => void refreshSession()}
+              isDemo={Boolean(session.demo?.enabled)}
             />
           )}
           {page === 'orders' && <OrderManagementPage />}
@@ -418,6 +425,7 @@ export default function App() {
           {page === 'plugins' && <IntegrationsPage />}
           {page === 'scheduled' && <ScheduledPage onAction={startAgentTask} />}
           {page === 'admin' && <AdminDashboard />}
+          {page === 'adminDelivery' && <AdminDeliveryPage />}
           {(page === 'channels' || page === 'youtube') && <IntegrationsPage />}
         </Suspense>
       </PageErrorBoundary>
