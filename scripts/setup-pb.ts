@@ -92,6 +92,22 @@ const COLLECTIONS: { name: string; fields: Field[] }[] = [
       { name: 'status', type: 'text' },
     ],
   },
+  {
+    // 对标账号库：灵感大屏「爬取对标账号主页视频」功能读写这里
+    name: 'competitor_accounts',
+    fields: [
+      { name: 'tenantId', type: 'text' },
+      { name: 'platform', type: 'text' },          // youtube / tiktok
+      { name: 'accountUrl', type: 'text' },         // 主页 URL（规范化后）
+      { name: 'accountName', type: 'text' },        // 展示名
+      { name: 'handle', type: 'text' },             // @handle / channel id
+      { name: 'avatarUrl', type: 'text' },
+      { name: 'note', type: 'text' },
+      { name: 'lastCrawledAt', type: 'text' },      // ISO
+      { name: 'lastCrawlCount', type: 'number' },
+      { name: 'createdAt', type: 'text' },
+    ],
+  },
 ];
 
 /** Auth as superuser; supports both new (_superusers) and legacy (admins) APIs. */

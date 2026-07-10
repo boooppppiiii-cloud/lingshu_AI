@@ -1,14 +1,14 @@
 {
   "lingshu-test@local.test": {
-    "status": "available",
+    "status": "expired",
     "email": "lingshu-test@local.test",
     "password": "Navi@42Mint",
     "userId": "aezy6mxm3nr9ajx",
     "tenantId": "hi6t0m59qdwpdsv",
     "activatedAt": null,
     "expiresAt": null,
-    "rotatedAt": null,
-    "rotationPassword": null,
+    "rotatedAt": "2026-07-09T16:38:01.411Z",
+    "rotationPassword": "Off@hutest#2026",
     "guidePending": false
   },
   "lingshutest01@163.com": {

@@ -4,10 +4,11 @@ import { execFileSync } from 'child_process';
 import dotenv from 'dotenv';
 import express from 'express';
 import compression from 'compression';
-import { ProxyAgent, setGlobalDispatcher } from 'undici';
+import { EnvHttpProxyAgent, setGlobalDispatcher } from 'undici';
 import { copywritingRouter } from './routes/copywriting.js';
 import { translationRouter } from './routes/translation.js';
 import { competitorRouter } from './routes/competitor.js';
+import { competitorAccountsRouter } from './routes/competitorAccounts.js';
 import { strategyRouter } from './routes/strategy.js';
 import { initCrawlerOpsWorker, videosRouter } from './routes/videos.js';
 import { scriptsRouter } from './routes/scripts.js';
@@ -47,8 +48,14 @@ function configureNetworkProxy(): void {
   process.env.http_proxy ||= proxy;
   process.env.CRAWLER_PROXY ||= proxy;
   process.env.NODE_USE_ENV_PROXY ||= '1';
-  setGlobalDispatcher(new ProxyAgent(proxy));
-  console.log(`[network] using proxy ${proxy}`);
+  // ProxyAgent 不认 NO_PROXY，会把发往 localhost（PocketBase 等）的请求也塞进代理导致静默失败；
+  // EnvHttpProxyAgent 按 NO_PROXY 绕行本地和 PB 主机。
+  const pbHost = (() => { try { return new URL(process.env.PB_URL || 'http://localhost:8090').hostname; } catch { return ''; } })();
+  const noProxy = ['localhost', '127.0.0.1', '::1', pbHost].filter(Boolean).join(',');
+  process.env.NO_PROXY = process.env.NO_PROXY ? `${process.env.NO_PROXY},${noProxy}` : noProxy;
+  process.env.no_proxy = process.env.NO_PROXY;
+  setGlobalDispatcher(new EnvHttpProxyAgent());
+  console.log(`[network] using proxy ${proxy} (NO_PROXY=${process.env.NO_PROXY})`);
 }
 
 function detectLocalProxy(): string {
@@ -87,6 +94,7 @@ app.get('/api/overseas/health', (_req, res) => {
 app.use('/api/overseas/copywriting', copywritingRouter);
 app.use('/api/overseas/translation', translationRouter);
 app.use('/api/overseas/competitor', competitorRouter);
+app.use('/api/overseas/competitor-accounts', competitorAccountsRouter);
 app.use('/api/overseas/strategy', strategyRouter);
 
 // Core routes

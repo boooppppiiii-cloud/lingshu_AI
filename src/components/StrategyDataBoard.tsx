@@ -82,7 +82,6 @@ const actionItems = [
   },
 ];
 
-const titleLevel1 = 'text-2xl font-bold text-text-primary font-display';
 const titleLevel2 = 'text-lg font-bold';
 const sectionTitle = 'flex items-center gap-2 text-lg font-bold text-text-primary';
 const sectionIcon = 'flex h-7 w-7 items-center justify-center rounded-lg bg-green-50 text-green-700';
@@ -103,8 +102,7 @@ export default function StrategyDataBoard({ onAction }: { onAction?: AgentAction
   return (
     <div className="h-full flex flex-col">
       <div className="px-6 pt-5 pb-4 border-b border-border flex-shrink-0">
-        <h1 className={titleLevel1}>经营仪表盘</h1>
-        <div className="mt-4 grid w-full grid-cols-3 gap-2 rounded-2xl border border-border bg-surface-2 p-1 shadow-sm">
+        <div className="grid w-full grid-cols-3 gap-2 rounded-2xl border border-border bg-surface-2 p-1 shadow-sm">
           {TABS.map(x => (
             <button key={x.id} onClick={() => setTab(x.id)}
               className={`flex h-12 items-center justify-center gap-2 rounded-xl ${titleLevel2} transition-all ${

@@ -5,7 +5,6 @@ import {
   CheckCircle2,
   Film,
   Loader2,
-  MessageSquare,
   PlayCircle,
   RefreshCw,
   Send,
@@ -74,18 +73,6 @@ export default function TrafficPage({ onNavigate, restore, kickoff, onScriptPane
     }));
   }, [viewMode]);
 
-  const openAssistant = () => {
-    window.dispatchEvent(new CustomEvent('lingshu-assistant-open', {
-      detail: {
-        context: {
-          agent: 'traffic',
-          label: '我的社媒',
-          summary: '当前在我的社媒模块，可围绕灵感拆解、AI素材快剪、账号发布和流量数据继续协助。',
-          suggestions: ['规划四平台发布节奏', '复盘账号流量数据', '生成短视频素材方向', '拆解爆款钩子'],
-        },
-      },
-    }));
-  };
   const handleEnterWorkflow = (payload: unknown) => {
     try { localStorage.setItem('ow_video_kickoff', JSON.stringify(payload)); } catch { /* ignore */ }
     setViewMode('create');
@@ -105,17 +92,6 @@ export default function TrafficPage({ onNavigate, restore, kickoff, onScriptPane
             <Zap size={13} />
           </div>
           <span className="text-sm font-semibold text-text-primary">我的社媒</span>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={openAssistant}
-            className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-semibold text-text-muted transition-colors hover:text-text-primary"
-          >
-            <MessageSquare size={12} />
-            问我的社媒
-          </button>
         </div>
       </div>
 

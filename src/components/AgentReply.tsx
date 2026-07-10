@@ -1,5 +1,8 @@
 import { useState, type ReactNode } from 'react';
 import { Check, Copy, Zap } from 'lucide-react';
+import {
+  Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
+} from 'recharts';
 import type { AgentType } from '../App';
 
 /* 渲染 Agent 回复的轻量 Markdown：
@@ -16,7 +19,27 @@ const AGENT_BY_NAME: Record<string, AgentType> = {
   策略专家: 'strategy',
   首页: 'strategy',
 };
-const ACTION_RE = /建议触发\s*[【[]?\s*(流量专家|我的社媒|转化专家|留存专家|我的客户|策略专家|首页)\s*[】\]]?\s*执行[:：]\s*(.+)/;
+// 锚定行首：只把独立成行的触发指令识别成按钮，避免把"如果需要，我建议触发…"整句吞成按钮、丢掉前半句
+const ACTION_RE = /^建议触发\s*[【[]?\s*(流量专家|我的社媒|转化专家|留存专家|我的客户|策略专家|首页)\s*[】\]]?\s*执行[:：]\s*(.+)/;
+// 引用块里的"提示/说明/备注"类内容：是说给用户听的话，不是可复制话术
+const NOTE_QUOTE_RE = /^(?:💡|⚠️?|📌|ℹ️?|❗|✅|🔔|🧭|🔍|📣|🚨|注意|提示|提醒|说明|备注|注[:：]|小贴士|温馨提示|总结|小结|TL;?DR|Tips?\b)/i;
+
+/* 链接保险丝：模型偶尔会编造不存在的 URL（如假的下载地址）。
+   正文里只有联网检索真实返回的来源域名（含 grounding 跳转域）才渲染成可点击链接，
+   其余 markdown 链接一律降级为纯文本，避免用户点到死链。
+   copy 块 / 引用重点块本身按纯文本渲染，不受影响。 */
+let trustedLinkHosts = new Set<string>(['vertexaisearch.cloud.google.com']);
+
+function setTrustedLinkHosts(sources?: { uri: string }[]) {
+  trustedLinkHosts = new Set(['vertexaisearch.cloud.google.com']);
+  for (const s of sources ?? []) {
+    try { trustedLinkHosts.add(new URL(s.uri).host); } catch { /* ignore */ }
+  }
+}
+
+function isTrustedUrl(url: string): boolean {
+  try { return trustedLinkHosts.has(new URL(url).host); } catch { return false; }
+}
 
 function cleanLooseMarkdown(text: string): string {
   let out = text.replace(/<br\s*\/?>/gi, '\n');
@@ -43,11 +66,13 @@ function inline(text: string, kb: string): ReactNode[] {
     if (m.index > last) nodes.push(cleanLooseMarkdown(safeText.slice(last, m.index)));
     if (m[1] !== undefined) {
       nodes.push(<strong key={`${kb}b${idx}`} className="font-bold text-text-primary">{cleanLooseMarkdown(m[1])}</strong>);
-    } else {
+    } else if (isTrustedUrl(m[3])) {
       nodes.push(
         <a key={`${kb}l${idx}`} href={m[3]} target="_blank" rel="noopener noreferrer"
           className="text-accent underline underline-offset-2 hover:opacity-80 break-all">{m[2]}</a>,
       );
+    } else {
+      nodes.push(cleanLooseMarkdown(m[2]));
     }
     last = re.lastIndex; idx++;
   }
@@ -88,6 +113,61 @@ function CopyButton({ text, label = '复制' }: { text: string; label?: string }
   );
 }
 
+/* ```chart 块：模型输出严格 JSON，渲染成对话内迷你图表。
+   数据不完整（流式中）或解析失败时显示占位，不渲染残缺图。 */
+type ChartSpec = {
+  type?: string;
+  title?: string;
+  unit?: string;
+  conclusion?: string;
+  data?: { label?: string; value?: number }[];
+};
+
+function MiniChart({ raw }: { raw: string }) {
+  let spec: ChartSpec | null = null;
+  try { spec = JSON.parse(raw) as ChartSpec; } catch { spec = null; }
+  const data = (spec?.data ?? [])
+    .filter((d): d is { label: string; value: number } => typeof d?.value === 'number' && Number.isFinite(d.value) && !!d?.label)
+    .slice(0, 12);
+  if (!spec || data.length < 2) {
+    return <div className="my-2 rounded-xl border border-dashed border-border bg-surface px-3 py-2.5 text-xs text-text-muted">图表数据生成中…</div>;
+  }
+  const isLine = spec.type === 'line';
+  const axisTick = { fontSize: 10, fill: 'var(--color-text-muted, #64748b)' };
+  return (
+    <div className="my-2 rounded-xl border border-border bg-white/75 px-3 pb-1 pt-2.5">
+      {spec.title && (
+        <p className="mb-1 text-xs font-bold text-text-primary">
+          {spec.title}
+          {spec.unit ? <span className="ml-1 font-normal text-text-muted">（{spec.unit}）</span> : null}
+        </p>
+      )}
+      <div className="h-40">
+        <ResponsiveContainer width="100%" height="100%">
+          {isLine ? (
+            <LineChart data={data} margin={{ top: 6, right: 8, left: -14, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,0.08)" vertical={false} />
+              <XAxis dataKey="label" tick={axisTick} tickLine={false} axisLine={false} interval="preserveStartEnd" />
+              <YAxis tick={axisTick} tickLine={false} axisLine={false} width={44} />
+              <Tooltip contentStyle={{ fontSize: 12, borderRadius: 10 }} />
+              <Line type="monotone" dataKey="value" stroke="var(--color-accent)" strokeWidth={2} dot={{ r: 2.5 }} />
+            </LineChart>
+          ) : (
+            <BarChart data={data} margin={{ top: 6, right: 8, left: -14, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,0.08)" vertical={false} />
+              <XAxis dataKey="label" tick={axisTick} tickLine={false} axisLine={false} interval={0} />
+              <YAxis tick={axisTick} tickLine={false} axisLine={false} width={44} />
+              <Tooltip contentStyle={{ fontSize: 12, borderRadius: 10 }} cursor={{ fill: 'rgba(15,23,42,0.04)' }} />
+              <Bar dataKey="value" fill="var(--color-accent)" radius={[5, 5, 0, 0]} maxBarSize={26} />
+            </BarChart>
+          )}
+        </ResponsiveContainer>
+      </div>
+      {spec.conclusion && <p className="mb-1.5 mt-1 text-xs leading-relaxed text-text-secondary">{spec.conclusion}</p>}
+    </div>
+  );
+}
+
 function CopyBlock({ text, title, tone = 'neutral' }: { text: string; title?: string; tone?: 'neutral' | 'quote' }) {
   return (
     <div className={`my-2 overflow-hidden rounded-xl border ${tone === 'quote' ? 'border-accent/20 bg-accent-glow' : 'border-border bg-white/75'}`}>
@@ -100,7 +180,13 @@ function CopyBlock({ text, title, tone = 'neutral' }: { text: string; title?: st
   );
 }
 
-export default function AgentReply({ content, sources, onAction }: { content: string; sources?: { title: string; uri: string }[]; onAction?: (agent: AgentType, task: string) => void }) {
+export default function AgentReply({ content, sources, onAction, onSuggest }: {
+  content: string;
+  sources?: { title: string; uri: string }[];
+  onAction?: (agent: AgentType, task: string) => void;
+  onSuggest?: (text: string) => void;
+}) {
+  setTrustedLinkHosts(sources);
   const lines = content.split('\n');
   const blocks: ReactNode[] = [];
   let list: { type: 'ul' | 'ol'; items: string[] } | null = null;
@@ -136,6 +222,7 @@ export default function AgentReply({ content, sources, onAction }: { content: st
     const line = raw.replace(/\s+$/, '');
     if (!line.trim()) { flush(); continue; }
     if (/^\s*#{1,6}\s*$/.test(line)) { flush(); continue; }
+    if (/^\s*(?:-{3,}|\*{3,}|_{3,})\s*$/.test(line)) { flush(); blocks.push(<hr key={`hr_${i}`} className="my-2 border-border" />); continue; }
 
     const fence = line.match(/^```([\w-]*)\s*$/);
     if (fence) {
@@ -147,7 +234,27 @@ export default function AgentReply({ content, sources, onAction }: { content: st
         body.push(lines[i]);
         i++;
       }
-      blocks.push(<CopyBlock key={`code_${i}`} title={lang === 'copy' ? '话术 / 文案' : lang} text={body.join('\n').trim()} />);
+      if (lang === 'chart') {
+        blocks.push(<MiniChart key={`chart_${i}`} raw={body.join('\n').trim()} />);
+      } else if (lang === 'next') {
+        const items = body.map(l => l.replace(/^\s*(?:[-*•·]|\d+[.、)])\s*/, '').trim()).filter(Boolean).slice(0, 4);
+        if (onSuggest && items.length) {
+          blocks.push(
+            <div key={`next_${i}`} className="my-2 flex flex-wrap gap-1.5">
+              {items.map((item, idx) => (
+                <button key={idx} type="button" onClick={() => onSuggest(item)}
+                  className="rounded-full border border-accent/30 bg-accent-glow px-3 py-1.5 text-xs font-semibold text-accent transition-colors hover:border-accent/60 active:scale-[0.98]">
+                  {item}
+                </button>
+              ))}
+            </div>,
+          );
+        }
+      } else {
+        // 语言标记缺失或是 text/markdown 这类"无信息"标记时，用中文兜底标题，不把 "text" 当标题展示
+        const title = lang === 'copy' ? '话术 / 文案' : /^(?:text|txt|plaintext|markdown|md)$/i.test(lang) ? '可复制内容' : lang;
+        blocks.push(<CopyBlock key={`code_${i}`} title={title} text={body.join('\n').trim()} />);
+      }
       continue;
     }
 
@@ -159,7 +266,16 @@ export default function AgentReply({ content, sources, onAction }: { content: st
         i++;
       }
       i--;
-      blocks.push(<CopyBlock key={`quote_${i}`} title="高亮话术" text={body.join('\n').trim()} tone="quote" />);
+      const quoteText = body.join('\n').trim();
+      if (NOTE_QUOTE_RE.test(quoteText)) {
+        blocks.push(
+          <div key={`note_${i}`} className="my-2 whitespace-pre-wrap break-words rounded-xl border-l-[3px] border-accent/50 bg-surface px-3 py-2.5 text-sm leading-relaxed text-text-secondary">
+            {inline(quoteText, `note_${i}`)}
+          </div>,
+        );
+      } else {
+        blocks.push(<CopyBlock key={`quote_${i}`} title="重点内容" text={quoteText} tone="quote" />);
+      }
       continue;
     }
 
@@ -174,8 +290,15 @@ export default function AgentReply({ content, sources, onAction }: { content: st
       const hasSeparator = tableLines.length > 1 && isTableSeparator(tableLines[1]);
       const header = splitTableRow(tableLines[0]);
       const rows = tableLines.slice(hasSeparator ? 2 : 1).map(splitTableRow);
+      // TSV：粘贴到 Excel / 飞书表格即还原成表
+      const tsv = [header, ...rows].map(r => r.map(cell => cleanLooseMarkdown(cell)).join('\t')).join('\n');
       blocks.push(
-        <div key={`table_${i}`} className="my-2 overflow-x-auto rounded-xl border border-border bg-white/70">
+        <div key={`tablewrap_${i}`} className="my-2 overflow-hidden rounded-xl border border-border bg-white/70">
+          <div className="flex items-center justify-between gap-2 border-b border-border/70 px-3 py-1.5">
+            <span className="text-[10px] font-semibold text-text-muted">表格 · 可粘贴到 Excel</span>
+            <CopyButton text={tsv} label="复制表格" />
+          </div>
+          <div className="overflow-x-auto">
           <table className="min-w-full border-collapse text-left text-xs">
             <thead className="bg-surface">
               <tr>{header.map((cell, idx) => <th key={idx} className="border-b border-border px-3 py-2 font-semibold text-text-primary whitespace-nowrap">{inline(cell, `th_${i}_${idx}`)}</th>)}</tr>
@@ -188,6 +311,7 @@ export default function AgentReply({ content, sources, onAction }: { content: st
               ))}
             </tbody>
           </table>
+          </div>
         </div>,
       );
       continue;
@@ -200,7 +324,8 @@ export default function AgentReply({ content, sources, onAction }: { content: st
       blocks.push(action);
       continue;
     }
-    const heading = line.match(/^#{1,6}\s*(.+)/);
+    // 单个 # 必须跟空格才算标题，避免行首 hashtag（#tiktokfinds #夏季新品）被渲染成大标题
+    const heading = line.match(/^(?:#{2,6}\s*|#\s+)(.+)/);
     const h3 = line.match(/^###\s+(.*)/);
     const h2 = line.match(/^##\s+(.*)/);
     const ol = line.match(/^\s*\d+[.、)]\s+(.*)/);

@@ -410,7 +410,9 @@ async function discoverFreshBackfillCandidates(input: {
       candidates.push(...await crawlYouTubeSearch(keyword, limit, input.dateFrom, input.dateTo));
     } else if (input.platform === 'tiktok') {
       candidates.push(...await crawlTikTokWithApifyFallback(keyword, limit, input.dateFrom, input.dateTo));
-    } else if (input.platform === 'facebook' || input.platform === 'instagram') {
+    } else if (input.platform === 'instagram') {
+      candidates.push(...await crawlInstagramWithApifyFallback(keyword, limit, input.dateFrom, input.dateTo));
+    } else if (input.platform === 'facebook') {
       candidates.push(...await crawlSocialUrlOrFallback(input.platform, keyword, limit, input.dateFrom, input.dateTo));
     }
   } catch (e) {
@@ -507,6 +509,11 @@ export interface CrawlVideosInput {
   limit?: number;
   dateFrom?: string;
   dateTo?: string;
+  // 对标账号主页采集：mode='account' 时 accountUrl 为账号主页 URL，
+  // 采集该账号最新视频而非按关键词检索。
+  mode?: 'keyword' | 'account';
+  accountUrl?: string;
+  accountName?: string;
 }
 
 export interface CrawlVideosResult {
@@ -553,22 +560,30 @@ videosRouter.post('/crawl', async (req, res) => {
 export async function crawlVideosForTenant(input: CrawlVideosInput): Promise<CrawlVideosResult> {
   const tenantId = input.tenantId;
   const platform = input.platform ?? 'youtube';
-  const keyword = input.keyword ?? DEFAULT_CRAWL_KEYWORDS;
+  const accountMode = input.mode === 'account' && looksLikeAccountUrl(input.accountUrl ?? '', platform);
+  const accountUrl = accountMode ? String(input.accountUrl).trim() : '';
+  const accountName = accountMode ? String(input.accountName || accountLabelFromUrl(accountUrl)) : '';
+  // 对标账号采集时用账号名/URL 作为关键词占位，便于溯源与去重信息展示。
+  const keyword = accountMode ? (accountName || accountUrl) : (input.keyword ?? DEFAULT_CRAWL_KEYWORDS);
   const limit = input.limit ?? 5;
   const dateFrom = input.dateFrom ?? '';
   const dateTo = input.dateTo ?? '';
+  const crawlRule = accountMode ? '对标账号主页' : '关键词检索';
 
   await purgeLegacyFakeVideos();
   const testTenant = await isTestTenantId(tenantId);
   const target = Math.min(30, Math.max(1, Number(limit) || 5));
-  let crawlerSource = `${platform}-search`;
+  let crawlerSource = accountMode ? `${platform}-account` : `${platform}-search`;
   let crawlerMessage = '';
   let crawlerTopUpMessage = '';
   let items: CrawledVideo[];
-  const directUrlInput = isPlatformUrl(keyword, platform);
+  // 账号主页采集与直链一样跳过关键词/封面/补齐等以搜索为前提的过滤。
+  const directUrlInput = accountMode || isPlatformUrl(keyword, platform);
   try {
     const safeLimit = Math.min(120, Math.max(target * 5, target));
-    if (platform === 'youtube') {
+    if (accountMode) {
+      items = await crawlAccountHomepage(platform, accountUrl, Math.max(target, Math.min(safeLimit, 30)), dateFrom, dateTo);
+    } else if (platform === 'youtube') {
       items = await crawlYouTubeSearch(keyword, safeLimit, dateFrom, dateTo);
     } else if (platform === 'facebook') {
       crawlerSource = /^https?:\/\/(?:www\.|m\.|mbasic\.)?facebook\.com\//i.test(keyword.trim()) ? 'facebook-url' : 'facebook-search';
@@ -579,7 +594,8 @@ export async function crawlVideosForTenant(input: CrawlVideosInput): Promise<Cra
       if (items.some(item => item.source === 'apify')) crawlerSource = 'apify-tiktok';
     } else if (platform === 'instagram') {
       crawlerSource = isPlatformUrl(keyword, 'instagram') ? 'instagram-url' : 'instagram-search';
-      items = await crawlSocialUrlOrFallback('instagram', keyword, safeLimit, dateFrom, dateTo);
+      items = await crawlInstagramWithApifyFallback(keyword, safeLimit, dateFrom, dateTo);
+      if (items.some(item => item.source === 'apify')) crawlerSource = 'apify-instagram';
     } else {
       throw new Error(`${platform} adapter pending`);
     }
@@ -665,16 +681,23 @@ export async function crawlVideosForTenant(input: CrawlVideosInput): Promise<Cra
           uploadedAt: item.uploadedAt || existingAnalysis.uploadedAt,
           dateEvidence: item.dateEvidence || existingAnalysis.dateEvidence,
           keyword,
-          crawlRule: '关键词检索',
+          crawlRule,
+          sourceAccount: accountMode ? accountUrl : existingAnalysis.sourceAccount,
+          sourceAccountName: accountMode ? accountName : existingAnalysis.sourceAccountName,
           dateFrom,
           dateTo,
         }),
       };
+      // 已有本地落盘缩略图时不要用新的临时签名链接覆盖
+      const keepLocalThumb = String(existingRecord.thumbnailUrl || '').startsWith('/media/') && isSignedExpiringThumbnail(item.thumbnailUrl);
       await store.update(COL, String(existingRecord.id), {
-        thumbnailUrl: item.thumbnailUrl || String(existingRecord.thumbnailUrl || ''),
+        thumbnailUrl: keepLocalThumb ? String(existingRecord.thumbnailUrl) : (item.thumbnailUrl || String(existingRecord.thumbnailUrl || '')),
         sourceUrl: item.sourceUrl || String(existingRecord.sourceUrl || ''),
         aiAnalysis: refreshedRecord.aiAnalysis,
       });
+      if (!keepLocalThumb) {
+        void persistThumbnailIfExpiring(String(existingRecord.id), item.thumbnailUrl).catch(() => {});
+      }
       existingRecords.push(refreshedRecord);
       continue;
     }
@@ -697,7 +720,9 @@ export async function crawlVideosForTenant(input: CrawlVideosInput): Promise<Cra
         analysisSource: 'metadata-fallback',
         analysisQuality: 'metadata',
         keyword,
-        crawlRule: '关键词检索',
+        crawlRule,
+        sourceAccount: accountMode ? accountUrl : undefined,
+        sourceAccountName: accountMode ? accountName : undefined,
         dateFrom,
         dateTo,
         importedAt: new Date().toISOString(),
@@ -709,6 +734,7 @@ export async function crawlVideosForTenant(input: CrawlVideosInput): Promise<Cra
     if (record) {
       imported += 1;
       records.push(record);
+      void persistThumbnailIfExpiring(String((record as Record<string, unknown>).id), item.thumbnailUrl).catch(() => {});
     }
     if (imported >= target) break;
   }
@@ -1494,12 +1520,68 @@ async function enqueueCrawledRecordsForAnalysis(records: unknown[]): Promise<voi
   }
 }
 
+// TikTok 等平台的缩略图是带签名的临时链接（x-expires），过期后 403，前端只能渲染兜底卡。
+// 抓到这类链接后要尽快下载落盘到 /media，把记录改成永久可用的本地地址。
+function signedThumbnailExpiry(url: string): number | null {
+  const x = /[?&]x-expires?=(\d+)/i.exec(url);
+  if (x) {
+    const ts = Number(x[1]);
+    return Number.isFinite(ts) ? ts * 1000 : null;
+  }
+  // Facebook/Instagram CDN 的过期时间放在十六进制 oe= 参数里
+  if (/\bfbcdn\.net\/|\bcdninstagram\.com\//i.test(url)) {
+    const oe = /[?&]oe=([0-9A-Fa-f]{6,12})(?:&|$)/.exec(url);
+    if (oe) {
+      const ts = parseInt(oe[1], 16);
+      return Number.isFinite(ts) ? ts * 1000 : null;
+    }
+  }
+  return null;
+}
+
+function isSignedExpiringThumbnail(url: string): boolean {
+  return /^https?:\/\//i.test(url) && signedThumbnailExpiry(url) !== null;
+}
+
+function isExpiredSignedThumbnail(url: string): boolean {
+  const exp = signedThumbnailExpiry(url);
+  return exp !== null && exp < Date.now() + 60_000;
+}
+
+async function cacheThumbnailLocally(recordId: string, url: string): Promise<string | null> {
+  try {
+    fs.mkdirSync(MEDIA_DIR, { recursive: true });
+    const resp = await fetch(url, { signal: AbortSignal.timeout(20_000) });
+    if (!resp.ok) return null;
+    const type = resp.headers.get('content-type') || '';
+    if (!type.startsWith('image/')) return null;
+    const buf = Buffer.from(await resp.arrayBuffer());
+    if (!buf.length || buf.length > 5 * 1024 * 1024) return null;
+    const file = `${recordId}.thumb.jpg`;
+    fs.writeFileSync(path.join(MEDIA_DIR, file), buf);
+    return `/media/${file}`;
+  } catch {
+    return null;
+  }
+}
+
+async function persistThumbnailIfExpiring(recordId: string, url: string): Promise<void> {
+  if (!isSignedExpiringThumbnail(url) || isExpiredSignedThumbnail(url)) return;
+  const local = await cacheThumbnailLocally(recordId, url);
+  if (local) await store.update(COL, recordId, { thumbnailUrl: local });
+}
+
 async function backfillMissingCrawledMedia(records: unknown[]): Promise<void> {
   const candidates = records
     .map(raw => raw as Record<string, unknown>)
-    .filter(record => ['youtube', 'tiktok'].includes(String(record.platform || '')))
+    .filter(record => ['youtube', 'tiktok', 'facebook', 'instagram'].includes(String(record.platform || '')))
     .filter(record => /^https?:\/\//i.test(String(record.sourceUrl || '')))
-    .filter(record => !normalizeThumbnailUrl(String(record.thumbnailUrl || '')) || canonicalSourceUrl(record.platform as Platform, String(record.sourceUrl || ''), '') !== String(record.sourceUrl || ''))
+    .filter(record => {
+      const thumb = normalizeThumbnailUrl(String(record.thumbnailUrl || ''));
+      return !thumb
+        || isSignedExpiringThumbnail(thumb)
+        || canonicalSourceUrl(record.platform as Platform, String(record.sourceUrl || ''), '') !== String(record.sourceUrl || '');
+    })
     .slice(0, 5);
 
   for (const record of candidates) {
@@ -1509,10 +1591,14 @@ async function backfillMissingCrawledMedia(records: unknown[]): Promise<void> {
       const canonicalUrl = canonicalSourceUrl(platform, existingSourceUrl, '');
       let thumbnailUrl = thumbnailForPlatform(platform, canonicalUrl, String(record.thumbnailUrl || ''));
       let sourceUrl = canonicalUrl;
-      if (!thumbnailUrl) {
+      if (!thumbnailUrl || isExpiredSignedThumbnail(thumbnailUrl)) {
         const meta = await crawlYtDlpMetadata(platform, sourceUrl, String(record.title || platform));
         sourceUrl = meta.sourceUrl || sourceUrl;
         thumbnailUrl = meta.thumbnailUrl || thumbnailUrl;
+      }
+      if (isSignedExpiringThumbnail(thumbnailUrl) && !isExpiredSignedThumbnail(thumbnailUrl)) {
+        const local = await cacheThumbnailLocally(String(record.id), thumbnailUrl);
+        if (local) thumbnailUrl = local;
       }
       if (sourceUrl !== existingSourceUrl || thumbnailUrl !== String(record.thumbnailUrl || '')) {
         await store.update(COL, String(record.id), { sourceUrl, thumbnailUrl });
@@ -2293,7 +2379,155 @@ function apifyTikTokTags(item: Record<string, unknown>, keyword: string): string
     .filter(Boolean))].slice(0, 8);
 }
 
+// ─── Instagram 采集：cookie(yt-dlp) 为主，Apify 兜底 ─────────────────────────
+// 结构与 crawlTikTokWithApifyFallback 一致。IG 封了匿名访问：
+//   · 直链 → 先走 yt-dlp（未登录会失败，配置了 YT_DLP_COOKIE_FILES 的 cookie 文件才通）；
+//   · 关键词 → IG 无公开搜索接口，yt-dlp 走不通，直接用 Apify hashtag 搜索。
+// 两种情况下 yt-dlp 拿不到时统一回落 Apify（apify/instagram-scraper）。
+async function crawlInstagramWithApifyFallback(keyword: string, limit: number, dateFrom = '', dateTo = ''): Promise<CrawledVideo[]> {
+  const input = keyword.trim();
+  const directUrl = isPlatformUrl(input, 'instagram');
+  const items: CrawledVideo[] = [];
+
+  if (directUrl) {
+    // 直链优先走 yt-dlp（配置了 cookie 文件即可，免 Apify 费用）；成功即返回，不再叠加 Apify。
+    try {
+      return [await crawlYtDlpMetadata('instagram', input, keyword)];
+    } catch (e) {
+      console.warn('[videos] Instagram yt-dlp metadata failed, trying Apify:', e instanceof Error ? e.message : e);
+    }
+  }
+
+  const seen = new Set(items.map(item => item.sourceUrl));
+  if (items.length < limit && canUseApifyInstagramCrawlFallback()) {
+    try {
+      const apifyItems = await crawlInstagramApify(input, Math.max(limit - items.length, limit), dateFrom, dateTo);
+      for (const item of apifyItems) {
+        if (seen.has(item.sourceUrl)) continue;
+        if (!directUrl && !isKeywordRelevant(item, input)) continue;
+        if (!directUrl && !isWithinDateRange(item.uploadedAt, dateFrom, dateTo)) continue;
+        if (!hasRealThumbnail(item)) continue;
+        seen.add(item.sourceUrl);
+        items.push(item);
+        if (items.length >= limit) break;
+      }
+    } catch (e) {
+      console.warn('[videos] Instagram Apify fallback failed:', e instanceof Error ? e.message : e);
+    }
+  }
+
+  if (items.length === 0) {
+    throw new Error('Instagram 抓取无可用视频：请配置 YT_DLP_COOKIE_FILES 登录态 cookie，或开启 Apify 兜底（APIFY_TOKEN / APIFY_INSTAGRAM_CRAWL_FALLBACK_ENABLED）');
+  }
+  return directUrl ? items.slice(0, limit) : sortByHeat(items).slice(0, limit);
+}
+
+async function crawlInstagramApify(keyword: string, limit: number, dateFrom = '', dateTo = ''): Promise<CrawledVideo[]> {
+  const token = process.env.APIFY_TOKEN?.trim();
+  if (!token) throw new Error('APIFY_TOKEN is not configured');
+  const actor = process.env.APIFY_INSTAGRAM_ACTOR?.trim() || 'apify/instagram-scraper';
+  const input = buildApifyInstagramInput(keyword, limit, dateFrom, dateTo);
+  const rows = await runApifyActorDatasetItems(actor, input, Number(process.env.APIFY_TIMEOUT_MS || 240_000), 'Instagram crawl');
+  return rows
+    .map(item => apifyInstagramItemToCrawledVideo(item, keyword))
+    .filter((item): item is CrawledVideo => Boolean(item))
+    .slice(0, limit);
+}
+
+function buildApifyInstagramInput(keyword: string, limit: number, dateFrom = '', _dateTo = ''): Record<string, unknown> {
+  const input = keyword.trim();
+  const resultsLimit = Math.min(50, Math.max(1, limit));
+  const base: Record<string, unknown> = {
+    resultsType: 'posts',
+    resultsLimit,
+    addParentData: false,
+  };
+  if (dateFrom) base.onlyPostsNewerThan = dateFrom;
+  if (isPlatformUrl(input, 'instagram')) {
+    base.directUrls = [input];
+  } else {
+    base.search = input.replace(/^#/, '').trim();
+    base.searchType = 'hashtag';
+    base.searchLimit = 1;
+  }
+  return base;
+}
+
+function apifyInstagramItemToCrawledVideo(item: Record<string, unknown>, keyword: string): CrawledVideo | null {
+  // 只保留可拿到 mp4 的视频/Reel，跳过纯图片帖。
+  const type = String(item.type || '').toLowerCase();
+  const isVideo = type === 'video' || item.productType === 'clips' || Boolean(item.videoUrl);
+  if (!isVideo) return null;
+  const author = String(item.ownerUsername || '').trim();
+  const shortCode = String(item.shortCode || '').trim();
+  const rawUrl = String(item.url || (shortCode ? `https://www.instagram.com/reel/${shortCode}/` : '')).trim();
+  const sourceUrl = canonicalSourceUrl('instagram', rawUrl, author);
+  if (!sourceUrl || !isPlatformUrl(sourceUrl, 'instagram')) return null;
+  const caption = String(item.caption || '').trim();
+  const title = cleanupAnalysisTitle(caption || (author ? `Instagram video by ${author}` : 'Instagram video'));
+  const thumbnailUrl = firstImageUrl([item.displayUrl, item.images, item]);
+  const duration = Number(item.videoDuration || 0);
+  const playCount = Number(item.videoPlayCount || item.videoViewCount || 0);
+  const likeCount = Number(item.likesCount || 0);
+  const commentCount = Number(item.commentsCount || 0);
+  const tags = apifyInstagramTags(item, keyword);
+  return {
+    platform: 'instagram',
+    title,
+    sourceUrl,
+    thumbnailUrl,
+    duration,
+    views: playCount > 0 ? compactNumber(playCount) : 'Instagram',
+    tags,
+    uploadedAt: apifyInstagramUploadedAt(item),
+    author,
+    likes: likeCount > 0 ? compactNumber(likeCount) : undefined,
+    comments: commentCount > 0 ? compactNumber(commentCount) : undefined,
+    source: 'apify',
+  };
+}
+
+function apifyInstagramUploadedAt(item: Record<string, unknown>): string | undefined {
+  const iso = String(item.timestamp || item.takenAt || '').trim();
+  return iso && !Number.isFinite(Number(iso)) ? iso : undefined;
+}
+
+function apifyInstagramTags(item: Record<string, unknown>, keyword: string): string[] {
+  const raw = [
+    ...(Array.isArray(item.hashtags) ? item.hashtags : []),
+    ...(Array.isArray(item.mentions) ? item.mentions : []),
+    ...tagsFromKeyword(keyword, 'instagram'),
+  ];
+  return [...new Set(raw
+    .map(tag => typeof tag === 'string' ? tag : String((tag as Record<string, unknown>)?.name || (tag as Record<string, unknown>)?.title || ''))
+    .map(tag => tag.replace(/^#/, '').trim())
+    .filter(Boolean))].slice(0, 8);
+}
+
+// 反爬节流：同一平台的元数据请求全局排队串行，条与条之间加随机间隔，
+// 避免多个入口（手动爬取/定时任务/backfill）叠加成并发快打触发风控。
+const crawlPacingQueues = new Map<string, Promise<void>>();
+const CRAWL_MIN_INTERVAL_MS = Number(process.env.CRAWLER_MIN_INTERVAL_MS || 3000);
+const CRAWL_JITTER_MS = Number(process.env.CRAWLER_JITTER_MS || 4000);
+
+async function withPlatformCrawlPacing<T>(platform: string, task: () => Promise<T>): Promise<T> {
+  const prev = crawlPacingQueues.get(platform) ?? Promise.resolve();
+  let release!: () => void;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  crawlPacingQueues.set(platform, prev.then(() => gate));
+  await prev;
+  try {
+    return await task();
+  } finally {
+    setTimeout(release, CRAWL_MIN_INTERVAL_MS + Math.random() * CRAWL_JITTER_MS);
+  }
+}
+
 async function crawlYtDlpMetadata(platform: Platform, url: string, keyword: string): Promise<CrawledVideo> {
+  return withPlatformCrawlPacing(platform, () => crawlYtDlpMetadataNow(platform, url, keyword));
+}
+
+async function crawlYtDlpMetadataNow(platform: Platform, url: string, keyword: string): Promise<CrawledVideo> {
   let stdout = '';
   try {
     ({ stdout } = await execFileAsync('python3', buildYtDlpArgs(['--dump-json', '--skip-download'], url, false), { maxBuffer: 8 * 1024 * 1024, timeout: 45_000, env: crawlerExecEnv() }));
@@ -2320,6 +2554,7 @@ async function downloadVideoToMaterial(input: {
   title: string;
   platform: Platform;
   duration: number;
+  record?: Record<string, unknown> | null;
 }): Promise<Material> {
   fs.mkdirSync(MEDIA_DIR, { recursive: true });
   const id = randomUUID();
@@ -2332,10 +2567,32 @@ async function downloadVideoToMaterial(input: {
     '-o', outTpl,
   ];
 
+  let ytDlpError: unknown = null;
   try {
     await execFileAsync('python3', buildYtDlpArgs(downloadArgs, input.sourceUrl, false), { maxBuffer: 4 * 1024 * 1024, timeout: 180_000, env: crawlerExecEnv() });
-  } catch {
-    await execYtDlpWithCookieFallback(downloadArgs, input.sourceUrl, 180_000, 4 * 1024 * 1024);
+  } catch (e) {
+    ytDlpError = e;
+    try {
+      await execYtDlpWithCookieFallback(downloadArgs, input.sourceUrl, 180_000, 4 * 1024 * 1024);
+      ytDlpError = null;
+    } catch (cookieError) {
+      ytDlpError = cookieError;
+    }
+  }
+  if (ytDlpError && (input.platform === 'instagram' || input.platform === 'tiktok')) {
+    const tenantId = apifyTenantIdFromRecord(input.record);
+    if (canUseApifyVideoFallback(tenantId, input.platform)) {
+      const downloaded = input.platform === 'instagram'
+        ? await downloadInstagramVideoViaApify(input.sourceUrl, tenantId)
+        : await downloadTikTokVideoViaApify(input.sourceUrl, tenantId);
+      const materialPath = path.join(MEDIA_DIR, `${id}.mp4`);
+      fs.copyFileSync(downloaded.filePath, materialPath);
+      cleanupTempVideo(downloaded.filePath);
+      ytDlpError = null;
+    }
+  }
+  if (ytDlpError) {
+    throw ytDlpError instanceof Error ? ytDlpError : new Error('yt-dlp failed for material download');
   }
   const downloaded = pickDownloadedVideoFile(id);
   if (!downloaded) throw new Error('yt-dlp did not produce a video file');
@@ -2415,12 +2672,20 @@ async function downloadVideoForAnalysis(input: {
   }
   if (lastError) {
     const tenantId = apifyTenantIdFromRecord(input.record);
-    if (input.platform === 'tiktok' && canUseApifyVideoFallback(tenantId)) {
+    if (input.platform === 'tiktok' && canUseApifyVideoFallback(tenantId, 'tiktok')) {
       try {
         console.warn('[videos] TikTok yt-dlp analysis download failed, trying Apify video fallback:', lastError instanceof Error ? lastError.message : lastError);
         return await downloadTikTokVideoViaApify(input.sourceUrl, tenantId);
       } catch (apifyError) {
         console.warn('[videos] TikTok Apify analysis video fallback failed:', apifyError instanceof Error ? apifyError.message : apifyError);
+      }
+    }
+    if (input.platform === 'instagram' && canUseApifyVideoFallback(tenantId, 'instagram')) {
+      try {
+        console.warn('[videos] Instagram yt-dlp analysis download failed, trying Apify video fallback:', lastError instanceof Error ? lastError.message : lastError);
+        return await downloadInstagramVideoViaApify(input.sourceUrl, tenantId);
+      } catch (apifyError) {
+        console.warn('[videos] Instagram Apify analysis video fallback failed:', apifyError instanceof Error ? apifyError.message : apifyError);
       }
     }
     throw lastError instanceof Error ? lastError : new Error('yt-dlp failed for all analysis formats');
@@ -2506,6 +2771,103 @@ async function downloadTikTokVideoViaApify(sourceUrl: string, tenantId?: string)
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function downloadInstagramVideoViaApify(sourceUrl: string, tenantId?: string): Promise<{ filePath: string; fileName: string; mimeType: string; size: number }> {
+  const token = process.env.APIFY_TOKEN?.trim();
+  if (!token) throw new Error('APIFY_TOKEN is not configured');
+  if (!canUseApifyVideoFallback(tenantId, 'instagram')) throw new Error('Apify video fallback daily limit reached for this account or server');
+  const actor = process.env.APIFY_INSTAGRAM_ACTOR?.trim() || 'apify/instagram-scraper';
+  const input = {
+    directUrls: [sourceUrl],
+    resultsType: 'posts',
+    resultsLimit: 1,
+    addParentData: false,
+  };
+  const rows = await runApifyActorDatasetItems(actor, input, Number(process.env.APIFY_VIDEO_TIMEOUT_MS || 240_000), 'Instagram video');
+  const row = rows[0];
+  // IG 的 videoUrl 是 cdninstagram 签名直链（无扩展名），findApifyVideoDownloadUrl 的
+  // 扩展名/白名单规则匹配不到，这里优先直接读 videoUrl 字段，再退回通用查找。
+  const videoUrl = String(row?.videoUrl || '').trim() || (row ? findApifyVideoDownloadUrl(row) : '');
+  if (!videoUrl) throw new Error('Apify did not return a downloadable video URL');
+  const videoRes = await fetch(videoUrl);
+  if (!videoRes.ok) throw new Error(`Apify video download HTTP ${videoRes.status}`);
+  const buf = Buffer.from(await videoRes.arrayBuffer());
+  if (buf.length < 1024) throw new Error('Apify returned an empty video file');
+  fs.mkdirSync(ANALYSIS_DIR, { recursive: true });
+  const fileName = `${randomUUID()}.mp4`;
+  const filePath = path.join(ANALYSIS_DIR, fileName);
+  fs.writeFileSync(filePath, buf);
+  recordApifyVideoFallbackUse(tenantId);
+  return {
+    filePath,
+    fileName,
+    mimeType: videoRes.headers.get('content-type')?.split(';')[0] || 'video/mp4',
+    size: buf.length,
+  };
+}
+
+async function runApifyActorDatasetItems(actor: string, input: Record<string, unknown>, timeoutMs: number, label: string): Promise<Record<string, unknown>[]> {
+  const token = process.env.APIFY_TOKEN?.trim();
+  if (!token) throw new Error('APIFY_TOKEN is not configured');
+  const deadline = Date.now() + Math.max(30_000, timeoutMs);
+  const startUrl = `https://api.apify.com/v2/acts/${encodeURIComponent(actor)}/runs?token=${encodeURIComponent(token)}`;
+  const start = await apifyJsonRequest(startUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  }, deadline, `${label} start`);
+  const startRecord = asRecord(start);
+  const run = asRecord(startRecord.data) || startRecord;
+  const runId = String(run.id || '').trim();
+  const datasetId = String(run.defaultDatasetId || '').trim();
+  if (!runId || !datasetId) throw new Error(`Apify ${label} did not return run/dataset identifiers`);
+
+  const pollIntervalMs = Math.max(1000, Number(process.env.APIFY_POLL_INTERVAL_MS || 5000));
+  let status = String(run.status || '').toUpperCase();
+  while (!['SUCCEEDED', 'FAILED', 'ABORTED', 'TIMED-OUT'].includes(status)) {
+    if (Date.now() >= deadline) throw new Error(`Apify ${label} timed out while waiting for run ${runId}`);
+    await delay(Math.min(pollIntervalMs, Math.max(250, deadline - Date.now())));
+    const current = await apifyJsonRequest(
+      `https://api.apify.com/v2/actor-runs/${encodeURIComponent(runId)}?token=${encodeURIComponent(token)}`,
+      { method: 'GET' },
+      deadline,
+      `${label} poll`,
+    );
+    const currentRecord = asRecord(current);
+    const currentRun = asRecord(currentRecord.data) || currentRecord;
+    status = String(currentRun.status || '').toUpperCase();
+  }
+  if (status !== 'SUCCEEDED') throw new Error(`Apify ${label} run ${runId} ended with status ${status}`);
+
+  const items = await apifyJsonRequest(
+    `https://api.apify.com/v2/datasets/${encodeURIComponent(datasetId)}/items?clean=true&token=${encodeURIComponent(token)}`,
+    { method: 'GET' },
+    deadline,
+    `${label} dataset`,
+  );
+  return Array.isArray(items) ? items as Record<string, unknown>[] : [];
+}
+
+async function apifyJsonRequest(url: string, init: RequestInit, deadline: number, label: string): Promise<unknown> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), Math.max(1000, deadline - Date.now()));
+  try {
+    const r = await fetch(url, { ...init, signal: controller.signal });
+    const text = await r.text();
+    if (!r.ok) throw new Error(`Apify ${label} HTTP ${r.status}: ${text.slice(0, 300)}`);
+    return text ? JSON.parse(text) as unknown : {};
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
 function findApifyVideoDownloadUrl(value: unknown, depth = 0): string {
@@ -2886,11 +3248,11 @@ function dateFromCompact(input: string): Date {
 
 async function crawlYtDlpSearch(platform: Platform, searchUrl: string, keyword: string, limit: number, dateFrom = '', dateTo = ''): Promise<CrawledVideo[]> {
   const dateArgs = ytdlpDateArgs(dateFrom, dateTo);
-  const { stdout } = await execFileAsync('python3', buildYtDlpArgs(['--dump-json', '--flat-playlist', '--playlist-end', String(limit), ...dateArgs], searchUrl, false), {
+  const { stdout } = await withPlatformCrawlPacing(platform, () => execFileAsync('python3', buildYtDlpArgs(['--dump-json', '--flat-playlist', '--playlist-end', String(limit), ...dateArgs], searchUrl, false), {
     maxBuffer: 16 * 1024 * 1024,
     timeout: 45_000,
     env: crawlerExecEnv(),
-  });
+  }));
   const items = stdout.split('\n')
     .map(line => line.trim())
     .filter(Boolean)
@@ -3332,6 +3694,80 @@ function looksLikeVideoUrl(url: string, platform: Platform): boolean {
   if (platform === 'instagram') return /\/(?:reel|p)\//i.test(url);
   if (platform === 'facebook') return /\/(?:reel|watch|videos)\b/i.test(url) || /[?&]v=\d+/i.test(url);
   return true;
+}
+
+// ─── 对标账号主页采集 ──────────────────────────────────────────────────────────
+// 判断输入是否为「账号主页 URL」（而非单条视频链接）。目前仅支持 youtube / tiktok。
+export function looksLikeAccountUrl(input: string, platform: Platform): boolean {
+  const url = String(input || '').trim();
+  if (!isPlatformUrl(url, platform)) return false;
+  if (platform === 'youtube') {
+    if (youtubeVideoId(url)) return false; // 是单条视频
+    return /\/(?:@[^/?#]+|channel\/[^/?#]+|c\/[^/?#]+|user\/[^/?#]+)/i.test(url);
+  }
+  if (platform === 'tiktok') {
+    return /\/@[^/?#]+/i.test(url) && !/\/video\/\d+/i.test(url);
+  }
+  return false;
+}
+
+// 从主页 URL 推断一个展示用账号名（@handle 或 channel 段）。
+export function accountLabelFromUrl(url: string): string {
+  try {
+    const path = new URL(url).pathname;
+    const handle = path.match(/\/(@[^/?#]+)/)?.[1]
+      || path.match(/\/(?:channel|c|user)\/([^/?#]+)/i)?.[1]
+      || path.split('/').filter(Boolean).pop();
+    return handle ? decodeURIComponent(handle) : url;
+  } catch {
+    return url;
+  }
+}
+
+// 把账号主页 URL 规范化成可被 yt-dlp flat-playlist 枚举的「视频列表页」。
+function normalizeAccountListUrl(platform: Platform, url: string): string {
+  const clean = stripTrackingParams(String(url || '').trim()).replace(/\/+$/, '');
+  if (platform === 'youtube') {
+    if (/\/(?:videos|shorts|streams|featured)$/i.test(clean)) return clean;
+    return `${clean}/videos`;
+  }
+  return clean;
+}
+
+// 采集某个对标账号主页的最新视频列表（flat-playlist 枚举，最多 limit 条）。
+async function crawlAccountHomepage(platform: Platform, accountUrl: string, limit: number, dateFrom = '', dateTo = ''): Promise<CrawledVideo[]> {
+  const listUrl = normalizeAccountListUrl(platform, accountUrl);
+  const safeLimit = Math.max(1, limit);
+  let items: CrawledVideo[];
+  try {
+    items = await crawlYtDlpSearch(platform, listUrl, '', safeLimit, '', '');
+  } catch (e) {
+    // TikTok/部分主页枚举需要登录态；退回带 cookies 的 flat-playlist 枚举。
+    console.warn('[videos] account homepage flat enumeration failed, retrying with cookies:', e);
+    items = await enumerateAccountWithCookies(platform, listUrl, safeLimit);
+  }
+  const withinRange = hasDateRange(dateFrom, dateTo)
+    ? items.filter(item => isWithinDateRange(item.uploadedAt, dateFrom, dateTo))
+    : items;
+  return (withinRange.length ? withinRange : items).slice(0, limit);
+}
+
+async function enumerateAccountWithCookies(platform: Platform, listUrl: string, limit: number): Promise<CrawledVideo[]> {
+  const stdout = await execYtDlpWithCookieFallback(
+    ['--dump-json', '--flat-playlist', '--playlist-end', String(limit)],
+    listUrl,
+    60_000,
+    16 * 1024 * 1024,
+  );
+  const items = stdout.split('\n')
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => { try { return JSON.parse(line) as Record<string, unknown>; } catch { return null; } })
+    .filter((meta): meta is Record<string, unknown> => Boolean(meta))
+    .map(metaToCrawledVideo(platform, ''))
+    .filter((item): item is CrawledVideo => Boolean(item));
+  if (items.length === 0) throw new Error(`${platform} 账号主页没有枚举到可用视频`);
+  return items.slice(0, limit);
 }
 
 function cleanSearchResultUrl(url: string): string {
@@ -4020,7 +4456,7 @@ function isPlatformUrl(input: string, platform: Platform): boolean {
   return false;
 }
 
-function inferPlatformFromUrl(input: string): Platform {
+export function inferPlatformFromUrl(input: string): Platform {
   try {
     const host = new URL(input).hostname;
     if (/tiktok\.com$/i.test(host)) return 'tiktok';
@@ -4238,14 +4674,20 @@ function apifyVideoUsageToday(tenantId?: string): { total: number; tenant: numbe
   };
 }
 
-function canUseApifyVideoFallback(tenantId?: string): boolean {
-  if (process.env.APIFY_TIKTOK_VIDEO_FALLBACK_ENABLED === '0') return false;
+function canUseApifyVideoFallback(tenantId?: string, platform: Platform = 'tiktok'): boolean {
+  const enableEnv = platform === 'instagram' ? 'APIFY_INSTAGRAM_VIDEO_FALLBACK_ENABLED' : 'APIFY_TIKTOK_VIDEO_FALLBACK_ENABLED';
+  if (process.env[enableEnv] === '0') return false;
   if (!process.env.APIFY_TOKEN?.trim()) return false;
+  // TikTok / Instagram 共用同一份 Apify 视频下载日额度（apify-video-usage.json）。
   const globalLimit = apifyVideoDailyLimit();
   const tenantLimit = apifyVideoTenantDailyLimit();
   if (globalLimit <= 0 || tenantLimit <= 0) return false;
   const usage = apifyVideoUsageToday(tenantId);
   return usage.total < globalLimit && usage.tenant < tenantLimit;
+}
+
+function canUseApifyInstagramCrawlFallback(): boolean {
+  return process.env.APIFY_INSTAGRAM_CRAWL_FALLBACK_ENABLED !== '0' && Boolean(process.env.APIFY_TOKEN?.trim());
 }
 
 function canUseApifyTikTokCrawlFallback(): boolean {
@@ -4429,12 +4871,15 @@ export async function runCrawlerOpsWorkerOnce(): Promise<{
         const errorMessage = e instanceof Error ? e.message : String(e);
         const compactError = compactVideoPipelineError(errorMessage);
         const compactReason = compactVideoPipelineError(classifyCrawlerFailure(errorMessage), 360);
-        const shouldTryApify = task.platform === 'tiktok'
+        const apifyVideoPlatform = task.platform === 'instagram' ? 'instagram' : task.platform === 'tiktok' ? 'tiktok' : null;
+        const shouldTryApify = Boolean(apifyVideoPlatform)
           && attemptNo >= Math.max(1, Number(process.env.APIFY_TIKTOK_VIDEO_AFTER_ATTEMPTS || 2))
-          && canUseApifyVideoFallback(apifyTenantIdFromRecord(record));
+          && canUseApifyVideoFallback(apifyTenantIdFromRecord(record), apifyVideoPlatform || 'tiktok');
         if (shouldTryApify) {
           try {
-            const downloaded = await downloadTikTokVideoViaApify(task.sourceUrl, apifyTenantIdFromRecord(record));
+            const downloaded = apifyVideoPlatform === 'instagram'
+              ? await downloadInstagramVideoViaApify(task.sourceUrl, apifyTenantIdFromRecord(record))
+              : await downloadTikTokVideoViaApify(task.sourceUrl, apifyTenantIdFromRecord(record));
             const videoAnalysis = await analyzeDownloadedVideoWithFallback({
               filePath: downloaded.filePath,
               mimeType: downloaded.mimeType,
@@ -4472,7 +4917,7 @@ export async function runCrawlerOpsWorkerOnce(): Promise<{
             resolved += 1;
             continue;
           } catch (apifyError) {
-            console.warn('[crawler-ops] TikTok Apify video fallback failed:', apifyError instanceof Error ? apifyError.message : apifyError);
+            console.warn(`[crawler-ops] ${task.platform} Apify video fallback failed:`, apifyError instanceof Error ? apifyError.message : apifyError);
           }
         }
         const canRetry = attemptNo < maxAttempts;
@@ -4589,7 +5034,9 @@ function crawlerOpsStats(tenantId?: string): Record<string, unknown> {
     cookieFileCount: cookieFiles().length,
     cookieBrowserCount: cookieBrowsers().length,
     apifyVideoFallback: {
-      enabled: process.env.APIFY_TIKTOK_VIDEO_FALLBACK_ENABLED !== '0',
+      enabled: process.env.APIFY_TIKTOK_VIDEO_FALLBACK_ENABLED !== '0' || process.env.APIFY_INSTAGRAM_VIDEO_FALLBACK_ENABLED !== '0',
+      tiktokEnabled: process.env.APIFY_TIKTOK_VIDEO_FALLBACK_ENABLED !== '0',
+      instagramEnabled: process.env.APIFY_INSTAGRAM_VIDEO_FALLBACK_ENABLED !== '0',
       usedToday: apifyUsage.total,
       dailyLimit: apifyVideoDailyLimit(),
       globalUsedToday: apifyUsage.total,

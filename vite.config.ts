@@ -14,7 +14,7 @@ function resolveHmr(): ServerOptions['hmr'] {
   return true;
 }
 
-const devApiTarget = process.env.DEV_API_TARGET ?? 'http://127.0.0.1:8788';
+const devApiTarget = process.env.DEV_API_TARGET ?? 'http://127.0.0.1:8790';
 
 export default defineConfig(() => ({
   plugins: [react(), tailwindcss()],

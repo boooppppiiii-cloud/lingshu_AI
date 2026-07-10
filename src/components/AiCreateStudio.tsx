@@ -1886,11 +1886,13 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                   <button key={m.id} onClick={() => setMode(m.id)}
                     className="card p-4 text-left transition-all"
                     style={on ? { borderColor: TRAFFIC_GREEN, boxShadow: `0 0 0 1px ${TRAFFIC_GREEN}` } : undefined}>
-                    <div className="w-9 h-9 rounded-xl flex items-center justify-center mb-3"
-                      style={{ background: on ? TRAFFIC_GREEN : 'var(--color-surface-2)', color: on ? '#fff' : 'var(--color-text-muted)' }}>
-                      <m.icon size={17} />
+                    <div className="mb-2 flex items-center gap-2">
+                      <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
+                        style={{ background: on ? TRAFFIC_GREEN : 'var(--color-surface-2)', color: on ? '#fff' : 'var(--color-text-muted)' }}>
+                        <m.icon size={14} />
+                      </div>
+                      <p className="text-sm font-bold text-text-primary">{m.title}</p>
                     </div>
-                    <p className="text-sm font-bold text-text-primary mb-1">{m.title}</p>
                     <p className="text-xs text-text-muted leading-relaxed">{m.desc}</p>
                   </button>
                 );

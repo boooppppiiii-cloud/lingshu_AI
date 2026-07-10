@@ -8,9 +8,11 @@ export interface LLMCallOptions {
   model?: string;
   systemPrompt?: string;
   deepThinking?: boolean;
+  requireSources?: boolean;
 }
 
 function resolveBackend(opts: LLMCallOptions): LLMBackend {
+  if (opts.requireSources) return 'gemini';
   return opts.backend ?? (process.env.OVERSEAS_LLM_BACKEND as LLMBackend) ?? 'gemini';
 }
 
@@ -30,24 +32,11 @@ async function callGemini(prompt: string, opts: LLMCallOptions): Promise<string>
 }
 
 async function callQwen(prompt: string, opts: LLMCallOptions): Promise<string> {
-  const apiKey = process.env.DASHSCOPE_API_KEY;
-  if (!apiKey) throw new Error('DASHSCOPE_API_KEY not set');
-
-  const client = new OpenAI({
-    apiKey,
-    baseURL: process.env.DASHSCOPE_BASE_URL ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-  });
-
-  const messages: OpenAI.Chat.ChatCompletionMessageParam[] = [];
-  if (opts.systemPrompt) messages.push({ role: 'system', content: opts.systemPrompt });
-  messages.push({ role: 'user', content: prompt });
-
-  const completion = await client.chat.completions.create({
-    model: opts.model ?? 'qwen-plus',
-    messages,
-  });
-
-  return completion.choices[0]?.message?.content ?? '';
+  const completion = await completeQwenMessages([
+    ...(opts.systemPrompt ? [{ role: 'system' as const, content: opts.systemPrompt }] : []),
+    { role: 'user' as const, content: prompt },
+  ], opts);
+  return completion;
 }
 
 export async function callLLM(prompt: string, opts: LLMCallOptions = {}): Promise<string> {
@@ -80,9 +69,14 @@ async function* streamGeminiChat(messages: ChatMessage[], opts: LLMCallOptions):
   const baseConfig: Record<string, unknown> = {
     // 默认低延迟；用户打开深度思考时给中等预算，避免明显拖慢首字。
     thinkingConfig: { thinkingBudget: opts.deepThinking ? 768 : 0 },
-    maxOutputTokens: opts.deepThinking ? 4096 : 2048,
+    maxOutputTokens: opts.deepThinking ? 8192 : 4096,
     ...(opts.systemPrompt ? { systemInstruction: { parts: [{ text: opts.systemPrompt }] } } : {}),
   };
+
+  // 记录最后一个 chunk 的收尾原因：MAX_TOKENS 等异常收尾不会抛错，只能靠它识别静默截断
+  let finishReason: string | undefined;
+  const sources: GroundingSource[] = [];
+  const seenSources = new Set<string>();
 
   // 单次尝试：withSearch 时挂联网检索（可引用真实来源），否则纯生成（更稳）
   async function* attempt(withSearch: boolean, model = modelId): AsyncGenerator<StreamEvent> {
@@ -91,64 +85,184 @@ async function* streamGeminiChat(messages: ChatMessage[], opts: LLMCallOptions):
       contents,
       config: withSearch ? { ...baseConfig, tools: [{ googleSearch: {} }] } : baseConfig,
     });
-    const sources: GroundingSource[] = [];
-    const seen = new Set<string>();
     for await (const chunk of stream) {
       const text = chunk.text;
       if (text) yield { text };
-      const gm = (chunk as any).candidates?.[0]?.groundingMetadata;
+      const candidate = (chunk as any).candidates?.[0];
+      finishReason = candidate?.finishReason ?? finishReason;
+      const gm = candidate?.groundingMetadata;
       for (const g of gm?.groundingChunks ?? []) {
         const uri = g?.web?.uri;
-        if (uri && !seen.has(uri)) { seen.add(uri); sources.push({ title: g.web.title ?? uri, uri }); }
+        if (uri && !seenSources.has(uri)) { seenSources.add(uri); sources.push({ title: g.web.title ?? uri, uri }); }
       }
     }
     if (sources.length) yield { sources: sources.slice(0, 6) };
   }
 
-  // 联网流偶发中途断流（terminated）。已吐内容就保留；几乎没吐就无联网重试一次（很稳）。
-  let emitted = 0;
+  // 断流续写：把已吐出的半截回复作为 model 轮塞回去，让模型无联网从断点接着写。
+  async function* continueFrom(partial: string): AsyncGenerator<StreamEvent> {
+    const stream = await ai.models.generateContentStream({
+      model: modelId,
+      contents: [
+        ...contents,
+        { role: 'model', parts: [{ text: partial }] },
+        { role: 'user', parts: [{ text: '你上一条回复在中途被截断了。请紧接着已输出的内容继续写完剩余部分：不要重复已写过的内容，不要重新开头或自我介绍，直接从断点续写。' }] },
+      ],
+      config: baseConfig,
+    });
+    for await (const chunk of stream) {
+      const text = chunk.text;
+      if (text) yield { text };
+      finishReason = (chunk as any).candidates?.[0]?.finishReason ?? finishReason;
+    }
+  }
+
+  // 联网流偶发中途断流（terminated）。几乎没吐就无联网整体重试一次（很稳）；
+  // 已吐出较多内容时不丢弃，改为带上下文续写补全剩余部分。
+  let emittedText = '';
   try {
     for await (const ev of attempt(true)) {
-      if ('text' in ev) emitted += ev.text.length;
+      if ('text' in ev) emittedText += ev.text;
       yield ev;
     }
   } catch (err) {
-    if (emitted < 20) {
+    if (emittedText.length < 20) {
+      if (opts.requireSources) throw err;
+      // 整体重试是从头生成，前面吐出的零星几个字不再算进续写上下文
       try {
-        for await (const ev of attempt(false)) yield ev;
+        emittedText = '';
+        for await (const ev of attempt(false)) {
+          if ('text' in ev) emittedText += ev.text;
+          yield ev;
+        }
       } catch (fallbackErr) {
         const raw = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
         if (/RESOURCE_EXHAUSTED|Too Many Requests|429|quota/i.test(raw) && modelId !== 'gemini-2.5-flash-lite') {
-          for await (const ev of attempt(false, 'gemini-2.5-flash-lite')) yield ev;
+          emittedText = '';
+          for await (const ev of attempt(false, 'gemini-2.5-flash-lite')) {
+            if ('text' in ev) emittedText += ev.text;
+            yield ev;
+          }
         } else {
           throw fallbackErr;
         }
       }
     } else {
-      const raw = err instanceof Error ? err.message : String(err);
-      yield { text: `\n\n（联网检索中断：${raw.slice(0, 120)}）` };
+      // 续写请求本身也可能被偶发 terminated 打断，失败后再试一次
+      let continued = false;
+      for (let i = 0; i < 2 && !continued; i++) {
+        try {
+          for await (const ev of continueFrom(emittedText)) {
+            if ('text' in ev) emittedText += ev.text;
+            yield ev;
+          }
+          continued = true;
+        } catch { /* retry */ }
+      }
+      if (!continued) {
+        const raw = err instanceof Error ? err.message : String(err);
+        yield { text: `\n\n（联网检索中断：${raw.slice(0, 120)}）` };
+      }
     }
+  }
+
+  // MAX_TOKENS 是正常收尾而非异常，上面的 catch 接不住；从断点自动续写，最多补两轮
+  for (let i = 0; i < 2 && finishReason === 'MAX_TOKENS' && emittedText; i++) {
+    finishReason = undefined;
+    try {
+      for await (const ev of continueFrom(emittedText)) {
+        if ('text' in ev) emittedText += ev.text;
+        yield ev;
+      }
+    } catch {
+      break;
+    }
+  }
+  if (finishReason === 'MAX_TOKENS') {
+    yield { text: '\n\n（内容较长已达单次输出上限，回复「继续」可接着写）' };
+  } else if (finishReason && finishReason !== 'STOP') {
+    yield { text: `\n\n（回复被模型策略提前结束：${finishReason}）` };
+  }
+  if (opts.requireSources && sources.length === 0) {
+    yield { text: '\n\n（本次问题需要联网来源，但模型没有返回可跳转来源；请重试或把问题限定到更具体的市场/平台/时间范围。）' };
   }
 }
 
 async function* streamQwenChat(messages: ChatMessage[], opts: LLMCallOptions): AsyncGenerator<StreamEvent> {
+  const msgs = buildQwenMessages(messages, opts);
+  let emittedText = '';
+
+  try {
+    for await (const ev of streamQwenMessages(msgs, opts)) {
+      if ('text' in ev) emittedText += ev.text;
+      yield ev;
+    }
+    return;
+  } catch (err) {
+    const fallbackMessages: OpenAI.Chat.ChatCompletionMessageParam[] = emittedText
+      ? [
+          ...msgs,
+          { role: 'assistant', content: emittedText },
+          {
+            role: 'user',
+            content: '你上一条回复在中途被截断了。请紧接着已输出的内容继续写完剩余部分：不要重复已写过的内容，不要重新开头或自我介绍，直接从断点续写。',
+          },
+        ]
+      : msgs;
+    try {
+      const text = await completeQwenMessages(fallbackMessages, opts);
+      if (text) yield { text };
+      return;
+    } catch {
+      if (emittedText) {
+        const raw = err instanceof Error ? err.message : String(err);
+        yield { text: `\n\n（模型流式连接中断：${raw.slice(0, 120)}。请发送「继续」接着写。）` };
+        return;
+      }
+      throw err;
+    }
+  }
+}
+
+function createQwenClient(): OpenAI {
   const apiKey = process.env.DASHSCOPE_API_KEY;
   if (!apiKey) throw new Error('DASHSCOPE_API_KEY not set');
 
-  const client = new OpenAI({
+  return new OpenAI({
     apiKey,
     baseURL: process.env.DASHSCOPE_BASE_URL ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1',
   });
+}
 
+function buildQwenMessages(messages: ChatMessage[], opts: LLMCallOptions): OpenAI.Chat.ChatCompletionMessageParam[] {
   const msgs: OpenAI.Chat.ChatCompletionMessageParam[] = [];
   if (opts.systemPrompt) msgs.push({ role: 'system', content: opts.systemPrompt });
   msgs.push(...messages.map(m => ({ role: m.role, content: m.content }) as OpenAI.Chat.ChatCompletionMessageParam));
+  return msgs;
+}
 
-  const stream = await client.chat.completions.create({ model: opts.model ?? 'qwen-plus', messages: msgs, stream: true });
+async function* streamQwenMessages(
+  messages: OpenAI.Chat.ChatCompletionMessageParam[],
+  opts: LLMCallOptions,
+): AsyncGenerator<StreamEvent> {
+  const client = createQwenClient();
+  const stream = await client.chat.completions.create({ model: opts.model ?? 'qwen-plus', messages, stream: true });
   for await (const chunk of stream) {
     const text = chunk.choices[0]?.delta?.content;
     if (text) yield { text };
   }
+}
+
+async function completeQwenMessages(
+  messages: OpenAI.Chat.ChatCompletionMessageParam[],
+  opts: LLMCallOptions,
+): Promise<string> {
+  const client = createQwenClient();
+  const completion = await client.chat.completions.create({
+    model: opts.model ?? 'qwen-plus',
+    messages,
+  });
+  return completion.choices[0]?.message?.content ?? '';
 }
 
 export async function* callLLMChatStream(messages: ChatMessage[], opts: LLMCallOptions = {}): AsyncGenerator<StreamEvent> {

@@ -5,10 +5,11 @@ import {
   TrendingUp, Clock, Globe, ChevronDown, X, Loader2,
   Check, Copy, ArrowRight, Zap, LayoutGrid, List,
   Lightbulb, Flame, BarChart2, ChevronRight, Film, Download, Plus,
-  Bookmark, Maximize2, Minimize2, Lock, Upload,
+  Bookmark, Maximize2, Minimize2, Lock, Upload, Users,
 } from 'lucide-react';
 import { studioApi, type Material } from '../lib/studioApi';
 import { authHeader } from '../lib/auth';
+import CompetitorAccountsModal from './CompetitorAccountsModal';
 import type { Page } from '../App';
 import { completeDemoStep, readDemoProgress } from '../lib/demoProgress';
 import demoCover1 from '../assets/covers/mock-1.png';
@@ -154,15 +155,10 @@ const PLATFORM_FILTERS: { id: Platform; label: string }[] = [
   { id: 'all',       label: '全部平台' },
   { id: 'youtube',   label: 'YouTube' },
   { id: 'tiktok',    label: 'TikTok' },
-  { id: 'instagram', label: 'Ins' },
+  { id: 'instagram', label: 'Instagram' },
   { id: 'facebook',  label: 'Facebook' },
 ];
-const ACTIVE_PLATFORMS: Array<Exclude<Platform, 'all'>> = ['youtube', 'tiktok'];
-
-const LOCKED_PLATFORM_MESSAGES: Partial<Record<Platform, string>> = {
-  facebook: '正式版解锁FB爆点推荐功能',
-  instagram: '正式版解锁IG爆点推荐功能',
-};
+const ACTIVE_PLATFORMS: Array<Exclude<Platform, 'all'>> = ['youtube', 'tiktok', 'instagram', 'facebook'];
 
 const LANGUAGES = [
   { code: 'en', label: 'English' }, { code: 'zh', label: '中文' },
@@ -1836,6 +1832,10 @@ function VideoCard({ video, index, isSelected, onSelect, onWatch, onAnalyzeVideo
   const trendLabel = video.trend === 'hot' ? '🔥 热门' : video.trend === 'rising' ? '↑ 上升' : '— 平稳';
   const trendColor = video.trend === 'hot' ? 'text-accent' : video.trend === 'rising' ? 'text-green' : 'text-text-muted';
   const crawlRule = video.aiAnalysis?.crawlRule || '关键词检索';
+  const crawledDate = video.crawledAt ? new Date(video.crawledAt) : null;
+  const crawledLabel = crawledDate && !Number.isNaN(crawledDate.getTime())
+    ? `${String(crawledDate.getMonth() + 1).padStart(2, '0')}-${String(crawledDate.getDate()).padStart(2, '0')} 入库`
+    : '';
 
   return (
     <motion.div initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
@@ -1884,6 +1884,12 @@ function VideoCard({ video, index, isSelected, onSelect, onWatch, onAnalyzeVideo
         <div className="absolute top-2 left-2">
           <span className="platform-badge text-[10px]" style={{ background: meta.bg, color: meta.color }}>{meta.label}</span>
         </div>
+        {crawledLabel && (
+          <div className="absolute top-2 right-2 px-1.5 py-0.5 rounded-md text-[10px] font-mono font-bold text-white bg-black/50 backdrop-blur-sm"
+            title={`爬取入库时间：${crawledDate!.toLocaleString()}`}>
+            {crawledLabel}
+          </div>
+        )}
       </div>
       <div className="p-3">
         <p className="text-xs font-semibold text-text-primary leading-snug line-clamp-2 mb-2">{video.title}</p>
@@ -2021,6 +2027,8 @@ function recordsToVideos(records: CrawlerRecord[]): TrendVideo[] {
       };
     })
     .filter(video => isDisplayableVideoAnalysis(video.aiAnalysis))
+    // 同一 sourceUrl 只保留一条（demo 数据/多次采集可能带来 id 不同的重复视频）
+    .filter((video, index, all) => !video.sourceUrl || all.findIndex(v => v.sourceUrl === video.sourceUrl) === index)
     .sort((a, b) => heatValue(b.views) - heatValue(a.views));
 }
 
@@ -2215,6 +2223,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   const [materialsLoading, setMaterialsLoading] = useState(false);
   const [uploadingMaterial, setUploadingMaterial] = useState(false);
   const [generatingNeedId, setGeneratingNeedId] = useState('');
+  const [showAccountsModal, setShowAccountsModal] = useState(false);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const platformLabel = PLATFORM_FILTERS.find(f => f.id === platform)?.label ?? '全部平台';
   const sortLabel = sortMode === 'crawlTime' ? '按爬取时间' : '按热度';
@@ -2263,7 +2272,9 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
       }
       setVideoPage(Number(data.page || nextPage));
       setVideoTotalPages(Math.max(1, Number(data.totalPages || nextPage)));
-      setCrawledVideos(prev => append ? [...prev, ...videos.filter(v => !prev.some(old => old.id === v.id))] : videos);
+      setCrawledVideos(prev => append
+        ? [...prev, ...videos.filter(v => !prev.some(old => old.id === v.id || (!!v.sourceUrl && old.sourceUrl === v.sourceUrl)))]
+        : videos);
     } catch {
       if (!append) {
         try {
@@ -2391,12 +2402,6 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   };
 
   const handlePlatformFilter = (nextPlatform: Platform) => {
-    const lockedMessage = LOCKED_PLATFORM_MESSAGES[nextPlatform];
-    if (lockedMessage) {
-      setMaterialMessage(lockedMessage);
-      setTimeout(() => setMaterialMessage(''), 3000);
-      return;
-    }
     setLastCrawlVideoIds([]);
     setPlatform(nextPlatform);
   };
@@ -2570,11 +2575,22 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
 
         <div className="px-6 py-5 pl-[74px]">
             {innerView === 'inspiration' && <div className="mb-4 space-y-2.5">
-              <div className="relative min-w-0">
-                <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
-                <input type="text" value={search} onChange={e => { setLastCrawlVideoIds([]); setSearch(e.target.value); }}
-                  placeholder="搜索视频标题或标签..."
-                  className="h-11 w-full pl-9 pr-4 rounded-xl border border-border bg-surface text-sm text-text-primary placeholder:text-text-muted outline-none focus:border-accent transition-colors" />
+              <div className="flex items-center gap-2.5">
+                <div className="relative min-w-0 flex-1">
+                  <Search size={13} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+                  <input type="text" value={search} onChange={e => { setLastCrawlVideoIds([]); setSearch(e.target.value); }}
+                    placeholder="搜索视频标题或标签..."
+                    className="h-11 w-full pl-9 pr-4 rounded-xl border border-border bg-surface text-sm text-text-primary placeholder:text-text-muted outline-none focus:border-accent transition-colors" />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowAccountsModal(true)}
+                  className="flex h-11 shrink-0 items-center gap-1.5 rounded-xl border border-accent/30 bg-accent-glow px-3.5 text-sm font-bold text-accent transition-colors hover:bg-accent hover:text-white"
+                  title="爬取对标账号主页最新视频"
+                >
+                  <Users size={15} />
+                  <span className="hidden sm:inline">对标账号</span>
+                </button>
               </div>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               <div className="relative h-14 rounded-2xl border border-border bg-surface shadow-sm transition-colors hover:border-border-bright focus-within:border-accent">
@@ -2588,7 +2604,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
                 >
                   {PLATFORM_FILTERS.map(f => (
                     <option key={f.id} value={f.id}>
-                      {f.id === 'instagram' ? 'Ins（正式版）' : f.id === 'facebook' ? 'Facebook（正式版）' : f.label}
+                      {f.label}
                     </option>
                   ))}
                 </select>
@@ -2661,9 +2677,10 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
                   </div>
                 </div>
               ) : viewMode === 'grid' ? (
-                <div className="columns-2 lg:columns-3 xl:columns-4 gap-4">
+                // grid 而非 columns 瀑布流：columns 是竖向灌列，横向阅读顺序会打乱排序
+                <div className="grid grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 items-start">
                   {filtered.map((video, i) => (
-                    <div key={video.id} className="break-inside-avoid mb-4">
+                    <div key={video.id}>
                       <VideoCard video={video} index={i} isSelected={selectedVideo?.id === video.id}
                         onSelect={() => toggleScriptPanel(video)}
                         onWatch={() => handleWatch(video)}
@@ -2852,6 +2869,17 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
       <AnimatePresence>
         {watchVideo && <WatchModal key={watchVideo.id} video={watchVideo} onClose={() => setWatchVideo(null)} />}
       </AnimatePresence>
+      <CompetitorAccountsModal
+        open={showAccountsModal}
+        onClose={() => setShowAccountsModal(false)}
+        onCrawled={() => {
+          setInnerView('inspiration');
+          setSortMode('crawlTime');
+          setPlatform('all');
+          setSearch('');
+          void refreshVideos(1, false);
+        }}
+      />
     </div>
   );
 }

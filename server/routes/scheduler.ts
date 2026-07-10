@@ -366,8 +366,16 @@ function normalizeCrawlerLimit(value: unknown): string {
   return String(Math.max(1, Math.min(10, Math.round(numeric))));
 }
 
+function resolveCrawlerPlatform(raw: unknown, fallback = 'youtube'): string {
+  const value = String(raw || fallback).toLowerCase();
+  for (const p of ['tiktok', 'facebook', 'instagram'] as const) {
+    if (value.includes(p)) return p;
+  }
+  return 'youtube';
+}
+
 function normalizeCrawlerConfig(config: Record<string, string>, fallbackPlatform = 'youtube'): Record<string, string> {
-  const platform = String(config.platforms || fallbackPlatform).toLowerCase().includes('tiktok') ? 'tiktok' : 'youtube';
+  const platform = resolveCrawlerPlatform(config.platforms, fallbackPlatform);
   const keywords = String(config.keywords || config.keyword || 'skincare').trim() || 'skincare';
   return {
     ...config,
@@ -380,7 +388,7 @@ function normalizeCrawlerConfig(config: Record<string, string>, fallbackPlatform
 async function executeVideoKeywordCrawl(task: ScheduledTask): Promise<string> {
   const tenantId = await resolveSchedulerTenantId(task);
   const platforms = splitConfigList(task.config.platforms, ['youtube'])
-    .filter((platform): platform is Platform => ['youtube', 'tiktok'].includes(platform));
+    .filter((platform): platform is Platform => ['youtube', 'tiktok', 'facebook', 'instagram'].includes(platform));
   const keywords = splitConfigList(task.config.keywords || task.config.keyword, ['skincare']);
   const limit = Math.max(1, Math.min(10, Number(task.config.limit || 5) || 5));
   const { dateFrom, dateTo } = beijingDateRange(task.config.dateWindowDays);
@@ -516,7 +524,7 @@ schedulerRouter.post('/', (req: Request, res: Response) => {
   const { tenantId } = res.locals as AuthLocals;
   const tasks = load();
   const isVideoCrawler = req.body.taskType === 'video_keyword_crawl';
-  const crawlerPlatform = String(req.body.config?.platforms || '').toLowerCase().includes('tiktok') ? 'tiktok' : 'youtube';
+  const crawlerPlatform = resolveCrawlerPlatform(req.body.config?.platforms);
   const crawlerConfig = normalizeCrawlerConfig({ ...(req.body.config ?? {}), tenantId }, crawlerPlatform);
   const task: ScheduledTask = {
     id: `task_${Date.now()}`,
