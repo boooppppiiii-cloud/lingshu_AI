@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { decryptSecret, getTenantPlatformApp, verifyMetaSignature } from '../lib/tenantPlatformApps.js';
+import { handleMetaWebhook } from '../whatsapp/historyImport.js';
 
 export const webhookRouter = Router();
 
@@ -38,8 +39,7 @@ webhookRouter.post('/meta/:tenantId', async (req, res) => {
     return;
   }
 
-  // The ingestion pipeline can subscribe here later. For now we acknowledge fast,
-  // because Meta retries aggressively if the webhook takes too long.
+  void handleMetaWebhook(tenantId, req.body).catch(error => console.error('[meta-webhook-ingest]', error));
   console.log('[meta-webhook]', tenantId, JSON.stringify(req.body).slice(0, 500));
   res.json({ ok: true });
 });

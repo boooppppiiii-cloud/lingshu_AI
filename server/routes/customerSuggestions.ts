@@ -1,7 +1,21 @@
 import { Router } from 'express';
 import { callLLM } from '../agents/llm.js';
+import { getWhatsAppCustomers, getWhatsAppImportStatus } from '../whatsapp/historyImport.js';
 
 export const customerSuggestionsRouter = Router();
+
+customerSuggestionsRouter.get('/', (req, res) => {
+  const source = String(req.query.source || '');
+  if (source && source !== 'whatsapp') {
+    res.json({ items: [], source });
+    return;
+  }
+  res.json({ items: getWhatsAppCustomers(), source: 'whatsapp', importStatus: getWhatsAppImportStatus() });
+});
+
+customerSuggestionsRouter.get('/whatsapp/import-status', (_req, res) => {
+  res.json(getWhatsAppImportStatus());
+});
 
 interface CustomerHint {
   name: string;

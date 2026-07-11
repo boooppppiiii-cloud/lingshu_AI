@@ -8,6 +8,7 @@ import { testDingTalk } from '../integrations/dingtalk.js';
 import { testFeishu } from '../integrations/feishu.js';
 import { getShopInfo, testShopify } from '../integrations/shopify.js';
 import { isDemoMode } from '../lib/demo.js';
+import { handleMetaWebhook } from '../whatsapp/historyImport.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA = path.join(__dirname, '../../data/channels.json');
@@ -198,7 +199,7 @@ channelsRouter.post('/webhook/whatsapp/:id', (req: Request, res: Response) => {
   const channels = load();
   const idx = channels.findIndex(c => c.id === req.params.id);
   if (idx !== -1) { channels[idx].stats.received++; channels[idx].lastActivity = new Date().toISOString(); save(channels); }
-  // TODO: route message to agent
+  void handleMetaWebhook(channel.id, req.body).catch(error => console.error('[whatsapp-channel-webhook]', error));
   res.sendStatus(200);
 });
 

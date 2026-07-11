@@ -15,6 +15,7 @@
     "import:trend-videos": "tsx scripts/import-trend-videos.ts",
     "demo:seed": "tsx scripts/demo-seed.ts",
     "demo:reset": "tsx scripts/demo-reset.ts",
+    "test:outbound-guard": "tsx server/autonomy/outboundGuard.test.ts",
     "desktop": "electron desktop/main.cjs",
     "lint": "tsc --noEmit"
   },

@@ -1,5 +1,5 @@
 import { Card, CardContent, CardHeader } from '../../ui/card';
-import type { CustomerProfile } from '../../ConversionPage';
+import type { CustomerProfile } from '../../../types/customer';
 
 export function IntentSignalsWidget({ customer }: { customer: CustomerProfile }) {
   return (

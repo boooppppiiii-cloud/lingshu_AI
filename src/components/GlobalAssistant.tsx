@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   ArrowUp,
   Bot,
+  CheckCircle2,
   Compass,
   Loader2,
   ShoppingCart,
@@ -21,6 +22,19 @@ interface AssistantContext {
   label: string;
   summary: string;
   suggestions: string[];
+  pendingCount?: number;
+  todoItems?: AssistantTodoItem[];
+}
+
+interface AssistantTodoItem {
+  id: string;
+  name: string;
+  product: string;
+  source?: string;
+  headline: string;
+  reason: string;
+  tone: 'red' | 'amber' | 'blue' | 'green';
+  completed: boolean;
 }
 
 interface Props {
@@ -162,6 +176,22 @@ function quickQuestions(context: AssistantContext) {
   return context.suggestions.length ? context.suggestions : DEFAULT_CONTEXT.strategy.suggestions;
 }
 
+function todoToneClass(tone: AssistantTodoItem['tone'], completed: boolean) {
+  if (completed) return 'border-emerald-100 bg-emerald-50/80 text-emerald-800';
+  if (tone === 'red') return 'border-red-100 bg-red-50 text-red-800';
+  if (tone === 'amber') return 'border-amber-100 bg-amber-50 text-amber-800';
+  if (tone === 'blue') return 'border-sky-100 bg-sky-50 text-sky-800';
+  return 'border-emerald-100 bg-emerald-50 text-emerald-800';
+}
+
+function todoDotClass(tone: AssistantTodoItem['tone'], completed: boolean) {
+  if (completed) return 'bg-emerald-500';
+  if (tone === 'red') return 'bg-red-500';
+  if (tone === 'amber') return 'bg-amber-500';
+  if (tone === 'blue') return 'bg-sky-500';
+  return 'bg-emerald-500';
+}
+
 export default function GlobalAssistant({
   page,
   restore,
@@ -173,6 +203,7 @@ export default function GlobalAssistant({
 }: Props) {
   const reduceMotion = useReducedMotion();
   const [mode, setMode] = useState<'breathing' | 'expanded' | 'chat'>('breathing');
+  const [panelView, setPanelView] = useState<'todo' | 'chat'>('chat');
   const [activeAgent, setActiveAgent] = useState<OrbitAgentId>('strategy');
   const [liveContext, setLiveContext] = useState<AssistantContext | null>(null);
   const [enterpriseContext, setEnterpriseContext] = useState('');
@@ -194,6 +225,16 @@ export default function GlobalAssistant({
   const pageContext = useMemo(() => liveContext ?? DEFAULT_CONTEXT[pageKey(page)] ?? DEFAULT_CONTEXT.strategy, [liveContext, page]);
   const activeContext = useMemo(() => contextForOrbit(activeAgent, pageContext), [activeAgent, pageContext]);
   const activeThread = threads[activeAgent];
+  const todoItems = pageContext.todoItems ?? [];
+  const activeTodoItems = todoItems.filter(item => !item.completed);
+  const completedTodoItems = todoItems.filter(item => item.completed);
+  const orderedTodoItems = [...activeTodoItems, ...completedTodoItems];
+  const pendingCount = todoItems.length ? activeTodoItems.length : Math.max(0, Number(pageContext.pendingCount ?? 0));
+  const pendingBadge = pendingCount > 9 ? '9+' : String(pendingCount);
+  const activeAgentLabel = SKILL_AGENTS.find(agent => agent.id === activeAgent)?.label ?? '灵枢助手';
+  const isCustomerTodoView = panelView === 'todo' && activeAgent === 'customer' && pageContext.agent === 'conversion';
+  const panelTitle = isCustomerTodoView ? '今日待办' : activeAgentLabel;
+  const panelSubtitle = isCustomerTodoView ? '当前：我的客户' : `当前：${activeContext.label}`;
   const radius = 110;
 
   const persistThread = useCallback((agentId: OrbitAgentId) => {
@@ -207,11 +248,12 @@ export default function GlobalAssistant({
 
   const openAgent = useCallback((agentId: OrbitAgentId) => {
     setActiveAgent(agentId);
+    setPanelView(agentId === 'customer' && pageContext.agent === 'conversion' && (pendingCount > 0 || todoItems.length > 0) ? 'todo' : 'chat');
     setUnreadCount(agentId, 0);
     setMode('chat');
     window.setTimeout(() => bottomRef.current?.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth' }), 60);
     persistThread(agentId);
-  }, [persistThread, reduceMotion, setUnreadCount]);
+  }, [pageContext.agent, pendingCount, persistThread, reduceMotion, setUnreadCount, todoItems.length]);
 
   const openCurrentPageAgent = useCallback(() => {
     openAgent(orbitIdForAgent(pageContext.agent));
@@ -342,6 +384,8 @@ export default function GlobalAssistant({
         label: detail.label,
         summary: detail.summary,
         suggestions: detail.suggestions?.length ? detail.suggestions : DEFAULT_CONTEXT[pageKey(page)]?.suggestions ?? DEFAULT_CONTEXT.strategy.suggestions,
+        pendingCount: typeof detail.pendingCount === 'number' ? detail.pendingCount : undefined,
+        todoItems: Array.isArray(detail.todoItems) ? detail.todoItems : undefined,
       });
     };
     window.addEventListener('lingshu-assistant-context', handler);
@@ -358,6 +402,8 @@ export default function GlobalAssistant({
           label: detail.context.label,
           summary: detail.context.summary,
           suggestions: detail.context.suggestions?.length ? detail.context.suggestions : pageContext.suggestions,
+          pendingCount: typeof detail.context.pendingCount === 'number' ? detail.context.pendingCount : pageContext.pendingCount,
+          todoItems: Array.isArray(detail.context.todoItems) ? detail.context.todoItems : pageContext.todoItems,
         };
         setLiveContext(targetContext);
       }
@@ -418,7 +464,10 @@ export default function GlobalAssistant({
       longPressedRef.current = false;
       return;
     }
-    if (mode === 'expanded') openCurrentPageAgent();
+    if (mode === 'expanded') {
+      openCurrentPageAgent();
+      return;
+    }
     else setMode('expanded');
   };
 
@@ -426,10 +475,18 @@ export default function GlobalAssistant({
 
   return (
     <div data-global-assistant className="fixed bottom-5 right-5 z-[75]">
+      {mode === 'expanded' && (
+        <button
+          type="button"
+          aria-label="收起灵枢助手"
+          onClick={() => setMode('breathing')}
+          className="fixed inset-0 z-0 cursor-default bg-transparent"
+        />
+      )}
       <AnimatePresence>
         {mode === 'expanded' && (
           <motion.div
-            className="pointer-events-none absolute bottom-0 right-0 h-52 w-52"
+            className="pointer-events-none absolute bottom-0 right-0 z-10 h-52 w-52"
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
@@ -450,9 +507,9 @@ export default function GlobalAssistant({
                   className="group pointer-events-auto absolute bottom-2 right-2 flex h-12 w-12 items-center justify-center rounded-full border bg-white shadow-[0_12px_28px_rgba(15,23,42,0.14)]"
                   style={{ borderColor: agent.color, color: agent.color, backgroundColor: agent.bg }}
                   initial={{ x: 0, y: 0, opacity: 0, scale: 0.72 }}
-                  animate={reduceMotion ? { opacity: 1, scale: 1 } : { x, y, opacity: 1, scale: 1 }}
-                  exit={reduceMotion ? { opacity: 0 } : { x: 0, y: 0, opacity: 0, scale: 0.72 }}
-                  transition={reduceMotion ? { duration: 0.16 } : { type: 'spring', stiffness: 260, damping: 18, delay: index * 0.06 }}
+                  animate={{ x, y, opacity: 1, scale: 1 }}
+                  exit={{ x: 0, y: 0, opacity: 0, scale: 0.72 }}
+                  transition={{ type: 'spring', stiffness: 260, damping: 18, delay: index * 0.06 }}
                 >
                   <Icon size={20} />
                   <span className="pointer-events-none absolute bottom-full left-1/2 mb-2 -translate-x-1/2 whitespace-nowrap rounded-full bg-slate-950 px-2.5 py-1 text-[11px] font-bold text-white opacity-0 shadow-lg transition-opacity group-hover:opacity-100 group-focus-visible:opacity-100">
@@ -475,16 +532,24 @@ export default function GlobalAssistant({
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: 18, scale: 0.96 }}
             transition={reduceMotion ? { duration: 0.16 } : { type: 'spring', stiffness: 240, damping: 24 }}
-            className="absolute bottom-14 right-0 flex h-[min(720px,calc(100vh-112px))] w-[420px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-2xl border border-border bg-white shadow-2xl"
+            className="absolute bottom-14 right-0 z-10 flex h-[min(720px,calc(100vh-112px))] w-[420px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-2xl border border-border bg-white shadow-2xl"
           >
             <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
               <div className="flex min-w-0 items-center gap-2">
-                <button type="button" onClick={() => setMode('expanded')} className="rounded-lg p-1.5 text-text-muted hover:bg-surface-2" title="返回展开态">
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isCustomerTodoView) setPanelView('chat');
+                    else setMode('expanded');
+                  }}
+                  className="rounded-lg p-1.5 text-text-muted hover:bg-surface-2"
+                  title={isCustomerTodoView ? '返回客户助手' : '返回展开态'}
+                >
                   <ArrowLeft size={16} />
                 </button>
                 <div className="min-w-0">
-                  <p className="truncate text-sm font-black text-text-primary">{SKILL_AGENTS.find(agent => agent.id === activeAgent)?.label ?? '灵枢助手'}</p>
-                  <p className="truncate text-[11px] text-text-muted">当前：{activeContext.label}</p>
+                  <p className="truncate text-sm font-black text-text-primary">{panelTitle}</p>
+                  <p className="truncate text-[11px] text-text-muted">{panelSubtitle}</p>
                 </div>
               </div>
               <button type="button" onClick={() => setMode('breathing')} className="rounded-lg p-1.5 text-text-muted hover:bg-surface-2" title="收回">
@@ -492,89 +557,145 @@ export default function GlobalAssistant({
               </button>
             </header>
 
-            <div
-              className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
-              onScroll={event => setScrollPosition(activeAgent, event.currentTarget.scrollTop)}
-            >
-              {!activeThread.messages.length ? (
-                <div className="flex h-full flex-col justify-center gap-4">
-                  <div>
-                    <p className="text-sm font-bold text-text-primary">我是{SKILL_AGENTS.find(agent => agent.id === activeAgent)?.label}</p>
-                    <p className="mt-1 text-sm leading-relaxed text-text-muted">我会结合当前页面上下文继续帮你处理。</p>
+            {isCustomerTodoView ? (
+              <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+                <div className="space-y-3">
+                  <div className="rounded-2xl border border-cyan-100 bg-cyan-50 p-4">
+                    <p className="text-sm font-black text-cyan-950">今日待办（{pendingCount}）</p>
+                    <p className="mt-2 text-sm leading-relaxed text-cyan-900">
+                      {pendingCount > 0 ? '需要你处理和确认的客户已按优先级排好。' : '今天的待办已处理完。'}
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setPanelView('chat')}
+                      className="mt-4 rounded-xl border border-cyan-200 bg-white px-3 py-2 text-xs font-black text-cyan-800 hover:bg-cyan-100"
+                    >
+                      客户助手
+                    </button>
                   </div>
-                  <div className="grid gap-2">
-                    {quickQuestions(activeContext).map(item => (
-                      <button
-                        key={item}
-                        type="button"
-                        onClick={() => void send(item)}
-                        className="rounded-xl border border-border bg-surface px-3 py-2 text-left text-xs font-semibold text-text-secondary hover:border-slate-300 hover:text-text-primary"
-                      >
-                        {item}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  {activeThread.messages.map((msg, index) => (
-                    <div key={index} className={`flex gap-2 ${msg.role === 'user' ? 'justify-end' : ''}`}>
-                      {msg.role === 'assistant' && <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-950 text-white"><Bot size={13} /></div>}
-                      <div className={`max-w-[82%] rounded-2xl px-3 py-2 text-sm leading-relaxed ${msg.role === 'user' ? 'rounded-tr-sm bg-accent text-white whitespace-pre-line' : 'rounded-tl-sm border border-border bg-surface-2 text-text-primary'}`}>
-                        {msg.role === 'assistant'
-                          ? (msg.content ? <AgentReply content={msg.content} sources={msg.sources} onAction={onAction} /> : <span className="opacity-40">...</span>)
-                          : msg.content}
-                      </div>
+
+                  {orderedTodoItems.length > 0 ? (
+                    <div className="space-y-2">
+                      {orderedTodoItems.map(item => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          onClick={() => {
+                            window.dispatchEvent(new CustomEvent('lingshu:select-customer', { detail: { id: item.id } }));
+                            setPanelView('chat');
+                          }}
+                          className={`flex w-full items-start gap-3 rounded-xl border px-3 py-3 text-left transition-colors hover:bg-white ${todoToneClass(item.tone, item.completed)}`}
+                        >
+                          <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${todoDotClass(item.tone, item.completed)}`} />
+                          <span className="min-w-0 flex-1">
+                            <span className="flex items-center gap-2">
+                              <span className="truncate text-xs font-black text-text-primary">{item.name}</span>
+                              {item.completed && (
+                                <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-100 px-2 py-0.5 text-[10px] font-black text-emerald-700">
+                                  <CheckCircle2 size={11} /> 已完成
+                                </span>
+                              )}
+                            </span>
+                            <span className="mt-1 block truncate text-[11px] font-bold opacity-80">{item.headline}</span>
+                            <span className="mt-1 block line-clamp-2 text-[11px] leading-5 text-text-secondary">{item.reason}</span>
+                          </span>
+                        </button>
+                      ))}
                     </div>
-                  ))}
-                  {loading && (
-                    <div className="flex gap-2">
-                      <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-950 text-white"><Loader2 size={13} className="animate-spin" /></div>
-                      <div className="rounded-2xl rounded-tl-sm border border-border bg-surface-2 px-3 py-2 text-sm text-text-muted">思考中...</div>
+                  ) : (
+                    <div className="rounded-xl border border-border bg-surface-2 px-3 py-4 text-center text-xs font-bold text-text-muted">
+                      暂无今日待办
                     </div>
                   )}
-                  <div ref={bottomRef} />
-                </div>
-              )}
-            </div>
-
-            <div className="shrink-0 border-t border-border p-3">
-              <div className="rounded-2xl border border-border bg-surface-2">
-                <textarea
-                  value={activeThread.draftInput}
-                  onChange={event => setDraftInput(activeAgent, event.target.value)}
-                  onKeyDown={event => {
-                    if (event.key === 'Enter' && !event.shiftKey) {
-                      event.preventDefault();
-                      void send(activeThread.draftInput);
-                    }
-                  }}
-                  rows={2}
-                  placeholder="问灵枢助手..."
-                  className="w-full resize-none bg-transparent px-3 pt-3 text-sm outline-none placeholder:text-text-muted"
-                />
-                <div className="flex items-center justify-end px-2 pb-2">
-                  <button type="button" onClick={() => void send(activeThread.draftInput)} disabled={!activeThread.draftInput.trim() || loading} className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-950 text-white disabled:opacity-40">
-                    {loading ? <Loader2 size={13} className="animate-spin" /> : <ArrowUp size={13} />}
-                  </button>
                 </div>
               </div>
-            </div>
+            ) : (
+              <>
+                <div
+                  className="min-h-0 flex-1 overflow-y-auto px-4 py-4"
+                  onScroll={event => setScrollPosition(activeAgent, event.currentTarget.scrollTop)}
+                >
+                  {!activeThread.messages.length ? (
+                    <div className="flex h-full flex-col justify-center gap-4">
+                      <div>
+                        <p className="text-sm font-bold text-text-primary">我是{activeAgentLabel}</p>
+                        <p className="mt-1 text-sm leading-relaxed text-text-muted">我会结合当前页面上下文继续帮你处理。</p>
+                      </div>
+                      <div className="grid gap-2">
+                        {quickQuestions(activeContext).map(item => (
+                          <button
+                            key={item}
+                            type="button"
+                            onClick={() => void send(item)}
+                            className="rounded-xl border border-border bg-surface px-3 py-2 text-left text-xs font-semibold text-text-secondary hover:border-slate-300 hover:text-text-primary"
+                          >
+                            {item}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {activeThread.messages.map((msg, index) => (
+                        <div key={index} className={`flex gap-2 ${msg.role === 'user' ? 'justify-end' : ''}`}>
+                          {msg.role === 'assistant' && <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-950 text-white"><Bot size={13} /></div>}
+                          <div className={`max-w-[82%] rounded-2xl px-3 py-2 text-sm leading-relaxed ${msg.role === 'user' ? 'rounded-tr-sm bg-accent text-white whitespace-pre-line' : 'rounded-tl-sm border border-border bg-surface-2 text-text-primary'}`}>
+                            {msg.role === 'assistant'
+                              ? (msg.content ? <AgentReply content={msg.content} sources={msg.sources} onAction={onAction} /> : <span className="opacity-40">...</span>)
+                              : msg.content}
+                          </div>
+                        </div>
+                      ))}
+                      {loading && (
+                        <div className="flex gap-2">
+                          <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-slate-950 text-white"><Loader2 size={13} className="animate-spin" /></div>
+                          <div className="rounded-2xl rounded-tl-sm border border-border bg-surface-2 px-3 py-2 text-sm text-text-muted">思考中...</div>
+                        </div>
+                      )}
+                      <div ref={bottomRef} />
+                    </div>
+                  )}
+                </div>
+
+                <div className="shrink-0 border-t border-border p-3">
+                  <div className="rounded-2xl border border-border bg-surface-2">
+                    <textarea
+                      value={activeThread.draftInput}
+                      onChange={event => setDraftInput(activeAgent, event.target.value)}
+                      onKeyDown={event => {
+                        if (event.key === 'Enter' && !event.shiftKey) {
+                          event.preventDefault();
+                          void send(activeThread.draftInput);
+                        }
+                      }}
+                      rows={2}
+                      placeholder="问灵枢助手..."
+                      className="w-full resize-none bg-transparent px-3 pt-3 text-sm outline-none placeholder:text-text-muted"
+                    />
+                    <div className="flex items-center justify-end px-2 pb-2">
+                      <button type="button" onClick={() => void send(activeThread.draftInput)} disabled={!activeThread.draftInput.trim() || loading} className="flex h-8 w-8 items-center justify-center rounded-xl bg-slate-950 text-white disabled:opacity-40">
+                        {loading ? <Loader2 size={13} className="animate-spin" /> : <ArrowUp size={13} />}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
           </motion.section>
         )}
       </AnimatePresence>
 
       {mode !== 'chat' && (
-        <div className="relative h-16 w-16">
+        <div className="relative z-10 h-16 w-16">
           <motion.span
             className="absolute inset-0 rounded-full border border-dashed border-text-muted/60"
-            animate={mode === 'breathing' && !reduceMotion ? { scale: [1, 1.08, 1], opacity: [0.4, 0.7, 0.4] } : { scale: 1, opacity: 0.72 }}
-            transition={{ duration: 2.4, ease: 'easeInOut', repeat: mode === 'breathing' && !reduceMotion ? Infinity : 0 }}
+            animate={mode === 'breathing' && pendingCount > 0 && !reduceMotion ? { scale: [1, 1.08, 1], opacity: [0.4, 0.7, 0.4] } : { scale: 1, opacity: 0.72 }}
+            transition={{ duration: 2.4, ease: 'easeInOut', repeat: mode === 'breathing' && pendingCount > 0 && !reduceMotion ? Infinity : 0 }}
           />
           <motion.span
             className="absolute inset-2 rounded-full border border-dashed border-text-muted/50"
-            animate={mode === 'breathing' && !reduceMotion ? { scale: [1, 1.08, 1], opacity: [0.4, 0.7, 0.4] } : { scale: 1, opacity: 0.65 }}
-            transition={{ duration: 2.4, ease: 'easeInOut', repeat: mode === 'breathing' && !reduceMotion ? Infinity : 0, delay: 0.18 }}
+            animate={mode === 'breathing' && pendingCount > 0 && !reduceMotion ? { scale: [1, 1.08, 1], opacity: [0.4, 0.7, 0.4] } : { scale: 1, opacity: 0.65 }}
+            transition={{ duration: 2.4, ease: 'easeInOut', repeat: mode === 'breathing' && pendingCount > 0 && !reduceMotion ? Infinity : 0, delay: 0.18 }}
           />
           <button
             type="button"
@@ -584,9 +705,10 @@ export default function GlobalAssistant({
             onPointerLeave={handlePointerUp}
             onClick={handleLauncherClick}
             className="absolute left-1/2 top-1/2 flex h-12 w-12 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-slate-950 text-white shadow-[0_16px_38px_rgba(15,23,42,0.22)]"
-            title={mode === 'expanded' ? '打开当前页面助手' : '展开灵枢助手'}
+            title={mode === 'expanded' ? `打开${AGENT_DISPLAY_NAME[orbitIdForAgent(pageContext.agent)]}` : '展开灵枢助手'}
           >
             <Bot size={21} />
+            {pendingCount > 0 && <span className="absolute -right-1 -top-1 min-w-5 rounded-full bg-red px-1 text-[11px] font-black text-white">{pendingBadge}</span>}
           </button>
         </div>
       )}

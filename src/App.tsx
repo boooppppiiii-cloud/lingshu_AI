@@ -283,6 +283,16 @@ export default function App() {
     if (p === 'adminDelivery') window.history.replaceState(null, '', '/admin/delivery');
     else if (window.location.pathname === '/admin/delivery') window.history.replaceState(null, '', '/');
   }, []);
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const nextPage = (event as CustomEvent<{ page?: Page }>).detail?.page;
+      if (!nextPage || !ALL_PAGES.includes(nextPage)) return;
+      handleNavigate(nextPage);
+    };
+    window.addEventListener('lingshu:navigate', handler);
+    return () => window.removeEventListener('lingshu:navigate', handler);
+  }, [handleNavigate]);
   const restoreFor = (a: AgentType) => (restore && restore.agent === a ? restore : undefined);
   const kickoffFor = (a: AgentType) => (kickoff && kickoff.agent === a ? { text: kickoff.text, key: kickoff.key } : undefined);
 

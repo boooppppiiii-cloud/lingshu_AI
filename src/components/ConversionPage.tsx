@@ -16,6 +16,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import {
   Bot,
+  ChevronDown,
   Eye,
   FileText,
   Filter,
@@ -34,13 +35,23 @@ import { BasicInfoWidget } from './customers/widgets/BasicInfoWidget';
 import { IntentSignalsWidget } from './customers/widgets/IntentSignalsWidget';
 import { OrderHistoryWidget } from './customers/widgets/OrderHistoryWidget';
 import { TagsWidget } from './customers/widgets/TagsWidget';
+import { SourceIcon } from './customers/SourceIcon';
+import { DailyBriefing } from './customers/DailyBriefing';
+import { useCustomers } from '../hooks/useCustomers';
+import { buildPrioritySuggestion, dailyTodoCustomers, isTodoCompleted, pendingCount, sortCustomersByPriority, type PrioritySuggestion } from '../lib/customerPriority';
+import type { AutonomyLevel, CustomerProfile, CustomerStage, HandlingMode, TimelineEvent } from '../types/customer';
 
 type CustomerView = 'inbox' | 'leads' | 'won' | 'silent';
-type CustomerStage = 'lead' | 'inquiry' | 'quoted' | 'won' | 'silent30' | 'silent60';
-type HandlingMode = 'ai_auto' | 'ai_draft' | 'human_needed';
 type AutomationLevel = 'auto' | 'confirm' | 'manual';
-type TimelineType = 'whatsapp' | 'call' | 'note' | 'quote' | 'task';
-type DraftIntent = 'reply' | 'opener' | 'followup' | 'reactivate' | 'post_call' | 'polish';
+type DraftIntent = 'reply' | 'opener' | 'followup' | 'reactivate' | 'post_call' | 'polish' | 'handoff_summary';
+
+declare global {
+  interface Window {
+    __lingshuDemo?: {
+      pushBuyerMessage?: (customerId: string, text: string) => void;
+    };
+  }
+}
 
 interface Props {
   onEnterConversation: (ctx: ConversationContext) => void;
@@ -51,54 +62,6 @@ interface Props {
   onAction?: AgentAction;
   onSessionRefresh?: () => void;
   isDemo?: boolean;
-}
-
-interface TimelineEvent {
-  id: string;
-  type: TimelineType;
-  actor: 'buyer' | 'seller' | 'ai' | 'owner';
-  title: string;
-  body: string;
-  time: string;
-  autoSent?: boolean;
-}
-
-export interface CustomerProfile {
-  id: string;
-  name: string;
-  avatar: string;
-  countryName: string;
-  email?: string;
-  language: string;
-  source: string;
-  product: string;
-  outboundProduct: string;
-  estimatedValue: string;
-  stage: CustomerStage;
-  intentScore: number;
-  intentSignals: string[];
-  handlingMode: HandlingMode;
-  handlingReason: string;
-  aiAutoCount?: number;
-  needCall?: boolean;
-  hasUnread?: boolean;
-  priority: number;
-  inboxReason?: 'call' | 'large' | 'draft' | 'overdue' | 'reply';
-  lastActive: string;
-  localTime: string;
-  orders: OrderRecord[];
-  tags: string[];
-  summary: string;
-  nextStep: string;
-  timeline: TimelineEvent[];
-}
-
-export interface OrderRecord {
-  id: string;
-  status: 'paid' | 'refunded' | 'cancelled' | 'pending';
-  total: string;
-  createdAt: string;
-  items?: { name: string; qty: number }[];
 }
 
 const VIEW_META: Record<CustomerView, { label: string; desc: string }> = {
@@ -133,6 +96,7 @@ const AUTOMATION_META: Record<AutomationLevel, { label: string; desc: string; co
 };
 
 type CustomerWidgetId = 'basicInfo' | 'orderHistory' | 'intentSignals' | 'tags';
+type CustomerWidgetProps = { customer: CustomerProfile; onCustomerPatch: (patch: Partial<CustomerProfile>) => void };
 
 const HANDLING_COLOR: Record<HandlingMode, string> = {
   ai_auto: '#16a34a',
@@ -147,11 +111,11 @@ const ADOPTION_STATS = [
 
 const DEFAULT_WIDGET_ORDER: CustomerWidgetId[] = ['basicInfo', 'orderHistory', 'intentSignals', 'tags'];
 
-const WIDGET_COMPONENTS: Record<CustomerWidgetId, ComponentType<{ customer: CustomerProfile }>> = {
+const WIDGET_COMPONENTS: Record<CustomerWidgetId, ComponentType<CustomerWidgetProps>> = {
   basicInfo: BasicInfoWidget,
-  orderHistory: OrderHistoryWidget,
-  intentSignals: IntentSignalsWidget,
-  tags: TagsWidget,
+  orderHistory: ({ customer, onCustomerPatch }) => <OrderHistoryWidget customer={customer} onCustomerPatch={onCustomerPatch} />,
+  intentSignals: ({ customer }) => <IntentSignalsWidget customer={customer} />,
+  tags: ({ customer }) => <TagsWidget customer={customer} />,
 };
 
 function getTenantId() {
@@ -182,198 +146,11 @@ function readWidgetOrder(): CustomerWidgetId[] {
   }
 }
 
-const CUSTOMERS: CustomerProfile[] = [
-  {
-    id: 'c1',
-    name: 'Ahmed Al-Rashid',
-    avatar: 'A',
-    countryName: '沙特',
-    language: '英语 / 阿语',
-    source: 'WhatsApp',
-    product: '定制假发 500 件',
-    outboundProduct: 'custom hair wigs, 500 pcs',
-    estimatedValue: '$2,400',
-    stage: 'inquiry',
-    intentScore: 96,
-    intentSignals: ['问价格 +2', '问MOQ/船期 +3', '明确500件 +4', '想通电话 +6'],
-    handlingMode: 'human_needed',
-    handlingReason: '客户询价数量较大，建议销售主动邀约一次通话确认细节',
-    needCall: true,
-    hasUnread: true,
-    priority: 100,
-    inboxReason: 'call',
-    lastActive: '10 min',
-    localTime: '15:20',
-    orders: [
-      { id: '#1001', status: 'paid', total: 'US $180.00', createdAt: '2025年11月18日 16:20', items: [{ name: '假发样品包', qty: 1 }] },
-    ],
-    tags: ['大单', 'OEM', '中东', '建议通话'],
-    summary: '询问 500 件价格、定制方案和船期，适合由销售主动邀约通话。',
-    nextStep: 'I can ask our manager to walk you through the options by a short call. What time works for you?',
-    timeline: [
-      { id: '1', type: 'whatsapp', actor: 'buyer', title: '客户消息', body: 'Hi, I need 500 pcs custom hair wigs. Please share MOQ, best price, and delivery time.', time: '10:15' },
-      { id: '2', type: 'call', actor: 'ai', title: '建议主动通话', body: '采购数量较大，建议由销售主动邀约通话，确认发质、长度、包装和交期。', time: '10:16' },
-      { id: '3', type: 'whatsapp', actor: 'seller', title: '销售回复', body: 'I can ask our manager to walk you through the options by a short call. What time works for you?', time: '10:16' },
-    ],
-  },
-  {
-    id: 'c2',
-    name: 'Fatima Hassan',
-    avatar: 'F',
-    countryName: '阿联酋',
-    language: '阿语',
-    source: 'WhatsApp',
-    product: '香皂礼盒 1000 套',
-    outboundProduct: 'soap gift boxes, 1000 sets',
-    estimatedValue: '$1,800',
-    stage: 'quoted',
-    intentScore: 91,
-    intentSignals: ['问价格 +2', '明确数量 +3', '节日前采购 +2'],
-    handlingMode: 'ai_draft',
-    handlingReason: '客户询价并明确数量，需要你确认报价草稿',
-    hasUnread: true,
-    priority: 88,
-    inboxReason: 'large',
-    lastActive: '45 min',
-    localTime: '16:20',
-    orders: [
-      { id: '#1002', status: 'paid', total: 'US $420.00', createdAt: '2025年9月12日 11:05', items: [{ name: '香皂礼盒试单', qty: 200 }] },
-    ],
-    tags: ['大单预警', '阿语', '包装定制'],
-    summary: '需要 1000 套定制 LOGO 礼盒，已给初步报价，等待确认包装方案。',
-    nextStep: '发送阿语报价单和三套包装方案。',
-    timeline: [
-      { id: '1', type: 'whatsapp', actor: 'buyer', title: '客户消息', body: 'Need 1000 gift boxes with custom logo. What is the best price?', time: '昨天 16:00' },
-      { id: '2', type: 'quote', actor: 'seller', title: '报价草稿', body: '$1.80 / set, custom logo included, 18 days lead time.', time: '昨天 16:02' },
-      { id: '3', type: 'whatsapp', actor: 'ai', title: 'AI 草稿', body: 'We can support custom logo gift boxes. I will confirm the best price and packaging options for you.', time: '昨天 16:03' },
-    ],
-  },
-  {
-    id: 'c3',
-    name: 'Maria Santos',
-    avatar: 'M',
-    countryName: '巴西',
-    language: '西语',
-    source: 'DM',
-    product: '艾灸贴 200 件',
-    outboundProduct: 'moxibustion patches, 200 pcs',
-    estimatedValue: '$380',
-    stage: 'lead',
-    intentScore: 74,
-    intentSignals: ['问价格 +2', '问样品 +2', '数量偏小 +1'],
-    handlingMode: 'ai_draft',
-    handlingReason: '客户询问样品和价格，AI 已准备筛选回复',
-    priority: 62,
-    inboxReason: 'draft',
-    lastActive: '1h',
-    localTime: '10:20',
-    orders: [],
-    tags: ['样品', '西语', '可培育'],
-    summary: '小批量试单，适合走样品政策和后续复购培育。',
-    nextStep: '询问收货地址，并发送样品政策。',
-    timeline: [
-      { id: '1', type: 'whatsapp', actor: 'buyer', title: '客户消息', body: 'Me interesa el parche de moxibustion, 200 piezas. Cual es el precio unitario?', time: '昨天 14:30' },
-      { id: '2', type: 'task', actor: 'ai', title: 'AI 建议', body: '发送样品政策，并询问收货地址。', time: '昨天 14:31' },
-    ],
-  },
-  {
-    id: 'c4',
-    name: 'John Thompson',
-    avatar: 'J',
-    countryName: '美国',
-    language: '英语',
-    source: 'Alibaba',
-    product: '义乌小商品样品盒',
-    outboundProduct: 'Yiwu sample box',
-    estimatedValue: '$120',
-    stage: 'won',
-    intentScore: 82,
-    intentSignals: ['给收货地址 +5', '确认样品 +2'],
-    handlingMode: 'ai_auto',
-    handlingReason: '成交后物流跟进，AI 可按固定话术提醒',
-    aiAutoCount: 1,
-    priority: 45,
-    lastActive: '3h',
-    localTime: '09:20',
-    orders: [
-      { id: '#1003', status: 'pending', total: 'US $120.00', createdAt: '今天 08:46', items: [{ name: '义乌小商品样品盒', qty: 1 }] },
-    ],
-    tags: ['已下单', '样品', '待发单号'],
-    summary: '样品订单已确认，等待发送物流单号。',
-    nextStep: '发送物流单号，并创建 3 天后的到货跟进。',
-    timeline: [
-      { id: '1', type: 'whatsapp', actor: 'buyer', title: '客户消息', body: 'Curated selection sounds great. Standard shipping is fine.', time: '今天 08:45' },
-      { id: '2', type: 'task', actor: 'ai', title: '跟进任务', body: '创建物流单号跟进任务。', time: '今天 08:46' },
-    ],
-  },
-  {
-    id: 'c5',
-    name: 'Khalid Mohammed',
-    avatar: 'K',
-    countryName: '沙特',
-    language: '阿语',
-    source: 'WhatsApp',
-    product: '棕色直发 14 寸',
-    outboundProduct: 'brown straight hair, 14 inch',
-    estimatedValue: '$3,600',
-    stage: 'silent60',
-    intentScore: 89,
-    intentSignals: ['历史大额采购 +4', '68天未互动', '新品匹配度高 +2'],
-    handlingMode: 'human_needed',
-    handlingReason: '高价值老客沉默 60 天，需要你判断唤醒力度',
-    needCall: false,
-    priority: 70,
-    inboxReason: 'reply',
-    lastActive: '68d',
-    localTime: '15:20',
-    orders: [
-      { id: '#1004', status: 'paid', total: 'US $3,600.00', createdAt: '2026年3月4日 15:10', items: [{ name: '棕色直发 14 寸', qty: 600 }] },
-      { id: '#0988', status: 'paid', total: 'US $1,900.00', createdAt: '2025年12月9日 14:35', items: [{ name: '假发补货批次', qty: 320 }] },
-    ],
-    tags: ['高价值老客', '沉默60天', '可唤醒'],
-    summary: '高价值复购客户，适合用新品目录和老客价唤醒。',
-    nextStep: '发送新品目录和老客专属价格。',
-    timeline: [
-      { id: '1', type: 'note', actor: 'owner', title: '历史偏好', body: '偏好自然黑/棕色直发，关注现货和补货速度。', time: '68天前' },
-      { id: '2', type: 'task', actor: 'ai', title: '沉默雷达', body: '进入沉默60天状态，建议用新品目录唤醒。', time: '今天 09:00' },
-    ],
-  },
-  {
-    id: 'c6',
-    name: 'Nguyen Van A',
-    avatar: 'N',
-    countryName: '越南',
-    language: '英语',
-    source: 'Instagram',
-    product: '发饰批发',
-    outboundProduct: 'wholesale hair accessories',
-    estimatedValue: '$260',
-    stage: 'lead',
-    intentScore: 46,
-    intentSignals: ['问目录 +1', '未给数量 +0'],
-    handlingMode: 'ai_auto',
-    handlingReason: '新客户首次进线，只咨询产品目录',
-    aiAutoCount: 2,
-    priority: 30,
-    inboxReason: 'reply',
-    lastActive: '昨天',
-    localTime: '19:20',
-    orders: [],
-    tags: ['低分潜客', 'AI已自动回复', '目录'],
-    summary: '只询问产品目录，AI 已自动发送基础目录。',
-    nextStep: '继续由 AI 自动接待，直到客户提供采购数量。',
-    timeline: [
-      { id: '1', type: 'whatsapp', actor: 'buyer', title: '客户消息', body: 'Hi, interested in wholesale hair accessories. What collections do you have?', time: '昨天 11:00' },
-      { id: '2', type: 'whatsapp', actor: 'ai', title: 'AI 自动回复', body: 'Thanks for reaching out. I sent our hair accessories catalog and 50 pcs mixed wholesale pack for your review.', time: '昨天 11:01', autoSent: true },
-    ],
-  },
-];
-
 function filterCustomers(view: CustomerView, customers: CustomerProfile[]) {
-  if (view === 'inbox') return customers.filter(customer => customer.inboxReason).sort((a, b) => b.priority - a.priority);
+  if (view === 'inbox') return sortCustomersByPriority(customers.filter(customer => customer.inboxReason));
   if (view === 'leads') return customers.filter(customer => ['lead', 'inquiry', 'quoted'].includes(customer.stage)).sort((a, b) => b.intentScore - a.intentScore);
   if (view === 'won') return customers.filter(customer => customer.stage === 'won');
-  return customers.filter(customer => customer.stage === 'silent30' || customer.stage === 'silent60').sort((a, b) => b.intentScore - a.intentScore);
+  return sortCustomersByPriority(customers.filter(customer => customer.stage === 'silent30' || customer.stage === 'silent60'));
 }
 
 function replyLanguage(customer: CustomerProfile): string {
@@ -398,7 +175,7 @@ function inferMessageLanguage(text: string): 'Arabic' | 'Spanish' | 'English' | 
 }
 
 function customerConversationLanguage(customer: CustomerProfile): string {
-  return inferMessageLanguage(latestBuyerMessage(customer)) || replyLanguage(customer);
+  return replyLanguage(customer);
 }
 
 function fallbackCustomerReply(customer: CustomerProfile): string {
@@ -413,7 +190,7 @@ function fallbackCustomerReply(customer: CustomerProfile): string {
 
 function fallbackCustomerReplyZh(customer: CustomerProfile): string {
   if (customer.needCall || customer.inboxReason === 'call') {
-    return `您好，我们可以根据您要的${customer.product}快速确认规格、价格和交期。为了避免信息来回确认，我可以安排经理和您做一个简短通话，您今天哪个时间方便？`;
+    return `您好，我们可以根据您要的${customer.product}快速确认规格、价格和交期。请您补充一下目标规格、包装要求和交付时间，我会尽快整理方案给您。`;
   }
   if (customer.stage === 'silent30' || customer.stage === 'silent60') {
     return `您好，之前您关注过${customer.product}，我们最近有新款和更适合批量采购的方案。如果您还在看这类产品，我可以发一份最新目录给您参考。`;
@@ -429,7 +206,7 @@ function normalizeDraftForChineseEditing(draft: string, customer: CustomerProfil
   if (containsChinese(draft)) return draft;
   const normalized = draft.toLowerCase();
   if (normalized.includes('call') || normalized.includes('manager')) {
-    return fallbackCustomerReplyZh({ ...customer, needCall: true });
+    return fallbackCustomerReplyZh(customer);
   }
   return fallbackCustomerReplyZh(customer);
 }
@@ -440,7 +217,7 @@ function translateChineseReplyForCustomer(customer: CustomerProfile, text: strin
 
   const product = customer.outboundProduct;
   const language = customerConversationLanguage(customer);
-  const wantsCall = body.includes('通话') || body.includes('电话') || customer.needCall || customer.inboxReason === 'call';
+  const wantsCall = body.includes('通话') || body.includes('电话');
   const isWakeup = body.includes('最新目录') || body.includes('新款');
 
   if (language === 'Arabic') {
@@ -468,7 +245,7 @@ async function requestDraft(customer: CustomerProfile, instruction?: string, mod
         timeline: customer.timeline.slice(-8),
         product: customer.outboundProduct,
         internalProduct: customer.product,
-        language: customerConversationLanguage(customer),
+        language: customer.language,
         stage: STAGE_LABEL[customer.stage],
         instruction,
         mode,
@@ -485,12 +262,45 @@ async function requestDraft(customer: CustomerProfile, instruction?: string, mod
   return fallbackCustomerReplyZh(customer);
 }
 
+function fallbackHandoffSummary(customer: CustomerProfile): string {
+  return [
+    `客户想要：${customer.summary}`,
+    `当前进展：${customer.nextStep}`,
+    `需要人工原因：${customer.handlingReason}`,
+  ].join('\n');
+}
+
+async function requestHandoffSummary(customer: CustomerProfile): Promise<string> {
+  try {
+    const resp = await fetch('/api/overseas/agents/conversion/draft', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeader() },
+      body: JSON.stringify({
+        customerId: customer.id,
+        timeline: customer.timeline.slice(-8),
+        product: customer.outboundProduct,
+        internalProduct: customer.product,
+        language: customer.language,
+        stage: STAGE_LABEL[customer.stage],
+        intent: 'handoff_summary',
+      }),
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      if (typeof data?.draft === 'string' && data.draft.trim()) return data.draft.trim();
+    }
+  } catch {
+    // Local fallback keeps the handoff context available.
+  }
+  return fallbackHandoffSummary(customer);
+}
+
 function fallbackCustomerSuggestions(customer: CustomerProfile): string[] {
   if (customer.inboxReason === 'call') {
     return [
-      `生成一条给 ${customer.name} 的通话承接回复，并询问方便通话的时间。`,
-      `整理 ${customer.product} 的 30 秒通话简报，突出当前采购意向。`,
-      '生成一条确认经理亲自跟进的稳单消息。',
+      `生成一条给 ${customer.name} 的今日主动触达草稿，确认规格、包装和交期。`,
+      `整理 ${customer.product} 的触达要点，突出当前采购数量和待确认信息。`,
+      '生成一条确认尽快整理方案的稳单消息。',
     ];
   }
   if (customer.stage === 'silent30' || customer.stage === 'silent60') {
@@ -546,7 +356,46 @@ function CompactCustomerList({
   onOpen: (id: string) => void;
   onViewChange: (view: CustomerView) => void;
 }) {
+  const [aiAutoExpanded, setAiAutoExpanded] = useState(false);
   const list = filterCustomers(view, customers);
+  const renderCustomer = (customer: CustomerProfile) => {
+    const lastMessage = customer.timeline[customer.timeline.length - 1];
+    const statusColor = HANDLING_COLOR[customer.handlingMode];
+    const hasUnread = Boolean(customer.hasUnread);
+    return (
+      <button
+        key={customer.id}
+        type="button"
+        onClick={() => onOpen(customer.id)}
+        className={`w-full border-b border-border px-4 py-3 text-left transition-colors hover:bg-surface-2 ${customer.id === selectedId ? 'bg-[#0891b2]/10' : 'bg-white'}`}
+      >
+        <div className="flex items-start gap-3">
+          <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border bg-surface-2 text-sm font-black text-text-secondary">
+            <span className="absolute -left-0.5 -top-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-white transition-opacity" style={{ backgroundColor: hasUnread ? '#dc2626' : statusColor, opacity: hasUnread ? 1 : 0 }} />
+            {customer.avatar}
+          </div>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex min-w-0 items-center gap-1.5">
+                <p className="truncate text-sm font-bold text-text-primary">{customer.name}</p>
+                <SourceIcon source={customer.source} size={11} />
+              </div>
+              <span className="shrink-0 text-[11px] font-medium text-text-muted">{lastMessage?.time || customer.lastActive}</span>
+            </div>
+            <p className="mt-1 truncate text-xs leading-5 text-text-muted">{lastMessage?.body || customer.summary}</p>
+          </div>
+        </div>
+      </button>
+    );
+  };
+  const inboxGroups = [
+    { key: 'human_needed', label: '需要你处理', items: list.filter(customer => customer.handlingMode === 'human_needed') },
+    { key: 'ai_draft', label: '等你确认', items: list.filter(customer => customer.handlingMode === 'ai_draft') },
+    { key: 'ai_auto', label: 'AI 接待中', items: list.filter(customer => customer.handlingMode === 'ai_auto') },
+  ] as const;
+  const aiAutoCount = inboxGroups[2].items.length;
+  const aiAutoReplies = inboxGroups[2].items.reduce((sum, customer) => sum + (customer.aiAutoCount ?? 0), 0);
+
   return (
     <aside className="h-full w-80 shrink-0 overflow-hidden border-r border-border bg-white">
       <div className="border-b border-border px-4 py-3">
@@ -571,33 +420,33 @@ function CompactCustomerList({
         </div>
       </div>
       <div className="h-[calc(100%-84px)] overflow-y-auto">
-        {list.map(customer => {
-          const lastMessage = customer.timeline[customer.timeline.length - 1];
-          const statusColor = HANDLING_COLOR[customer.handlingMode];
-          const hasUnread = Boolean(customer.hasUnread);
-          return (
-            <button
-              key={customer.id}
-              type="button"
-              onClick={() => onOpen(customer.id)}
-              className={`w-full border-b border-border px-4 py-3 text-left transition-colors hover:bg-surface-2 ${customer.id === selectedId ? 'bg-[#0891b2]/10' : 'bg-white'}`}
-            >
-              <div className="flex items-start gap-3">
-                <div className="relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-border bg-surface-2 text-sm font-black text-text-secondary">
-                  <span className="absolute -left-0.5 -top-0.5 h-2.5 w-2.5 rounded-full ring-2 ring-white transition-opacity" style={{ backgroundColor: hasUnread ? '#dc2626' : statusColor, opacity: hasUnread ? 1 : 0 }} />
-                  {customer.avatar}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-start justify-between gap-3">
-                    <p className="truncate text-sm font-bold text-text-primary">{customer.name}</p>
-                    <span className="shrink-0 text-[11px] font-medium text-text-muted">{lastMessage?.time || customer.lastActive}</span>
-                  </div>
-                  <p className="mt-1 truncate text-xs leading-5 text-text-muted">{lastMessage?.body || customer.summary}</p>
-                </div>
+        {view !== 'inbox' && list.map(renderCustomer)}
+        {view === 'inbox' && (
+          <div>
+            <div className="border-b border-border bg-surface-2 px-4 py-2">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[11px] font-black text-text-secondary">需要你处理</p>
+                <span className="min-w-5 rounded-full bg-red-600 px-1.5 py-0.5 text-center text-[10px] font-black text-white">{inboxGroups[0].items.length}</span>
               </div>
+            </div>
+            {inboxGroups[0].items.map(renderCustomer)}
+
+            <div className="border-b border-border bg-surface-2 px-4 py-2">
+              <p className="text-[11px] font-black text-text-secondary">等你确认</p>
+            </div>
+            {inboxGroups[1].items.map(renderCustomer)}
+
+            <button
+              type="button"
+              onClick={() => setAiAutoExpanded(open => !open)}
+              className="flex w-full items-center justify-between border-b border-border bg-surface-2 px-4 py-2 text-left"
+            >
+              <span className="text-[11px] font-black text-text-secondary">AI 正在接待 {aiAutoCount} 位客户 · 今日已自动回复 {aiAutoReplies} 条</span>
+              <ChevronDown size={14} className={`text-text-muted transition-transform ${aiAutoExpanded ? 'rotate-180' : ''}`} />
             </button>
-          );
-        })}
+            {aiAutoExpanded && inboxGroups[2].items.map(renderCustomer)}
+          </div>
+        )}
       </div>
     </aside>
   );
@@ -621,7 +470,7 @@ function DraftSuggestionBar({
   onRegenerate: () => void;
 }) {
   return (
-    <div className="relative ml-auto max-w-[74%] rounded-2xl rounded-tr-sm border border-dashed border-[#0891b2]/35 bg-[#0891b2]/[0.08] px-4 py-3 shadow-sm">
+    <div data-draft-suggestion className="relative ml-auto max-w-[74%] rounded-2xl rounded-tr-sm border border-dashed border-[#0891b2]/35 bg-[#0891b2]/[0.08] px-4 py-3 shadow-sm">
       <button type="button" onClick={onDismiss} className="absolute right-2 top-2 rounded-full p-1 text-text-muted hover:bg-white/70">
         <X size={12} />
       </button>
@@ -767,7 +616,13 @@ function ChatThread({
       <header className="flex h-14 shrink-0 items-center justify-between border-b border-border px-5">
         <div>
           <p className="text-sm font-black text-text-primary">{customer.name}</p>
-          <p className="text-[11px] text-text-muted">{STAGE_LABEL[customer.stage]} · {customer.source} · {customer.lastActive}</p>
+          <div className="mt-0.5 flex items-center gap-1.5 text-[11px] text-text-muted">
+            <span>{STAGE_LABEL[customer.stage]}</span>
+            <span>·</span>
+            <SourceIcon source={customer.source} size={12} />
+            <span>·</span>
+            <span>{customer.lastActive}</span>
+          </div>
         </div>
         <div className="rounded-xl border border-border bg-surface px-3 py-1.5 text-xs font-bold text-text-secondary">{'\u5f53\u5730\u65f6\u95f4'} {customer.localTime}</div>
       </header>
@@ -842,9 +697,11 @@ function ChatThread({
 function SortableWidget({
   id,
   customer,
+  onCustomerPatch,
 }: {
   id: CustomerWidgetId;
   customer: CustomerProfile;
+  onCustomerPatch: (patch: Partial<CustomerProfile>) => void;
 }) {
   const {
     attributes,
@@ -871,100 +728,186 @@ function SortableWidget({
       >
         <GripVertical size={14} />
       </button>
-      <Widget customer={customer} />
+      <Widget customer={customer} onCustomerPatch={onCustomerPatch} />
     </div>
   );
 }
 
-function HandlingStatusCard({
+function suggestionDismissKey(customerId: string, suggestionType: string) {
+  return `lingshu:crm:dismissed:${customerId}:${suggestionType}`;
+}
+
+function isSuggestionDismissed(customerId: string, suggestionType: string) {
+  const until = Number(localStorage.getItem(suggestionDismissKey(customerId, suggestionType)) || 0);
+  return Date.now() < until;
+}
+
+function suggestionToneClass(tone: PrioritySuggestion['tone']) {
+  if (tone === 'red') return 'border-l-red-500 bg-red-50 text-red-700';
+  if (tone === 'amber') return 'border-l-amber-500 bg-amber-50 text-amber-800';
+  if (tone === 'blue') return 'border-l-sky-500 bg-sky-50 text-sky-800';
+  return 'border-l-emerald-500 bg-emerald-50 text-emerald-800';
+}
+
+function PrimaryActionCard({
   customer,
   onModeChange,
   onToast,
+  onGenerateDraft,
+  onFocusReply,
+  onViewDraft,
+  onCompleteTodo,
 }: {
   customer: CustomerProfile;
   onModeChange: (mode: HandlingMode) => void;
   onToast: (message: string) => void;
+  onGenerateDraft: (instruction: string, intent?: DraftIntent) => Promise<void> | void;
+  onFocusReply: () => void;
+  onViewDraft: () => void;
+  onCompleteTodo: () => void;
 }) {
-  const [recordOpen, setRecordOpen] = useState(false);
-  const [callResult, setCallResult] = useState('有意向');
-  const [note, setNote] = useState('');
+  const [evidenceOpen, setEvidenceOpen] = useState(false);
+  const [dismissTick, setDismissTick] = useState(0);
+  const [handoffSummary, setHandoffSummary] = useState('');
+  const rawSuggestion = buildPrioritySuggestion(customer);
+  const dismissed = rawSuggestion.suggestionType !== 'none' && isSuggestionDismissed(customer.id, rawSuggestion.suggestionType);
+  const suggestion: PrioritySuggestion = dismissed
+    ? {
+      customerId: customer.id,
+      suggestionType: 'none',
+      headline: '今日任务已完成',
+      reason: '已暂不处理，24 小时内不再提醒',
+      evidence: ['已按你的选择静默 24 小时'],
+      priorityScore: 0,
+      tone: 'green',
+    }
+    : rawSuggestion;
 
   const switchMode = (mode: HandlingMode, message: string) => {
     onModeChange(mode);
     onToast(message);
   };
 
-  if (customer.handlingMode === 'ai_auto') {
-    return (
-      <div className="rounded-2xl border border-emerald-100 bg-emerald-50 p-4">
-        <p className="text-sm font-black text-emerald-800">AI 接待中</p>
-        <p className="mt-2 text-xs leading-relaxed text-emerald-700">{customer.handlingReason} · 已自动回复 {customer.aiAutoCount ?? 0} 条</p>
+  useEffect(() => {
+    setEvidenceOpen(false);
+    setHandoffSummary('');
+  }, [customer.id, suggestion.suggestionType]);
+
+  useEffect(() => {
+    if (!evidenceOpen || suggestion.suggestionType !== 'handoff' || handoffSummary) return;
+    let alive = true;
+    void requestHandoffSummary(customer).then(summary => {
+      if (alive) setHandoffSummary(summary);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [customer, evidenceOpen, handoffSummary, suggestion.suggestionType]);
+
+  const dismissSuggestion = () => {
+    localStorage.setItem(suggestionDismissKey(customer.id, suggestion.suggestionType), String(Date.now() + 24 * 60 * 60 * 1000));
+    onCompleteTodo();
+    setDismissTick(value => value + 1);
+    onToast('已暂不处理，24 小时内不再提醒');
+  };
+
+  void dismissTick;
+
+  const primaryAction = () => {
+    if (suggestion.suggestionType === 'call') {
+      void onGenerateDraft('生成一条主动触达草稿，语气自然，不承诺价格、折扣、付款条款或交期。', 'reactivate');
+      return;
+    }
+    if (suggestion.suggestionType === 'handoff') {
+      onFocusReply();
+      onToast('已聚焦回复框');
+      return;
+    }
+    if (suggestion.suggestionType === 'draft_review' || suggestion.suggestionType === 'blocked_auto') {
+      onViewDraft();
+      return;
+    }
+    if (suggestion.suggestionType === 'touch') {
+      void onGenerateDraft('生成一条主动触达草稿，语气自然，不承诺价格、折扣、付款条款或交期。', 'reactivate');
+      return;
+    }
+  };
+
+  const secondaryAction = () => {
+    if (suggestion.suggestionType === 'call') {
+      dismissSuggestion();
+      return;
+    }
+    if (suggestion.suggestionType === 'handoff') {
+      switchMode('ai_auto', '已交回 AI 接待');
+      return;
+    }
+    if (suggestion.suggestionType === 'draft_review' || suggestion.suggestionType === 'blocked_auto') {
+      dismissSuggestion();
+      return;
+    }
+    if (suggestion.suggestionType === 'touch') {
+      dismissSuggestion();
+    }
+  };
+
+  const primaryLabel: Record<PrioritySuggestion['suggestionType'], string> = {
+    call: '生成触达草稿',
+    handoff: '打开回复',
+    draft_review: '查看草稿',
+    touch: '生成触达草稿',
+    blocked_auto: '查看草稿',
+    none: '知道了',
+  };
+  const secondaryLabel: Record<PrioritySuggestion['suggestionType'], string> = {
+    call: '暂不处理',
+    handoff: '交回 AI',
+    draft_review: '忽略此条',
+    touch: '暂不处理',
+    blocked_auto: '忽略此条',
+    none: '',
+  };
+
+  return (
+    <div className={`rounded-2xl border border-border border-l-4 p-4 ${suggestionToneClass(suggestion.tone)}`}>
+      <p className="text-sm font-black">{suggestion.headline}</p>
+      <p className="mt-2 text-xs leading-relaxed opacity-85">{suggestion.reason}</p>
+      {suggestion.suggestionType !== 'none' && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          <button type="button" onClick={primaryAction} className="rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white hover:bg-slate-800">
+            {primaryLabel[suggestion.suggestionType]}
+          </button>
+          {secondaryLabel[suggestion.suggestionType] && (
+            <button type="button" onClick={secondaryAction} className="rounded-xl border border-current/20 bg-white px-3 py-2 text-xs font-bold hover:bg-white/80">
+              {secondaryLabel[suggestion.suggestionType]}
+            </button>
+          )}
+        </div>
+      )}
+      {suggestion.suggestionType !== 'none' && (
+        <button type="button" onClick={() => setEvidenceOpen(open => !open)} className="mt-3 flex w-full items-center justify-between rounded-xl bg-white/70 px-3 py-2 text-left text-xs font-black">
+          AI 判断依据
+          <ChevronDown size={14} className={`transition-transform ${evidenceOpen ? 'rotate-180' : ''}`} />
+        </button>
+      )}
+      {evidenceOpen && (
+        <div className="mt-2 rounded-xl bg-white/75 px-3 py-3 text-xs leading-relaxed">
+          {suggestion.suggestionType === 'handoff' && (
+            <div className="mb-3 whitespace-pre-line rounded-lg bg-surface-2 px-3 py-2 text-text-secondary">
+              {handoffSummary || '正在整理交接摘要...'}
+            </div>
+          )}
+          <div className="space-y-1.5">
+            {suggestion.evidence.map(item => (
+              <p key={item} className="flex gap-2 text-text-secondary"><span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-current opacity-50" />{item}</p>
+            ))}
+          </div>
+        </div>
+      )}
+      {customer.handlingMode === 'ai_auto' && suggestion.suggestionType === 'none' && (
         <button type="button" onClick={() => switchMode('human_needed', '已转为你亲自接手')} className="mt-3 rounded-xl border border-emerald-200 bg-white px-3 py-2 text-xs font-bold text-emerald-800 hover:bg-emerald-100">
           转我接手
         </button>
-      </div>
-    );
-  }
-
-  if (customer.handlingMode === 'ai_draft') {
-    return (
-      <div className="rounded-2xl border border-amber-100 bg-amber-50 p-4">
-        <p className="text-sm font-black text-amber-800">等你审核</p>
-        <p className="mt-2 text-xs leading-relaxed text-amber-700">{customer.handlingReason} · 中文草稿已备好，可在聊天区修改后翻译发送</p>
-        <div className="mt-3 flex gap-2">
-          <button type="button" onClick={() => switchMode('human_needed', '已转为你亲自接手')} className="rounded-xl border border-amber-200 bg-white px-3 py-2 text-xs font-bold text-amber-800 hover:bg-amber-100">
-            转我接手
-          </button>
-          <button type="button" onClick={() => switchMode('ai_auto', '已交回 AI 接待')} className="rounded-xl bg-amber-600 px-3 py-2 text-xs font-bold text-white hover:bg-amber-700">
-            交回 AI
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="rounded-2xl border border-red-100 bg-red-50 p-4">
-      <p className="text-sm font-black text-red-700">{customer.needCall ? '建议你主动通话 · 高优先级' : '需要你出面'}</p>
-      <p className="mt-2 text-xs leading-relaxed text-red-700/80">
-        {customer.needCall ? `对方当地 ${customer.localTime}，${customer.handlingReason}` : customer.handlingReason}
-      </p>
-      <div className="mt-3 flex flex-wrap gap-2">
-        {customer.needCall ? (
-          <button type="button" onClick={() => onToast('已打开线上通话入口（演示）')} className="rounded-xl bg-red-600 px-3 py-2 text-xs font-bold text-white hover:bg-red-700">
-            发起线上通话
-          </button>
-        ) : (
-          <button type="button" onClick={() => onToast('请在中间聊天区回复客户')} className="rounded-xl bg-red-600 px-3 py-2 text-xs font-bold text-white hover:bg-red-700">
-            打开聊天回复
-          </button>
-        )}
-        <button type="button" onClick={() => switchMode('ai_draft', '已切换为 AI 写草稿，你来审核')} className="rounded-xl border border-red-200 bg-white px-3 py-2 text-xs font-bold text-red-700 hover:bg-red-100">
-          改为草稿审核
-        </button>
-      </div>
-      {customer.needCall && (
-        <div className="mt-3 rounded-xl border border-red-100 bg-white/75 p-3">
-          <button type="button" onClick={() => setRecordOpen(v => !v)} className="flex w-full items-center justify-between text-left text-xs font-black text-red-700">
-            通话后 15 秒记录
-            <span>{recordOpen ? '收起' : '记录'}</span>
-          </button>
-          {recordOpen && (
-            <div className="mt-3 space-y-2">
-              <div className="grid grid-cols-2 gap-1.5">
-                {['有意向', '要样品', '再联系', '无效'].map(item => (
-                  <button key={item} type="button" onClick={() => setCallResult(item)} className={`rounded-lg border px-2 py-1.5 text-xs font-bold ${callResult === item ? 'border-red-400 bg-red-50 text-red-700' : 'border-border text-text-muted'}`}>
-                    {item}
-                  </button>
-                ))}
-              </div>
-              <textarea value={note} onChange={event => setNote(event.target.value)} rows={2} placeholder="一句话记录通话结果..." className="w-full resize-none rounded-xl border border-border bg-white px-3 py-2 text-xs outline-none" />
-              <button type="button" onClick={() => onToast(`已保存通话记录：${callResult}`)} className="w-full rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white">
-                保存并生成下一步
-              </button>
-            </div>
-          )}
-        </div>
       )}
     </div>
   );
@@ -990,7 +933,7 @@ function RulesDisclosure() {
   );
 }
 
-function AdoptionPrompt({ onToast }: { onToast: (message: string) => void }) {
+function AdoptionPrompt({ autonomyLevel, onToast }: { autonomyLevel: AutonomyLevel; onToast: (message: string) => void }) {
   const stat = ADOPTION_STATS.find(item => item.consecutiveUnedited >= 15);
   const [hidden, setHidden] = useState(() => {
     if (!stat) return true;
@@ -998,13 +941,13 @@ function AdoptionPrompt({ onToast }: { onToast: (message: string) => void }) {
     return Date.now() < until;
   });
   const [enabled, setEnabled] = useState(false);
-  if (!stat || hidden || enabled) return null;
+  if (!stat || hidden || enabled || autonomyLevel !== 'draft') return null;
   return (
     <div className="rounded-2xl border border-sky-100 bg-sky-50 p-4">
-      <p className="text-xs leading-relaxed text-sky-800">过去两周你直接发送了 {stat.consecutiveUnedited} 条{stat.category}AI 草稿且未修改，要不要让 AI 自动回复这类消息？</p>
+      <p className="text-xs leading-relaxed text-sky-800">过去两周你直接发送了 {stat.consecutiveUnedited} 条{stat.category}AI 草稿且未修改。可以把全局 AI 参与程度调到“低风险消息自动回”，让 L3 动作自动处理。</p>
       <div className="mt-3 flex gap-2">
-        <button type="button" onClick={() => { setEnabled(true); onToast(`已开启${stat.category}自动回复（演示）`); }} className="rounded-xl bg-sky-600 px-3 py-2 text-xs font-bold text-white hover:bg-sky-700">
-          开启自动回复
+        <button type="button" onClick={() => { setEnabled(true); localStorage.setItem('lingshu:enterprise:highlight-autonomy', 'auto'); window.dispatchEvent(new CustomEvent('lingshu:navigate', { detail: { page: 'enterprise' } })); onToast('已跳转到企业中心 AI 参与程度设置'); }} className="rounded-xl bg-sky-600 px-3 py-2 text-xs font-bold text-white hover:bg-sky-700">
+          去设置自动档
         </button>
         <button type="button" onClick={() => { localStorage.setItem(`lingshu:crm:adoption-dismiss:${stat.category}`, String(Date.now() + 30 * 24 * 60 * 60 * 1000)); setHidden(true); }} className="rounded-xl border border-sky-200 bg-white px-3 py-2 text-xs font-bold text-sky-700 hover:bg-sky-100">
           暂不
@@ -1016,14 +959,24 @@ function AdoptionPrompt({ onToast }: { onToast: (message: string) => void }) {
 
 function CustomerInfoRail({
   customer,
+  autonomyLevel,
   onGenerateDraft,
   onHandlingModeChange,
+  onCustomerPatch,
   onToast,
+  onFocusReply,
+  onViewDraft,
+  onCompleteTodo,
 }: {
   customer: CustomerProfile | null;
-  onGenerateDraft: (instruction: string) => Promise<void> | void;
+  autonomyLevel: AutonomyLevel;
+  onGenerateDraft: (instruction: string, intent?: DraftIntent) => Promise<void> | void;
   onHandlingModeChange: (mode: HandlingMode) => void;
+  onCustomerPatch: (patch: Partial<CustomerProfile>) => void;
   onToast: (message: string) => void;
+  onFocusReply: () => void;
+  onViewDraft: () => void;
+  onCompleteTodo: () => void;
 }) {
   const [widgetOrder, setWidgetOrder] = useState<CustomerWidgetId[]>(() => readWidgetOrder());
   const [suggestions, setSuggestions] = useState<string[]>([]);
@@ -1088,8 +1041,8 @@ function CustomerInfoRail({
         <p className="mt-0.5 text-[11px] text-text-muted">先看是否需要你接手，再看客户资料。</p>
       </div>
       <div className="grid gap-3">
-        <HandlingStatusCard customer={customer} onModeChange={onHandlingModeChange} onToast={onToast} />
-        <AdoptionPrompt onToast={onToast} />
+        <PrimaryActionCard customer={customer} onModeChange={onHandlingModeChange} onToast={onToast} onGenerateDraft={onGenerateDraft} onFocusReply={onFocusReply} onViewDraft={onViewDraft} onCompleteTodo={onCompleteTodo} />
+        <AdoptionPrompt autonomyLevel={autonomyLevel} onToast={onToast} />
       </div>
 
       <div className="mt-3">
@@ -1100,7 +1053,7 @@ function CustomerInfoRail({
           <SortableContext items={widgetOrder} strategy={verticalListSortingStrategy}>
             <div className="grid gap-3">
               {widgetOrder.map(id => (
-                <SortableWidget key={id} id={id} customer={customer} />
+                <SortableWidget key={id} id={id} customer={customer} onCustomerPatch={onCustomerPatch} />
               ))}
             </div>
           </SortableContext>
@@ -1210,29 +1163,24 @@ function CustomerInfoRail({
   */
 }
 
-function appendMessage(customer: CustomerProfile, body: string, actor: 'seller' | 'buyer' | 'ai'): CustomerProfile {
+function createMessageEvent(customerId: string, body: string, actor: 'seller' | 'buyer' | 'ai'): TimelineEvent {
   const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   return {
-    ...customer,
-    lastActive: '刚刚',
-    timeline: [
-      ...customer.timeline,
-      {
-        id: `${customer.id}-${Date.now()}-${actor}`,
-        type: 'whatsapp',
-        actor,
-        title: actor === 'buyer' ? '客户消息' : actor === 'ai' ? 'AI 回复' : '销售回复',
-        body,
-        time,
-      },
-    ],
+    id: `${customerId}-${Date.now()}-${actor}`,
+    type: 'whatsapp',
+    actor,
+    title: actor === 'buyer' ? '客户消息' : actor === 'ai' ? 'AI 回复' : '销售回复',
+    body,
+    time,
   };
 }
 
 export default function ConversionPage({ onLeaveConversation: _onLeaveConversation, isDemo = false }: Props) {
   const [view, setView] = useState<CustomerView>('inbox');
-  const [customers, setCustomers] = useState<CustomerProfile[]>(CUSTOMERS);
+  const { customers, updateCustomer, appendTimelineEvent } = useCustomers();
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [autonomyLevel, setAutonomyLevel] = useState<AutonomyLevel>('draft');
+  const [dailyBriefingOpen, setDailyBriefingOpen] = useState(false);
   const [draftSuggestion, setDraftSuggestion] = useState<string | null>(null);
   const [input, setInput] = useState('');
   const [translatedInput, setTranslatedInput] = useState('');
@@ -1243,6 +1191,58 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
     selectedId ? customers.find(customer => customer.id === selectedId) ?? null : null
   ), [customers, selectedId]);
   const activeView = VIEW_META[view];
+  const customerPendingCount = useMemo(() => pendingCount(customers), [customers]);
+  const customerTodoItems = useMemo(() => (
+    dailyTodoCustomers(customers).map(customer => {
+      const suggestion = buildPrioritySuggestion(customer);
+      const completed = isTodoCompleted(customer);
+      return {
+        id: customer.id,
+        name: customer.name,
+        product: customer.product,
+        source: customer.source,
+        headline: completed ? '今日任务已处理' : suggestion.headline,
+        reason: completed ? '今天已处理，已放到待办底部' : suggestion.reason,
+        tone: completed ? 'green' : suggestion.tone,
+        completed,
+      };
+    })
+  ), [customers]);
+
+  useEffect(() => {
+    customers.forEach(customer => {
+      if (customer.todoCompletedAt) return;
+      const suggestion = buildPrioritySuggestion(customer);
+      if (suggestion.suggestionType !== 'none' && isSuggestionDismissed(customer.id, suggestion.suggestionType)) {
+        updateCustomer(customer.id, { todoCompletedAt: new Date().toISOString(), hasUnread: false });
+      }
+    });
+  }, [customers, updateCustomer]);
+
+  useEffect(() => {
+    fetch('/api/overseas/enterprise/profile', { headers: authHeader() })
+      .then(resp => resp.ok ? resp.json() : null)
+      .then(data => {
+        const value = data?.strategy?.aiAutonomy;
+        if (value === 'remind' || value === 'draft' || value === 'auto') setAutonomyLevel(value);
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (customerPendingCount <= 0) return;
+    const today = new Date().toISOString().slice(0, 10);
+    const key = 'lingshu:briefing:lastShown';
+    if (localStorage.getItem(key) === today) return;
+    localStorage.setItem(key, today);
+    setDailyBriefingOpen(true);
+  }, [customerPendingCount]);
+
+  useEffect(() => {
+    const handler = () => setDailyBriefingOpen(true);
+    window.addEventListener('lingshu:open-daily-briefing', handler);
+    return () => window.removeEventListener('lingshu:open-daily-briefing', handler);
+  }, []);
 
   useEffect(() => {
     setDraftSuggestion(null);
@@ -1270,16 +1270,28 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
         agent: 'conversion',
         label: viewLabel,
         summary,
+        pendingCount: customerPendingCount,
+        todoItems: customerTodoItems,
         suggestions: selected
-          ? ['生成下一条回复', '准备通话简报', '生成报价跟进', '创建通话后任务']
+          ? ['生成下一条回复', '整理触达要点', '生成报价跟进', '创建今日触达任务']
           : ['现在该先回谁？', '筛选紧急客户', '筛选高意向客户', '创建老客唤醒批次'],
       },
     }));
-  }, [view, selected, activeView]);
+  }, [view, selected, activeView, customerPendingCount, customerTodoItems]);
 
   const updateSelectedCustomer = (updater: (customer: CustomerProfile) => CustomerProfile) => {
     if (!selectedId) return;
-    setCustomers(list => list.map(customer => customer.id === selectedId ? updater(customer) : customer));
+    const customer = customers.find(item => item.id === selectedId);
+    if (!customer) return;
+    updateCustomer(selectedId, updater(customer));
+  };
+
+  const markTodoCompleted = (id: string) => {
+    updateCustomer(id, { todoCompletedAt: new Date().toISOString(), hasUnread: false });
+  };
+
+  const markSelectedTodoCompleted = () => {
+    if (selected) markTodoCompleted(selected.id);
   };
 
   const showToast = (message: string) => {
@@ -1287,12 +1299,39 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
     window.setTimeout(() => setToast(current => current === message ? null : current), 2200);
   };
 
+  useEffect(() => {
+    if (!isDemo) return;
+    const previousDemo = window.__lingshuDemo;
+    const previousPushBuyerMessage = previousDemo?.pushBuyerMessage;
+
+    window.__lingshuDemo = {
+      ...(previousDemo ?? {}),
+      pushBuyerMessage: (customerId: string, text: string) => {
+        const body = text.trim();
+        if (!customerId || !body) return;
+        appendTimelineEvent(customerId, createMessageEvent(customerId, body, 'buyer'));
+        updateCustomer(customerId, { hasUnread: true, lastActive: '刚刚' });
+      },
+    };
+
+    return () => {
+      if (!window.__lingshuDemo) return;
+      if (previousPushBuyerMessage) {
+        window.__lingshuDemo.pushBuyerMessage = previousPushBuyerMessage;
+        return;
+      }
+      delete window.__lingshuDemo.pushBuyerMessage;
+      if (Object.keys(window.__lingshuDemo).length === 0) delete window.__lingshuDemo;
+    };
+  }, [appendTimelineEvent, isDemo, updateCustomer]);
+
   const updateHandlingMode = (mode: HandlingMode) => {
     updateSelectedCustomer(customer => ({
       ...customer,
       handlingMode: mode,
       needCall: mode === 'human_needed' ? customer.needCall : false,
       aiAutoCount: mode === 'ai_auto' ? customer.aiAutoCount ?? 0 : customer.aiAutoCount,
+      todoCompletedAt: mode === 'ai_auto' ? new Date().toISOString() : undefined,
     }));
   };
 
@@ -1300,7 +1339,8 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
     if (!selected) return;
     const body = (translatedInput.trim() || (containsChinese(input) ? translateChineseReplyForCustomer(selected, input) : input.trim()));
     if (!body) return;
-    updateSelectedCustomer(customer => appendMessage(customer, body, 'seller'));
+    appendTimelineEvent(selected.id, createMessageEvent(selected.id, body, 'seller'));
+    updateCustomer(selected.id, { lastActive: '刚刚', hasUnread: false, todoCompletedAt: new Date().toISOString() });
     setInput('');
     setTranslatedInput('');
     setDraftSuggestion(null);
@@ -1308,7 +1348,8 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
 
   const sendDraftDirectly = () => {
     if (!selected || !draftSuggestion) return;
-    updateSelectedCustomer(customer => appendMessage(customer, translateChineseReplyForCustomer(selected, draftSuggestion), 'seller'));
+    appendTimelineEvent(selected.id, createMessageEvent(selected.id, translateChineseReplyForCustomer(selected, draftSuggestion), 'seller'));
+    updateCustomer(selected.id, { lastActive: '刚刚', hasUnread: false, todoCompletedAt: new Date().toISOString() });
     setDraftSuggestion(null);
     setInput('');
     setTranslatedInput('');
@@ -1344,19 +1385,19 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
     setTranslatedInput(translateChineseReplyForCustomer(selected, input));
   };
 
-  const simulateBuyerMessage = () => {
-    updateSelectedCustomer(customer => ({
-      ...appendMessage(customer, 'Can you confirm the MOQ, delivery time, and best price today?', 'buyer'),
-      hasUnread: true,
-    }));
-  };
-
   const openCustomer = (id: string) => {
     setSelectedId(id);
-    setCustomers(list => list.map(customer => (
-      customer.id === id ? { ...customer, hasUnread: false } : customer
-    )));
+    updateCustomer(id, { hasUnread: false });
   };
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+      if (id) openCustomer(id);
+    };
+    window.addEventListener('lingshu:select-customer', handler);
+    return () => window.removeEventListener('lingshu:select-customer', handler);
+  }, [customers]);
 
   const editDraft = () => {
     if (!selected || !draftSuggestion) return;
@@ -1371,6 +1412,21 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
         inputEl.selectionEnd = inputEl.value.length;
       }
     }, 0);
+  };
+
+  const focusReplyInput = () => {
+    const inputEl = document.querySelector<HTMLTextAreaElement>('[data-customer-reply-input]');
+    inputEl?.focus();
+    inputEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+
+  const viewDraftSuggestion = () => {
+    const draftEl = document.querySelector<HTMLElement>('[data-draft-suggestion]');
+    if (draftEl) {
+      draftEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    focusReplyInput();
   };
 
 
@@ -1394,20 +1450,26 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
         onPreviewTranslate={previewTranslate}
         isPolishing={isPolishing}
       />
-      <CustomerInfoRail customer={selected} onGenerateDraft={generateManualDraft} onHandlingModeChange={updateHandlingMode} onToast={showToast} />
+      <CustomerInfoRail
+        customer={selected}
+        autonomyLevel={autonomyLevel}
+        onGenerateDraft={generateManualDraft}
+        onHandlingModeChange={updateHandlingMode}
+        onCustomerPatch={(patch) => {
+          if (selected) updateCustomer(selected.id, patch);
+        }}
+        onToast={showToast}
+        onFocusReply={focusReplyInput}
+        onViewDraft={viewDraftSuggestion}
+        onCompleteTodo={markSelectedTodoCompleted}
+      />
+      {dailyBriefingOpen && (
+        <DailyBriefing customers={customers} onSelectCustomer={openCustomer} onClose={() => setDailyBriefingOpen(false)} />
+      )}
       {toast && (
         <div className="fixed bottom-24 left-1/2 z-[70] -translate-x-1/2 rounded-full bg-slate-950 px-4 py-2 text-xs font-bold text-white shadow-lg">
           {toast}
         </div>
-      )}
-      {isDemo && selected && (
-        <button
-          type="button"
-          onClick={simulateBuyerMessage}
-          className="fixed bottom-24 right-[370px] z-[60] rounded-full border border-border bg-white px-3 py-2 text-xs font-bold text-text-secondary shadow-lg hover:bg-surface-2"
-        >
-          模拟客户消息
-        </button>
       )}
     </div>
   );

@@ -1,4 +1,4 @@
-import { Component, type ErrorInfo, type ReactNode } from 'react';
+import { Component, useEffect, useState, type ErrorInfo, type ReactNode } from 'react';
 import ChannelsPage from './ChannelsPage';
 
 class IntegrationTabBoundary extends Component<
@@ -38,6 +38,28 @@ class IntegrationTabBoundary extends Component<
 }
 
 export default function IntegrationsPage() {
+  const [importStatus, setImportStatus] = useState<{ status?: string; done?: number; total?: number } | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const load = () => {
+      fetch('/api/overseas/customers/whatsapp/import-status')
+        .then(resp => resp.ok ? resp.json() : null)
+        .then(data => {
+          if (alive) setImportStatus(data);
+        })
+        .catch(() => {});
+    };
+    load();
+    const timer = window.setInterval(load, 5000);
+    return () => {
+      alive = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  const importing = importStatus?.status === 'importing';
+
   return (
     <div className="flex flex-col h-full bg-white">
       <div className="px-8 pt-8 pb-4 border-b border-gray-100">
@@ -45,6 +67,11 @@ export default function IntegrationsPage() {
           <h1 className="text-xl font-semibold text-gray-900">集成中心</h1>
           <p className="text-sm text-gray-500 mt-0.5">统一管理 WhatsApp、YouTube、TikTok、Instagram 和 Facebook 账号授权</p>
         </div>
+        {importing && (
+          <div className="mt-4 rounded-lg border border-sky-100 bg-sky-50 px-4 py-3 text-sm font-semibold text-sky-800">
+            正在导入历史记录（{importStatus.done ?? 0}/{importStatus.total ?? 0}）
+          </div>
+        )}
       </div>
 
       <div className="min-h-0 flex-1">

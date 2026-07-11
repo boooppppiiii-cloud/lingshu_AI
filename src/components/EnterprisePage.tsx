@@ -24,11 +24,13 @@ interface ProductItem {
   documents?: ProductAsset[];
 }
 
+type AutonomyLevel = 'remind' | 'draft' | 'auto';
+
 interface Profile {
   company: { name: string; industry: string; companyType?: string; mainMarkets: string; primaryLanguages?: string; founded: string; description: string };
   products: { categories: string; priceRange: string; moq: string; certifications: string; highlights: string; items?: ProductItem[] };
   brand: { tone: string; style: string; taboos: string; usp: string; preferredLanguages?: string };
-  strategy?: { currentGoal?: string; focusProducts?: string; focusMarkets?: string; excludedMarkets?: string; pricingStrategy?: string; minMargin?: string; agentAutonomy?: string };
+  strategy?: { currentGoal?: string; focusProducts?: string; focusMarkets?: string; excludedMarkets?: string; pricingStrategy?: string; minMargin?: string; agentAutonomy?: string; aiAutonomy?: AutonomyLevel };
   customers?: { targetProfiles?: string; highValueSignals?: string; lowQualitySignals?: string; commonQuestions?: string; followupStyle?: string };
   operations?: { leadTime?: string; customization?: string; logistics?: string; paymentTerms?: string; riskNotes?: string };
   agentLearning?: { provenAngles?: string; weakAngles?: string; pendingAssumptions?: string; userCorrections?: string };
@@ -46,7 +48,7 @@ const DEFAULT: Profile = {
     items: [],
   },
   brand: { tone: '', style: '', taboos: '', usp: '', preferredLanguages: '' },
-  strategy: { currentGoal: '', focusProducts: '', focusMarkets: '', excludedMarkets: '', pricingStrategy: '', minMargin: '', agentAutonomy: '' },
+  strategy: { currentGoal: '', focusProducts: '', focusMarkets: '', excludedMarkets: '', pricingStrategy: '', minMargin: '', agentAutonomy: '', aiAutonomy: 'draft' },
   customers: { targetProfiles: '', highValueSignals: '', lowQualitySignals: '', commonQuestions: '', followupStyle: '' },
   operations: { leadTime: '', customization: '', logistics: '', paymentTerms: '', riskNotes: '' },
   agentLearning: { provenAngles: '', weakAngles: '', pendingAssumptions: '', userCorrections: '' },
@@ -58,6 +60,14 @@ const AGENTS = [
   { icon: Zap, label: '我的社媒', color: '#d97706' },
   { icon: MessageSquare, label: '我的客户', color: '#0891b2' },
 ];
+
+const AUTONOMY_OPTIONS: Array<{ value: AutonomyLevel; title: string; desc: string; detail: string }> = [
+  { value: 'remind', title: '只提醒我', desc: 'AI 发现该联系谁会告诉你', detail: '不替你写、不替你发' },
+  { value: 'draft', title: '帮我写草稿（推荐）', desc: 'AI 写好回复等你确认', detail: '一键发送' },
+  { value: 'auto', title: '低风险消息自动回', desc: '物流通知、基础问答等 AI 直接回复', detail: '报价等大事永远等你确认' },
+];
+
+const L3_ACTIONS = ['物流状态更新', '节假日祝福', '明确索要目录时发送已审批资料', '标准售后确认', '知识库内基础问答'];
 
 interface DemoTemplate { id: string; name: string; description: string; profile?: Profile }
 interface ProductApiInfo { apiKey: string; tenantId: string; docsUrl: string; createdAt?: string; lastIngestedAt?: string; lastProductName?: string }
@@ -146,6 +156,7 @@ export default function EnterprisePage() {
   const [apiStatus, setApiStatus] = useState<ProductApiStatus>({ count: 0 });
   const [orderImporting, setOrderImporting] = useState(false);
   const [orderImportMessage, setOrderImportMessage] = useState('');
+  const [autonomyHighlight, setAutonomyHighlight] = useState(false);
 
   useEffect(() => {
     Promise.all([
@@ -191,6 +202,22 @@ export default function EnterprisePage() {
   const set = <K extends keyof Profile>(section: K) =>
     (field: string, value: string) =>
       setProfile(prev => ({ ...prev, [section]: { ...(prev[section] as object), [field]: value } }));
+
+  useEffect(() => {
+    if (localStorage.getItem('lingshu:enterprise:highlight-autonomy') !== 'auto') return;
+    localStorage.removeItem('lingshu:enterprise:highlight-autonomy');
+    setAutonomyHighlight(true);
+    window.setTimeout(() => document.getElementById('ai-autonomy')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 80);
+    window.setTimeout(() => setAutonomyHighlight(false), 3200);
+  }, [loading]);
+
+  const setAutonomy = (value: AutonomyLevel) => {
+    if (value === 'auto' && profile.strategy?.aiAutonomy !== 'auto') {
+      const ok = window.confirm(`切换到低风险自动回复后，AI 将可自动处理：\n\n${L3_ACTIONS.map(item => `• ${item}`).join('\n')}\n\n报价、折扣、付款条款、交期承诺仍永远需要你确认。`);
+      if (!ok) return;
+    }
+    setProfile(prev => ({ ...prev, strategy: { ...prev.strategy, aiAutonomy: value } }));
+  };
 
   const handleSave = async () => {
     setSaving(true);
@@ -466,6 +493,41 @@ export default function EnterprisePage() {
                 </button>
               </div>
             </div>
+          </section>
+
+          <section id="ai-autonomy" className={`card p-5 transition-all ${autonomyHighlight ? 'ring-2 ring-amber-300' : ''}`}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-text-primary">AI 参与程度</p>
+                <p className="mt-1 text-[11px] leading-relaxed text-text-muted">这个设置作用于动作风险，不按客户画像放权。</p>
+              </div>
+              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-bold text-slate-600">
+                当前：{AUTONOMY_OPTIONS.find(item => item.value === (profile.strategy?.aiAutonomy ?? 'draft'))?.title}
+              </span>
+            </div>
+            <div className="mt-4 grid grid-cols-3 gap-3">
+              {AUTONOMY_OPTIONS.map(option => {
+                const active = (profile.strategy?.aiAutonomy ?? 'draft') === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => setAutonomy(option.value)}
+                    className={`min-h-[118px] rounded-lg border p-3 text-left transition-all ${active ? 'border-slate-950 bg-slate-950 text-white shadow-sm' : 'border-border bg-white text-text-primary hover:border-slate-300 hover:bg-surface-2'}`}
+                  >
+                    <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-black ${active ? 'border-white bg-white text-slate-950' : 'border-border text-text-muted'}`}>
+                      {active ? '✓' : ''}
+                    </span>
+                    <p className="mt-2 text-xs font-black">{option.title}</p>
+                    <p className={`mt-2 text-[11px] leading-5 ${active ? 'text-white/80' : 'text-text-muted'}`}>{option.desc}</p>
+                    <p className={`text-[11px] leading-5 ${active ? 'text-white/80' : 'text-text-muted'}`}>{option.detail}</p>
+                  </button>
+                );
+              })}
+            </div>
+            <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-[11px] font-semibold leading-relaxed text-red-700">
+              无论选择哪档：报价、折扣、付款条款、交期承诺，AI 永远不会替你决定。
+            </p>
           </section>
 
           {/* Company Info */}

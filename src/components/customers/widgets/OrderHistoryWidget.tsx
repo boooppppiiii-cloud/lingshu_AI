@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Card, CardContent, CardHeader } from '../../ui/card';
-import type { CustomerProfile, OrderRecord } from '../../ConversionPage';
+import type { CustomerProfile, OrderRecord } from '../../../types/customer';
 
 const STATUS_STYLE: Record<OrderRecord['status'], string> = {
   paid: 'bg-emerald-50 text-emerald-700 border-emerald-100',
@@ -73,8 +73,29 @@ function OrderDetail({ customer, order }: { customer: CustomerProfile; order: Or
   );
 }
 
-export function OrderHistoryWidget({ customer }: { customer: CustomerProfile }) {
+export function OrderHistoryWidget({ customer, onCustomerPatch }: { customer: CustomerProfile; onCustomerPatch?: (patch: Partial<CustomerProfile>) => void }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
+  const [draftOrder, setDraftOrder] = useState({ id: '', total: '', status: 'pending' as OrderRecord['status'], createdAt: new Date().toISOString().slice(0, 10) });
+
+  const addOrder = () => {
+    const id = draftOrder.id.trim();
+    const total = draftOrder.total.trim();
+    if (!id || !total || !onCustomerPatch) return;
+    onCustomerPatch({
+      orders: [
+        ...customer.orders,
+        {
+          id,
+          total,
+          status: draftOrder.status,
+          createdAt: draftOrder.createdAt,
+        },
+      ],
+    });
+    setDraftOrder({ id: '', total: '', status: 'pending', createdAt: new Date().toISOString().slice(0, 10) });
+    setFormOpen(false);
+  };
 
   return (
     <Card>
@@ -104,7 +125,30 @@ export function OrderHistoryWidget({ customer }: { customer: CustomerProfile }) 
                 {expanded && <OrderDetail customer={customer} order={order} />}
               </div>
             );
-          }) : <p className="text-xs text-text-muted">暂无订单</p>}
+          }) : customer.isReal ? (
+            <div className="rounded-lg border border-dashed border-border bg-surface-2 px-3 py-3">
+              <p className="text-xs font-bold text-text-primary">还没有订单记录</p>
+              <button type="button" onClick={() => setFormOpen(open => !open)} className="mt-2 rounded-lg bg-slate-950 px-3 py-1.5 text-[11px] font-bold text-white">
+                添加一笔
+              </button>
+              {formOpen && (
+                <div className="mt-3 grid gap-2">
+                  <input value={draftOrder.id} onChange={event => setDraftOrder(prev => ({ ...prev, id: event.target.value }))} placeholder="订单号" className="rounded-lg border border-border bg-white px-3 py-2 text-xs outline-none" />
+                  <input value={draftOrder.total} onChange={event => setDraftOrder(prev => ({ ...prev, total: event.target.value }))} placeholder="金额，例如 US $120.00" className="rounded-lg border border-border bg-white px-3 py-2 text-xs outline-none" />
+                  <select value={draftOrder.status} onChange={event => setDraftOrder(prev => ({ ...prev, status: event.target.value as OrderRecord['status'] }))} className="rounded-lg border border-border bg-white px-3 py-2 text-xs outline-none">
+                    <option value="pending">待处理</option>
+                    <option value="paid">已支付</option>
+                    <option value="refunded">已退款</option>
+                    <option value="cancelled">已取消</option>
+                  </select>
+                  <input value={draftOrder.createdAt} onChange={event => setDraftOrder(prev => ({ ...prev, createdAt: event.target.value }))} placeholder="日期" className="rounded-lg border border-border bg-white px-3 py-2 text-xs outline-none" />
+                  <button type="button" onClick={addOrder} className="rounded-lg bg-slate-950 px-3 py-2 text-xs font-bold text-white">
+                    保存订单
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : <p className="text-xs text-text-muted">暂无订单</p>}
         </div>
       </CardContent>
     </Card>

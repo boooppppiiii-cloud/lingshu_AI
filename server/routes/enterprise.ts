@@ -6,6 +6,7 @@ import { randomBytes, randomUUID } from 'crypto';
 import type { Request } from 'express';
 import { resetDemoUsage } from '../lib/demo.js';
 import { auth } from '../storage/index.js';
+import type { AutonomyLevel } from '../autonomy/actionRules.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_FILE = path.join(__dirname, '../../data/enterprise.json');
@@ -89,6 +90,7 @@ export interface EnterpriseProfile {
     pricingStrategy?: string;
     minMargin?: string;
     agentAutonomy?: string;
+    aiAutonomy?: AutonomyLevel;
   };
   customers?: {
     targetProfiles?: string;
@@ -162,7 +164,7 @@ function readProfile(): EnterpriseProfile {
         items: [],
       },
       brand: { tone: '', style: '', taboos: '', usp: '', preferredLanguages: '' },
-      strategy: { currentGoal: '', focusProducts: '', focusMarkets: '', excludedMarkets: '', pricingStrategy: '', minMargin: '', agentAutonomy: '' },
+      strategy: { currentGoal: '', focusProducts: '', focusMarkets: '', excludedMarkets: '', pricingStrategy: '', minMargin: '', agentAutonomy: '', aiAutonomy: 'draft' },
       customers: { targetProfiles: '', highValueSignals: '', lowQualitySignals: '', commonQuestions: '', followupStyle: '' },
       operations: { leadTime: '', customization: '', logistics: '', paymentTerms: '', riskNotes: '' },
       agentLearning: { provenAngles: '', weakAngles: '', pendingAssumptions: '', userCorrections: '' },
@@ -387,7 +389,12 @@ function normalizeProfile(profile: EnterpriseProfile): EnterpriseProfile {
       documents: Array.isArray(item.documents) ? item.documents : [],
     }))
     : [];
-  return { ...profile, products: { ...products, items } };
+  const strategy = { ...(profile.strategy ?? {}), aiAutonomy: normalizeAutonomy(profile.strategy?.aiAutonomy) };
+  return { ...profile, strategy, products: { ...products, items } };
+}
+
+function normalizeAutonomy(value: unknown): AutonomyLevel {
+  return value === 'remind' || value === 'auto' || value === 'draft' ? value : 'draft';
 }
 
 function writeProfile(profile: EnterpriseProfile): void {
@@ -568,6 +575,7 @@ export function buildEnterpriseContext(profile: EnterpriseProfile): string {
   if (profile.strategy?.pricingStrategy) parts.push(`价格策略：${profile.strategy.pricingStrategy}`);
   if (profile.strategy?.minMargin) parts.push(`最低利润要求：${profile.strategy.minMargin}`);
   if (profile.strategy?.agentAutonomy) parts.push(`Agent 执行权限：${profile.strategy.agentAutonomy}`);
+  if (profile.strategy?.aiAutonomy) parts.push(`AI 参与程度：${profile.strategy.aiAutonomy}`);
   if (profile.customers?.targetProfiles) parts.push(`目标客户画像：${profile.customers.targetProfiles}`);
   if (profile.customers?.highValueSignals) parts.push(`高价值客户信号：${profile.customers.highValueSignals}`);
   if (profile.customers?.lowQualitySignals) parts.push(`低质量询盘特征：${profile.customers.lowQualitySignals}`);
@@ -727,7 +735,7 @@ enterpriseRouter.post('/demo/reset', (_req, res) => {
     company: { name: '', industry: '', companyType: '', mainMarkets: '', primaryLanguages: '', founded: '', description: '' },
     products: { categories: '', priceRange: '', moq: '', certifications: '', highlights: '', items: [] },
     brand: { tone: '', style: '', taboos: '', usp: '', preferredLanguages: '' },
-    strategy: { currentGoal: '', focusProducts: '', focusMarkets: '', excludedMarkets: '', pricingStrategy: '', minMargin: '', agentAutonomy: '' },
+    strategy: { currentGoal: '', focusProducts: '', focusMarkets: '', excludedMarkets: '', pricingStrategy: '', minMargin: '', agentAutonomy: '', aiAutonomy: 'draft' },
     customers: { targetProfiles: '', highValueSignals: '', lowQualitySignals: '', commonQuestions: '', followupStyle: '' },
     operations: { leadTime: '', customization: '', logistics: '', paymentTerms: '', riskNotes: '' },
     agentLearning: { provenAngles: '', weakAngles: '', pendingAssumptions: '', userCorrections: '' },
