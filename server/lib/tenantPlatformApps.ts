@@ -1,4 +1,7 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Request } from 'express';
 import { store } from '../storage/index.js';
 import { getPublicOrigin, getMetaOAuthClient, getYouTubeOAuthClient } from './oauthConfig.js';
@@ -65,6 +68,10 @@ export interface PublicTenantPlatformApp {
 
 const COL = 'tenant_platform_apps';
 const STATE_TTL_MS = 10 * 60 * 1000;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DATA_DIR = path.join(__dirname, '../../data');
+const ENTERPRISE_FILE = path.join(DATA_DIR, 'enterprise.json');
+const DAILY_BRIEFING_QUEUE_FILE = path.join(DATA_DIR, 'daily-briefing-queue.json');
 const MISSING_TENANT_PLATFORM_APP_KEY =
   'TENANT_PLATFORM_APP_KEY is required in production. Generate one with `openssl rand -base64 32` and set it in the server environment before starting LingShu.';
 
@@ -309,7 +316,28 @@ export function verifyMetaSignature(appSecret: string, rawBody: Buffer, signatur
 }
 
 export async function notifyDeliveryTeam(message: string): Promise<void> {
+  const enterpriseNotifications = readEnterpriseNotificationSettings();
+  if (enterpriseNotifications?.quietOutsideHours && !isWithinWorkHours(enterpriseNotifications.workHours)) {
+    enqueueDailyBriefing(message);
+    console.warn('[delivery-alert:queued-for-briefing]', message);
+    return;
+  }
   const tasks: Promise<unknown>[] = [];
+  if (enterpriseNotifications?.receivers.length) {
+    for (const receiver of enterpriseNotifications.receivers) {
+      if (receiver.channel === 'dingtalk') {
+        tasks.push(sendDingTalkText({ webhookUrl: receiver.target, secret: '' }, message));
+      } else if (receiver.channel === 'feishu') {
+        tasks.push(sendFeishuText({ webhookUrl: receiver.target, secret: '' }, message));
+      } else {
+        console.warn(`[delivery-alert:${receiver.channel}] ${receiver.name || receiver.target}: ${message}`);
+      }
+    }
+    if (tasks.length) {
+      await Promise.allSettled(tasks);
+    }
+    return;
+  }
   const dingTalkWebhook = text(process.env.DELIVERY_ALERT_DINGTALK_WEBHOOK);
   if (dingTalkWebhook) {
     tasks.push(sendDingTalkText({
@@ -329,4 +357,66 @@ export async function notifyDeliveryTeam(message: string): Promise<void> {
     return;
   }
   await Promise.allSettled(tasks);
+}
+
+function readEnterpriseNotificationSettings(): null | {
+  receivers: Array<{ name: string; channel: 'wecom' | 'dingtalk' | 'feishu' | 'sms'; target: string }>;
+  workHours: { start: string; end: string };
+  quietOutsideHours: boolean;
+} {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(ENTERPRISE_FILE, 'utf8'));
+    const notifications = parsed?.notifications;
+    const receivers = Array.isArray(notifications?.receivers)
+      ? notifications.receivers.map((receiver: any) => ({
+        name: text(receiver?.name),
+        channel: ['wecom', 'dingtalk', 'feishu', 'sms'].includes(receiver?.channel) ? receiver.channel : 'wecom',
+        target: text(receiver?.target),
+      })).filter((receiver: any) => receiver.target)
+      : [];
+    if (!receivers.length) return null;
+    return {
+      receivers,
+      workHours: {
+        start: /^\d{2}:\d{2}$/.test(text(notifications?.workHours?.start)) ? text(notifications?.workHours?.start) : '09:00',
+        end: /^\d{2}:\d{2}$/.test(text(notifications?.workHours?.end)) ? text(notifications?.workHours?.end) : '22:00',
+      },
+      quietOutsideHours: notifications?.quietOutsideHours !== false,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function minutesOfDay(value: string): number {
+  const [hour, minute] = value.split(':').map(Number);
+  return hour * 60 + minute;
+}
+
+function isWithinWorkHours(workHours: { start: string; end: string }): boolean {
+  const now = new Date();
+  const current = now.getHours() * 60 + now.getMinutes();
+  const start = minutesOfDay(workHours.start);
+  const end = minutesOfDay(workHours.end);
+  if (start === end) return true;
+  if (start < end) return current >= start && current <= end;
+  return current >= start || current <= end;
+}
+
+function enqueueDailyBriefing(message: string): void {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    const existing = JSON.parse(fs.existsSync(DAILY_BRIEFING_QUEUE_FILE) ? fs.readFileSync(DAILY_BRIEFING_QUEUE_FILE, 'utf8') : '[]');
+    const items = Array.isArray(existing) ? existing : [];
+    items.push({ id: crypto.randomUUID(), message, createdAt: new Date().toISOString(), deliverOn: nextLocalDate() });
+    fs.writeFileSync(DAILY_BRIEFING_QUEUE_FILE, JSON.stringify(items, null, 2), 'utf8');
+  } catch (error) {
+    console.warn('[delivery-alert:queue-failed]', error);
+  }
+}
+
+function nextLocalDate(): string {
+  const next = new Date();
+  next.setDate(next.getDate() + 1);
+  return next.toISOString().slice(0, 10);
 }

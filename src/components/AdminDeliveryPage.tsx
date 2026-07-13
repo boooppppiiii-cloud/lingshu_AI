@@ -39,6 +39,7 @@ type TestState = Record<string, Record<string, 'idle' | 'running' | 'ok' | 'erro
 type AssistLinkState = Record<string, { link: string; loading?: boolean }>;
 type ProgressStageKey = 'email_connected' | 'business_verification' | 'permanent_token_replaced';
 type ProgressStageState = 'done' | 'pending' | 'todo';
+interface KnowledgeCompletionState { completed: number; total: number }
 
 const STATUS_LABEL: Record<Status, string> = {
   pending: '待配置',
@@ -174,10 +175,12 @@ function DeploymentProgressStrip({
   tenant,
   busyKey,
   onToggle,
+  knowledgeCompletion,
 }: {
   tenant: TenantCard;
   busyKey: string;
   onToggle: (tenant: TenantCard, key: ProgressStageKey) => Promise<void>;
+  knowledgeCompletion: KnowledgeCompletionState | null;
 }) {
   const meta = appFor(tenant, 'meta');
   const google = appFor(tenant, 'google');
@@ -226,6 +229,12 @@ function DeploymentProgressStrip({
       state: hasCheck(meta, 'email_connected') ? 'done' : 'todo',
       manual: 'email_connected',
       hint: '手动勾选，记录顾问已完成邮箱接入',
+    },
+    {
+      key: 'business_data',
+      label: `业务资料导入 ${knowledgeCompletion?.completed ?? 0}/${knowledgeCompletion?.total ?? 6}`,
+      state: (knowledgeCompletion?.completed ?? 0) >= 5 ? 'done' : 'todo',
+      hint: '读取该租户知识库完成度，>=5/6 视为完成',
     },
     {
       key: 'business',
@@ -523,6 +532,7 @@ function PlatformWizard({
 
 export default function AdminDeliveryPage() {
   const [tenants, setTenants] = useState<TenantCard[]>([]);
+  const [knowledgeCompletion, setKnowledgeCompletion] = useState<KnowledgeCompletionState | null>(null);
   const [drafts, setDrafts] = useState<Draft>({});
   const [tests, setTests] = useState<TestState>({});
   const [assistLinks, setAssistLinks] = useState<AssistLinkState>({});
@@ -537,6 +547,12 @@ export default function AdminDeliveryPage() {
     try {
       const data = await jsonFetch('/api/overseas/admin/delivery/platform-apps');
       setTenants(data.tenants ?? []);
+      fetch('/api/overseas/enterprise/knowledge-completion', { headers: authHeader() })
+        .then(resp => resp.ok ? resp.json() : null)
+        .then(result => {
+          if (typeof result?.completed === 'number') setKnowledgeCompletion({ completed: result.completed, total: result.total || 6 });
+        })
+        .catch(() => setKnowledgeCompletion(null));
     } catch (err) {
       setError(err instanceof Error ? err.message : '读取失败');
     } finally {
@@ -724,7 +740,7 @@ export default function AdminDeliveryPage() {
                   </div>
                   <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-bold text-text-secondary">现场预计 3 小时</span>
                 </div>
-                <DeploymentProgressStrip tenant={tenant} busyKey={progressBusyKey} onToggle={toggleProgressStage} />
+                <DeploymentProgressStrip tenant={tenant} busyKey={progressBusyKey} onToggle={toggleProgressStage} knowledgeCompletion={knowledgeCompletion} />
                 <div className="grid gap-3">
                   {tenant.apps.map(app => (
                     <PlatformWizard

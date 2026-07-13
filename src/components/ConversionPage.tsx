@@ -632,6 +632,7 @@ function DraftSuggestionBar({
   translatedDraft,
   isTemplate,
   templatePlan,
+  priceRulesReady,
   onSend,
   onEdit,
   onDismiss,
@@ -641,6 +642,7 @@ function DraftSuggestionBar({
   translatedDraft: string;
   isTemplate: boolean;
   templatePlan: TemplatePlan | null;
+  priceRulesReady: boolean;
   onSend: () => void;
   onEdit: () => void;
   onDismiss: () => void;
@@ -676,6 +678,15 @@ function DraftSuggestionBar({
         <div className="mt-2 rounded-xl border border-[#0891b2]/15 bg-white/70 px-3 py-2 text-xs leading-relaxed text-text-secondary">
           <span className="font-bold text-text-primary">{'\u4e2d\u6587\u8349\u7a3f\uff1a'}</span>{draft}
         </div>
+        {!priceRulesReady && (
+          <button
+            type="button"
+            onClick={() => { localStorage.setItem('lingshu:enterprise:highlight-biz-rules', 'true'); window.dispatchEvent(new CustomEvent('lingshu:navigate', { detail: { page: 'enterprise' } })); }}
+            className="mt-2 rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-left text-xs font-bold text-sky-800 hover:bg-sky-100"
+          >
+            完善报价规则后，AI 才能帮你答价格 → 去完善
+          </button>
+        )}
         <div className="mt-3 flex justify-end gap-1.5">
           <button type="button" onClick={onSend} disabled={!templateApproved} className="rounded-lg bg-[#0891b2] px-3 py-1.5 text-xs font-bold text-white disabled:cursor-not-allowed disabled:bg-amber-200 disabled:text-amber-900">
             {!templateApproved ? '\u6d88\u606f\u6a21\u677f\u5ba1\u6838\u4e2d' : isTemplate ? '\u53d1\u9001\u6a21\u677f' : '\u76f4\u63a5\u53d1\u9001'}
@@ -761,6 +772,7 @@ function ChatThread({
   isPolishing,
   templates,
   onManualActive,
+  priceRulesReady,
 }: {
   customer: CustomerProfile | null;
   draftSuggestion: string | null;
@@ -779,6 +791,7 @@ function ChatThread({
   isPolishing: boolean;
   templates: MessageTemplate[];
   onManualActive: () => void;
+  priceRulesReady: boolean;
 }) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -871,7 +884,7 @@ function ChatThread({
             );
           })}
           {draftSuggestion && (
-            <DraftSuggestionBar draft={draftSuggestion} translatedDraft={isOutsideWindow && templatePlan ? templatePlan.rendered : translateChineseReplyForCustomer(customer, draftSuggestion)} isTemplate={isOutsideWindow} templatePlan={templatePlan} onSend={onSendDraft} onEdit={onEditDraft} onDismiss={onDismissDraft} onRegenerate={onRegenerateDraft} />
+            <DraftSuggestionBar draft={draftSuggestion} translatedDraft={isOutsideWindow && templatePlan ? templatePlan.rendered : translateChineseReplyForCustomer(customer, draftSuggestion)} isTemplate={isOutsideWindow} templatePlan={templatePlan} priceRulesReady={priceRulesReady} onSend={onSendDraft} onEdit={onEditDraft} onDismiss={onDismissDraft} onRegenerate={onRegenerateDraft} />
           )}
         </div>
       </div>
@@ -965,6 +978,7 @@ function suggestionToneClass(tone: PrioritySuggestion['tone']) {
 
 function PrimaryActionCard({
   customer,
+  notificationReady,
   onModeChange,
   onToast,
   onGenerateDraft,
@@ -973,6 +987,7 @@ function PrimaryActionCard({
   onCompleteTodo,
 }: {
   customer: CustomerProfile;
+  notificationReady: boolean;
   onModeChange: (mode: HandlingMode) => void;
   onToast: (message: string) => void;
   onGenerateDraft: (instruction: string, intent?: DraftIntent) => Promise<void> | void;
@@ -1084,6 +1099,15 @@ function PrimaryActionCard({
 
   return (
     <div className={`rounded-2xl border border-border border-l-4 p-4 ${suggestionToneClass(suggestion.tone)}`}>
+      {!notificationReady && (
+        <button
+          type="button"
+          onClick={() => { localStorage.setItem('lingshu:enterprise:highlight-notifications', 'true'); window.dispatchEvent(new CustomEvent('lingshu:navigate', { detail: { page: 'enterprise' } })); onToast('已跳转到通知接收方式设置'); }}
+          className="mb-3 w-full rounded-xl border border-sky-200 bg-sky-50 px-3 py-2 text-left text-xs font-bold text-sky-800 hover:bg-sky-100"
+        >
+          还没设置提醒接收方式，重要客户消息可能错过 → 去设置
+        </button>
+      )}
       <p className="text-sm font-black">{suggestion.headline}</p>
       <p className="mt-2 text-xs leading-relaxed opacity-85">{suggestion.reason}</p>
       {suggestion.suggestionType !== 'none' && (
@@ -1174,6 +1198,7 @@ function AdoptionPrompt({ autonomyLevel, onToast }: { autonomyLevel: AutonomyLev
 function CustomerInfoRail({
   customer,
   autonomyLevel,
+  notificationReady,
   onGenerateDraft,
   onHandlingModeChange,
   onCustomerPatch,
@@ -1184,6 +1209,7 @@ function CustomerInfoRail({
 }: {
   customer: CustomerProfile | null;
   autonomyLevel: AutonomyLevel;
+  notificationReady: boolean;
   onGenerateDraft: (instruction: string, intent?: DraftIntent) => Promise<void> | void;
   onHandlingModeChange: (mode: HandlingMode) => void;
   onCustomerPatch: (patch: Partial<CustomerProfile>) => void;
@@ -1255,7 +1281,7 @@ function CustomerInfoRail({
         <p className="mt-0.5 text-[11px] text-text-muted">先看是否需要你接手，再看客户资料。</p>
       </div>
       <div className="grid gap-3">
-        <PrimaryActionCard customer={customer} onModeChange={onHandlingModeChange} onToast={onToast} onGenerateDraft={onGenerateDraft} onFocusReply={onFocusReply} onViewDraft={onViewDraft} onCompleteTodo={onCompleteTodo} />
+        <PrimaryActionCard customer={customer} notificationReady={notificationReady} onModeChange={onHandlingModeChange} onToast={onToast} onGenerateDraft={onGenerateDraft} onFocusReply={onFocusReply} onViewDraft={onViewDraft} onCompleteTodo={onCompleteTodo} />
         <AdoptionPrompt autonomyLevel={autonomyLevel} onToast={onToast} />
       </div>
 
@@ -1421,6 +1447,8 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
   const [toast, setToast] = useState<string | null>(null);
   const [undoSend, setUndoSend] = useState<null | { customerId: string; eventId: string; restoreText: string; timer: number }>(null);
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
+  const [priceRulesReady, setPriceRulesReady] = useState(true);
+  const [notificationReady, setNotificationReady] = useState(true);
   const [lastDraftKey, setLastDraftKey] = useState('');
   const selected = useMemo(() => (
     selectedId ? customers.find(customer => customer.id === selectedId) ?? null : null
@@ -1460,6 +1488,16 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
       .then(data => {
         const value = data?.strategy?.aiAutonomy;
         if (value === 'remind' || value === 'draft' || value === 'auto') setAutonomyLevel(value);
+        setPriceRulesReady(Boolean(data?.bizRules?.quoteMode && data?.bizRules?.samplePolicy && data?.bizRules?.paymentTerms));
+      })
+      .catch(() => {});
+    fetch('/api/overseas/enterprise/knowledge-completion', { headers: authHeader() })
+      .then(resp => resp.ok ? resp.json() : null)
+      .then(data => {
+        if (data?.sections?.bizRules) setPriceRulesReady(Boolean(data.sections.bizRules.completed));
+        if (typeof data?.notificationsReady === 'boolean') {
+          setNotificationReady(data.notificationsReady);
+        }
       })
       .catch(() => {});
   }, []);
@@ -1755,10 +1793,12 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
           isPolishing={isPolishing}
           templates={templates}
           onManualActive={reportManualActive}
+          priceRulesReady={priceRulesReady}
         />
         <CustomerInfoRail
           customer={selected}
           autonomyLevel={autonomyLevel}
+          notificationReady={notificationReady}
           onGenerateDraft={generateManualDraft}
           onHandlingModeChange={updateHandlingMode}
           onCustomerPatch={(patch) => {

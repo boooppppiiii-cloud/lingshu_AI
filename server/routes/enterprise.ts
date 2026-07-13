@@ -7,6 +7,8 @@ import type { Request } from 'express';
 import { resetDemoUsage } from '../lib/demo.js';
 import { auth } from '../storage/index.js';
 import type { AutonomyLevel } from '../autonomy/actionRules.js';
+import { callLLM } from '../agents/llm.js';
+import { notifyDeliveryTeam } from '../lib/tenantPlatformApps.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_FILE = path.join(__dirname, '../../data/enterprise.json');
@@ -18,6 +20,41 @@ const ORDERS_FILE = path.join(DATA_DIR, 'orders.json');
 const PRODUCT_API_FILE = path.join(DATA_DIR, 'product-api.json');
 
 type OrderStatus = '待付款' | '已付款' | '生产中' | '已发货' | '已完成' | '退款';
+
+type QuoteMode = '' | 'range' | 'human_only';
+type BargainPolicy = '' | 'no' | 'limited' | 'open';
+type NotificationChannel = 'wecom' | 'dingtalk' | 'feishu' | 'sms';
+
+export interface BizRules {
+  quoteMode: QuoteMode;
+  priceRange?: string;
+  bargainPolicy: BargainPolicy;
+  bargainFloor?: string;
+  moq: string;
+  samplePolicy: string;
+  paymentTerms: string;
+  leadTime: string;
+}
+
+export interface FaqItem {
+  id: string;
+  question: string;
+  answer: string;
+  approvedForAuto: boolean;
+}
+
+export interface NotificationReceiver {
+  name: string;
+  channel: NotificationChannel;
+  target: string;
+}
+
+export interface NotificationSettings {
+  receivers: NotificationReceiver[];
+  workHours: { start: string; end: string };
+  quietOutsideHours: boolean;
+  lastTestAt?: string;
+}
 
 interface OrderRecord {
   id: string;
@@ -112,6 +149,9 @@ export interface EnterpriseProfile {
     pendingAssumptions?: string;
     userCorrections?: string;
   };
+  bizRules?: BizRules;
+  faq?: FaqItem[];
+  notifications?: NotificationSettings;
   knowledge: string;
 }
 
@@ -122,6 +162,24 @@ interface ProductApiSecret {
   lastIngestedAt?: string;
   lastProductName?: string;
 }
+
+const DEFAULT_BIZ_RULES: BizRules = {
+  quoteMode: '',
+  priceRange: '',
+  bargainPolicy: 'no',
+  bargainFloor: '',
+  moq: '',
+  samplePolicy: '',
+  paymentTerms: '',
+  leadTime: '',
+};
+
+const DEFAULT_NOTIFICATIONS: NotificationSettings = {
+  receivers: [],
+  workHours: { start: '09:00', end: '22:00' },
+  quietOutsideHours: true,
+  lastTestAt: '',
+};
 
 function readProductApiSecret(): ProductApiSecret | null {
   try {
@@ -168,6 +226,9 @@ function readProfile(): EnterpriseProfile {
       customers: { targetProfiles: '', highValueSignals: '', lowQualitySignals: '', commonQuestions: '', followupStyle: '' },
       operations: { leadTime: '', customization: '', logistics: '', paymentTerms: '', riskNotes: '' },
       agentLearning: { provenAngles: '', weakAngles: '', pendingAssumptions: '', userCorrections: '' },
+      bizRules: { ...DEFAULT_BIZ_RULES },
+      faq: [],
+      notifications: { ...DEFAULT_NOTIFICATIONS, workHours: { ...DEFAULT_NOTIFICATIONS.workHours } },
       knowledge: '',
     });
   }
@@ -374,6 +435,16 @@ function emptyProduct(index: number): NonNullable<EnterpriseProfile['products'][
 }
 
 function normalizeProfile(profile: EnterpriseProfile): EnterpriseProfile {
+  const companyInput = (profile.company ?? {}) as Partial<EnterpriseProfile['company']>;
+  const company = {
+    name: text(companyInput.name),
+    industry: text(companyInput.industry),
+    companyType: text(companyInput.companyType),
+    mainMarkets: text(companyInput.mainMarkets),
+    primaryLanguages: text(companyInput.primaryLanguages),
+    founded: text(companyInput.founded),
+    description: text(companyInput.description),
+  };
   const products = profile.products ?? { categories: '', priceRange: '', moq: '', certifications: '', highlights: '' };
   const existing = Array.isArray(products.items) ? products.items : [];
   const items = existing.length
@@ -389,8 +460,97 @@ function normalizeProfile(profile: EnterpriseProfile): EnterpriseProfile {
       documents: Array.isArray(item.documents) ? item.documents : [],
     }))
     : [];
+  const operations = {
+    leadTime: '',
+    customization: '',
+    logistics: '',
+    paymentTerms: '',
+    riskNotes: '',
+    ...(profile.operations ?? {}),
+  };
+  const bizRules = normalizeBizRules(profile.bizRules, products, operations);
+  const notifications = normalizeNotifications(profile.notifications);
+  const faq = normalizeFaq(profile.faq);
   const strategy = { ...(profile.strategy ?? {}), aiAutonomy: normalizeAutonomy(profile.strategy?.aiAutonomy) };
-  return { ...profile, strategy, products: { ...products, items } };
+  return {
+    ...profile,
+    company,
+    operations,
+    strategy,
+    products: { ...products, items },
+    bizRules,
+    faq,
+    notifications,
+  };
+}
+
+function normalizeQuoteMode(value: unknown): QuoteMode {
+  return value === 'range' || value === 'human_only' ? value : '';
+}
+
+function normalizeBargainPolicy(value: unknown): BargainPolicy {
+  return value === 'limited' || value === 'open' || value === 'no' ? value : 'no';
+}
+
+function normalizeBizRules(
+  input: EnterpriseProfile['bizRules'],
+  products: EnterpriseProfile['products'],
+  operations: NonNullable<EnterpriseProfile['operations']>,
+): BizRules {
+  const merged = { ...DEFAULT_BIZ_RULES, ...(input ?? {}) };
+  const priceRange = text(merged.priceRange) || text(products.priceRange);
+  const moq = text(merged.moq) || text(products.moq);
+  const paymentTerms = text(merged.paymentTerms) || text(operations.paymentTerms);
+  const leadTime = text(merged.leadTime) || text(operations.leadTime);
+  const quoteMode = normalizeQuoteMode(merged.quoteMode) || (priceRange ? 'range' : '');
+  return {
+    quoteMode,
+    priceRange,
+    bargainPolicy: normalizeBargainPolicy(merged.bargainPolicy),
+    bargainFloor: text(merged.bargainFloor),
+    moq,
+    samplePolicy: text(merged.samplePolicy),
+    paymentTerms,
+    leadTime,
+  };
+}
+
+function normalizeFaq(input: EnterpriseProfile['faq']): FaqItem[] {
+  if (!Array.isArray(input)) return [];
+  return input.map(item => ({
+    id: text(item?.id) || randomUUID(),
+    question: text(item?.question),
+    answer: text(item?.answer),
+    approvedForAuto: Boolean(item?.approvedForAuto),
+  })).filter(item => item.question || item.answer);
+}
+
+function normalizeNotifications(input: EnterpriseProfile['notifications']): NotificationSettings {
+  const receivers = Array.isArray(input?.receivers)
+    ? input.receivers.map(receiver => ({
+      name: text(receiver?.name),
+      channel: normalizeNotificationChannel(receiver?.channel),
+      target: text(receiver?.target),
+    })).filter(receiver => receiver.name || receiver.target)
+    : [];
+  return {
+    receivers,
+    workHours: {
+      start: normalizeHour(input?.workHours?.start, DEFAULT_NOTIFICATIONS.workHours.start),
+      end: normalizeHour(input?.workHours?.end, DEFAULT_NOTIFICATIONS.workHours.end),
+    },
+    quietOutsideHours: input?.quietOutsideHours !== false,
+    lastTestAt: text(input?.lastTestAt),
+  };
+}
+
+function normalizeNotificationChannel(value: unknown): NotificationChannel {
+  return value === 'wecom' || value === 'dingtalk' || value === 'feishu' || value === 'sms' ? value : 'wecom';
+}
+
+function normalizeHour(value: unknown, fallback: string): string {
+  const raw = text(value);
+  return /^\d{2}:\d{2}$/.test(raw) ? raw : fallback;
 }
 
 function normalizeAutonomy(value: unknown): AutonomyLevel {
@@ -401,6 +561,102 @@ function writeProfile(profile: EnterpriseProfile): void {
   const clean = normalizeProfile(profile) as EnterpriseProfile & { integrations?: unknown };
   delete clean.integrations;
   fs.writeFileSync(DATA_FILE, JSON.stringify(clean, null, 2), 'utf8');
+}
+
+export function readEnterpriseProfile(): EnterpriseProfile {
+  return readProfile();
+}
+
+export type KnowledgeSectionKey = 'products' | 'materials' | 'bizRules' | 'faq' | 'market' | 'company';
+
+export interface KnowledgeCompletion {
+  completed: number;
+  total: 6;
+  sections: Record<KnowledgeSectionKey, { completed: boolean; label: string }>;
+  notificationsReady: boolean;
+}
+
+function assetCounts(profile: EnterpriseProfile) {
+  const items = profile.products.items ?? [];
+  return items.reduce((acc, item) => {
+    acc.images += (item.images?.length ?? 0) + (item.imageUrl ? 1 : 0);
+    acc.videos += item.videos?.length ?? 0;
+    acc.documents += item.documents?.length ?? 0;
+    return acc;
+  }, { images: 0, videos: 0, documents: 0 });
+}
+
+function hasTestedNotificationTarget(profile: EnterpriseProfile): boolean {
+  return Boolean((profile.notifications?.receivers ?? []).length >= 1 && profile.notifications?.lastTestAt);
+}
+
+export function knowledgeCompletion(profile: EnterpriseProfile): KnowledgeCompletion {
+  const normalized = normalizeProfile(profile);
+  const counts = assetCounts(normalized);
+  const totalAssets = counts.images + counts.videos + counts.documents;
+  const hasProductVideo = (normalized.products.items ?? []).some(item => (item.videos?.length ?? 0) >= 1);
+  const sections: KnowledgeCompletion['sections'] = {
+    products: { label: '产品资料', completed: (normalized.products.items ?? []).length >= 1 },
+    materials: { label: '素材库', completed: hasProductVideo || totalAssets >= 5 },
+    bizRules: {
+      label: '报价与业务规则',
+      completed: Boolean(normalized.bizRules?.quoteMode && normalized.bizRules.samplePolicy && normalized.bizRules.paymentTerms),
+    },
+    faq: { label: '常见问答', completed: (normalized.faq ?? []).length >= 5 },
+    market: {
+      label: '目标市场与语言',
+      completed: Boolean(text(normalized.company.mainMarkets) && text(normalized.company.primaryLanguages)),
+    },
+    company: { label: '公司介绍', completed: text(normalized.company.description).length >= 50 },
+  };
+  return {
+    completed: Object.values(sections).filter(section => section.completed).length,
+    total: 6,
+    sections,
+    notificationsReady: hasTestedNotificationTarget(normalized),
+  };
+}
+
+export function bizRulesReady(profile: EnterpriseProfile): boolean {
+  return knowledgeCompletion(profile).sections.bizRules.completed;
+}
+
+export function shouldSuppressPrice(profile: EnterpriseProfile): boolean {
+  const normalized = normalizeProfile(profile);
+  return !bizRulesReady(normalized) || normalized.bizRules?.quoteMode === 'human_only';
+}
+
+export function autoFaqReady(profile: EnterpriseProfile): boolean {
+  return (normalizeProfile(profile).faq ?? []).filter(item => item.approvedForAuto).length >= 5;
+}
+
+export function findApprovedFaqAnswer(profile: EnterpriseProfile, message: string): FaqItem | null {
+  const normalizedMessage = text(message).toLowerCase();
+  if (!normalizedMessage) return null;
+  const candidates = (normalizeProfile(profile).faq ?? []).filter(item => item.approvedForAuto && item.question && item.answer);
+  return candidates.find(item => normalizedMessage.includes(item.question.toLowerCase()) || item.question.toLowerCase().includes(normalizedMessage)) ?? null;
+}
+
+export function buildBizRulesInstruction(profile: EnterpriseProfile): string {
+  const normalized = normalizeProfile(profile);
+  const rules = normalized.bizRules ?? DEFAULT_BIZ_RULES;
+  const lines = [
+    'Enterprise business rules:',
+    `Quote mode: ${rules.quoteMode || 'not_configured'}`,
+    rules.quoteMode === 'range' && rules.priceRange ? `Allowed price range wording: ${rules.priceRange}` : '',
+    rules.quoteMode === 'human_only' ? 'Hard rule: never include price numbers, currency symbols, unit prices, discounts, or exact amounts. Tell the buyer that a human seller will confirm the quote.' : '',
+    !bizRulesReady(normalized) ? 'Hard rule: quote rules are incomplete. Do not include concrete prices. Ask for missing details and say the seller will confirm pricing.' : '',
+    rules.moq ? `MOQ guidance: ${rules.moq}` : '',
+    rules.samplePolicy ? `Sample policy: ${rules.samplePolicy}` : '',
+    rules.paymentTerms ? `Payment terms: ${rules.paymentTerms}` : '',
+    rules.leadTime ? `Lead time: ${rules.leadTime}` : '',
+    rules.bargainPolicy ? `Bargaining policy: ${rules.bargainPolicy}${rules.bargainFloor ? `; floor note: ${rules.bargainFloor}` : ''}` : '',
+  ].filter(Boolean);
+  return lines.join('\n');
+}
+
+export function notificationTargetReady(profile: EnterpriseProfile): boolean {
+  return hasTestedNotificationTarget(normalizeProfile(profile));
 }
 
 async function resolveTenantId(req: Request): Promise<string> {
@@ -521,6 +777,16 @@ export function buildEnterpriseContext(profile: EnterpriseProfile): string {
       if (details.length) parts.push(`产品${index + 1}：${details.join('；')}`);
     });
   }
+  if (profile.bizRules) {
+    parts.push(`Business rules: quoteMode=${profile.bizRules.quoteMode || 'not_configured'}; priceRange=${profile.bizRules.priceRange || ''}; moq=${profile.bizRules.moq || ''}; samplePolicy=${profile.bizRules.samplePolicy || ''}; paymentTerms=${profile.bizRules.paymentTerms || ''}; leadTime=${profile.bizRules.leadTime || ''}; bargainPolicy=${profile.bizRules.bargainPolicy || ''}; bargainFloor=${profile.bizRules.bargainFloor || ''}`);
+  }
+  const approvedFaq = (profile.faq ?? []).filter(item => item.approvedForAuto && item.question && item.answer);
+  if (approvedFaq.length) {
+    parts.push(`Approved FAQ for auto reply:\n${approvedFaq.map(item => `Q: ${item.question}\nA: ${item.answer}`).join('\n')}`);
+  }
+  if (profile.notifications?.receivers?.length) {
+    parts.push(`Notification receivers: ${profile.notifications.receivers.map(item => `${item.name}/${item.channel}/${item.target}`).join('; ')}; workHours=${profile.notifications.workHours.start}-${profile.notifications.workHours.end}; quietOutsideHours=${profile.notifications.quietOutsideHours}`);
+  }
   if (profile.brand.usp) parts.push(`核心卖点：${profile.brand.usp}`);
   if (profile.brand.tone) parts.push(`品牌调性：${profile.brand.tone}`);
   if (profile.brand.preferredLanguages) parts.push(`首选输出语言：${profile.brand.preferredLanguages}`);
@@ -551,10 +817,100 @@ export function buildEnterpriseContext(profile: EnterpriseProfile): string {
   return parts.join('\n');
 }
 
+function fallbackFaqStructure(raw: string): FaqItem[] {
+  const lines = raw.split(/\r?\n+/).map(line => line.trim()).filter(Boolean);
+  const items: FaqItem[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    const [questionPart, ...answerParts] = line.split(/[：:]/);
+    const looksLikeQuestion = /[?？]|^(q|问|问题)/i.test(line);
+    if (answerParts.length || looksLikeQuestion) {
+      const question = answerParts.length ? questionPart.replace(/^(q|问|问题)\s*/i, '').trim() : line;
+      const answer = answerParts.join(':').replace(/^(a|答|答案)\s*/i, '').trim() || lines[index + 1] || '';
+      items.push({ id: randomUUID(), question, answer, approvedForAuto: false });
+      if (!answerParts.length && lines[index + 1]) index += 1;
+    }
+  }
+  if (!items.length && raw.trim()) {
+    items.push({ id: randomUUID(), question: '常见问题', answer: raw.trim(), approvedForAuto: false });
+  }
+  return items.slice(0, 20);
+}
+
+function parseFaqItemsFromLLM(raw: string): FaqItem[] {
+  const match = raw.match(/\[[\s\S]*\]/);
+  if (!match) return [];
+  try {
+    const parsed = JSON.parse(match[0]);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map(item => ({
+      id: randomUUID(),
+      question: text(item?.question),
+      answer: text(item?.answer),
+      approvedForAuto: false,
+    })).filter(item => item.question && item.answer).slice(0, 30);
+  } catch {
+    return [];
+  }
+}
+
+async function structureFaqText(raw: string): Promise<FaqItem[]> {
+  const source = raw.trim();
+  if (!source) return [];
+  try {
+    const prompt = [
+      '把下面旧版常见问答文本整理成 JSON 数组。',
+      '只返回 JSON，不要解释。数组元素格式：{"question":"客户可能这样问","answer":"标准回答"}。',
+      '合并重复问题，保留卖家原意，不要编造价格、交期或政策。',
+      '',
+      source,
+    ].join('\n');
+    const result = parseFaqItemsFromLLM(await callLLM(prompt));
+    if (result.length) return result;
+  } catch {
+    // Fall through to deterministic parsing.
+  }
+  return fallbackFaqStructure(source);
+}
+
 export const enterpriseRouter = Router();
 
 enterpriseRouter.get('/profile', (_req, res) => {
   res.json(readProfile());
+});
+
+enterpriseRouter.get('/knowledge-completion', (_req, res) => {
+  const profile = readProfile();
+  res.json(knowledgeCompletion(profile));
+});
+
+enterpriseRouter.post('/faq/structure', async (req, res) => {
+  const source = text(req.body?.text);
+  if (!source) {
+    res.status(400).json({ error: 'text is required' });
+    return;
+  }
+  const items = await structureFaqText(source);
+  res.json({ items });
+});
+
+enterpriseRouter.post('/notifications/test', async (req, res) => {
+  const profile = readProfile();
+  const receiver = req.body?.receiver as Partial<NotificationReceiver> | undefined;
+  const target = text(receiver?.target);
+  const name = text(receiver?.name) || '通知接收人';
+  const channel = normalizeNotificationChannel(receiver?.channel);
+  if (!target) {
+    res.status(400).json({ error: 'receiver target is required' });
+    return;
+  }
+  await notifyDeliveryTeam(`[灵枢测试提醒] ${name} (${channel}/${target}) 已接入重要客户提醒。`);
+  const notifications = normalizeNotifications({
+    ...(profile.notifications ?? DEFAULT_NOTIFICATIONS),
+    lastTestAt: new Date().toISOString(),
+  });
+  writeProfile({ ...profile, notifications });
+  res.json({ ok: true, lastTestAt: notifications.lastTestAt });
 });
 
 enterpriseRouter.get('/orders', (_req, res) => {
@@ -690,10 +1046,13 @@ enterpriseRouter.post('/demo/reset', (_req, res) => {
     brand: { tone: '', style: '', taboos: '', usp: '', preferredLanguages: '' },
     strategy: { currentGoal: '', focusProducts: '', focusMarkets: '', excludedMarkets: '', pricingStrategy: '', minMargin: '', agentAutonomy: '', aiAutonomy: 'draft' },
     customers: { targetProfiles: '', highValueSignals: '', lowQualitySignals: '', commonQuestions: '', followupStyle: '' },
-    operations: { leadTime: '', customization: '', logistics: '', paymentTerms: '', riskNotes: '' },
-    agentLearning: { provenAngles: '', weakAngles: '', pendingAssumptions: '', userCorrections: '' },
-    knowledge: '',
-  });
+      operations: { leadTime: '', customization: '', logistics: '', paymentTerms: '', riskNotes: '' },
+      agentLearning: { provenAngles: '', weakAngles: '', pendingAssumptions: '', userCorrections: '' },
+      bizRules: { ...DEFAULT_BIZ_RULES },
+      faq: [],
+      notifications: { ...DEFAULT_NOTIFICATIONS, workHours: { ...DEFAULT_NOTIFICATIONS.workHours } },
+      knowledge: '',
+    });
   fs.writeFileSync(DATA_FILE, JSON.stringify(profile, null, 2), 'utf8');
   writeJson('channels.json', []);
   writeJson('plugins.json', []);
