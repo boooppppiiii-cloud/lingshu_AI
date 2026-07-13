@@ -48,6 +48,19 @@ type AutomationLevel = 'auto' | 'confirm' | 'manual';
 type DraftIntent = 'reply' | 'opener' | 'followup' | 'reactivate' | 'post_call' | 'polish' | 'handoff_summary';
 type CustomerFilterKey = 'source' | 'country' | 'language' | 'stage' | 'handling' | 'tag';
 
+interface MessageTemplate {
+  name: string;
+  label: string;
+  status: 'pending' | 'approved' | 'rejected' | string;
+  body: string;
+}
+
+interface TemplatePlan {
+  template: MessageTemplate;
+  variables: string[];
+  rendered: string;
+}
+
 interface CustomerListFilters {
   source: string;
   country: string;
@@ -235,6 +248,34 @@ function fallbackCustomerReplyZh(customer: CustomerProfile): string {
     return `您好，之前您关注过${customer.product}，我们最近有新款和更适合批量采购的方案。如果您还在看这类产品，我可以发一份最新目录给您参考。`;
   }
   return `您好，感谢您的咨询。我先为您确认${customer.product}的起订量、最优价格和交期，稍后把完整信息发给您。`;
+}
+
+function chooseTemplateName(customer: CustomerProfile): string {
+  if (customer.stage === 'silent30' || customer.stage === 'silent60') return 'product_update';
+  if (customer.stage === 'won' || customer.stage === 'quoted') return 'order_followup';
+  return 'greeting_opener';
+}
+
+function templateVariables(customer: CustomerProfile, draft: string): string[] {
+  const firstName = customer.name.split(/\s+/)[0] || customer.name;
+  if (chooseTemplateName(customer) === 'order_followup') {
+    return [firstName, customer.product, draft.slice(0, 80) || 'next steps'];
+  }
+  if (chooseTemplateName(customer) === 'product_update') {
+    return [firstName, customer.product, draft.slice(0, 80) || 'latest catalog'];
+  }
+  return [firstName, 'LingShu seller', customer.product];
+}
+
+function renderTemplateBody(template: MessageTemplate, variables: string[]): string {
+  return template.body.replace(/\{\{(\d+)}}/g, (_, index) => variables[Number(index) - 1] || '');
+}
+
+function buildTemplatePlan(customer: CustomerProfile, templates: MessageTemplate[], draft: string): TemplatePlan | null {
+  const template = templates.find(item => item.name === chooseTemplateName(customer)) || templates[0];
+  if (!template) return null;
+  const variables = templateVariables(customer, draft);
+  return { template, variables, rendered: renderTemplateBody(template, variables) };
 }
 
 function containsChinese(text: string): boolean {
@@ -590,6 +631,7 @@ function DraftSuggestionBar({
   draft,
   translatedDraft,
   isTemplate,
+  templatePlan,
   onSend,
   onEdit,
   onDismiss,
@@ -598,11 +640,13 @@ function DraftSuggestionBar({
   draft: string;
   translatedDraft: string;
   isTemplate: boolean;
+  templatePlan: TemplatePlan | null;
   onSend: () => void;
   onEdit: () => void;
   onDismiss: () => void;
   onRegenerate: () => void;
 }) {
+  const templateApproved = !isTemplate || templatePlan?.template.status === 'approved';
   return (
     <div data-draft-suggestion className="relative ml-auto max-w-[74%] rounded-2xl rounded-tr-sm border border-dashed border-[#0891b2]/35 bg-[#0891b2]/[0.08] px-4 py-3 shadow-sm">
       <button type="button" onClick={onDismiss} className="absolute right-2 top-2 rounded-full p-1 text-text-muted hover:bg-white/70">
@@ -612,17 +656,30 @@ function DraftSuggestionBar({
         <div className="flex shrink-0 items-center gap-1.5 text-xs font-black text-[#0891b2]">
           <Bot size={14} />
           {'AI \u5efa\u8bae\u56de\u590d'}
-          {isTemplate && <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-black text-amber-700">{'\u6a21\u677f'}</span>}
+          {isTemplate && (
+            <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-black ${templateApproved ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
+              {templateApproved ? '\u6a21\u677f\u53ef\u53d1' : '\u6a21\u677f\u5ba1\u6838\u4e2d'}
+            </span>
+          )}
           <button type="button" onClick={onRegenerate} className="ml-1 rounded-full p-1 text-[#0891b2] hover:bg-white" title="\u6362\u4e00\u7248">
             <RefreshCw size={12} />
           </button>
         </div>
         <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-text-primary">{translatedDraft}</p>
+        {isTemplate && templatePlan && (
+          <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
+            <p className="font-black">{'AI \u5df2\u9009\u62e9\u6a21\u677f\uff1a'}{templatePlan.template.label}</p>
+            <p className="mt-1">{'\u53d8\u91cf\uff1a'}{templatePlan.variables.map((item, index) => `{{${index + 1}}}=${item}`).join(' / ')}</p>
+            <p className="mt-1 whitespace-pre-line">{'\u6700\u7ec8\u53d1\u9001\u6548\u679c\uff1a'}{templatePlan.rendered}</p>
+          </div>
+        )}
         <div className="mt-2 rounded-xl border border-[#0891b2]/15 bg-white/70 px-3 py-2 text-xs leading-relaxed text-text-secondary">
           <span className="font-bold text-text-primary">{'\u4e2d\u6587\u8349\u7a3f\uff1a'}</span>{draft}
         </div>
         <div className="mt-3 flex justify-end gap-1.5">
-          <button type="button" onClick={onSend} className="rounded-lg bg-[#0891b2] px-3 py-1.5 text-xs font-bold text-white">{'\u76f4\u63a5\u53d1\u9001'}</button>
+          <button type="button" onClick={onSend} disabled={!templateApproved} className="rounded-lg bg-[#0891b2] px-3 py-1.5 text-xs font-bold text-white disabled:cursor-not-allowed disabled:bg-amber-200 disabled:text-amber-900">
+            {!templateApproved ? '\u6d88\u606f\u6a21\u677f\u5ba1\u6838\u4e2d' : isTemplate ? '\u53d1\u9001\u6a21\u677f' : '\u76f4\u63a5\u53d1\u9001'}
+          </button>
           <button type="button" onClick={onEdit} className="rounded-lg border border-border bg-white px-3 py-1.5 text-xs font-bold text-text-secondary">{'\u4fee\u6539'}</button>
         </div>
       </div>
@@ -670,6 +727,10 @@ function lastBuyerEvent(customer: CustomerProfile): TimelineEvent | undefined {
   return [...customer.timeline].reverse().find(event => event.type === 'whatsapp' && event.actor === 'buyer');
 }
 
+function isOutsideWhatsAppWindow(customer: CustomerProfile): boolean {
+  return timelineEventAgeHours(lastBuyerEvent(customer)) > 24;
+}
+
 function sceneChips(customer: CustomerProfile): { intent: DraftIntent; label: string }[] {
   const chips: { intent: DraftIntent; label: string }[] = [];
   const hasSellerOrAi = customer.timeline.some(event => event.type === 'whatsapp' && (event.actor === 'seller' || event.actor === 'ai'));
@@ -698,6 +759,8 @@ function ChatThread({
   onSceneDraft,
   onPreviewTranslate,
   isPolishing,
+  templates,
+  onManualActive,
 }: {
   customer: CustomerProfile | null;
   draftSuggestion: string | null;
@@ -714,11 +777,15 @@ function ChatThread({
   onSceneDraft: (intent: DraftIntent) => void;
   onPreviewTranslate: () => void;
   isPolishing: boolean;
+  templates: MessageTemplate[];
+  onManualActive: () => void;
 }) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
   const composerState = draftSuggestion ? 'draft' : input.trim() ? 'typing' : 'idle';
   const isOutsideWindow = customer ? timelineEventAgeHours(lastBuyerEvent(customer)) > 24 : false;
+  const templatePlan = customer && draftSuggestion ? buildTemplatePlan(customer, templates, draftSuggestion) : null;
+  const typedTemplatePlan = customer && input.trim() ? buildTemplatePlan(customer, templates, input) : null;
   const chips = customer && composerState === 'idle' ? sceneChips(customer) : [];
 
   useEffect(() => {
@@ -792,12 +859,19 @@ function ChatThread({
                     </div>
                   )}
                   {event.autoSent && <div className="mt-2 flex justify-end"><span className="rounded-full bg-white/15 px-2 py-0.5 text-[10px] font-bold text-white/85">{'AI \u81ea\u52a8\u56de\u590d'}</span></div>}
+                  {!isBuyer && event.sendStatus && (
+                    <div className="mt-2 flex justify-end">
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${event.sendStatus === 'failed' ? 'bg-red-100 text-red-700' : 'bg-white/15 text-white/85'}`}>
+                        {event.sendStatus === 'queued' ? '发送中' : event.sendStatus === 'sent' ? '已发送' : event.sendStatus === 'delivered' ? '已送达' : event.sendStatus === 'failed' ? '发送失败' : '草稿'}
+                      </span>
+                    </div>
+                  )}
                 </div>
               </div>
             );
           })}
           {draftSuggestion && (
-            <DraftSuggestionBar draft={draftSuggestion} translatedDraft={translateChineseReplyForCustomer(customer, draftSuggestion)} isTemplate={isOutsideWindow} onSend={onSendDraft} onEdit={onEditDraft} onDismiss={onDismissDraft} onRegenerate={onRegenerateDraft} />
+            <DraftSuggestionBar draft={draftSuggestion} translatedDraft={isOutsideWindow && templatePlan ? templatePlan.rendered : translateChineseReplyForCustomer(customer, draftSuggestion)} isTemplate={isOutsideWindow} templatePlan={templatePlan} onSend={onSendDraft} onEdit={onEditDraft} onDismiss={onDismissDraft} onRegenerate={onRegenerateDraft} />
           )}
         </div>
       </div>
@@ -811,7 +885,13 @@ function ChatThread({
           )}
           <div className="rounded-xl border border-border bg-surface-2 p-3">
             {previewOpen && translatedInput && <div className="mb-3 rounded-xl border border-border bg-white px-3 py-2 text-xs leading-relaxed text-text-secondary"><span className="font-black text-text-primary">{'\u8bd1\u6587\u9884\u89c8\uff1a'}</span>{translatedInput}</div>}
-            <textarea ref={inputRef} data-customer-reply-input rows={3} value={input} onChange={event => onInputChange(event.target.value)} placeholder="\u8f93\u5165\u4e2d\u6587\u56de\u590d..." className="w-full resize-none bg-transparent text-sm leading-relaxed text-text-primary outline-none placeholder:text-text-muted" />
+            {isOutsideWindow && typedTemplatePlan && input.trim() && (
+              <div className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
+                <span className="font-black">{'\u5c06\u4f7f\u7528\u6a21\u677f\uff1a'}</span>{typedTemplatePlan.template.label}
+                <div className="mt-1">{typedTemplatePlan.template.status === 'approved' ? '\u6a21\u677f\u5df2\u901a\u8fc7\uff0c\u53ef\u53d1\u9001' : '\u6d88\u606f\u6a21\u677f\u5ba1\u6838\u4e2d\uff0c\u6682\u4e0d\u80fd\u53d1\u9001'}</div>
+              </div>
+            )}
+            <textarea ref={inputRef} data-customer-reply-input rows={3} value={input} onFocus={onManualActive} onChange={event => { onManualActive(); onInputChange(event.target.value); }} placeholder="\u8f93\u5165\u4e2d\u6587\u56de\u590d..." className="w-full resize-none bg-transparent text-sm leading-relaxed text-text-primary outline-none placeholder:text-text-muted" />
             <div className="mt-2 flex items-center justify-between gap-2">
               {composerState === 'typing' ? (
                 <div className="flex items-center gap-1.5">
@@ -819,7 +899,7 @@ function ChatThread({
                   <button type="button" onClick={() => { setPreviewOpen(open => !open); if (!previewOpen) onPreviewTranslate(); }} disabled={!input.trim()} className="flex h-8 w-8 items-center justify-center rounded-lg text-text-muted hover:bg-white hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40" title="\u8bd1\u6587\u9884\u89c8"><Eye size={15} /></button>
                 </div>
               ) : <span />}
-               <button type="button" onClick={onSend} disabled={!input.trim()} className="flex items-center gap-1.5 rounded-xl bg-[#0891b2] px-4 py-2 text-xs font-bold text-white disabled:opacity-40"><Send size={13} /> {'\u53d1\u9001'}</button>
+               <button type="button" onClick={onSend} disabled={!input.trim() || (isOutsideWindow && typedTemplatePlan?.template.status !== 'approved')} className="flex items-center gap-1.5 rounded-xl bg-[#0891b2] px-4 py-2 text-xs font-bold text-white disabled:cursor-not-allowed disabled:opacity-40"><Send size={13} /> {isOutsideWindow ? '\u53d1\u9001\u6a21\u677f' : '\u53d1\u9001'}</button>
             </div>
           </div>
         </div>
@@ -1297,21 +1377,40 @@ function CustomerInfoRail({
   */
 }
 
-function createMessageEvent(customerId: string, body: string, actor: 'seller' | 'buyer' | 'ai'): TimelineEvent {
+function createMessageEvent(
+  customerId: string,
+  body: string,
+  actor: 'seller' | 'buyer' | 'ai',
+  extra: Partial<TimelineEvent> = {},
+): TimelineEvent {
   const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   return {
     id: `${customerId}-${Date.now()}-${actor}`,
     type: 'whatsapp',
     actor,
-    title: actor === 'buyer' ? '客户消息' : actor === 'ai' ? 'AI 回复' : '销售回复',
+    title: actor === 'buyer' ? '????' : actor === 'ai' ? 'AI ??' : '????',
     body,
     time,
+    ...extra,
   };
+}
+
+async function sendCustomerOutbox(customer: CustomerProfile, body: string, outsideWindow: boolean, templatePlan?: TemplatePlan | null) {
+  const resp = await fetch(`/api/overseas/customers/${encodeURIComponent(customer.id)}/outbox`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    body: JSON.stringify(templatePlan
+      ? { body: templatePlan.rendered, mode: 'template', outsideWindow, templateName: templatePlan.template.name, variables: templatePlan.variables }
+      : { body, mode: 'free_text', outsideWindow }),
+  });
+  const data = await resp.json().catch(() => ({}));
+  if (!resp.ok) throw new Error(data.message || data.error || '发送失败');
+  return data as { status?: 'queued' | 'sent' | 'delivered'; outboxId?: string };
 }
 
 export default function ConversionPage({ onLeaveConversation: _onLeaveConversation, isDemo = false }: Props) {
   const [view, setView] = useState<CustomerView>('inbox');
-  const { customers, updateCustomer, appendTimelineEvent } = useCustomers();
+  const { customers, updateCustomer, appendTimelineEvent, updateTimelineEvent, removeTimelineEvent } = useCustomers();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [autonomyLevel, setAutonomyLevel] = useState<AutonomyLevel>('draft');
   const [dailyBriefingOpen, setDailyBriefingOpen] = useState(false);
@@ -1320,6 +1419,8 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
   const [translatedInput, setTranslatedInput] = useState('');
   const [isPolishing, setIsPolishing] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [undoSend, setUndoSend] = useState<null | { customerId: string; eventId: string; restoreText: string; timer: number }>(null);
+  const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [lastDraftKey, setLastDraftKey] = useState('');
   const selected = useMemo(() => (
     selectedId ? customers.find(customer => customer.id === selectedId) ?? null : null
@@ -1361,6 +1462,13 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
         if (value === 'remind' || value === 'draft' || value === 'auto') setAutonomyLevel(value);
       })
       .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    fetch('/api/overseas/customers/templates', { headers: authHeader() })
+      .then(resp => resp.ok ? resp.json() : null)
+      .then(data => setTemplates(Array.isArray(data?.items) ? data.items : []))
+      .catch(() => setTemplates([]));
   }, []);
 
   useEffect(() => {
@@ -1469,24 +1577,68 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
     }));
   };
 
-  const sendReply = () => {
-    if (!selected) return;
-    const body = (translatedInput.trim() || (containsChinese(input) ? translateChineseReplyForCustomer(selected, input) : input.trim()));
-    if (!body) return;
-    appendTimelineEvent(selected.id, createMessageEvent(selected.id, body, 'seller'));
-    updateCustomer(selected.id, { lastActive: '刚刚', hasUnread: false, todoCompletedAt: new Date().toISOString() });
-    setInput('');
-    setTranslatedInput('');
-    setDraftSuggestion(null);
+  const markMessageStatus = (customerId: string, messageId: string, status: TimelineEvent['sendStatus']) => {
+    updateTimelineEvent(customerId, messageId, { sendStatus: status });
   };
 
-  const sendDraftDirectly = () => {
-    if (!selected || !draftSuggestion) return;
-    appendTimelineEvent(selected.id, createMessageEvent(selected.id, translateChineseReplyForCustomer(selected, draftSuggestion), 'seller'));
-    updateCustomer(selected.id, { lastActive: '刚刚', hasUnread: false, todoCompletedAt: new Date().toISOString() });
+  const queueSend = (customer: CustomerProfile, body: string, restoreText: string, templatePlan?: TemplatePlan | null) => {
+    const eventBody = templatePlan ? templatePlan.rendered : body;
+    const event = createMessageEvent(customer.id, eventBody, 'seller', {
+      sendStatus: 'queued',
+      sendMode: templatePlan ? 'template' : 'free_text',
+      confirmedByHuman: true,
+    });
+    appendTimelineEvent(customer.id, event);
+    updateCustomer(customer.id, { lastActive: '刚刚', hasUnread: false, todoCompletedAt: new Date().toISOString() });
     setDraftSuggestion(null);
     setInput('');
     setTranslatedInput('');
+
+    const timer = window.setTimeout(() => {
+      setUndoSend(current => current?.eventId === event.id ? null : current);
+      void sendCustomerOutbox(customer, body, isOutsideWhatsAppWindow(customer), templatePlan)
+        .then(result => markMessageStatus(customer.id, event.id, result.status || 'sent'))
+        .catch(error => {
+          markMessageStatus(customer.id, event.id, 'failed');
+          showToast(error instanceof Error ? error.message : '发送失败');
+        });
+    }, 4000);
+
+    setUndoSend({ customerId: customer.id, eventId: event.id, restoreText, timer });
+  };
+
+  const undoQueuedSend = () => {
+    if (!undoSend) return;
+    window.clearTimeout(undoSend.timer);
+    removeTimelineEvent(undoSend.customerId, undoSend.eventId);
+    if (selected?.id === undoSend.customerId) {
+      setInput(undoSend.restoreText);
+      setTranslatedInput(selected ? translateChineseReplyForCustomer(selected, undoSend.restoreText) : '');
+    }
+    setUndoSend(null);
+  };
+
+  const sendReply = async () => {
+    if (!selected) return;
+    const templatePlan = isOutsideWhatsAppWindow(selected) ? buildTemplatePlan(selected, templates, input) : null;
+    const body = templatePlan?.rendered || (translatedInput.trim() || (containsChinese(input) ? translateChineseReplyForCustomer(selected, input) : input.trim()));
+    if (!body) return;
+    if (isOutsideWhatsAppWindow(selected) && templatePlan?.template.status !== 'approved') {
+      showToast('消息模板审核中，暂时不能发送超窗触达。');
+      return;
+    }
+    queueSend(selected, body, input, templatePlan);
+  };
+
+  const sendDraftDirectly = async () => {
+    if (!selected || !draftSuggestion) return;
+    const templatePlan = isOutsideWhatsAppWindow(selected) ? buildTemplatePlan(selected, templates, draftSuggestion) : null;
+    if (isOutsideWhatsAppWindow(selected) && templatePlan?.template.status !== 'approved') {
+      showToast('消息模板审核中，暂时不能发送超窗触达。');
+      return;
+    }
+    const body = templatePlan?.rendered || translateChineseReplyForCustomer(selected, draftSuggestion);
+    queueSend(selected, body, draftSuggestion, templatePlan);
   };
 
   const generateManualDraft = async (instruction: string, intent: DraftIntent = 'reply') => {
@@ -1519,9 +1671,17 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
     setTranslatedInput(translateChineseReplyForCustomer(selected, input));
   };
 
+  const reportManualActive = () => {
+    if (!selected) return;
+    fetch(`/api/overseas/customers/${encodeURIComponent(selected.id)}/manual-active`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeader() },
+      body: JSON.stringify({ minutes: 10 }),
+    }).catch(() => {});
+  };
+
   const openCustomer = (id: string) => {
     setSelectedId(id);
-    updateCustomer(id, { hasUnread: false });
   };
 
   useEffect(() => {
@@ -1593,6 +1753,8 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
           onSceneDraft={(intent) => void generateManualDraft('', intent)}
           onPreviewTranslate={previewTranslate}
           isPolishing={isPolishing}
+          templates={templates}
+          onManualActive={reportManualActive}
         />
         <CustomerInfoRail
           customer={selected}
@@ -1614,6 +1776,12 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
       {toast && (
         <div className="fixed bottom-24 left-1/2 z-[70] -translate-x-1/2 rounded-full bg-slate-950 px-4 py-2 text-xs font-bold text-white shadow-lg">
           {toast}
+        </div>
+      )}
+      {undoSend && (
+        <div className="fixed bottom-24 left-1/2 z-[80] flex -translate-x-1/2 items-center gap-3 rounded-full bg-slate-950 px-4 py-2 text-xs font-bold text-white shadow-lg">
+          <span>{'\u5df2\u53d1\u9001\uff0c4 \u79d2\u5185\u53ef\u64a4\u56de'}</span>
+          <button type="button" onClick={undoQueuedSend} className="rounded-full bg-white px-2.5 py-1 text-xs font-black text-slate-950">{'\u64a4\u56de'}</button>
         </div>
       )}
     </div>

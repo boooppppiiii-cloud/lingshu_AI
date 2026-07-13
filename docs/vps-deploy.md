@@ -105,6 +105,7 @@ bash deploy/make-production-env.sh
 - Gemini / DashScope / Seedance Key：有就填，没有就先回车跳过
 
 这一步会生成 `.env.production`，里面保存线上密钥。不要把这个文件发给别人。
+其中 `TENANT_PLATFORM_APP_KEY` 用于加密每个租户的平台 App Secret 和 Token；脚本会自动生成。手动部署时可用 `openssl rand -base64 32` 生成，详见 `docs/tenant-platform-app-key.md`。
 
 ## 第 5 步：启动全部服务
 

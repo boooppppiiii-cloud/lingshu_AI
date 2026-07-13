@@ -9,6 +9,9 @@ import { testFeishu } from '../integrations/feishu.js';
 import { getShopInfo, testShopify } from '../integrations/shopify.js';
 import { isDemoMode } from '../lib/demo.js';
 import { handleMetaWebhook } from '../whatsapp/historyImport.js';
+import { requireAuth, type AuthLocals } from '../middleware/auth.js';
+import { requireAdminUser } from '../lib/demoAccounts.js';
+import { getTenantPlatformApp, type TenantPlatformAppRecord, type TenantPlatformStatus } from '../lib/tenantPlatformApps.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA = path.join(__dirname, '../../data/channels.json');
@@ -33,6 +36,53 @@ function save(channels: Channel[]) {
 }
 
 export const channelsRouter = Router();
+
+type TenantChannelStatus = 'advisor_configuring' | 'waiting_customer' | 'importing' | 'connected' | 'needs_service';
+
+const USER_CHANNELS = [
+  { id: 'whatsapp', name: 'WhatsApp Business', platform: 'meta' as const, oauth: true },
+  { id: 'instagram', name: 'Instagram', platform: 'meta' as const, oauth: true },
+  { id: 'facebook', name: 'Facebook', platform: 'meta' as const, oauth: true },
+  { id: 'youtube', name: 'YouTube', platform: 'google' as const, oauth: true },
+] as const;
+
+function tenantStatus(status?: TenantPlatformStatus): TenantChannelStatus {
+  if (status === 'active') return 'connected';
+  if (status === 'waiting_customer') return 'waiting_customer';
+  if (status === 'importing_history' || status === 'verifying') return 'importing';
+  if (status === 'token_expired' || status === 'error' || status === 'needs_permanent_token') return 'needs_service';
+  return 'advisor_configuring';
+}
+
+function lastCheckedAt(app: TenantPlatformAppRecord | null): string | null {
+  if (!app) return null;
+  const record = app as TenantPlatformAppRecord & { updated?: string; updatedAt?: string; created?: string; createdAt?: string };
+  return record.updated || record.updatedAt || record.created || record.createdAt || null;
+}
+
+channelsRouter.get('/status', requireAuth, async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const isAdmin = Boolean(await requireAdminUser(req));
+  const metaApp = await getTenantPlatformApp(tenantId, 'meta');
+  const googleApp = await getTenantPlatformApp(tenantId, 'google');
+  const platformApps = { meta: metaApp, google: googleApp };
+
+  res.json({
+    isAdmin,
+    channels: USER_CHANNELS.map(channel => {
+      const app = platformApps[channel.platform];
+      const status = tenantStatus(app?.status);
+      return {
+        id: channel.id,
+        name: channel.name,
+        oauth: channel.oauth,
+        status,
+        lastCheckedAt: lastCheckedAt(app),
+        needsAuthorization: status === 'waiting_customer',
+      };
+    }),
+  });
+});
 
 channelsRouter.get('/', (_req, res) => res.json(load()));
 

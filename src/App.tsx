@@ -16,6 +16,7 @@ import IntegrationsPage from './components/IntegrationsPage';
 import ScheduledPage from './components/ScheduledPage';
 import AdminDashboard from './components/AdminDashboard';
 import AdminDeliveryPage from './components/AdminDeliveryPage';
+import AssistLinkPage from './components/AssistLinkPage';
 
 export type Page =
   | 'strategy'
@@ -149,6 +150,8 @@ class PageErrorBoundary extends Component<
 }
 
 export default function App() {
+  if (window.location.pathname.startsWith('/assist/')) return <AssistLinkPage />;
+
   const [page, setPage] = useState<Page>(loadPage);
   const [conversation, setConversation] = useState<ConversationContext | null>(null);
   const [scriptPanelOpen, setScriptPanelOpen] = useState(false);

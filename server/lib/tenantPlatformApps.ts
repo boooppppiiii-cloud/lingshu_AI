@@ -7,7 +7,16 @@ import { sendFeishuText } from '../integrations/feishu.js';
 
 export type TenantPlatform = 'meta' | 'google';
 export type TenantTokenType = 'user_60d' | 'system_user_permanent';
-export type TenantPlatformStatus = 'pending' | 'active' | 'token_expired' | 'error';
+export type TenantPlatformStatus =
+  | 'pending'
+  | 'configuring'
+  | 'waiting_customer'
+  | 'importing_history'
+  | 'verifying'
+  | 'active'
+  | 'needs_permanent_token'
+  | 'token_expired'
+  | 'error';
 
 export interface TenantPlatformAppRecord {
   id: string;
@@ -16,11 +25,18 @@ export interface TenantPlatformAppRecord {
   app_id?: string;
   app_secret?: string;
   wa_config_id?: string;
+  business_id?: string;
+  waba_id?: string;
+  phone_number_id?: string;
+  page_id?: string;
+  ig_user_id?: string;
+  youtube_channel_id?: string;
   webhook_verify_token?: string;
   token_type?: TenantTokenType;
   access_token?: string;
   token_expires_at?: string;
   status?: TenantPlatformStatus;
+  last_checklist?: string;
   notes?: string;
 }
 
@@ -31,27 +47,45 @@ export interface PublicTenantPlatformApp {
   appId: string;
   appSecretSet: boolean;
   waConfigId: string;
+  businessId: string;
+  wabaId: string;
+  phoneNumberId: string;
+  pageId: string;
+  igUserId: string;
+  youtubeChannelId: string;
   webhookVerifyToken: string;
   webhookUrl: string;
   tokenType: TenantTokenType;
   accessTokenSet: boolean;
   tokenExpiresAt: string;
   status: TenantPlatformStatus;
+  checklist: Record<string, boolean>;
   notes: string;
 }
 
 const COL = 'tenant_platform_apps';
 const STATE_TTL_MS = 10 * 60 * 1000;
+const MISSING_TENANT_PLATFORM_APP_KEY =
+  'TENANT_PLATFORM_APP_KEY is required in production. Generate one with `openssl rand -base64 32` and set it in the server environment before starting LingShu.';
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
 
-function secretKey(): Buffer {
-  const raw = text(process.env.TENANT_PLATFORM_APP_KEY) || text(process.env.OAUTH_STATE_SECRET) || 'lingshu-local-dev-tenant-platform-key';
-  if (raw === 'lingshu-local-dev-tenant-platform-key' && process.env.NODE_ENV === 'production') {
-    console.warn('[tenant-platform-apps] TENANT_PLATFORM_APP_KEY is not set in production.');
+function assertTenantPlatformAppKey(): void {
+  if (process.env.NODE_ENV === 'production' && !text(process.env.TENANT_PLATFORM_APP_KEY)) {
+    throw new Error(MISSING_TENANT_PLATFORM_APP_KEY);
   }
+}
+
+assertTenantPlatformAppKey();
+
+function secretKey(): Buffer {
+  const tenantKey = text(process.env.TENANT_PLATFORM_APP_KEY);
+  if (process.env.NODE_ENV === 'production' && !tenantKey) {
+    throw new Error(MISSING_TENANT_PLATFORM_APP_KEY);
+  }
+  const raw = tenantKey || text(process.env.OAUTH_STATE_SECRET) || 'lingshu-local-dev-tenant-platform-key';
   return crypto.createHash('sha256').update(raw).digest();
 }
 
@@ -104,6 +138,14 @@ export function tenantWebhookUrl(req: Request, tenantId: string): string {
 }
 
 export function publicTenantPlatformApp(req: Request, app: TenantPlatformAppRecord): PublicTenantPlatformApp {
+  const checklist = (() => {
+    try {
+      const parsed = JSON.parse(text(app.last_checklist) || '{}');
+      return parsed && typeof parsed === 'object' ? parsed as Record<string, boolean> : {};
+    } catch {
+      return {};
+    }
+  })();
   return {
     id: app.id,
     tenantId: app.tenant_id,
@@ -111,12 +153,19 @@ export function publicTenantPlatformApp(req: Request, app: TenantPlatformAppReco
     appId: text(app.app_id),
     appSecretSet: Boolean(text(app.app_secret)),
     waConfigId: text(app.wa_config_id),
+    businessId: text(app.business_id),
+    wabaId: text(app.waba_id),
+    phoneNumberId: text(app.phone_number_id),
+    pageId: text(app.page_id),
+    igUserId: text(app.ig_user_id),
+    youtubeChannelId: text(app.youtube_channel_id),
     webhookVerifyToken: text(app.webhook_verify_token),
     webhookUrl: app.platform === 'meta' ? tenantWebhookUrl(req, app.tenant_id) : '',
     tokenType: app.token_type || 'user_60d',
     accessTokenSet: Boolean(text(app.access_token)),
     tokenExpiresAt: text(app.token_expires_at),
     status: app.status || 'pending',
+    checklist,
     notes: text(app.notes),
   };
 }
@@ -127,10 +176,17 @@ export async function upsertTenantPlatformApp(input: {
   appId?: string;
   appSecret?: string;
   waConfigId?: string;
+  businessId?: string;
+  wabaId?: string;
+  phoneNumberId?: string;
+  pageId?: string;
+  igUserId?: string;
+  youtubeChannelId?: string;
   tokenType?: TenantTokenType;
   accessToken?: string;
   tokenExpiresAt?: string;
   status?: TenantPlatformStatus;
+  checklist?: Record<string, boolean>;
   notes?: string;
 }): Promise<TenantPlatformAppRecord> {
   const existing = await getTenantPlatformApp(input.tenantId, input.platform);
@@ -144,8 +200,15 @@ export async function upsertTenantPlatformApp(input: {
   if (input.appId !== undefined) patch.app_id = input.appId;
   if (input.appSecret) patch.app_secret = encryptSecret(input.appSecret);
   if (input.waConfigId !== undefined) patch.wa_config_id = input.waConfigId;
+  if (input.businessId !== undefined) patch.business_id = input.businessId;
+  if (input.wabaId !== undefined) patch.waba_id = input.wabaId;
+  if (input.phoneNumberId !== undefined) patch.phone_number_id = input.phoneNumberId;
+  if (input.pageId !== undefined) patch.page_id = input.pageId;
+  if (input.igUserId !== undefined) patch.ig_user_id = input.igUserId;
+  if (input.youtubeChannelId !== undefined) patch.youtube_channel_id = input.youtubeChannelId;
   if (input.accessToken) patch.access_token = encryptSecret(input.accessToken);
   if (input.tokenExpiresAt !== undefined) patch.token_expires_at = input.tokenExpiresAt;
+  if (input.checklist !== undefined) patch.last_checklist = JSON.stringify(input.checklist);
   if (input.notes !== undefined) patch.notes = input.notes;
 
   if (existing) {

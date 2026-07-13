@@ -31,6 +31,7 @@ import { assistantThreadsRouter } from './routes/assistantThreads.js';
 import { webhookRouter } from './routes/webhooks.js';
 import { isDemoMode, demoLimits } from './lib/demo.js';
 import { initTenantPlatformTokenMonitor } from './routes/tenantPlatformTokenMonitor.js';
+import { assistLinksRouter } from './routes/assistLinks.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
@@ -114,6 +115,8 @@ app.use('/api/overseas/agents', agentChatRouter);
 app.use('/api/overseas/agents', draftReplyRouter);
 app.use('/api/overseas/customers', customerSuggestionsRouter);
 app.use('/api/overseas/channels', channelsRouter);
+app.use('/api/channels', channelsRouter);
+app.use('/api', assistLinksRouter);
 app.use('/api/overseas/youtube', youtubeRouter);
 app.use('/api/overseas/social', socialRouter);
 app.use('/api/overseas/scheduler', schedulerRouter);

@@ -20,6 +20,8 @@ export function useCustomers(): {
   customers: CustomerProfile[];
   updateCustomer: (id: string, patch: Partial<CustomerProfile>) => void;
   appendTimelineEvent: (id: string, event: TimelineEvent) => void;
+  updateTimelineEvent: (customerId: string, eventId: string, patch: Partial<TimelineEvent>) => void;
+  removeTimelineEvent: (customerId: string, eventId: string) => void;
   loading: boolean;
 } {
   const [customers, setCustomers] = useState<CustomerProfile[]>(() => CUSTOMERS.map(cloneCustomer));
@@ -73,10 +75,28 @@ export function useCustomers(): {
     )));
   }, []);
 
+  const updateTimelineEvent = useCallback((customerId: string, eventId: string, patch: Partial<TimelineEvent>) => {
+    setCustomers(list => list.map(customer => (
+      customer.id === customerId
+        ? { ...customer, timeline: customer.timeline.map(event => event.id === eventId ? { ...event, ...patch } : event) }
+        : customer
+    )));
+  }, []);
+
+  const removeTimelineEvent = useCallback((customerId: string, eventId: string) => {
+    setCustomers(list => list.map(customer => (
+      customer.id === customerId
+        ? { ...customer, timeline: customer.timeline.filter(event => event.id !== eventId) }
+        : customer
+    )));
+  }, []);
+
   return {
     customers,
     updateCustomer,
     appendTimelineEvent,
+    updateTimelineEvent,
+    removeTimelineEvent,
     loading,
   };
 }

@@ -4,6 +4,39 @@ import { getWhatsAppCustomers, getWhatsAppImportStatus } from '../whatsapp/histo
 
 export const customerSuggestionsRouter = Router();
 
+const manualActiveUntil = new Map<string, number>();
+
+const MESSAGE_TEMPLATES = [
+  {
+    name: 'greeting_opener',
+    label: '问候开场',
+    status: process.env.WHATSAPP_TEMPLATE_STATUS || 'pending',
+    body: 'Hi {{1}}, this is {{2}}. We can support wholesale supply for {{3}}. May I know your target quantity?',
+  },
+  {
+    name: 'product_update',
+    label: '新品通知',
+    status: process.env.WHATSAPP_TEMPLATE_STATUS || 'pending',
+    body: 'Hi {{1}}, we recently updated {{2}}. I can send you the latest catalog and wholesale offer.',
+  },
+  {
+    name: 'order_followup',
+    label: '订单跟进',
+    status: process.env.WHATSAPP_TEMPLATE_STATUS || 'pending',
+    body: 'Hi {{1}}, following up on your {{2}} order. We can confirm {{3}} for you today.',
+  },
+] as const;
+
+function isTemplateApproved(templateName: string) {
+  return MESSAGE_TEMPLATES.some(template => template.name === templateName && template.status === 'approved');
+}
+
+function renderTemplate(templateName: string, variables: string[]) {
+  const template = MESSAGE_TEMPLATES.find(item => item.name === templateName);
+  if (!template) return '';
+  return template.body.replace(/\{\{(\d+)}}/g, (_, index) => variables[Number(index) - 1] || '');
+}
+
 customerSuggestionsRouter.get('/', (req, res) => {
   const source = String(req.query.source || '');
   if (source && source !== 'whatsapp') {
@@ -15,6 +48,63 @@ customerSuggestionsRouter.get('/', (req, res) => {
 
 customerSuggestionsRouter.get('/whatsapp/import-status', (_req, res) => {
   res.json(getWhatsAppImportStatus());
+});
+
+customerSuggestionsRouter.get('/templates', (_req, res) => {
+  res.json({ items: MESSAGE_TEMPLATES });
+});
+
+customerSuggestionsRouter.post('/:id/manual-active', (req, res) => {
+  const customerId = String(req.params.id || '');
+  if (!customerId) {
+    res.status(400).json({ error: 'customer_id_required' });
+    return;
+  }
+  const minutes = Math.max(1, Math.min(30, Number(req.body?.minutes || 10) || 10));
+  const until = Date.now() + minutes * 60_000;
+  manualActiveUntil.set(customerId, until);
+  res.json({ ok: true, suspendedUntil: new Date(until).toISOString() });
+});
+
+customerSuggestionsRouter.post('/:id/outbox', (req, res) => {
+  const customerId = String(req.params.id || '');
+  const body = String(req.body?.body || '').trim();
+  const mode = String(req.body?.mode || 'free_text');
+  if (!customerId || !body) {
+    res.status(400).json({ error: 'customer_id_and_body_required' });
+    return;
+  }
+  if (mode === 'free_text' && req.body?.outsideWindow) {
+    res.status(409).json({ error: 'whatsapp_template_required', message: '距客户上次消息已超过24小时，请使用模板消息发送。' });
+    return;
+  }
+  if (mode === 'template') {
+    const templateName = String(req.body?.templateName || '').trim();
+    const variables = Array.isArray(req.body?.variables) ? req.body.variables.map((item: unknown) => String(item || '')) : [];
+    if (!isTemplateApproved(templateName)) {
+      res.status(409).json({ error: 'template_pending', message: '消息模板审核中，暂时不能发送超窗触达。' });
+      return;
+    }
+    res.json({
+      ok: true,
+      outboxId: `tpl_${Date.now()}`,
+      status: 'sent',
+      sentAt: new Date().toISOString(),
+      renderedBody: renderTemplate(templateName, variables) || body,
+    });
+    return;
+  }
+  const suspendedUntil = manualActiveUntil.get(customerId) || 0;
+  if (req.body?.auto === true && suspendedUntil > Date.now()) {
+    res.status(409).json({ error: 'manual_active', message: '人工正在回复，AI 自动发送已挂起，只生成草稿。' });
+    return;
+  }
+  res.json({
+    ok: true,
+    outboxId: `out_${Date.now()}`,
+    status: 'sent',
+    sentAt: new Date().toISOString(),
+  });
 });
 
 interface CustomerHint {
