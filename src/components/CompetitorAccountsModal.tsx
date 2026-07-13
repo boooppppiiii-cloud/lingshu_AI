@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { X, Plus, Loader2, Trash2, Download, Users, ExternalLink, AlertCircle } from 'lucide-react';
 import { authHeader } from '../lib/auth';
 
-type AccountPlatform = 'youtube' | 'tiktok';
+type AccountPlatform = 'youtube' | 'tiktok' | 'instagram' | 'facebook';
 
 interface CompetitorAccount {
   id: string;
@@ -21,6 +21,8 @@ interface CompetitorAccount {
 const PLATFORM_META: Record<AccountPlatform, { label: string; bg: string }> = {
   youtube: { label: 'YouTube', bg: '#ff0000' },
   tiktok: { label: 'TikTok', bg: '#010101' },
+  instagram: { label: 'Instagram', bg: '#c13584' },
+  facebook: { label: 'Facebook', bg: '#1877f2' },
 };
 
 const CRAWL_COUNT = 10;
@@ -35,6 +37,13 @@ function formatTime(iso: string): string {
 async function readError(r: Response, fallback: string): Promise<string> {
   const data = await r.json().catch(() => ({})) as { error?: string };
   return data.error || fallback;
+}
+
+function accountPlaceholder(platform: AccountPlatform): string {
+  if (platform === 'youtube') return 'https://www.youtube.com/@handle';
+  if (platform === 'tiktok') return 'https://www.tiktok.com/@user';
+  if (platform === 'instagram') return 'https://www.instagram.com/username';
+  return 'https://www.facebook.com/page';
 }
 
 export default function CompetitorAccountsModal({
@@ -180,13 +189,15 @@ export default function CompetitorAccountsModal({
                 >
                   <option value="youtube">YouTube</option>
                   <option value="tiktok">TikTok</option>
+                  <option value="instagram">Instagram</option>
+                  <option value="facebook">Facebook</option>
                 </select>
                 <input
                   type="text"
                   value={url}
                   onChange={e => setUrl(e.target.value)}
                   onKeyDown={e => { if (e.key === 'Enter' && !adding) void addAccount(); }}
-                  placeholder={platform === 'youtube' ? 'https://www.youtube.com/@handle' : 'https://www.tiktok.com/@user'}
+                  placeholder={accountPlaceholder(platform)}
                   className="h-11 w-full rounded-xl border border-border bg-white px-3.5 text-sm text-text-primary placeholder:text-text-muted outline-none focus:border-accent"
                 />
                 <button
@@ -219,7 +230,7 @@ export default function CompetitorAccountsModal({
                 <div className="flex h-40 flex-col items-center justify-center gap-2 text-center">
                   <Users size={26} className="text-text-muted" />
                   <p className="text-sm font-semibold text-text-primary">还没有对标账号</p>
-                  <p className="text-xs text-text-muted">在上方粘贴一个 YouTube / TikTok 主页链接开始</p>
+                  <p className="text-xs text-text-muted">在上方粘贴一个 YouTube / TikTok / Instagram / Facebook 主页链接开始</p>
                 </div>
               ) : (
                 <ul className="space-y-2.5">

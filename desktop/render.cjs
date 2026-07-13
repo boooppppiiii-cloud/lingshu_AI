@@ -1,22 +1,120 @@
 /* eslint-disable */
 /**
  * 本机原生 ffmpeg 合成器（桌面端）。
- * 按服务器下发的 manifest 把「素材片段 → 拼接 → 烧录封面标题/口播 Hook → 混入 BGM」
+ * 按服务器下发的 manifest 把「素材片段 → 拼接 → 烧录字幕 → 混入 BGM」
  * 合成一条真实 MP4。素材 / BGM 通过 manifest 里的 url 现拉到临时目录再喂给 ffmpeg。
  *
  * manifest 字段缺失时优雅退化：
  *   - 没有素材片段 → 用纯色背景兜底，仍出片
  *   - 没有 BGM     → 用静音轨
- *   - 没有字体     → 不烧字
  * 等 cover.url / voiceover.url 接入后，再把封面图叠层、把配音混进音轨即可，签名不变。
  */
-const { spawn } = require('node:child_process');
+const { execFile, spawn } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
 let ffmpegPath = null;
 try { ffmpegPath = require('ffmpeg-static'); } catch { ffmpegPath = null; }
+
+function execFileAsync(file, args, timeout = 8000) {
+  return new Promise((resolve, reject) => {
+    execFile(file, args, { timeout }, (err, stdout, stderr) => {
+      if (err) reject(new Error(String(stderr || err.message || err)));
+      else resolve(String(stdout || ''));
+    });
+  });
+}
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function openMacCapcutApp() {
+  if (process.platform !== 'darwin') return false;
+  const appNames = ['剪映专业版', '剪映', 'CapCut', 'CapCut Global', 'JianyingPro', 'Jianying', 'VideoFusion-macOS'];
+  const bundleIds = [
+    'com.lemon.lvpro',
+    'com.lemon.lvpro-intl',
+    'com.lemon.lvoverseas',
+    'com.lemon.capcut',
+    'com.bytedance.CapCut',
+    'com.bytedance.capcut',
+  ];
+  for (const appName of appNames) {
+    try {
+      await execFileAsync('open', ['-a', appName], 5000);
+      return true;
+    } catch { /* try next */ }
+  }
+  for (const bundleId of bundleIds) {
+    try {
+      await execFileAsync('open', ['-b', bundleId], 5000);
+      return true;
+    } catch { /* try next */ }
+  }
+  return false;
+}
+
+async function clickJianyingCreateDraft() {
+  if (process.platform !== 'darwin') return { ok: false, error: '当前系统不支持自动点击剪映创建草稿' };
+  const script = `
+set appNames to {"剪映专业版", "剪映", "CapCut", "JianyingPro", "VideoFusion-macOS"}
+set targetProcess to ""
+tell application "System Events"
+  repeat with appName in appNames
+    if exists process (appName as text) then
+      set targetProcess to appName as text
+      exit repeat
+    end if
+  end repeat
+end tell
+if targetProcess is "" then error "未找到正在运行的剪映/CapCut 进程"
+tell application targetProcess to activate
+delay 1
+tell application "System Events"
+  tell process targetProcess
+    repeat 25 times
+      if exists button "开始创作" of window 1 then
+        click button "开始创作" of window 1
+        return "created"
+      end if
+      if exists UI element "开始创作" of window 1 then
+        click UI element "开始创作" of window 1
+        return "created"
+      end if
+      if exists static text "开始创作" of window 1 then
+        click static text "开始创作" of window 1
+        return "created"
+      end if
+      delay 0.2
+    end repeat
+    if exists window 1 then
+      set winPos to position of window 1
+      set winSize to size of window 1
+      set clickX to ((item 1 of winPos) + ((item 1 of winSize) * 0.56)) as integer
+      set clickY to ((item 2 of winPos) + 120) as integer
+      click at {clickX, clickY}
+      return "created"
+    end if
+  end tell
+end tell
+error "已打开剪映，但没有找到「开始创作」按钮"
+`;
+  try {
+    const stdout = await execFileAsync('osascript', ['-e', script], 12000);
+    return { ok: /created/.test(stdout) };
+  } catch (err) {
+    const message = String(err && err.message || err);
+    const needsPermission = /not allowed assistive access|辅助|System Events|not authorized|1002|1743/i.test(message);
+    return {
+      ok: false,
+      error: needsPermission
+        ? '已打开剪映，但系统未授权自动点击。请在 macOS「系统设置 > 隐私与安全性 > 辅助功能」允许 Codex/Electron/终端控制电脑后重试。'
+        : message.replace(/\s+/g, ' ').trim(),
+    };
+  }
+}
 
 /** 画面比例 → 分辨率 */
 function resolution(ratio) {
@@ -26,46 +124,6 @@ function resolution(ratio) {
     case '9:16':
     default: return [1080, 1920];
   }
-}
-
-/** 找一个存在的系统字体给 drawtext 用；优先 CJK 字体，找不到则返回 null（退化为不烧字） */
-function findFont() {
-  const candidates = [
-    '/System/Library/Fonts/Supplemental/Arial Unicode.ttf', // mac，含中文
-    '/System/Library/Fonts/PingFang.ttc',
-    '/System/Library/Fonts/Supplemental/Arial.ttf',
-    '/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc', // linux CJK
-    '/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf',
-    'C:\\Windows\\Fonts\\msyh.ttc',                            // windows 微软雅黑
-    'C:\\Windows\\Fonts\\arial.ttf',
-  ];
-  return candidates.find(p => { try { return fs.existsSync(p); } catch { return false; } }) || null;
-}
-
-/** 取脚本第一行非标签文本作为 Hook */
-function firstHook(script) {
-  const lines = String(script || '').split('\n').map(s => s.trim());
-  for (const l of lines) {
-    if (l && !/^\[.*\]$/.test(l) && !/^scene\s/i.test(l)) return l;
-  }
-  return lines.find(Boolean) || '';
-}
-
-/** 构造 drawtext 片段（用 textfile 规避特殊字符转义） */
-function drawtext({ font, textfile, fontsize, y }) {
-  const parts = [
-    font ? `fontfile='${font.replace(/'/g, "\\'")}'` : null,
-    `textfile='${textfile.replace(/'/g, "\\'")}'`,
-    'fontcolor=white',
-    `fontsize=${fontsize}`,
-    'x=(w-text_w)/2',
-    `y=${y}`,
-    'line_spacing=12',
-    'box=1',
-    'boxcolor=black@0.38',
-    'boxborderw=22',
-  ].filter(Boolean);
-  return `drawtext=${parts.join(':')}`;
 }
 
 const IMAGE_RE = /\.(jpe?g|png|webp|gif|bmp|svg)(\?|$)/i;
@@ -82,6 +140,11 @@ function safeName(name) {
   return String(name || 'asset').replace(/[\\/:*?"<>|\n\r]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 80) || 'asset';
 }
 
+function finiteNumber(value, fallback) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : fallback;
+}
+
 function srtTime(sec) {
   const n = Math.max(0, Number(sec) || 0);
   const h = Math.floor(n / 3600);
@@ -91,9 +154,68 @@ function srtTime(sec) {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')},${String(ms).padStart(3, '0')}`;
 }
 
+function assTime(sec) {
+  const n = Math.max(0, Number(sec) || 0);
+  const h = Math.floor(n / 3600);
+  const m = Math.floor((n % 3600) / 60);
+  const s = Math.floor(n % 60);
+  const cs = Math.floor((n - Math.floor(n)) * 100);
+  return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`;
+}
+
+function assText(value) {
+  return String(value || '')
+    .replace(/\r?\n+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .replace(/[{}]/g, '')
+    .trim();
+}
+
+function filterPath(value) {
+  return String(value || '')
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/:/g, '\\:')
+    .replace(/,/g, '\\,');
+}
+
+function cuesToAss(cues, width, height) {
+  const valid = (Array.isArray(cues) ? cues : [])
+    .map(cue => ({
+      start: Math.max(0, Number(cue && cue.start) || 0),
+      end: Math.max(0, Number(cue && cue.end) || 0),
+      text: assText(cue && cue.text),
+    }))
+    .filter(cue => cue.text && cue.end > cue.start);
+  if (!valid.length) return '';
+
+  const fontSize = Math.max(34, Math.round(width / 22));
+  const marginV = Math.round(height / 3);
+  const events = valid.map(cue =>
+    `Dialogue: 0,${assTime(cue.start)},${assTime(cue.end)},Default,,0,0,0,,${cue.text}`
+  );
+  return [
+    '[Script Info]',
+    'ScriptType: v4.00+',
+    `PlayResX: ${width}`,
+    `PlayResY: ${height}`,
+    'WrapStyle: 2',
+    'ScaledBorderAndShadow: yes',
+    '',
+    '[V4+ Styles]',
+    'Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding',
+    `Style: Default,Arial Unicode MS,${fontSize},&H00FFFFFF,&H00FFFFFF,&HAA000000,&H66000000,-1,0,0,0,100,100,0,0,1,4,1,2,80,80,${marginV},1`,
+    '',
+    '[Events]',
+    'Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text',
+    ...events,
+    '',
+  ].join('\n');
+}
+
 function cuesToSrt(cues) {
   return (Array.isArray(cues) ? cues : []).map((cue, i) => {
-    const text = [cue.text, cue.zh].filter(Boolean).join('\n');
+    const text = [cue.text, cue.zh].filter(Boolean).map(assText).join('\n');
     return `${i + 1}\n${srtTime(cue.start)} --> ${srtTime(cue.end)}\n${text}\n`;
   }).join('\n');
 }
@@ -122,6 +244,31 @@ async function exportCapcutPackage(payload) {
         copied.push({ ...m, localFile: null, error: 'no source url' });
       }
     }
+    const audioAssets = {};
+    const bgm = payload && payload.bgm;
+    if (bgm && bgm.url) {
+      const ext = path.extname(String(bgm.url || '').split('?')[0]) || '.mp3';
+      const file = `bgm-${safeName(bgm.name || bgm.id || 'background')}${ext}`;
+      const dest = path.join(assetDir, file);
+      try {
+        await downloadTo(bgm.url, dest);
+        audioAssets.bgm = { ...bgm, localFile: `assets/${file}` };
+      } catch {
+        audioAssets.bgm = { ...bgm, localFile: null, error: 'download failed' };
+      }
+    }
+    const voiceover = payload && payload.voiceover;
+    if (voiceover && voiceover.url) {
+      const ext = path.extname(String(voiceover.url || '').split('?')[0]) || '.wav';
+      const file = `voiceover${ext}`;
+      const dest = path.join(assetDir, file);
+      try {
+        await downloadTo(voiceover.url, dest);
+        audioAssets.voiceover = { ...voiceover, localFile: `assets/${file}` };
+      } catch {
+        audioAssets.voiceover = { ...voiceover, localFile: null, error: 'download failed' };
+      }
+    }
 
     const timeline = {
       app: 'lingshu-ai',
@@ -131,22 +278,35 @@ async function exportCapcutPackage(payload) {
       language: payload && payload.language || 'en',
       coverTitle: payload && payload.coverTitle || '',
       materials: copied,
+      audio: audioAssets,
       subtitles: payload && payload.cues || [],
       script: payload && payload.script || '',
     };
     fs.writeFileSync(path.join(root, 'timeline.json'), JSON.stringify(timeline, null, 2), 'utf8');
     fs.writeFileSync(path.join(root, 'subtitles.srt'), cuesToSrt(payload && payload.cues), 'utf8');
     fs.writeFileSync(path.join(root, 'README.txt'), [
-      '灵枢 AI 剪映精修包',
+      '灵枢 AI 剪映精修包（手动导入）',
       '',
+      '说明：当前版本会导出素材包和时间线说明，不会在剪映里自动创建新草稿。',
       '1. 打开剪映/CapCut，新建项目。',
       '2. 导入 assets 文件夹内的素材，按 timeline.json 的顺序铺到时间线。',
       '3. 按每个素材的 edit.trimStart / edit.trimEnd / edit.speed / edit.transition 做裁剪、变速和转场。',
-      '4. 导入 subtitles.srt 作为字幕轨。',
-      '5. 按 coverTitle/script 做标题、口播和卡点微调。',
+      '4. 如果 timeline.json 里 audio.bgm / audio.voiceover 有 localFile，把对应音频拖到音频轨，并按 volume 百分比设置音量。',
+      '5. 导入 subtitles.srt 作为字幕轨。',
+      '6. 按 coverTitle/script 做标题、口播和卡点微调。',
     ].join('\n'), 'utf8');
 
-    return { ok: true, dir: root };
+    const appOpened = await openMacCapcutApp();
+    let draftCreated = false;
+    let createDraftError = '';
+    if (appOpened) {
+      await delay(1600);
+      const draft = await clickJianyingCreateDraft();
+      draftCreated = !!draft.ok;
+      createDraftError = draft.error || '';
+    }
+
+    return { ok: true, dir: root, appOpened, draftCreated, createDraftError };
   } catch (err) {
     return { ok: false, error: String(err && err.message || err) };
   }
@@ -156,7 +316,7 @@ async function exportCapcutPackage(payload) {
  * 合成成片。
  * @param {object} manifest 服务器下发的渲染清单
  * @param {(pct:number)=>void} onProgress 进度回调（0-100）
- * @param {string} [outDir] 输出目录，默认系统临时目录
+ * @param {string} [outDir] 输出目录，默认 ~/Downloads/lingshu-ai-exports
  * @returns {Promise<{ok:boolean, outputPath?:string, error?:string}>}
  */
 async function composite(manifest, onProgress = () => {}, outDir) {
@@ -167,9 +327,9 @@ async function composite(manifest, onProgress = () => {}, outDir) {
   const spec = (manifest && manifest.spec) || {};
   const duration = Math.max(1, Number(spec.duration) || 20);
   const [w, h] = resolution(spec.ratio);
-  const font = findFont();
   const jobId = (manifest && manifest.jobId) || `job-${Date.now()}`;
-  const dir = outDir || os.tmpdir();
+  const dir = outDir || path.join(os.homedir(), 'Downloads', 'lingshu-ai-exports');
+  fs.mkdirSync(dir, { recursive: true });
   const outputPath = path.join(dir, `studio-${jobId}.mp4`);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-'));
 
@@ -181,7 +341,7 @@ async function composite(manifest, onProgress = () => {}, outDir) {
       const u = timeline[i].url;
       const ext = (u.split('?')[0].split('.').pop() || 'mp4').toLowerCase();
       const dest = path.join(tmp, `clip${i}.${ext}`);
-      try { await downloadTo(u, dest); localClips.push({ file: dest, image: IMAGE_RE.test(u) }); } catch { /* 跳过失败片段 */ }
+      try { await downloadTo(u, dest); localClips.push({ ...timeline[i], file: dest, image: IMAGE_RE.test(u) }); } catch { /* 跳过失败片段 */ }
     }
 
     let bgmFile = null;
@@ -202,7 +362,7 @@ async function composite(manifest, onProgress = () => {}, outDir) {
       } catch { voFile = null; }
     }
 
-    if (process.env.RENDER_DEBUG) console.error(`[render] downloaded clips=${localClips.length} bgm=${bgmFile ? 'yes' : 'no'}`);
+    if (process.env.RENDER_DEBUG) console.error(`[render] downloaded clips=${localClips.length} bgm=${bgmFile ? 'yes' : 'no'} voiceover=${voFile ? 'yes' : 'no'}`);
 
     // 2) 组装 ffmpeg 参数
     const n = localClips.length;
@@ -211,14 +371,22 @@ async function composite(manifest, onProgress = () => {}, outDir) {
     let vlabel;
 
     if (n > 0) {
-      const seg = Math.max(1, duration / n);
       localClips.forEach(c => {
-        if (c.image) args.push('-loop', '1', '-t', seg.toFixed(3), '-i', c.file);
-        else args.push('-stream_loop', '-1', '-t', seg.toFixed(3), '-i', c.file); // 短片循环填满本段
+        const target = Math.max(0.5, finiteNumber(c.targetDuration, duration / n));
+        if (c.image) args.push('-loop', '1', '-t', target.toFixed(3), '-i', c.file);
+        else args.push('-i', c.file);
       });
-      localClips.forEach((_, i) => {
+      localClips.forEach((c, i) => {
+        const target = Math.max(0.5, finiteNumber(c.targetDuration, duration / n));
+        const trimStart = Math.max(0, finiteNumber(c.trimStart, 0));
+        const rawTrimEnd = finiteNumber(c.trimEnd, trimStart + target);
+        const trimEnd = Math.max(trimStart + 0.1, rawTrimEnd);
+        const speed = Math.min(4, Math.max(0.25, finiteNumber(c.speed, 1)));
         // 先 scale 到「不超过目标」再居中铺底，规避 1×1 等退化尺寸把缩放器拖死；不足处用黑边 pad 填满
-        filters.push(`[${i}:v]scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:color=0x141A2E,setsar=1,fps=30,format=yuv420p[v${i}]`);
+        const source = c.image
+          ? `[${i}:v]trim=duration=${target.toFixed(3)},setpts=PTS-STARTPTS`
+          : `[${i}:v]trim=start=${trimStart.toFixed(3)}:end=${trimEnd.toFixed(3)},setpts=(PTS-STARTPTS)/${speed.toFixed(3)},tpad=stop_mode=clone:stop_duration=${target.toFixed(3)},trim=duration=${target.toFixed(3)},setpts=PTS-STARTPTS`;
+        filters.push(`${source},scale=${w}:${h}:force_original_aspect_ratio=decrease,pad=${w}:${h}:(ow-iw)/2:(oh-ih)/2:color=0x141A2E,setsar=1,fps=30,format=yuv420p[v${i}]`);
       });
       filters.push(`${localClips.map((_, i) => `[v${i}]`).join('')}concat=n=${n}:v=1:a=0[vcat]`);
       vlabel = '[vcat]';
@@ -236,24 +404,28 @@ async function composite(manifest, onProgress = () => {}, outDir) {
     let voIdx = -1;
     if (voFile) { args.push('-i', voFile); voIdx = bgmIdx + 1; }
 
-    // 3) 烧录标题 + Hook
-    const title = (manifest && manifest.cover && manifest.cover.title) || '';
-    const hook = firstHook(manifest && manifest.script);
-    const titleFile = path.join(tmp, 'title.txt');
-    const hookFile = path.join(tmp, 'hook.txt');
-    fs.writeFileSync(titleFile, title, 'utf8');
-    fs.writeFileSync(hookFile, hook, 'utf8');
-    const dt = [];
-    if (title) dt.push(drawtext({ font, textfile: titleFile, fontsize: Math.round(w / 16), y: 'h*0.10' }));
-    if (hook) dt.push(drawtext({ font, textfile: hookFile, fontsize: Math.round(w / 26), y: 'h*0.80' }));
-    filters.push(`${vlabel}${dt.length ? dt.join(',') : 'null'}[vout]`);
+    // 3) 烧录口播字幕。每条 cue 单行显示，位置在画面下方 1/3。
+    const subtitleCues = manifest && manifest.subtitles && manifest.subtitles.mode !== 'off'
+      ? manifest.subtitles.cues
+      : [];
+    const ass = cuesToAss(subtitleCues, w, h);
+    if (ass) {
+      const assFile = path.join(tmp, 'subtitles.ass');
+      fs.writeFileSync(assFile, ass, 'utf8');
+      filters.push(`${vlabel}subtitles='${filterPath(assFile)}'[vout]`);
+    } else {
+      filters.push(`${vlabel}null[vout]`);
+    }
 
-    // 4) 音轨混音：有配音时把 BGM 压低垫底，配音满音量叠上
-    const vol = Math.min(1, Math.max(0, (Number(spec.bgmVol) || 35) / 100));
+    // 4) 音轨混音：有配音时把 BGM 压低垫底，配音按用户设置音量叠上
+    const rawBgmVol = Number(spec.bgmVol);
+    const rawVoiceVol = Number(spec.voiceVol);
+    const vol = Math.min(1, Math.max(0, (Number.isFinite(rawBgmVol) ? rawBgmVol : 35) / 100));
+    const voiceVol = Math.min(1.5, Math.max(0, (Number.isFinite(rawVoiceVol) ? rawVoiceVol : 100) / 100));
     if (voFile) {
       const duck = (vol * 0.5).toFixed(2); // 有人声时 BGM 再降一档
       filters.push(`[${bgmIdx}:a]volume=${duck},aformat=sample_rates=44100:channel_layouts=stereo[abgm]`);
-      filters.push(`[${voIdx}:a]volume=1.0,aformat=sample_rates=44100:channel_layouts=stereo[avo]`);
+      filters.push(`[${voIdx}:a]volume=${voiceVol.toFixed(2)},aformat=sample_rates=44100:channel_layouts=stereo[avo]`);
       filters.push(`[abgm][avo]amix=inputs=2:duration=longest:dropout_transition=2:normalize=0[aout]`);
     } else {
       filters.push(`[${bgmIdx}:a]volume=${vol.toFixed(2)},aformat=sample_rates=44100:channel_layouts=stereo[aout]`);

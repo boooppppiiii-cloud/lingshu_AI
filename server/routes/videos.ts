@@ -50,6 +50,22 @@ interface CrawledVideo {
   source?: string;
 }
 
+type ContentFormat = 'video' | 'image';
+
+interface CrawledImagePost {
+  platform: Platform;
+  title: string;
+  sourceUrl: string;
+  thumbnailUrl: string;
+  views: string;
+  tags: string[];
+  uploadedAt?: string;
+  author?: string;
+  likes?: string;
+  comments?: string;
+  source?: string;
+}
+
 interface Material {
   id: string;
   name: string;
@@ -154,6 +170,29 @@ function isPublicTestTenantVideo(record: Record<string, unknown>): boolean {
   const analysis = videoAnalysisOf(record);
   if (analysis.userVisible === false) return false;
   return isVideoLevelAnalysis(analysis);
+}
+
+function recordContentFormat(record: Record<string, unknown>): ContentFormat {
+  const analysis = videoAnalysisOf(record);
+  return analysis.contentFormat === 'image' ? 'image' : 'video';
+}
+
+function isPublicImageRecord(record: Record<string, unknown>): boolean {
+  const analysis = videoAnalysisOf(record);
+  return analysis.contentFormat === 'image'
+    && analysis.userVisible !== false
+    && isValidImagePostRecord(record);
+}
+
+function isValidImagePostRecord(record: Record<string, unknown>): boolean {
+  const sourceUrl = String(record.sourceUrl || '').trim();
+  const thumbnailUrl = String(record.thumbnailUrl || '').trim();
+  if (!sourceUrl || !thumbnailUrl) return false;
+  if (/\/(?:search|explore\/tags)\b/i.test(sourceUrl)) return false;
+  const platform = (record.platform || inferPlatformFromUrl(sourceUrl)) as Platform;
+  if (platform === 'instagram') return /\/p\//i.test(sourceUrl);
+  if (platform === 'facebook') return !/\/(?:watch|reel|videos)\b/i.test(sourceUrl);
+  return true;
 }
 
 function videoSuccessVisibilityPatch(): Record<string, unknown> {
@@ -556,6 +595,165 @@ videosRouter.post('/crawl', async (req, res) => {
     res.status(502).json({ error: e instanceof Error ? e.message : 'Crawl failed' });
   }
 });
+
+// ─── POST /videos/crawl-image-posts ──────────────────────────────────────────
+// Body: { platform?: 'youtube' | 'tiktok' | 'facebook' | 'instagram', keyword?: string, limit?: number }
+videosRouter.post('/crawl-image-posts', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const { platform = 'instagram', keyword = DEFAULT_CRAWL_KEYWORDS, limit = 5 } = req.body as {
+    platform?: Platform;
+    keyword?: string;
+    limit?: number;
+  };
+
+  if (!['youtube', 'tiktok', 'facebook', 'instagram'].includes(platform)) {
+    res.status(400).json({ error: 'Only youtube, tiktok, facebook and instagram are supported by this crawler task' });
+    return;
+  }
+
+  try {
+    const result = await crawlImagePostsForTenant({
+      tenantId,
+      platform,
+      keyword,
+      limit,
+    });
+    res.json(result);
+  } catch (e) {
+    console.error('[videos] image post crawl failed:', e);
+    res.status(502).json({ error: e instanceof Error ? e.message : 'Image post crawl failed' });
+  }
+});
+
+async function crawlImagePostsForTenant(input: {
+  tenantId: string;
+  platform: Platform;
+  keyword: string;
+  limit: number;
+}): Promise<CrawlVideosResult> {
+  const target = Math.min(30, Math.max(1, Number(input.limit) || 5));
+  const keyword = String(input.keyword || DEFAULT_CRAWL_KEYWORDS).trim();
+  let items: CrawledImagePost[] = [];
+  let crawlerMessage = '';
+  const crawlerSource = `${input.platform}-image-search`;
+
+  try {
+    const safeLimit = Math.max(target * 4, target, 12);
+    if (input.platform === 'instagram') {
+      items = await crawlInstagramImagePostsApify(keyword, safeLimit);
+    } else if (input.platform === 'tiktok') {
+      items = await crawlTikTokImagePostsApify(keyword, safeLimit);
+    } else if (input.platform === 'facebook') {
+      items = await crawlFacebookImagePostsApify(keyword, safeLimit);
+    } else if (input.platform === 'youtube') {
+      items = await crawlYouTubeCommunityPostsPublicSearch(keyword, safeLimit);
+    }
+    items = items
+      .filter(item => item.platform === input.platform && isPlatformUrl(item.sourceUrl, input.platform))
+      .filter(item => imagePostRelevant(item, keyword));
+  } catch (e) {
+    crawlerMessage = e instanceof Error
+      ? `${input.platform} 图文采集未找到可入库内容：${e.message}`
+      : `${input.platform} 图文采集未找到可入库内容`;
+    console.warn(`[videos] ${input.platform} image post crawl degraded:`, e);
+    items = [];
+  }
+
+  const seen = new Set<string>();
+  const orderedItems = items
+    .filter(item => {
+      if (seen.has(item.sourceUrl)) return false;
+      seen.add(item.sourceUrl);
+      return true;
+    })
+    .slice(0, target);
+
+  let imported = 0;
+  let skipped = 0;
+  let skippedExisting = 0;
+  const records: unknown[] = [];
+  const existingRecords: unknown[] = [];
+
+  for (const item of orderedItems) {
+    const existingByUrl = await store.list(COL, {
+      where: { tenantId: input.tenantId, sourceUrl: item.sourceUrl },
+      page: 1,
+      perPage: 1,
+    });
+    const existingRecord = existingByUrl.items[0] as Record<string, unknown> | undefined;
+    if (existingRecord) {
+      skipped += 1;
+      skippedExisting += 1;
+      const existingAnalysis = parseJsonRecord<Record<string, unknown>>(existingRecord.aiAnalysis, {});
+      await store.update(COL, String(existingRecord.id), {
+        thumbnailUrl: item.thumbnailUrl || String(existingRecord.thumbnailUrl || ''),
+        aiAnalysis: JSON.stringify({
+          ...existingAnalysis,
+          contentFormat: 'image',
+          views: item.views || existingAnalysis.views,
+          uploadedAt: item.uploadedAt || existingAnalysis.uploadedAt,
+          keyword,
+          crawlRule: '图文检索',
+          importedAt: existingAnalysis.importedAt || new Date().toISOString(),
+        }),
+      });
+      existingRecords.push({ ...existingRecord, thumbnailUrl: item.thumbnailUrl || existingRecord.thumbnailUrl });
+      continue;
+    }
+
+    const record = await store.create(COL, {
+      tenantId: input.tenantId,
+      platform: item.platform,
+      title: item.title,
+      thumbnailUrl: item.thumbnailUrl,
+      videoFileId: '',
+      duration: 0,
+      sourceUrl: item.sourceUrl,
+      tags: JSON.stringify(item.tags),
+      aiAnalysis: JSON.stringify({
+        contentFormat: 'image',
+        source: item.source || crawlerSource,
+        views: item.views,
+        uploadedAt: item.uploadedAt,
+        author: item.author,
+        likes: item.likes,
+        comments: item.comments,
+        gemini: imageMetadataFallbackAnalysis(item),
+        analysisSource: 'image-metadata',
+        analysisQuality: 'metadata',
+        keyword,
+        crawlRule: '图文检索',
+        importedAt: new Date().toISOString(),
+      }),
+      status: 'analyzed' as VideoStatus,
+      crawledAt: new Date().toISOString(),
+    });
+    if (record) {
+      imported += 1;
+      records.push(record);
+      void persistThumbnailIfExpiring(String((record as Record<string, unknown>).id), item.thumbnailUrl).catch(() => {});
+    }
+    if (imported >= target) break;
+  }
+
+  const resultRecords = [...records, ...existingRecords].slice(0, target);
+  return {
+    platform: input.platform,
+    keyword,
+    imported,
+    refreshed: 0,
+    skipped,
+    skippedExisting,
+    returnedExisting: Math.max(0, resultRecords.length - records.length),
+    requested: target,
+    total: items.length,
+    source: crawlerSource,
+    message: crawlerMessage || (resultRecords.length
+      ? `图文采集完成：返回 ${resultRecords.length} 条（新增 ${imported} 条，库内已有 ${Math.max(0, resultRecords.length - records.length)} 条）`
+      : `图文采集完成：未找到可入库图文，请换关键词或平台账号主页`),
+    items: resultRecords.map(record => publicVideoRecord(record as Record<string, unknown>)),
+  };
+}
 
 export async function crawlVideosForTenant(input: CrawlVideosInput): Promise<CrawlVideosResult> {
   const tenantId = input.tenantId;
@@ -1084,6 +1282,7 @@ async function listPublicVideosForTenant(input: {
   perPage: number;
   platform?: string;
   status?: string;
+  contentFormat?: ContentFormat;
 }): Promise<{
   items: Record<string, unknown>[];
   totalItems: number;
@@ -1092,15 +1291,31 @@ async function listPublicVideosForTenant(input: {
   perPage: number;
 }> {
   const where = videoListWhere(input.tenantId, input.platform, input.status);
+  const contentFormat = input.contentFormat || 'video';
   const testTenant = await isTestTenantId(input.tenantId);
   if (!testTenant) {
-    const result = await store.list<Record<string, unknown>>(COL, {
-      where,
-      sort: '-crawledAt',
+    if (contentFormat === 'video') {
+      const result = await store.list<Record<string, unknown>>(COL, {
+        where,
+        sort: '-crawledAt',
+        page: input.page,
+        perPage: input.perPage,
+      });
+      const items = result.items.filter(record => recordContentFormat(record) === 'video');
+      return { ...result, items: items.map(publicVideoRecord) };
+    }
+
+    const visible = await scanRecordsByContentFormat(where, contentFormat);
+    const totalItems = visible.length;
+    const totalVisiblePages = Math.max(1, Math.ceil(totalItems / input.perPage));
+    const start = (input.page - 1) * input.perPage;
+    return {
+      items: visible.slice(start, start + input.perPage).map(publicVideoRecord),
+      totalItems,
+      totalPages: totalVisiblePages,
       page: input.page,
       perPage: input.perPage,
-    });
-    return { ...result, items: result.items.map(publicVideoRecord) };
+    };
   }
 
   const visible: Record<string, unknown>[] = [];
@@ -1118,7 +1333,7 @@ async function listPublicVideosForTenant(input: {
         perPage: 100,
       });
       for (const record of result.items) {
-        if (!isPublicTestTenantVideo(record)) continue;
+        if (contentFormat === 'image' ? !isPublicImageRecord(record) : !isPublicTestTenantVideo(record)) continue;
         const sourceUrl = String(record.sourceUrl || '').trim();
         if (sourceUrl && seenSourceUrls.has(sourceUrl)) continue;
         if (sourceUrl) seenSourceUrls.add(sourceUrl);
@@ -1152,7 +1367,7 @@ async function listPublicVideosForTenant(input: {
       perPage: 100,
     });
     for (const record of result.items) {
-      if (!isPublicTestTenantVideo(record)) continue;
+      if (contentFormat === 'image' ? !isPublicImageRecord(record) : !isPublicTestTenantVideo(record)) continue;
       if (String(record.tenantId || '') === input.tenantId) continue;
       const sourceUrl = String(record.sourceUrl || '').trim();
       if (sourceUrl && seenSourceUrls.has(sourceUrl)) continue;
@@ -1176,29 +1391,59 @@ async function listPublicVideosForTenant(input: {
   };
 }
 
+async function scanRecordsByContentFormat(where: Record<string, string> | undefined, contentFormat: ContentFormat): Promise<Record<string, unknown>[]> {
+  const out: Record<string, unknown>[] = [];
+  const seenSourceUrls = new Set<string>();
+  let page = 1;
+  let totalPages = 1;
+  do {
+    const result = await store.list<Record<string, unknown>>(COL, {
+      where,
+      sort: '-crawledAt',
+      page,
+      perPage: 100,
+    });
+    for (const record of result.items) {
+      if (recordContentFormat(record) !== contentFormat) continue;
+      if (contentFormat === 'image' && !isValidImagePostRecord(record)) continue;
+      const sourceUrl = String(record.sourceUrl || '').trim();
+      if (sourceUrl && seenSourceUrls.has(sourceUrl)) continue;
+      if (sourceUrl) seenSourceUrls.add(sourceUrl);
+      out.push(record);
+    }
+    totalPages = result.totalPages || 1;
+    page += 1;
+  } while (page <= totalPages && page <= 50);
+  return out;
+}
+
 // ─── GET /videos ──────────────────────────────────────────────────────────────
-// Query: page, perPage, platform, status
+// Query: page, perPage, platform, status, contentFormat(video|image)
 videosRouter.get('/', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
   await purgeLegacyFakeVideos();
-  const { page = '1', perPage = '20', platform, status } = req.query as Record<string, string>;
+  const { page = '1', perPage = '20', platform, status, contentFormat: rawContentFormat = 'video' } = req.query as Record<string, string>;
   const pageNumber = Math.max(1, Number(page) || 1);
   const perPageNumber = Math.min(100, Math.max(1, Number(perPage) || 20));
+  const contentFormat: ContentFormat = rawContentFormat === 'image' ? 'image' : 'video';
 
   const result = await listPublicVideosForTenant({
     tenantId,
     platform,
     status,
+    contentFormat,
     page: pageNumber,
     perPage: perPageNumber,
   });
 
-  void enqueueCrawledRecordsForAnalysis(result.items).catch((e) => {
-    console.warn('[videos] opportunistic analysis enqueue failed:', e instanceof Error ? e.message : e);
-  });
-  void backfillMissingCrawledMedia(result.items).catch((e) => {
-    console.warn('[videos] opportunistic media backfill failed:', e instanceof Error ? e.message : e);
-  });
+  if (contentFormat === 'video') {
+    void enqueueCrawledRecordsForAnalysis(result.items).catch((e) => {
+      console.warn('[videos] opportunistic analysis enqueue failed:', e instanceof Error ? e.message : e);
+    });
+    void backfillMissingCrawledMedia(result.items).catch((e) => {
+      console.warn('[videos] opportunistic media backfill failed:', e instanceof Error ? e.message : e);
+    });
+  }
 
   res.json(result);
 });
@@ -2504,6 +2749,353 @@ function apifyInstagramTags(item: Record<string, unknown>, keyword: string): str
     .filter(Boolean))].slice(0, 8);
 }
 
+// ─── Facebook 账号主页采集：yt-dlp 为主，Apify posts actor 兜底 ───────────────
+// Facebook Page 的 /videos 列表经常无法匿名枚举。Apify 返回的是帖子列表，
+// 因此这里严格只收 media 中确认为 Video 的条目，避免把图片帖混入视频库。
+async function crawlFacebookAccountApify(accountUrl: string, limit: number, dateFrom = '', dateTo = ''): Promise<CrawledVideo[]> {
+  const token = process.env.APIFY_TOKEN?.trim();
+  if (!token) throw new Error('APIFY_TOKEN is not configured');
+  const actor = process.env.APIFY_FACEBOOK_ACTOR?.trim() || 'apify/facebook-posts-scraper';
+  const input = buildApifyFacebookAccountInput(accountUrl, limit);
+  const rows = await runApifyActorDatasetItems(actor, input, Number(process.env.APIFY_TIMEOUT_MS || 240_000), 'Facebook account crawl');
+  return rows
+    .map(item => apifyFacebookPostToCrawledVideo(item, accountUrl))
+    .filter((item): item is CrawledVideo => Boolean(item))
+    .filter(item => isWithinDateRange(item.uploadedAt, dateFrom, dateTo))
+    .slice(0, limit);
+}
+
+function buildApifyFacebookAccountInput(accountUrl: string, limit: number): Record<string, unknown> {
+  const resultsLimit = Math.min(50, Math.max(limit * 4, limit, 10));
+  return {
+    startUrls: [{ url: accountUrl }],
+    resultsLimit,
+    maxPosts: resultsLimit,
+  };
+}
+
+function apifyFacebookPostToCrawledVideo(item: Record<string, unknown>, accountUrl: string): CrawledVideo | null {
+  const media = findFacebookVideoMedia(item);
+  if (!media) return null;
+  const rawUrl = String(media.url || media.permalink_url || item.url || item.topLevelUrl || '').trim();
+  const sourceUrl = rawUrl && isPlatformUrl(rawUrl, 'facebook') ? stripTrackingParams(rawUrl) : '';
+  if (!sourceUrl || !looksLikeVideoUrl(sourceUrl, 'facebook')) return null;
+  const author = String(item.pageName || asRecord(item.user).name || accountLabelFromUrl(accountUrl)).trim();
+  const text = String(item.text || item.message || '').trim();
+  const title = cleanupAnalysisTitle(text || (author ? `Facebook video by ${author}` : 'Facebook video'));
+  const durationMs = Number(media.playable_duration_in_ms || 0);
+  const likes = Number(item.likes || item.reactionLikeCount || 0);
+  const comments = Number(item.comments || 0);
+  const shares = Number(item.shares || 0);
+  return {
+    platform: 'facebook',
+    title,
+    sourceUrl,
+    thumbnailUrl: firstImageUrl([media.thumbnail, media.thumbnailImage, media.image, media]),
+    duration: durationMs > 0 ? Math.round(durationMs / 1000) : Number(media.duration || 0),
+    views: shares > 0 ? `${compactNumber(shares)} shares` : 'Facebook',
+    tags: facebookTagsFromPost(item, accountUrl),
+    uploadedAt: apifyFacebookUploadedAt(item, media),
+    author,
+    likes: likes > 0 ? compactNumber(likes) : undefined,
+    comments: comments > 0 ? compactNumber(comments) : undefined,
+    source: 'apify',
+  };
+}
+
+function findFacebookVideoMedia(value: unknown, depth = 0): Record<string, unknown> | null {
+  if (depth > 5 || value == null) return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findFacebookVideoMedia(item, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const type = String(record.__typename || record.__isMedia || '').toLowerCase();
+  const playable = record.is_playable === true
+    || type === 'video'
+    || Boolean(record.playable_url || record.browser_native_hd_url || record.browser_native_sd_url || record.videoId || record.permalink_url);
+  const mediaUrl = String(record.url || record.permalink_url || '').trim();
+  if (playable && (!mediaUrl || isPlatformUrl(mediaUrl, 'facebook'))) return record;
+  for (const key of ['media', 'attachments', 'video', 'videos', 'comet_sections']) {
+    const found = findFacebookVideoMedia(record[key], depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+function apifyFacebookUploadedAt(item: Record<string, unknown>, media: Record<string, unknown>): string | undefined {
+  const iso = String(item.time || item.createdAt || item.date || '').trim();
+  if (iso && !Number.isFinite(Number(iso))) return iso;
+  const timestamp = Number(item.timestamp || media.publish_time || 0);
+  if (timestamp > 1_000_000_000_000) return new Date(timestamp).toISOString();
+  if (timestamp > 1_000_000_000) return new Date(timestamp * 1000).toISOString();
+  return undefined;
+}
+
+function facebookTagsFromPost(item: Record<string, unknown>, accountUrl: string): string[] {
+  const tags = new Set<string>();
+  const text = String(item.text || '').trim();
+  for (const match of text.matchAll(/#([\p{L}\p{N}_-]+)/gu)) tags.add(match[1]);
+  const account = accountLabelFromUrl(accountUrl).replace(/^@/, '').trim();
+  if (account) tags.add(account);
+  tags.add('facebook');
+  return [...tags].filter(Boolean).slice(0, 8);
+}
+
+// ─── 图文/图片帖采集 ─────────────────────────────────────────────────────────
+async function crawlInstagramImagePostsApify(keyword: string, limit: number): Promise<CrawledImagePost[]> {
+  const token = process.env.APIFY_TOKEN?.trim();
+  if (!token) throw new Error('APIFY_TOKEN is not configured');
+  const actor = process.env.APIFY_INSTAGRAM_ACTOR?.trim() || 'apify/instagram-scraper';
+  const cleanKeyword = keyword.replace(/^#/, '').trim();
+  const rows = await runApifyActorDatasetItems(actor, {
+    directUrls: [`https://www.instagram.com/explore/tags/${encodeURIComponent(cleanKeyword)}/`],
+    resultsType: 'posts',
+    resultsLimit: Math.min(50, Math.max(limit * 4, limit, 12)),
+    addParentData: false,
+  }, Number(process.env.APIFY_TIMEOUT_MS || 240_000), 'Instagram image posts');
+  return rows
+    .map(item => apifyInstagramItemToImagePost(item, keyword))
+    .filter((item): item is CrawledImagePost => Boolean(item))
+    .slice(0, limit);
+}
+
+function apifyInstagramItemToImagePost(item: Record<string, unknown>, keyword: string): CrawledImagePost | null {
+  const type = String(item.type || '').toLowerCase();
+  const isVideo = type === 'video' || item.productType === 'clips' || Boolean(item.videoUrl);
+  if (isVideo) return null;
+  const author = String(item.ownerUsername || '').trim();
+  const shortCode = String(item.shortCode || '').trim();
+  const rawUrl = String(item.url || (shortCode ? `https://www.instagram.com/p/${shortCode}/` : '')).trim();
+  const sourceUrl = canonicalSourceUrl('instagram', rawUrl, author);
+  if (!sourceUrl || !isPlatformUrl(sourceUrl, 'instagram')) return null;
+  if (!/\/p\//i.test(sourceUrl)) return null;
+  const thumbnailUrl = firstImageUrl([item.displayUrl, item.images, item]);
+  if (!thumbnailUrl) return null;
+  const caption = String(item.caption || '').trim();
+  const likes = Number(item.likesCount || 0);
+  const comments = Number(item.commentsCount || 0);
+  return {
+    platform: 'instagram',
+    title: cleanupAnalysisTitle(caption || (author ? `Instagram post by ${author}` : 'Instagram image post')),
+    sourceUrl,
+    thumbnailUrl,
+    views: likes > 0 ? `${compactNumber(likes)} likes` : 'Instagram',
+    tags: apifyInstagramTags(item, keyword),
+    uploadedAt: apifyInstagramUploadedAt(item),
+    author,
+    likes: likes > 0 ? compactNumber(likes) : undefined,
+    comments: comments > 0 ? compactNumber(comments) : undefined,
+    source: 'apify-image',
+  };
+}
+
+async function crawlTikTokImagePostsApify(keyword: string, limit: number): Promise<CrawledImagePost[]> {
+  const token = process.env.APIFY_TOKEN?.trim();
+  if (!token) throw new Error('APIFY_TOKEN is not configured');
+  const actor = process.env.APIFY_TIKTOK_ACTOR?.trim() || 'clockworks/tiktok-scraper';
+  const input = {
+    ...buildApifyTikTokInput(keyword, limit),
+    shouldDownloadSlideshowImages: false,
+  };
+  const rows = await runApifyActorDatasetItems(actor, input, Number(process.env.APIFY_TIMEOUT_MS || 240_000), 'TikTok image posts');
+  return rows
+    .map(item => apifyTikTokItemToImagePost(item, keyword))
+    .filter((item): item is CrawledImagePost => Boolean(item))
+    .slice(0, limit);
+}
+
+function apifyTikTokItemToImagePost(item: Record<string, unknown>, keyword: string): CrawledImagePost | null {
+  const hasImages = Boolean(item.imagePost)
+    || (Array.isArray(item.images) && item.images.length > 0)
+    || (Array.isArray(item.imageUrls) && item.imageUrls.length > 0)
+    || String(item.type || item.mediaType || '').toLowerCase().includes('photo');
+  if (!hasImages) return null;
+  const author = apifyAuthor(item);
+  const sourceUrl = canonicalSourceUrl('tiktok', String(item.webVideoUrl || item.url || item.shareUrl || item.link || '').trim(), author);
+  if (!sourceUrl || !isPlatformUrl(sourceUrl, 'tiktok')) return null;
+  const text = String(item.text || item.description || item.desc || item.title || '').trim();
+  const likes = Number(item.diggCount || item.likes || item.likeCount || 0);
+  const comments = Number(item.commentCount || item.comments || 0);
+  return {
+    platform: 'tiktok',
+    title: cleanupAnalysisTitle(text || (author ? `TikTok photo post by ${author}` : 'TikTok photo post')),
+    sourceUrl,
+    thumbnailUrl: firstImageUrl([item.imagePost, item.images, item.imageUrls, item.coverUrl, item.thumbnailUrl, item]),
+    views: likes > 0 ? `${compactNumber(likes)} likes` : 'TikTok',
+    tags: apifyTikTokTags(item, keyword),
+    uploadedAt: apifyUploadedAt(item),
+    author,
+    likes: likes > 0 ? compactNumber(likes) : undefined,
+    comments: comments > 0 ? compactNumber(comments) : undefined,
+    source: 'apify-image',
+  };
+}
+
+async function crawlFacebookImagePostsApify(keyword: string, limit: number): Promise<CrawledImagePost[]> {
+  const token = process.env.APIFY_TOKEN?.trim();
+  if (!token) throw new Error('APIFY_TOKEN is not configured');
+  const actor = process.env.APIFY_FACEBOOK_ACTOR?.trim() || 'apify/facebook-posts-scraper';
+  const inputUrl = isPlatformUrl(keyword, 'facebook')
+    ? keyword
+    : `https://www.facebook.com/search/posts/?q=${encodeURIComponent(keyword)}`;
+  const rows = await runApifyActorDatasetItems(actor, {
+    startUrls: [{ url: inputUrl }],
+    resultsLimit: Math.min(50, Math.max(limit * 4, 10)),
+    maxPosts: Math.min(50, Math.max(limit * 4, 10)),
+  }, Number(process.env.APIFY_TIMEOUT_MS || 240_000), 'Facebook image posts');
+  const mapped = rows
+    .map(item => apifyFacebookPostToImagePost(item, keyword))
+    .filter((item): item is CrawledImagePost => Boolean(item))
+    .slice(0, limit);
+  if (mapped.length > 0) return mapped;
+  return crawlFacebookImagePostsPublicSearch(keyword, limit);
+}
+
+function apifyFacebookPostToImagePost(item: Record<string, unknown>, keyword: string): CrawledImagePost | null {
+  if (findFacebookVideoMedia(item)) return null;
+  const media = findFacebookImageMedia(item);
+  const sourceUrl = String(item.url || item.topLevelUrl || media?.url || '').trim();
+  if (!sourceUrl || !isPlatformUrl(sourceUrl, 'facebook')) return null;
+  if (/\/search\//i.test(sourceUrl)) return null;
+  const thumbnailUrl = firstImageUrl([media, item.media, item]);
+  if (!media || !thumbnailUrl) return null;
+  const author = String(item.pageName || asRecord(item.user).name || '').trim();
+  const text = String(item.text || item.message || '').trim();
+  const likes = Number(item.likes || item.reactionLikeCount || 0);
+  const comments = Number(item.comments || 0);
+  return {
+    platform: 'facebook',
+    title: cleanupAnalysisTitle(text || (author ? `Facebook post by ${author}` : 'Facebook image post')),
+    sourceUrl: stripTrackingParams(sourceUrl),
+    thumbnailUrl,
+    views: likes > 0 ? `${compactNumber(likes)} likes` : 'Facebook',
+    tags: tagsFromKeyword(keyword, 'facebook'),
+    uploadedAt: apifyFacebookUploadedAt(item, media || {}),
+    author,
+    likes: likes > 0 ? compactNumber(likes) : undefined,
+    comments: comments > 0 ? compactNumber(comments) : undefined,
+    source: 'apify-image',
+  };
+}
+
+function findFacebookImageMedia(value: unknown, depth = 0): Record<string, unknown> | null {
+  if (depth > 5 || value == null) return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findFacebookImageMedia(item, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+  if (typeof value !== 'object') return null;
+  const record = value as Record<string, unknown>;
+  const type = String(record.__typename || record.__isMedia || '').toLowerCase();
+  if (type === 'photo' || record.photo_image || record.image || record.thumbnail) return record;
+  for (const key of ['media', 'attachments', 'photo', 'photos']) {
+    const found = findFacebookImageMedia(record[key], depth + 1);
+    if (found) return found;
+  }
+  return null;
+}
+
+async function crawlFacebookImagePostsPublicSearch(keyword: string, limit: number): Promise<CrawledImagePost[]> {
+  const query = `site:facebook.com "${keyword}" ("/photos/" OR "photo" OR "/posts/")`;
+  const url = `https://www.bing.com/search?format=rss&q=${encodeURIComponent(query)}`;
+  const xml = await fetchText(url, 20_000);
+  const items: CrawledImagePost[] = [];
+  const seen = new Set<string>();
+  for (const match of xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)) {
+    const block = match[1] || '';
+    const link = cleanSearchResultUrl(decodeHtml(block.match(/<link>([^<]+)<\/link>/i)?.[1] || '').trim());
+    if (!link || !isPlatformUrl(link, 'facebook') || /\/(?:search|watch|reel|videos)\b/i.test(link) || seen.has(link)) continue;
+    seen.add(link);
+    const title = decodeHtml(block.match(/<title>([^<]+)<\/title>/i)?.[1] || '').trim();
+    items.push({
+      platform: 'facebook',
+      title: cleanupAnalysisTitle(title || `Facebook image post: ${keyword}`),
+      sourceUrl: link,
+      thumbnailUrl: '',
+      views: 'Facebook',
+      tags: tagsFromKeyword(keyword, 'facebook'),
+      source: 'public-search-image',
+    });
+    if (items.length >= limit) break;
+  }
+  if (items.length === 0) throw new Error('Facebook public search did not expose image posts for this keyword');
+  return items;
+}
+
+async function crawlYouTubeCommunityPostsPublicSearch(keyword: string, limit: number): Promise<CrawledImagePost[]> {
+  const query = `site:youtube.com/post "${keyword}"`;
+  const url = `https://www.bing.com/search?format=rss&q=${encodeURIComponent(query)}`;
+  const xml = await fetchText(url, 20_000);
+  const items: CrawledImagePost[] = [];
+  const seen = new Set<string>();
+  const itemMatches = [...xml.matchAll(/<item>([\s\S]*?)<\/item>/gi)];
+  for (const match of itemMatches) {
+    const block = match[1] || '';
+    const link = cleanSearchResultUrl(decodeHtml(block.match(/<link>([^<]+)<\/link>/i)?.[1] || '').trim());
+    if (!link || !isPlatformUrl(link, 'youtube') || !/\/post\//i.test(link) || seen.has(link)) continue;
+    seen.add(link);
+    const title = decodeHtml(block.match(/<title>([^<]+)<\/title>/i)?.[1] || '').trim();
+    items.push({
+      platform: 'youtube',
+      title: cleanupAnalysisTitle(title || `YouTube Community post: ${keyword}`),
+      sourceUrl: link,
+      thumbnailUrl: '',
+      views: 'YouTube',
+      tags: tagsFromKeyword(keyword, 'youtube'),
+      source: 'public-search-image',
+    });
+    if (items.length >= limit) break;
+  }
+  if (items.length === 0) throw new Error('YouTube Community posts are not exposed reliably by public search');
+  return items;
+}
+
+function imagePostRelevant(item: CrawledImagePost, keyword: string): boolean {
+  const clean = keyword.trim().toLowerCase();
+  if (!clean || /^https?:\/\//i.test(clean)) return true;
+  const text = `${item.title} ${item.tags.join(' ')}`.toLowerCase();
+  return clean.split(/\s+/).some(token => token.length > 1 && text.includes(token.replace(/^#/, '')));
+}
+
+function imageMetadataFallbackAnalysis(item: CrawledImagePost): VideoAiAnalysis {
+  const tags = item.tags.filter(Boolean).slice(0, 5);
+  const topic = tags.length ? tags.slice(0, 3).join(' / ') : item.title;
+  const platform = PLATFORM_LABEL[item.platform] || item.platform;
+  return {
+    theme: `${platform} 图文灵感：${item.title}`,
+    hooks: [
+      `首图/标题围绕「${item.title}」建立点击理由`,
+      item.views ? `用互动做社会证明：${item.views}` : '用封面和标题先表达结果或场景',
+      tags[0] ? `正文可围绕「${tags[0]}」展开痛点和卖点` : '正文可围绕产品场景、质地、前后对比展开',
+    ],
+    sellingPoints: tags.length ? tags.map(tag => `可围绕「${tag}」展开图文卖点`) : ['首图钩子', '多图对比', '评论互动', '收藏转化'],
+    mood: '图文种草 / 收藏导向 / 信息密度高',
+    structure: `首图钩子 → 多图细节 → ${topic} → 评论/收藏引导`,
+    baseRequirements: `基础要求：情绪氛围偏图文种草和收藏导向；光影保持清晰明亮；全片主要场景围绕首图、多图细节和正文转化信息；质感强调真实产品实拍与细节可信度；改编成视频时需强化反转钩子、真人口播、卡点节奏、特效转场和产品质感。`,
+    firstTenSeconds: {
+      atmosphere: '图文内容重点看首图气质、标题承诺和评论区反馈。',
+      audioVisual: '无音频；用封面、标题、正文和多图顺序承载信息。',
+      camera: '关注构图、产品露出、真人/场景/对比图的顺序。',
+      visuals: `视觉核心围绕「${topic}」展开。`,
+      voiceMusic: '图文无配乐，转视频时可按平台节奏补 BGM 和口播。',
+    },
+    coarseStructure: [
+      { time: '图1', label: '首图钩子', description: `用「${item.title}」建立点击/停留理由` },
+      { time: '图2-3', label: '细节展开', description: tags[0] ? `围绕「${tags[0]}」展示产品、场景或结果` : '展示产品、场景或结果' },
+      { time: '正文', label: '转化说明', description: '用简短正文补充卖点、适用人群和行动引导' },
+    ],
+    recommendedScriptType: 'storyboard',
+  };
+}
+
 // 反爬节流：同一平台的元数据请求全局排队串行，条与条之间加随机间隔，
 // 避免多个入口（手动爬取/定时任务/backfill）叠加成并发快打触发风控。
 const crawlPacingQueues = new Map<string, Promise<void>>();
@@ -2927,6 +3519,7 @@ function metadataFallbackAnalysis(input: Pick<CrawledVideo, 'platform' | 'title'
       : ['产品演示', '痛点解决', '结果证明', '行动引导'],
     mood: input.platform === 'tiktok' || input.platform === 'instagram' ? '快节奏 / 社媒感 / 视觉种草' : '信息型 / 评测型 / 解释清晰',
     structure: `标题/封面钩子 → 场景痛点 → 核心展示（${topic}） → 证明细节 → CTA`,
+    baseRequirements: `基础要求：情绪氛围围绕「${title}」制造好奇、信任和种草；光影应清晰突出人物与产品；全片主要场景围绕产品实拍、使用演示、结果对比和行动引导；质感强调真实口播、产品近景、包装/材质/效果细节；创作上需要强反转开头、真人口播、卡点剪辑、特效拉满，并把产品质感拍清楚。`,
     firstTenSeconds: {
       atmosphere: `前 10 秒大概率用「${title}」建立观看预期，并借助 ${platform} 平台语境形成信任或好奇。`,
       audioVisual: `字幕/标题应快速解释「${topic}」，画面需要同步出现产品、结果或痛点。`,
@@ -2949,6 +3542,7 @@ function metadataFallbackAnalysis(input: Pick<CrawledVideo, 'platform' | 'title'
     scriptDetails15s: [
       {
         time: '0.2s',
+        environment: '产品实拍或人物口播场景',
         shot: '特写',
         camera: '固定镜头',
         visual: `用标题或封面信息承接「${title}」，优先出现人物、产品或结果画面。`,
@@ -2957,6 +3551,7 @@ function metadataFallbackAnalysis(input: Pick<CrawledVideo, 'platform' | 'title'
       },
       {
         time: '3.2s',
+        environment: '使用场景或痛点展示场景',
         shot: '中近景',
         camera: '轻微推近',
         visual: tags[0] ? `放大「${tags[0]}」相关场景或痛点。` : '展示用户痛点或使用前后反差。',
@@ -2965,6 +3560,7 @@ function metadataFallbackAnalysis(input: Pick<CrawledVideo, 'platform' | 'title'
       },
       {
         time: '6.2s-9.2s',
+        environment: '核心产品展示场景',
         shot: '近景',
         camera: '固定或手持跟拍',
         visual: `进入核心展示「${topic}」，突出产品、动作或效果。`,
@@ -2973,6 +3569,7 @@ function metadataFallbackAnalysis(input: Pick<CrawledVideo, 'platform' | 'title'
       },
       {
         time: '9.2s-12.2s',
+        environment: '证明细节或反馈展示场景',
         shot: '中景',
         camera: '慢切或平移',
         visual: input.views ? `用热度、评论或结果画面强化可信度：${input.views}。` : '补充细节证明和真实使用反馈。',
@@ -2981,6 +3578,7 @@ function metadataFallbackAnalysis(input: Pick<CrawledVideo, 'platform' | 'title'
       },
       {
         time: '12.2s-15.0s',
+        environment: '产品收束或人物 CTA 场景',
         shot: '中近景',
         camera: '收束镜头',
         visual: '以结果、产品正面或人物反应收束，引导收藏/询盘/继续观看。',
@@ -3668,6 +4266,10 @@ function verifiedSeedItems(platform: Platform, keyword: string): CrawledVideo[] 
 
 async function searchPublicVideoUrls(platform: Platform, keyword: string, limit: number): Promise<string[]> {
   const query = publicSearchQuery(platform, keyword);
+  return searchPublicVideoUrlsByQuery(platform, query, limit);
+}
+
+async function searchPublicVideoUrlsByQuery(platform: Platform, query: string, limit: number): Promise<string[]> {
   const url = `https://www.bing.com/search?format=rss&q=${encodeURIComponent(query)}`;
   const xml = await fetchText(url, 20_000);
   const urls = new Set<string>();
@@ -3697,16 +4299,35 @@ function looksLikeVideoUrl(url: string, platform: Platform): boolean {
 }
 
 // ─── 对标账号主页采集 ──────────────────────────────────────────────────────────
-// 判断输入是否为「账号主页 URL」（而非单条视频链接）。目前仅支持 youtube / tiktok。
+// 判断输入是否为「账号主页 URL」（而非单条视频链接）。
 export function looksLikeAccountUrl(input: string, platform: Platform): boolean {
   const url = String(input || '').trim();
   if (!isPlatformUrl(url, platform)) return false;
-  if (platform === 'youtube') {
-    if (youtubeVideoId(url)) return false; // 是单条视频
-    return /\/(?:@[^/?#]+|channel\/[^/?#]+|c\/[^/?#]+|user\/[^/?#]+)/i.test(url);
-  }
-  if (platform === 'tiktok') {
-    return /\/@[^/?#]+/i.test(url) && !/\/video\/\d+/i.test(url);
+  try {
+    const parsed = new URL(url);
+    const path = parsed.pathname.replace(/\/+$/, '');
+    const segments = path.split('/').filter(Boolean);
+    if (platform === 'youtube') {
+      if (youtubeVideoId(url)) return false; // 是单条视频
+      return /\/(?:@[^/?#]+|channel\/[^/?#]+|c\/[^/?#]+|user\/[^/?#]+)/i.test(path);
+    }
+    if (platform === 'tiktok') {
+      return /\/@[^/?#]+/i.test(path) && !/\/video\/\d+/i.test(path);
+    }
+    if (platform === 'instagram') {
+      if (looksLikeVideoUrl(url, 'instagram')) return false;
+      const first = segments[0] || '';
+      return Boolean(first)
+        && !['accounts', 'explore', 'reel', 'reels', 'p', 'stories', 'tv', 'direct'].includes(first.toLowerCase());
+    }
+    if (platform === 'facebook') {
+      if (looksLikeVideoUrl(url, 'facebook')) return false;
+      const first = segments[0] || '';
+      return Boolean(first)
+        && !['watch', 'reel', 'reels', 'videos', 'groups', 'events', 'marketplace', 'share'].includes(first.toLowerCase());
+    }
+  } catch {
+    return false;
   }
   return false;
 }
@@ -3731,11 +4352,27 @@ function normalizeAccountListUrl(platform: Platform, url: string): string {
     if (/\/(?:videos|shorts|streams|featured)$/i.test(clean)) return clean;
     return `${clean}/videos`;
   }
+  if (platform === 'instagram') {
+    if (/\/(?:reels|reels\/|tagged)$/i.test(clean)) return clean;
+    return `${clean}/reels`;
+  }
+  if (platform === 'facebook') {
+    if (/\/(?:videos|reels)$/i.test(clean)) return clean;
+    return `${clean}/videos`;
+  }
   return clean;
 }
 
 // 采集某个对标账号主页的最新视频列表（flat-playlist 枚举，最多 limit 条）。
 async function crawlAccountHomepage(platform: Platform, accountUrl: string, limit: number, dateFrom = '', dateTo = ''): Promise<CrawledVideo[]> {
+  if (platform === 'instagram' && canUseApifyInstagramCrawlFallback()) {
+    try {
+      const apifyItems = await crawlInstagramApify(accountUrl, Math.max(1, limit), dateFrom, dateTo);
+      if (apifyItems.length > 0) return apifyItems.slice(0, limit);
+    } catch (e) {
+      console.warn('[videos] Instagram account Apify crawl failed, falling back to yt-dlp:', e instanceof Error ? e.message : e);
+    }
+  }
   const listUrl = normalizeAccountListUrl(platform, accountUrl);
   const safeLimit = Math.max(1, limit);
   let items: CrawledVideo[];
@@ -3744,12 +4381,54 @@ async function crawlAccountHomepage(platform: Platform, accountUrl: string, limi
   } catch (e) {
     // TikTok/部分主页枚举需要登录态；退回带 cookies 的 flat-playlist 枚举。
     console.warn('[videos] account homepage flat enumeration failed, retrying with cookies:', e);
-    items = await enumerateAccountWithCookies(platform, listUrl, safeLimit);
+    try {
+      items = await enumerateAccountWithCookies(platform, listUrl, safeLimit);
+    } catch (cookieError) {
+      if (platform !== 'facebook') throw cookieError;
+      if (canUseApifyFacebookCrawlFallback()) {
+        try {
+          console.warn('[videos] Facebook account cookie enumeration failed, trying Apify:', cookieError instanceof Error ? cookieError.message : cookieError);
+          items = await crawlFacebookAccountApify(accountUrl, safeLimit, dateFrom, dateTo);
+        } catch (apifyError) {
+          console.warn('[videos] Facebook account Apify crawl failed, trying public URL search:', apifyError instanceof Error ? apifyError.message : apifyError);
+          items = await crawlFacebookAccountByPublicSearch(accountUrl, safeLimit);
+        }
+      } else {
+        console.warn('[videos] Facebook account cookie enumeration failed, trying public URL search:', cookieError instanceof Error ? cookieError.message : cookieError);
+        items = await crawlFacebookAccountByPublicSearch(accountUrl, safeLimit);
+      }
+    }
   }
   const withinRange = hasDateRange(dateFrom, dateTo)
     ? items.filter(item => isWithinDateRange(item.uploadedAt, dateFrom, dateTo))
     : items;
   return (withinRange.length ? withinRange : items).slice(0, limit);
+}
+
+async function crawlFacebookAccountByPublicSearch(accountUrl: string, limit: number): Promise<CrawledVideo[]> {
+  const account = accountLabelFromUrl(accountUrl).replace(/^@/, '').trim();
+  const hostPath = (() => {
+    try {
+      const url = new URL(accountUrl);
+      return `${url.hostname.replace(/^www\./, '')}/${url.pathname.split('/').filter(Boolean)[0] || account}`;
+    } catch {
+      return `facebook.com/${account}`;
+    }
+  })();
+  const query = `site:${hostPath} ("/videos/" OR "/reel/" OR "watch")`;
+  const candidates = await searchPublicVideoUrlsByQuery('facebook', query, Math.max(limit * 4, 12));
+  const items: CrawledVideo[] = [];
+  for (const url of candidates) {
+    try {
+      const item = await crawlYtDlpMetadata('facebook', url, account);
+      if (hasRealThumbnail(item)) items.push(item);
+    } catch (e) {
+      console.warn('[videos] Facebook account candidate failed:', e instanceof Error ? e.message : e);
+    }
+    if (items.length >= limit) break;
+  }
+  if (items.length === 0) throw new Error('Facebook 账号主页暂未搜索到可用公开视频');
+  return items.slice(0, limit);
 }
 
 async function enumerateAccountWithCookies(platform: Platform, listUrl: string, limit: number): Promise<CrawledVideo[]> {
@@ -4688,6 +5367,10 @@ function canUseApifyVideoFallback(tenantId?: string, platform: Platform = 'tikto
 
 function canUseApifyInstagramCrawlFallback(): boolean {
   return process.env.APIFY_INSTAGRAM_CRAWL_FALLBACK_ENABLED !== '0' && Boolean(process.env.APIFY_TOKEN?.trim());
+}
+
+function canUseApifyFacebookCrawlFallback(): boolean {
+  return process.env.APIFY_FACEBOOK_CRAWL_FALLBACK_ENABLED !== '0' && Boolean(process.env.APIFY_TOKEN?.trim());
 }
 
 function canUseApifyTikTokCrawlFallback(): boolean {

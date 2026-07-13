@@ -12,6 +12,7 @@ export interface VideoAiAnalysis {
   sellingPoints: string[];
   mood: string;
   structure: string;
+  baseRequirements?: string;
   firstTenSeconds?: {
     atmosphere?: string;
     audioVisual?: string;
@@ -33,6 +34,7 @@ export interface VideoAiAnalysis {
   scriptDetails15s?: Array<{
     time?: string;
     timestamp?: string;
+    environment?: string;
     shot?: string;
     camera?: string;
     visual?: string;

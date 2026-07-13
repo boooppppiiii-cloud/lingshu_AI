@@ -415,7 +415,6 @@ function publicProductApiInfo(secret: ProductApiSecret | null) {
     createdAt: secret?.createdAt || '',
     lastIngestedAt: secret?.lastIngestedAt || '',
     lastProductName: secret?.lastProductName || '',
-    docsUrl: '/api/overseas/enterprise/product-api/docs',
   };
 }
 
@@ -429,48 +428,6 @@ function ensureProductApiKey(tenantId: string): ProductApiSecret {
   };
   writeProductApiSecret(next);
   return next;
-}
-
-function productApiDocs(origin = '') {
-  const base = origin ? `${origin}/api/v1/products` : '/api/v1/products';
-  return {
-    title: '灵枢产品 API 极简文档',
-    auth: '请求头使用 x-api-key: <企业中心生成的 API Key>',
-    endpoints: [
-      {
-        method: 'POST',
-        path: `${base}/bulk`,
-        description: '批量 upsert 商品。按 sku/货号去重；没有 sku 时按 name 去重。',
-      },
-      {
-        method: 'GET',
-        path: `${base}?limit=50`,
-        description: '查询已接入商品，可选 sku 参数精确查询。',
-      },
-      {
-        method: 'DELETE',
-        path: `${base}/{sku}`,
-        description: '按 sku 删除商品，也支持 DELETE /api/v1/products?sku=xxx。',
-      },
-    ],
-    productFields: ['sku', 'name', 'color', 'size', 'tagPrice', 'material', 'imageUrl', 'highlights', 'attributes'],
-    attributes: 'JSON 字段，用来承接服装类自由属性标签，例如 { "领型": "圆领", "袖长": "短袖", "季节": "夏季" }。',
-    example: {
-      products: [
-        {
-          sku: 'YW-TSHIRT-001',
-          name: '纯棉圆领T恤',
-          color: '黑色',
-          size: 'S/M/L',
-          tagPrice: '39.9',
-          material: '100% cotton',
-          imageUrl: 'https://example.com/sku-001.jpg',
-          highlights: '不起球，适合中东夏季批发',
-          attributes: { 领型: '圆领', 袖长: '短袖', 厚薄: '常规' },
-        },
-      ],
-    },
-  };
 }
 
 function readApiKey(req: Request) {
@@ -659,10 +616,6 @@ enterpriseRouter.post('/product-api/rotate', async (req, res) => {
   };
   writeProductApiSecret(next);
   res.json(publicProductApiInfo(next));
-});
-
-enterpriseRouter.get('/product-api/docs', (req, res) => {
-  res.json(productApiDocs(`${req.protocol}://${req.get('host')}`));
 });
 
 enterpriseRouter.get('/product-api/status', (_req, res) => {

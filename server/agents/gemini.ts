@@ -154,6 +154,7 @@ function parseScriptDetails15s(value: unknown): VideoAiAnalysis['scriptDetails15
     if (!visual && !subtitle) return null;
     return {
       time: String(item.time ?? item.timestamp ?? '').trim(),
+      environment: String(item.environment ?? '').trim(),
       shot: String(item.shot ?? '').trim(),
       camera: String(item.camera ?? '').trim(),
       visual,
@@ -172,6 +173,7 @@ export function normalizeVideoAnalysis(parsed: Partial<VideoAiAnalysis>): VideoA
     sellingPoints: Array.isArray(parsed.sellingPoints) ? parsed.sellingPoints.map(String) : [],
     mood: String(parsed.mood ?? ''),
     structure: String(parsed.structure ?? ''),
+    baseRequirements: String(parsed.baseRequirements ?? ''),
     firstTenSeconds: parseFirstTenSeconds(parsed.firstTenSeconds),
     coarseStructure: parseCoarseStructure(parsed.coarseStructure),
     scriptSummary15s: parseScriptSummary15s(parsed.scriptSummary15s),
@@ -197,6 +199,7 @@ export async function analyzeVideo(opts: {
 - sellingPoints: string[], 3–6 个中文卖点、利益点或画面展示点
 - mood: string，中文情绪/风格描述，例如“高能评测”“种草感”“教程感”“幽默反差”
 - structure: string，中文叙事结构，例如“痛点 → 展示 → 证明 → CTA”
+- baseRequirements: string，作为第一段“基础要求”输出，必须包含情绪氛围、光影、全片主要场景、质感、基础创作要求；基础创作要求需明确强反转、真人口播、卡点、特效拉满、产品质感等可执行方向
 - firstTenSeconds: object，详细分析视频前 10 秒，包含以下中文字段：
   - atmosphere: 氛围
   - audioVisual: 音画配合
@@ -207,12 +210,14 @@ export async function analyzeVideo(opts: {
 - scriptSummary15s: object，15 秒脚本详析摘要，包含 visualStyle（指定画风）、coreEmotion（核心情绪）、competitors（竞品/品牌/视觉参照物数组；如无明确识别则空数组）
 - scriptDetails15s: array，逐时间戳详析 0–15 秒，每项必须包含：
   - time: string，使用类似 "0.2s" 或 "5.2s–7.2s" 的时间戳
+  - environment: string，环境/场景，例如“白色浴室台面”“居家卧室”“户外街景”
   - shot: string，景别，例如“特写”“中景”“近景”
   - camera: string，运镜，例如“固定镜头”“微推近”“手持晃动”“旋转运镜”
   - visual: string，具体画面人物/产品/动作/场景
-  - subtitle: string，画面字幕或口播原句；没有字幕则概括口播
-  - audio: string，配音、BGM、音效
-  - note: string，可选，记录字幕口误、品牌露出、无法确认信息
+  - subtitle: string，只填写画面中清晰可见的字幕或可确认的口播原句；看不清/听不清则填空字符串，禁止写“待补全”或猜测台词
+  - audio: string，只填写可确认的配音、BGM、音效；无法确认则填空字符串，禁止写“可能有……”或猜测台词
+  - note: string，可选，只记录确定可见的信息；禁止编造品牌、@账号、原台词或无法确认的提示
+每一个分镜的内容要能被前端按“时间戳 + 段落”展示；段落信息必须覆盖环境、景别、运镜、配乐、台词、画面，字段之间语义上可用分号连接。
 - recommendedScriptType: "voiceover" | "storyboard"`;
 
   const raw = await withRetry(() =>
@@ -248,6 +253,7 @@ export async function analyzeYouTubeUrl(opts: {
 - sellingPoints: string[], 3–6 个中文卖点、利益点或画面展示点
 - mood: string，中文情绪/风格描述
 - structure: string，中文叙事结构，例如“痛点 → 展示 → 证明 → CTA”
+- baseRequirements: string，作为第一段“基础要求”输出，必须包含情绪氛围、光影、全片主要场景、质感、基础创作要求；基础创作要求需明确强反转、真人口播、卡点、特效拉满、产品质感等可执行方向
 - firstTenSeconds: object，详细分析视频前 10 秒，包含以下中文字段：
   - atmosphere: 氛围
   - audioVisual: 音画配合
@@ -258,12 +264,14 @@ export async function analyzeYouTubeUrl(opts: {
 - scriptSummary15s: object，15 秒脚本详析摘要，包含 visualStyle（指定画风）、coreEmotion（核心情绪）、competitors（竞品/品牌/视觉参照物数组；如无明确识别则空数组）
 - scriptDetails15s: array，逐时间戳详析 0–15 秒，每项必须包含：
   - time: string，使用类似 "0.2s" 或 "5.2s–7.2s" 的时间戳
+  - environment: string，环境/场景，例如“白色浴室台面”“居家卧室”“户外街景”
   - shot: string，景别，例如“特写”“中景”“近景”
   - camera: string，运镜，例如“固定镜头”“微推近”“手持晃动”“旋转运镜”
   - visual: string，具体画面人物/产品/动作/场景
-  - subtitle: string，画面字幕或口播原句；没有字幕则概括口播
-  - audio: string，配音、BGM、音效
-  - note: string，可选，记录字幕口误、品牌露出、无法确认信息
+  - subtitle: string，只填写画面中清晰可见的字幕或可确认的口播原句；看不清/听不清则填空字符串，禁止写“待补全”或猜测台词
+  - audio: string，只填写可确认的配音、BGM、音效；无法确认则填空字符串，禁止写“可能有……”或猜测台词
+  - note: string，可选，只记录确定可见的信息；禁止编造品牌、@账号、原台词或无法确认的提示
+每一个分镜的内容要能被前端按“时间戳 + 段落”展示；段落信息必须覆盖环境、景别、运镜、配乐、台词、画面，字段之间语义上可用分号连接。
 - recommendedScriptType: "voiceover" | "storyboard"`;
 
   const raw = await withRetry(() =>

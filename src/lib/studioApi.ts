@@ -10,15 +10,24 @@ async function post<T>(path: string, body: unknown, fallback: T): Promise<T & { 
     });
     if (r.status === 402 || r.status === 429) {
       const j = await r.json().catch(() => ({}));
-      throw new Error(j.error === 'demo_expired' ? '试用已到期，请联系服务顾问开通或延长试用。' : '今日试用额度已用完，请明天再试或联系服务顾问开通更多额度。');
+      throw new Error(formatDemoQuotaError(j));
     }
     if (!r.ok) throw new Error(String(r.status));
     return (await r.json()) as T & { source?: string };
   } catch (err: any) {
     const message = String(err?.message || '');
     if (message.includes('Demo') || message.includes('试用') || message.includes('额度') || message.includes('到期')) throw err;
-    return { ...fallback, source: 'local' };
+    return { ...fallback, source: 'local', error: message || 'request_failed' };
   }
+}
+
+function formatDemoQuotaError(j: any): string {
+  if (j?.error === 'demo_expired') return '试用已到期，请联系服务顾问开通或延长试用。';
+  if (j?.error === 'demo_token_quota_exceeded') return '今日 Token 额度已用完，请明天再试或联系服务顾问开通更多额度。';
+  if (j?.quota === 'generation') return '今日普通生成额度已用完，脚本/封面/配音等 AI 生成请明天再试或联系服务顾问开通更多额度。';
+  if (j?.quota === 'render') return '今日成片预览额度已用完，请明天再试或联系服务顾问开通更多额度。';
+  if (j?.quota === 'videoGeneration') return '今日视频生成额度已用完，请明天再试或联系服务顾问开通更多额度。';
+  return '今日试用额度已用完，请明天再试或联系服务顾问开通更多额度。';
 }
 
 async function get<T>(path: string, fallback: T): Promise<T & { source?: string }> {
@@ -62,10 +71,20 @@ export interface SubtitleSpec {
 
 export interface RenderSpec {
   materials: string[];
+  timeline?: {
+    name: string;
+    trimStart?: number;
+    trimEnd?: number;
+    speed?: number;
+    targetStart?: number;
+    targetEnd?: number;
+    targetDuration?: number;
+  }[];
   script: string;
   voice: string;
   bgm: string;
   bgmVol: number;
+  voiceVol: number;
   coverId: string;
   coverTitle: string;
   ratio: string;
@@ -79,9 +98,19 @@ export interface RenderSpec {
 
 export interface RenderManifest {
   jobId: string;
-  spec: { ratio: string; duration: number; platform: string; language: string; bgmVol: number };
+  spec: { ratio: string; duration: number; platform: string; language: string; bgmVol: number; voiceVol: number };
   script: string;
-  timeline: { index: number; name: string; url: string | null }[];
+  timeline: {
+    index: number;
+    name: string;
+    url: string | null;
+    trimStart?: number;
+    trimEnd?: number;
+    speed?: number;
+    targetStart?: number;
+    targetEnd?: number;
+    targetDuration?: number;
+  }[];
   voiceover: { voice: string | null; url: string | null };
   cover: { id: string | null; title: string; url: string | null };
   bgm: { id: string | null; url: string | null };
@@ -98,7 +127,8 @@ export interface RenderAuthorization {
 export interface DesktopRenderBridge {
   available: boolean;
   render: (manifest: RenderManifest) => Promise<{ ok: boolean; outputPath?: string; error?: string }>;
-  openInCapcut?: (payload: Record<string, unknown>) => Promise<{ ok: boolean; dir?: string; error?: string }>;
+  openInCapcut?: (payload: Record<string, unknown>) => Promise<{ ok: boolean; dir?: string; appOpened?: boolean; draftCreated?: boolean; createDraftError?: string; error?: string }>;
+  showItemInFolder?: (filePath: string) => Promise<{ ok: boolean; error?: string }>;
   onProgress: (cb: (pct: number) => void) => () => void; // 返回取消订阅函数
 }
 
@@ -121,9 +151,11 @@ function localManifest(spec: RenderSpec): RenderManifest {
       platform: spec.platform || 'tiktok',
       language: spec.language || 'en',
       bgmVol: spec.bgmVol ?? 35,
+      voiceVol: spec.voiceVol ?? 100,
     },
     script: spec.script ?? '',
-    timeline: (spec.materials ?? []).map((name, index) => ({ index, name, url: null })),
+    timeline: (spec.timeline?.length ? spec.timeline : (spec.materials ?? []).map(name => ({ name })))
+      .map((item, index) => ({ index, ...item, url: null })),
     voiceover: { voice: spec.voice ?? null, url: null },
     cover: { id: spec.coverId ?? null, title: spec.coverTitle ?? '', url: null },
     bgm: { id: spec.bgm ?? null, url: null },
@@ -156,6 +188,31 @@ export interface SeedanceVideoResult {
   createdAt?: string;
 }
 
+export interface FbPosterBrief {
+  headline: string;
+  subheadline: string;
+  originBadge: string;
+  trustBadges: string[];
+  sellingPoints: string[];
+  process: string[];
+  categories: { name: string; description: string }[];
+  bottomBar: string[];
+  cta: string;
+}
+
+export interface FbPosterResult {
+  ok: boolean;
+  source?: 'ai' | 'fallback' | 'local';
+  poster: FbPosterBrief;
+  caption: string;
+  hashtags: string[];
+  commentCta: string;
+  dmOpening: string;
+  fieldsToConfirm: string[];
+  imagePrompt: string;
+  error?: string;
+}
+
 async function del(path: string): Promise<{ ok: boolean }> {
   try {
     const r = await fetch(`/api/overseas/studio/${path}`, { method: 'DELETE', headers: authHeader() });
@@ -174,6 +231,7 @@ export const studioApi = {
     duration: number;
     scriptType?: 'voiceover' | 'storyboard';
     generationMode?: 'material' | 'product' | 'clone';
+    materialInfos?: Array<{ name: string; type: string; folder: string; duration: number; role?: string; targetStart?: number; targetEnd?: number }>;
     provider?: 'gemini' | 'qwen';
     audience?: string;
     sellingPoints?: string;
@@ -182,7 +240,7 @@ export const studioApi = {
     referenceAnalysis?: string;
     referenceHighlights?: string[];
   }, fb: string) =>
-    post<{ script: string }>('script', b, { script: fb }),
+    post<{ script: string; source?: 'ai' | 'fallback' | 'local' }>('script', b, { script: fb }),
 
   covers: (b: { script?: string; productInfo?: string; language: string; provider?: 'gemini' | 'qwen'; tone?: string }, fb: string[]) =>
     post<{ covers: string[] }>('covers', b, { covers: fb }),
@@ -199,12 +257,48 @@ export const studioApi = {
   }, fb: { caption: string; hashtags: string[] }) =>
     post<{ caption: string; hashtags: string[] }>('caption', b, fb),
 
+  fbPoster: (b: {
+    mode: 'material' | 'clone' | 'product';
+    productInfo?: string;
+    platform: string;
+    ratio: string;
+    posterStyle: string;
+    language: string;
+    provider?: 'gemini' | 'qwen';
+    materials?: Array<{ id?: string; name: string; type?: string; folder?: string; role?: string }>;
+    referenceNotes?: string;
+  }) =>
+    post<FbPosterResult>('fb-poster', b, {
+      ok: false,
+      poster: {
+        headline: '',
+        subheadline: '',
+        originBadge: '',
+        trustBadges: [],
+        sellingPoints: [],
+        process: [],
+        categories: [],
+        bottomBar: [],
+        cta: '',
+      },
+      caption: '',
+      hashtags: [],
+      commentCta: '',
+      dmOpening: '',
+      fieldsToConfirm: [],
+      imagePrompt: '',
+    }),
+
   select: (b: SelectInput, fb: string[]) =>
     post<{ selectedIds: string[]; reason: string }>('select', b, { selectedIds: fb, reason: '本地按视频优先选取' }),
 
   // 配音 TTS
   tts: (b: { script?: string; text?: string; voice: string; language: string }) =>
     post<{ ok: boolean; url?: string; duration?: number; error?: string }>('tts', b, { ok: false }),
+  ttsBatch: (b: { voice: string; items: { code: string; text: string; language?: string }[] }) =>
+    post<{ ok: boolean; audios: Record<string, { ok: boolean; source?: string; url?: string; duration?: number; error?: string }>; error?: string }>('tts/batch', b, { ok: false, audios: {} }),
+  uploadVoiceSample: (b: { name: string; dataBase64: string; mimeType?: string; duration?: number }) =>
+    post<{ ok: boolean; id?: string; voiceId?: string; name?: string; url?: string; duration?: number; error?: string }>('voice-samples', b, { ok: false }),
   uploadVoiceover: (b: { name: string; dataBase64: string; mimeType?: string; duration?: number }) =>
     post<{ ok: boolean; url?: string; duration?: number; error?: string }>('voiceover', b, { ok: false }),
 
@@ -215,6 +309,8 @@ export const studioApi = {
   // 文本翻译（默认译成简体中文，供用户确认外语文案）
   translate: (b: { text: string; target?: string; source?: string }) =>
     post<{ ok: boolean; text: string }>('translate', b, { ok: false, text: '' }),
+  translateBatch: (b: { text: string; targets: string[]; source?: string }) =>
+    post<{ ok: boolean; translations: Record<string, string>; error?: string }>('translate/batch', b, { ok: false, translations: {} }),
 
   // Seedance 视频生成
   seedanceVideo: (b: {
@@ -252,8 +348,38 @@ export const studioApi = {
     }
   },
 
+  renderLocal: async (manifest: RenderManifest): Promise<{ ok: boolean; outputPath?: string; error?: string }> => {
+    try {
+      const r = await fetch('/api/overseas/studio/render/local', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeader() },
+        body: JSON.stringify(manifest),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(data?.error || String(r.status));
+      return data as { ok: boolean; outputPath?: string; error?: string };
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '本地 MP4 导出失败' };
+    }
+  },
+
+  openRenderOutput: async (path: string): Promise<{ ok: boolean; error?: string }> => {
+    try {
+      const r = await fetch('/api/overseas/studio/render/open-output', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeader() },
+        body: JSON.stringify({ path }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) return { ok: false, error: data?.error || `打开本地文件夹失败（${r.status}）` };
+      return data as { ok: boolean; error?: string };
+    } catch (err: any) {
+      return { ok: false, error: err?.message || '打开本地文件夹失败' };
+    }
+  },
+
   openCapcut: (payload: Record<string, unknown>) =>
-    post<{ ok: boolean; dir?: string; appOpened?: boolean; folderOpened?: boolean; error?: string }>('capcut/open', payload, { ok: false, error: '剪映跳转失败' }),
+    post<{ ok: boolean; dir?: string; appOpened?: boolean; draftCreated?: boolean; folderOpened?: boolean; createDraftError?: string; error?: string }>('capcut/open', payload, { ok: false, error: '剪映跳转失败' }),
 
   // 草稿 / 作品
   listProjects: async (): Promise<StudioProject[]> => {

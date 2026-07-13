@@ -40,8 +40,20 @@ ipcMain.handle('render:start', async (_event, manifest) => {
 
 ipcMain.handle('capcut:open', async (_event, payload) => {
   const result = await exportCapcutPackage(payload);
-  if (result.ok && result.dir) shell.openPath(result.dir);
+  if (result.ok && result.dir && !result.appOpened) shell.openPath(result.dir);
   return result;
+});
+
+ipcMain.handle('file:showItemInFolder', async (_event, filePath) => {
+  if (!filePath || typeof filePath !== 'string') {
+    return { ok: false, error: '缺少本地文件路径' };
+  }
+  try {
+    shell.showItemInFolder(filePath);
+    return { ok: true };
+  } catch (error) {
+    return { ok: false, error: error?.message || '打开本地文件夹失败' };
+  }
 });
 
 app.whenReady().then(createWindow);

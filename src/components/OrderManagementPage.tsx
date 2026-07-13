@@ -359,10 +359,10 @@ export default function OrderManagementPage() {
                           {pct(margin)}
                         </span>
                       </td>
-                      <td className="px-4 py-3">
-                        <span className="rounded-full px-2 py-0.5 text-[10px] font-semibold" style={{ background: style.bg, color: style.fg }}>{order.status}</span>
+                      <td className="px-4 py-3 whitespace-nowrap">
+                        <span className="inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold" style={{ background: style.bg, color: style.fg }}>{order.status}</span>
                       </td>
-                      <td className="px-4 py-3 text-text-secondary">{order.orderDate}</td>
+                      <td className="px-4 py-3 whitespace-nowrap text-text-secondary">{order.orderDate}</td>
                       <td className="px-4 py-3 text-text-secondary">{order.owner}</td>
                       <td className="px-4 py-3">
                         <select value={order.status} onChange={e => setOrderStatus(order.id, e.target.value as OrderStatus)} className="rounded-md border border-border bg-white px-2 py-1 text-[11px] outline-none">

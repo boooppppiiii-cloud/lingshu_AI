@@ -137,13 +137,17 @@ app.use('/media', express.static(mediaDir, {
   immutable: true,
 }));
 
-// BGM 曲库本地文件托管（内置种子曲 + POST /studio/bgm 上传）
+// BGM 曲库本地文件托管（POST /studio/bgm 上传）
 const bgmDir = path.join(__dirname, '..', 'data', 'bgm');
 app.use('/bgm', express.static(bgmDir, { maxAge: '7d', immutable: true }));
 
 // TTS 配音音频托管（POST /studio/tts 生成到 data/tts/）
 const ttsDir = path.join(__dirname, '..', 'data', 'tts');
 app.use('/tts', express.static(ttsDir, { maxAge: '1d' }));
+
+// 真人音色样本托管（POST /studio/voice-samples 上传）
+const voiceSamplesDir = path.join(__dirname, '..', 'data', 'voice-samples');
+app.use('/voice-samples', express.static(voiceSamplesDir, { maxAge: '1d' }));
 
 // 封面 SVG 托管（POST /studio/cover 生成到 data/covers/）
 const coversDir = path.join(__dirname, '..', 'data', 'covers');

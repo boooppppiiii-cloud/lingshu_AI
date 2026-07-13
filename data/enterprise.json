@@ -1,89 +1,56 @@
 {
   "company": {
-    "name": "灵枢维护管理员",
-    "industry": "美妆",
-    "companyType": "工贸一体供应商",
-    "mainMarkets": "欧美",
-    "primaryLanguages": "英语",
-    "founded": "2019",
-    "description": "专注无纺布环保购物袋、促销礼品袋、零售包装袋和活动定制袋，服务海外商超、礼品公司、展会活动方和品牌渠道商。优势是小批量打样快、印刷定制灵活、交期稳定，适合用短视频展示耐用、防水、承重、可折叠和品牌定制场景。"
+    "name": "LumaPro Lighting Manufacturing",
+    "industry": "LED 灯具 / 商照 / 家居照明",
+    "companyType": "源头工厂，具备结构设计、组装、老化测试和包装定制能力",
+    "mainMarkets": "德国、法国、美国、沙特、澳大利亚",
+    "primaryLanguages": "英语、德语、法语、阿拉伯语",
+    "founded": "2015",
+    "description": "主营 LED 轨道灯、筒灯、线性灯、太阳能庭院灯和智能家居灯具，为工程商、照明设计公司、建材批发商和电商卖家提供 OEM/ODM。"
   },
   "products": {
-    "categories": "美妆",
-    "priceRange": "FOB $0.18 - $1.20 / 件，按尺寸、克重、印刷工艺和数量报价",
-    "moq": "常规款 500 件起订；定制印刷 1000 件起订；支持样品单和混批测试",
-    "certifications": "可配合提供 SGS 材质检测、REACH/RoHS 环保材料声明、BSCI/工厂验厂资料（按订单需求确认）",
-    "highlights": "超轻无纺布，结实耐用；可做 80-120gsm 加厚；支持丝印、热转印、覆膜、烫金；可折叠收纳；适合商超、礼品、展会、服装门店和节日促销。",
-    "items": [
-      {
-        "name": "无纺布包包",
-        "category": "家居",
-        "highlights": "主推环保无纺布手提袋：轻便、耐拉、不易破，支持 LOGO 定制和多色印刷。适合展示承重测试、防水泼洒、折叠收纳、商超购物、展会礼品和品牌包装场景。",
-        "images": [
-          {
-            "name": "截屏2026-07-07 上午1.09.42.png",
-            "type": "image/png",
-            "size": 61785,
-            "updatedAt": "2026-07-08T15:08:31.713Z",
-            "url": "/api/overseas/enterprise/assets/1783523311702-7314e706-2f8b-4e2d-a4c9-acefaf2b9340.png"
-          }
-        ],
-        "videos": [],
-        "documents": []
-      },
-      {
-        "name": "加厚覆膜购物袋",
-        "category": "环保包装",
-        "highlights": "90-120gsm 加厚无纺布，表面可覆膜，防泼水、挺括度更好，适合品牌门店、服装零售和礼品包装。可拍摄拉扯测试、雨天防水、门店陈列和高端包装对比。",
-        "images": [],
-        "videos": [],
-        "documents": []
-      },
-      {
-        "name": "展会促销礼品袋",
-        "category": "促销礼品",
-        "highlights": "大容量、低单价、交期快，适合展会资料袋、活动伴手礼、商超赠品和节日促销。可做大面积 LOGO，适合短视频强调品牌曝光和采购性价比。",
-        "images": [],
-        "videos": [],
-        "documents": []
-      }
-    ]
+    "categories": "LED 轨道灯、磁吸轨道系统、筒灯、线性灯、太阳能庭院灯、智能调光灯",
+    "priceRange": "FOB $3.5 - $68 / piece；工程项目按配置报价",
+    "moq": "标准款 100 件起；定制色温/外壳 300 件起；工程项目可按清单评估",
+    "certifications": "CE、RoHS、UKCA、ETL 部分型号、IES/LDT 光学文件、IP65 部分型号",
+    "highlights": "支持光效参数文件、色温/显指/外壳颜色定制；72 小时老化测试；可为工程客户提供灯光方案清单和包装标签。",
+    "items": []
   },
   "brand": {
-    "tone": "专业、直接、可信、有工厂感，强调可验证的耐用测试和采购价值",
-    "style": "工厂实拍",
-    "taboos": "不夸大承重到不现实数字；不承诺未确认的具体到港时间；不使用一次性塑料袋贬低话术；不直接攻击竞品品牌；涉及环保认证时必须说明以实际订单检测文件为准。",
-    "usp": "工贸一体供应链，500 件起快速打样，支持 LOGO/尺寸/克重/颜色定制，7-15 天常规生产，适合中小批量品牌包装和促销礼品采购。",
-    "preferredLanguages": "英语"
+    "tone": "技术型、可靠、工程专业、参数清晰",
+    "style": "正式",
+    "taboos": "不虚构认证；不承诺未测试的防水等级；不使用不准确的瓦数/流明参数。",
+    "usp": "Reliable LED lighting with certified options, fast sampling, and project-ready optical data.",
+    "preferredLanguages": "英语、德语、法语、阿拉伯语"
   },
   "strategy": {
-    "currentGoal": "用社媒短视频验证无纺布袋的海外询盘转化，优先生成可直接拍摄的产品演示脚本和多平台发布文案。",
-    "focusProducts": "美妆",
-    "focusMarkets": "欧美",
-    "excludedMarkets": "暂不重点投入低价极限比价、无品牌定制需求、只要免费样品的客户。",
-    "pricingStrategy": "用阶梯报价引导：500/1000/3000/5000 件；先报标准克重和基础印刷，再按尺寸、覆膜、手提长度、包装方式加价。",
-    "minMargin": "目标毛利 25%-35%，低于 20% 需人工确认。",
-    "agentAutonomy": "脚本、发布文案、询盘首响可自动生成；涉及最终报价、交期承诺和认证文件必须提醒人工确认。"
+    "currentGoal": "提高工程项目询盘质量，降低低价零散询盘占比。",
+    "focusProducts": "磁吸轨道灯系统、IP65 庭院灯、智能调光线性灯",
+    "focusMarkets": "欧洲商照工程商、中东建材批发商、北美亚马逊品牌商",
+    "excludedMarkets": "暂不主动推广没有认证适配的强制准入市场",
+    "pricingStrategy": "按参数和认证分层报价，强调寿命、稳定性和项目交付，不打价格战。",
+    "minMargin": "24%",
+    "agentAutonomy": "Agent 可生成产品标题、参数卖点、工程跟进话术；认证、项目报价和交期需确认。"
   },
   "customers": {
-    "targetProfiles": "海外礼品公司、商超采购、服装/鞋帽/美妆门店包装负责人、展会活动执行公司、进口批发商、品牌方采购助理。",
-    "highValueSignals": "询问 LOGO 印刷、尺寸克重、样品费、交期、海运/空运、长期复购、不同颜色混装、是否能提供检测报告；明确活动日期或门店上新计划；采购量 1000 件以上。",
-    "lowQualitySignals": "只问最低价不提供尺寸和数量；MOQ 低于 100 件且要求免费定制；要求虚假认证；只要求立即发大量样品但无公司信息。",
-    "commonQuestions": "Can I print my logo? What is your MOQ? How long is sample time? Can you make custom size and color? Is the material eco-friendly? Can you ship by air/sea? How much for 1000 pcs?\n跟进偏好：先确认用途、尺寸、数量、印刷颜色和交期，再给阶梯报价；语气简洁专业，附上可选方案和下一步确认项。",
-    "followupStyle": "WhatsApp/邮件首响控制在 5 句话内：先确认需求，再给 2 个推荐规格，最后引导对方发送 logo/尺寸/数量。报价前必须问清尺寸、克重、印刷面数、包装方式和目的港。"
+    "targetProfiles": "照明工程商、室内设计公司、建材批发商、电商品牌商。关注认证、光效、质保、参数文件、交期和项目稳定供货。",
+    "highValueSignals": "提供项目清单、询问 IES/LDT、色温显指、认证、质保、包装标签和长期补货。",
+    "lowQualitySignals": "只问单价、无目标规格、MOQ 过低、要求未认证进入强制认证市场。",
+    "commonQuestions": "是否有 CE/ETL；能否提供 IES 文件；质保几年；是否支持 DALI/0-10V 调光；样品和项目交期。",
+    "followupStyle": "报价后补一份参数对照表和应用场景图；工程客户优先请求项目图纸或 BOM。"
   },
   "operations": {
-    "leadTime": "样品 3-5 天；常规定制大货 7-15 天；复杂覆膜/多色印刷 15-25 天，以订单数量和排产为准。",
-    "customization": "支持尺寸、克重、颜色、手提长度、LOGO 丝印/热转印/覆膜、单个 OPP 包装、吊牌和外箱唛头定制。",
-    "logistics": "小批量可 DHL/FedEx/UPS；中大批量建议空运或海运；可配合国内主要仓/宁波/上海仓发货，支持 FOB Ningbo/Shanghai。",
-    "paymentTerms": "样品费预付；大货 T/T 30% 定金，70% 出货前付清；长期客户可按订单评估更灵活条款。",
-    "riskNotes": "无纺布颜色和印刷存在轻微批次色差；环保认证、承重数据和到港时效需按实际订单规格确认；客户提供 LOGO 文件需确认版权授权；急单需先确认排产。"
+    "leadTime": "样品 5-10 天；标准大货 20-30 天；定制外壳/驱动 35-45 天。",
+    "customization": "支持色温、显指、光束角、驱动方案、外壳颜色、包装和标签定制。",
+    "logistics": "支持空运、海运、铁路和欧洲/中东专线；可做托盘包装。",
+    "paymentTerms": "T/T 30% 订金，70% 出货前；工程项目可按批次出货。",
+    "riskNotes": "项目参数必须二次确认；涉及电气认证和安装环境时需要确认目标市场标准。"
   },
   "agentLearning": {
-    "provenAngles": "短视频优先用“承重测试、泼水测试、折叠收纳、LOGO 定制前后对比、商超购物场景、展会礼品发放场景”。前三秒用痛点或测试结果开场，例如“Will this eco bag survive 10kg?”、“Stop using weak promo bags”。",
-    "weakAngles": "单纯展示工厂机器或静态产品图转化弱；只讲环保概念不展示测试证据容易空泛；过度低价话术容易吸引低质量询盘。",
-    "pendingAssumptions": "当前企业资料为调试用 mock，需要后续用真实工厂产能、认证文件、报价表和历史订单数据校准。",
-    "userCorrections": "脚本功能调试阶段，优先生成真实可拍、B2B 询盘导向、可复用到 TikTok/YouTube Shorts/Instagram Reels 的内容。"
+    "provenAngles": "认证齐全、IES/LDT 文件、72 小时老化测试、项目清单支持、工程案例。",
+    "weakAngles": "只强调低价、过度生活方式化、参数不清楚的泛文案。",
+    "pendingAssumptions": "欧洲客户更重视认证和光学文件，中东客户更重视交期和批发价格，待更多成交验证。",
+    "userCorrections": "把 best quality 改成 tested reliability；参数必须保守表达。"
   },
-  "knowledge": "【调试用完整企业资料】\n公司：本地演示租户（工贸一体供应商）\n主营：无纺布环保购物袋、促销礼品袋、展会手提袋、零售包装袋。\n主推品：无纺布包包、加厚覆膜购物袋、展会促销礼品袋。\n目标市场：东南亚、中东、欧美礼品采购与零售包装市场。\n默认创作语言：英语；中东内容可增加阿拉伯语短句。\n核心卖点：500 件起订、LOGO 定制、尺寸/颜色/克重可选、样品 3-5 天、常规大货 7-15 天、供应链交期稳定。\n脚本生成要求：内容必须突出真实产品测试和采购场景，例如承重、防泼水、折叠收纳、LOGO 定制、商超购物、展会资料袋、品牌门店包装。避免虚假环保承诺和夸大承重。优先生成 15 秒短视频脚本，结构为：前三秒测试/痛点钩子 → 展示产品细节 → 给出采购规格 → CTA 引导询盘。\n报价前必问信息：数量、尺寸、克重、印刷颜色、是否覆膜、交期、目的港、包装方式。\n\n公司：lingshu-admin\n主营品类：美妆\n目标市场：欧美\n海外平台经验：正在准备\n默认创作语言：英语\n\n公司：lingshu-admin\n主营品类：美妆\n目标市场：欧美\n海外平台经验：正在准备\n默认创作语言：英语\n\n公司：lingshu-test\n\n公司：lingshu-test\n\n公司：灵枢维护管理员\n\n公司：灵枢维护管理员\n\n公司：灵枢维护管理员\n\n公司：灵枢维护管理员"
+  "knowledge": "灯具 Agent 输出时应优先结构化参数：功率、流明、色温、显指、光束角、IP 等级、认证和质保。视频脚本可多用安装前后对比、照度效果、老化测试和项目场景。"
 }

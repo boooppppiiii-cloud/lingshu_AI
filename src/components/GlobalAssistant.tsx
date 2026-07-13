@@ -172,6 +172,47 @@ function mergeConsecutiveAssistant(list: Message[]): Message[] {
   return merged;
 }
 
+function apiHistory(list: Message[]): Message[] {
+  return mergeConsecutiveAssistant(list)
+    .filter(msg => {
+      const text = msg.content.trim();
+      return text && text !== '请求失败，请稍后重试。' && text !== 'API error';
+    })
+    .slice(-8)
+    .map(msg => ({
+      ...msg,
+      content: compactText(msg.content, msg.role === 'assistant' ? 1200 : 800),
+    }));
+}
+
+async function responseErrorMessage(resp: Response): Promise<string> {
+  const data = await resp.json().catch(() => null) as {
+    error?: string;
+    quota?: string;
+    tokenCost?: number;
+    demo?: {
+      remaining?: { aiChat?: number; tokens?: number };
+      totalRemaining?: { tokens?: number };
+    };
+  } | null;
+
+  if (data?.error === 'demo_token_quota_exceeded') {
+    const daily = data.demo?.remaining?.tokens;
+    const total = data.demo?.totalRemaining?.tokens;
+    const left = Math.min(daily ?? Number.POSITIVE_INFINITY, total ?? Number.POSITIVE_INFINITY);
+    const leftText = Number.isFinite(left) ? `当前剩余约 ${Math.max(0, left)} token，` : '';
+    const costText = data.tokenCost ? `本次预计需要约 ${data.tokenCost} token，` : '';
+    return `试用 Token 不足：${leftText}${costText}请清空一部分对话历史、换更短的问题，或重置/开通更多试用额度。`;
+  }
+  if (data?.error === 'demo_quota_exceeded') {
+    const label = data.quota === 'aiChat' ? '今日对话次数' : '今日试用额度';
+    return `${label}已用完，请明天再试或联系服务顾问开通更多额度。`;
+  }
+  if (data?.error === 'demo_expired') return '试用已到期，请联系服务顾问开通或延长试用。';
+  if (data?.error) return data.error;
+  return `请求失败（HTTP ${resp.status}），请稍后重试。`;
+}
+
 function quickQuestions(context: AssistantContext) {
   return context.suggestions.length ? context.suggestions : DEFAULT_CONTEXT.strategy.suggestions;
 }
@@ -211,6 +252,7 @@ export default function GlobalAssistant({
   const longPressRef = useRef<number | null>(null);
   const longPressedRef = useRef(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const assistantRootRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const handledKickoffs = useRef(new Set<string>());
   const handledRestores = useRef(new Set<string>());
@@ -266,9 +308,10 @@ export default function GlobalAssistant({
     const thread = useAssistantStore.getState().threads[targetAgent];
     const context = forcedContext ?? contextForOrbit(targetAgent, pageContext);
     const enterpriseBrief = compactText(enterpriseContext);
+    const historyForApi = apiHistory(thread.messages);
     const nextVisible = [...mergeConsecutiveAssistant(thread.messages), { role: 'user' as const, content: visibleText }];
     const apiMessages: Message[] = [
-      ...mergeConsecutiveAssistant(thread.messages),
+      ...historyForApi,
       {
         role: 'user',
         content: [
@@ -312,7 +355,8 @@ export default function GlobalAssistant({
         body: JSON.stringify({ messages: apiMessages, deepThinking: false }),
         signal: controller.signal,
       });
-      if (!resp.ok || !resp.body) throw new Error('API error');
+      if (!resp.ok) throw new Error(await responseErrorMessage(resp));
+      if (!resp.body) throw new Error('模型响应为空，请稍后重试。');
       ensureAssistant();
       const reader = resp.body.getReader();
       const decoder = new TextDecoder();
@@ -340,7 +384,7 @@ export default function GlobalAssistant({
       }
       if (buffer.trim()) consumeLine(buffer);
     } catch (err: any) {
-      const message = err?.name === 'AbortError' ? '这次响应已停止。' : '请求失败，请稍后重试。';
+      const message = err?.name === 'AbortError' ? '这次响应已停止。' : (err?.message || '请求失败，请稍后重试。');
       if (assistantStarted) patchAssistant(msg => ({ ...msg, content: msg.content ? `${msg.content}\n\n${message}` : message }));
       else setMessages(targetAgent, [...useAssistantStore.getState().threads[targetAgent].messages, { role: 'assistant', content: message }]);
     } finally {
@@ -471,10 +515,22 @@ export default function GlobalAssistant({
     else setMode('expanded');
   };
 
+  useEffect(() => {
+    if (mode !== 'expanded') return;
+    const handleOutsidePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (assistantRootRef.current?.contains(target)) return;
+      setMode('breathing');
+    };
+    document.addEventListener('pointerdown', handleOutsidePointerDown, true);
+    return () => document.removeEventListener('pointerdown', handleOutsidePointerDown, true);
+  }, [mode]);
+
   if (suppressForRightSidebar) return null;
 
   return (
-    <div data-global-assistant className="fixed bottom-5 right-5 z-[75]">
+    <div ref={assistantRootRef} data-global-assistant className="fixed bottom-5 right-5 z-[75]">
       {mode === 'expanded' && (
         <button
           type="button"

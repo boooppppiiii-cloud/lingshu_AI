@@ -5,7 +5,7 @@ import {
   TrendingUp, Clock, Globe, ChevronDown, X, Loader2,
   Check, Copy, ArrowRight, Zap, LayoutGrid, List,
   Lightbulb, Flame, BarChart2, ChevronRight, Film, Download, Plus,
-  Bookmark, Maximize2, Minimize2, Lock, Upload, Users,
+  Bookmark, Maximize2, Minimize2, Lock, Upload, Users, Images,
 } from 'lucide-react';
 import { studioApi, type Material } from '../lib/studioApi';
 import { authHeader } from '../lib/auth';
@@ -20,6 +20,7 @@ type Platform = 'all' | 'tiktok' | 'instagram' | 'youtube' | 'facebook';
 type ScriptType = 'voiceover' | 'storyboard';
 type SortMode = 'heat' | 'crawlTime';
 type InspirationInnerView = 'inspiration' | 'library' | 'shooting';
+type ContentFormat = 'video' | 'image';
 
 const isDemoTrafficStep = () => {
   const progress = readDemoProgress();
@@ -41,6 +42,7 @@ interface TrendVideo {
   status?: 'pending' | 'analyzed' | 'failed';
   aiAnalysis?: VideoAnalysisPayload;
   crawledAt?: string;
+  contentFormat: ContentFormat;
 }
 
 interface GeminiVideoAnalysis {
@@ -49,6 +51,7 @@ interface GeminiVideoAnalysis {
   sellingPoints?: string[];
   mood?: string;
   structure?: string;
+  baseRequirements?: string;
   firstTenSeconds?: {
     atmosphere?: string;
     audioVisual?: string;
@@ -71,6 +74,7 @@ interface GeminiVideoAnalysis {
   scriptDetails15s?: Array<{
     time?: string;
     timestamp?: string;
+    environment?: string;
     shot?: string;
     camera?: string;
     visual?: string;
@@ -83,6 +87,7 @@ interface GeminiVideoAnalysis {
 
 interface VideoAnalysisPayload {
   source?: string;
+  contentFormat?: ContentFormat;
   views?: string;
   keyword?: string;
   crawlRule?: string;
@@ -107,7 +112,7 @@ interface VideoAnalysisPayload {
 
 interface StructureStep { time: string; label: string; desc: string }
 interface FirstTenSecondInsight { dimension: string; detail: string }
-interface ScriptDetail15s { time: string; shot: string; camera: string; visual: string; subtitle: string; audio: string; note?: string }
+interface ScriptDetail15s { time: string; environment: string; shot: string; camera: string; visual: string; subtitle: string; audio: string; note?: string }
 interface ScriptSummary15s { visualStyle: string; coreEmotion: string; competitors: string[] }
 interface ScriptAnalysis {
   videoType: string;
@@ -115,6 +120,7 @@ interface ScriptAnalysis {
   firstTenSeconds: FirstTenSecondInsight[];
   scriptSummary15s: ScriptSummary15s;
   scriptDetails15s: ScriptDetail15s[];
+  baseRequirements: string;
   referenceHighlights: string[];
   adaptTip: string;
   emotion: string;
@@ -125,7 +131,20 @@ interface FrameMaterialMatch {
   detail: ScriptDetail15s;
   material?: Material;
   score: number;
+  scores?: {
+    semantic: number;
+    duration: number;
+    shot: number;
+    quality: number;
+    risk: number;
+  };
+  trim?: {
+    start: number;
+    end: number;
+    label: string;
+  };
   reason: string;
+  risks: string[];
   suggestion: string;
 }
 
@@ -177,6 +196,21 @@ function cleanAnalysisText(value: unknown): string {
     .trim();
 }
 
+function isUnusableAnalysisText(value: unknown): boolean {
+  const text = cleanAnalysisText(value);
+  return !text
+    || /字幕待|待 Gemini|待真实视频|视频下载并分析完成后|视频级分析会补充|无法确认/i.test(text);
+}
+
+function cleanScriptDetailField(value: unknown, field: 'visual' | 'subtitle' | 'audio' | 'note'): string {
+  const text = cleanAnalysisText(value);
+  if (!text || isUnusableAnalysisText(text)) return '';
+  if (field === 'subtitle' && /按画面\/字幕推断|可能有|可能是|疑似|口播|台词|@|#|‘|’|"|"/i.test(text)) return '';
+  if (field === 'audio' && /按画面\/字幕推断|可能有|可能是|疑似|台词|@|#|‘|’|"|"/i.test(text)) return '';
+  if (field === 'note' && /可能有|可能是|疑似.*(?:台词|提示)|@|#|‘|’|"|"/i.test(text)) return '';
+  return text;
+}
+
 function hasCompleteGeminiAnalysis(gemini?: GeminiVideoAnalysis): boolean {
   if (!gemini) return false;
   const firstTen = gemini.firstTenSeconds || {};
@@ -210,6 +244,20 @@ function isDisplayableVideoAnalysis(analysis?: VideoAnalysisPayload): boolean {
     && (!downloadStatus || downloadStatus === 'analyzed' || videoFetchStatus === 'direct_url' || videoFetchStatus === 'fetched');
 }
 
+function contentFormatOfAnalysis(analysis?: VideoAnalysisPayload): ContentFormat {
+  return analysis?.contentFormat === 'image' ? 'image' : 'video';
+}
+
+function isDisplayableForFormat(video: TrendVideo, contentFormat: ContentFormat): boolean {
+  const sourceUrl = video.sourceUrl || '';
+  if (contentFormat === 'image') return video.contentFormat === 'image'
+    && Boolean(video.thumbnail)
+    && Boolean(sourceUrl)
+    && !/\/(?:search|explore\/tags)\b/i.test(sourceUrl)
+    && (video.platform !== 'instagram' || /\/p\//i.test(sourceUrl));
+  return video.contentFormat === 'video' && isDisplayableVideoAnalysis(video.aiAnalysis);
+}
+
 function getAnalysis(video: TrendVideo): ScriptAnalysis | null {
   const gemini = video.aiAnalysis?.gemini;
   if (!gemini) return null;
@@ -223,6 +271,7 @@ function getAnalysis(video: TrendVideo): ScriptAnalysis | null {
     firstTenSeconds: buildFirstTenSecondInsights(gemini, video, hooks, sellingPoints),
     scriptSummary15s: buildScriptSummary15s(gemini, video, sellingPoints),
     scriptDetails15s: buildScriptDetails15s(gemini, video, structure),
+    baseRequirements: buildBaseRequirements(gemini, video),
     referenceHighlights: [
       gemini.theme ? `主题：${cleanAnalysisText(gemini.theme)}` : '',
       gemini.mood ? `情绪：${cleanAnalysisText(gemini.mood)}` : '',
@@ -235,6 +284,16 @@ function getAnalysis(video: TrendVideo): ScriptAnalysis | null {
     emotion: cleanAnalysisText(gemini.mood) || (isMetadataFallback ? '基础分析' : '真实分析'),
     infoSpeed: video.duration > 90 ? '中密度' : '高密度',
   };
+}
+
+function buildBaseRequirements(gemini: GeminiVideoAnalysis, video: TrendVideo): string {
+  const explicit = cleanAnalysisText(gemini.baseRequirements);
+  if (explicit) return explicit;
+  const summary = gemini.scriptSummary15s || {};
+  const mood = cleanAnalysisText(gemini.mood) || cleanAnalysisText(summary.coreEmotion) || '好奇、信任、种草';
+  const style = cleanAnalysisText(summary.visualStyle) || (video.platform === 'youtube' ? '真人写实评测风格' : '真人社媒写实风格');
+  const scene = cleanAnalysisText(gemini.theme) || video.title;
+  return `情绪氛围：${mood}；光影：清晰明亮，突出人物、产品和使用效果；全片主要场景：围绕「${scene}」展开真人口播、产品实拍、使用演示和结果对比；质感：${style}，产品包装、材质、肤感/触感/功能细节要拍清楚；基础要求：强反转开头，真人口播，卡点剪辑，特效拉满，产品质感突出。`;
 }
 
 function buildScriptSummary15s(gemini: GeminiVideoAnalysis, video: TrendVideo, sellingPoints: string[]): ScriptSummary15s {
@@ -252,17 +311,20 @@ function buildScriptSummary15s(gemini: GeminiVideoAnalysis, video: TrendVideo, s
 function buildScriptDetails15s(gemini: GeminiVideoAnalysis, video: TrendVideo, structure: StructureStep[]): ScriptDetail15s[] {
   const details = Array.isArray(gemini.scriptDetails15s) ? gemini.scriptDetails15s : [];
   const normalized = details.map((item, index) => {
-    const visual = cleanAnalysisText(item.visual);
-    const subtitle = cleanAnalysisText(item.subtitle);
+    const visual = cleanScriptDetailField(item.visual, 'visual');
+    const subtitle = cleanScriptDetailField(item.subtitle, 'subtitle');
+    const audio = cleanScriptDetailField(item.audio, 'audio');
+    const note = cleanScriptDetailField(item.note, 'note');
     if (!visual && !subtitle) return null;
     return {
       time: String(item.time || item.timestamp || `${Math.max(0.2, index * 1.5).toFixed(1)}s`),
+      environment: cleanAnalysisText(item.environment) || '真实产品/人物口播场景',
       shot: String(item.shot || '中近景'),
       camera: String(item.camera || '固定镜头'),
       visual: visual || `画面承接「${video.title}」的核心信息。`,
-      subtitle: subtitle || '字幕待 Gemini 从真实视频中补全',
-      audio: cleanAnalysisText(item.audio) || 'BGM/配音待 Gemini 从真实视频中补全',
-      note: item.note ? cleanAnalysisText(item.note) : undefined,
+      subtitle,
+      audio,
+      note: note || undefined,
     };
   }).filter(Boolean) as ScriptDetail15s[];
   if (normalized.length) return normalized.slice(0, 12);
@@ -270,6 +332,7 @@ function buildScriptDetails15s(gemini: GeminiVideoAnalysis, video: TrendVideo, s
   const source = structure.length ? structure : splitStructure(video.title, Math.min(video.duration, 15));
   return source.slice(0, 5).map((step, index) => ({
     time: index === 0 ? '0.2s' : `${(index * 3).toFixed(1)}s-${Math.min(index * 3 + 3, 15).toFixed(1)}s`,
+    environment: '真实产品/人物口播场景',
     shot: index === 0 ? '特写' : '中近景',
     camera: index === 0 ? '固定镜头' : '轻微推近',
     visual: `画面围绕「${cleanAnalysisText(step.desc)}」展开，视频级分析会补充人物、产品、动作和场景细节。`,
@@ -405,33 +468,124 @@ function materialMatchReason(material: Material, tokens: string[], score: number
   return hits.length ? `命中关键词：${hits.join(' / ')}` : `按视频类型和时长兜底匹配，匹配度 ${score}`;
 }
 
+function parseFrameTimeRange(time: string): { start: number; end: number; duration: number } {
+  const values = Array.from(String(time).matchAll(/(\d+(?:\.\d+)?)/g)).map(match => Number(match[1]));
+  const start = Math.max(0, values[0] ?? 0);
+  const end = Math.max(start + 3, values[1] ?? start + 3);
+  return { start, end, duration: Math.max(1, end - start) };
+}
+
+function formatClipTime(seconds: number): string {
+  const safe = Math.max(0, seconds);
+  const min = Math.floor(safe / 60);
+  const sec = Math.floor(safe % 60);
+  const decimal = Math.round((safe - Math.floor(safe)) * 10);
+  return decimal > 0
+    ? `${min}:${String(sec).padStart(2, '0')}.${decimal}`
+    : `${min}:${String(sec).padStart(2, '0')}`;
+}
+
+function chooseTrimWindow(material: Material, frameDuration: number, semanticScore: number, index: number): FrameMaterialMatch['trim'] {
+  const materialDuration = Math.max(0, Number(material.duration) || 0);
+  const target = Math.max(1.5, frameDuration);
+  if (material.type === 'image' || materialDuration <= 0) {
+    return { start: 0, end: target, label: `建议展示 ${target.toFixed(1)}s` };
+  }
+  if (materialDuration <= target + 0.2) {
+    return { start: 0, end: materialDuration, label: `使用全段 ${formatClipTime(materialDuration)}` };
+  }
+  const spare = Math.max(0, materialDuration - target);
+  const anchor = semanticScore >= 5 ? 0.38 : 0.5 + ((index % 3) - 1) * 0.18;
+  const start = Math.min(spare, Math.max(0, spare * anchor));
+  const end = Math.min(materialDuration, start + target);
+  return {
+    start: +start.toFixed(1),
+    end: +end.toFixed(1),
+    label: `建议截取 ${formatClipTime(start)}-${formatClipTime(end)}`,
+  };
+}
+
+function scoreMaterialForFrame(material: Material, detail: ScriptDetail15s, tokens: string[], index: number, used: Set<string>) {
+  const haystack = `${material.name} ${material.folder}`.toLowerCase();
+  const frameText = `${detail.visual} ${detail.subtitle} ${detail.shot} ${detail.camera}`.toLowerCase();
+  const frameTime = parseFrameTimeRange(detail.time);
+  const materialDuration = Number(material.duration) || 0;
+  let semantic = 0;
+  for (const token of tokens) if (haystack.includes(token)) semantic += token.length >= 4 ? 3 : 1;
+  semantic = Math.min(10, semantic);
+
+  let shot = 0;
+  if (/close|特写|texture|质地|产品|product/.test(frameText) && /detail|product|产品|特写|upload|hot/i.test(`${material.folder} ${material.name}`)) shot += 4;
+  if (/face|skin|肤|脸|真人|model|角色|人物/.test(frameText) && /model|scene|skin|face|真人|场景|presenter/i.test(`${material.folder} ${material.name}`)) shot += 4;
+  if (/factory|工厂|warehouse|生产|发货|ship|proof|证明/.test(frameText) && /factory|工厂|warehouse|ship|发货/i.test(`${material.folder} ${material.name}`)) shot += 4;
+  if (/推近|push|移动|handheld|手持/.test(frameText) && material.type === 'video') shot += 2;
+  shot = Math.min(10, shot);
+
+  let durationScore = 0;
+  if (material.type === 'image') {
+    durationScore = frameTime.duration <= 4 ? 6 : 3;
+  } else if (materialDuration >= frameTime.duration) {
+    durationScore = materialDuration >= frameTime.duration * 3 ? 8 : 10;
+  } else if (materialDuration >= frameTime.duration * 0.75) {
+    durationScore = 5;
+  } else if (materialDuration > 0) {
+    durationScore = 2;
+  }
+
+  const quality = material.url || material.poster ? 8 : 5;
+  let risk = 0;
+  const risks: string[] = [];
+  if (materialDuration > 0 && materialDuration < frameTime.duration) {
+    risk += 4;
+    risks.push(`素材短于分镜 ${formatClipTime(frameTime.duration - materialDuration)}`);
+  }
+  if (materialDuration >= frameTime.duration * 3) {
+    risk += 1;
+    risks.push('素材较长，已建议截取中段高可用片段');
+  }
+  if (semantic === 0) {
+    risk += 2;
+    risks.push('语义命中较弱，属于类型/时长兜底');
+  }
+  if (used.has(material.id)) {
+    risk += 3;
+    risks.push('该素材已用于其他分镜，注意连续重复感');
+  }
+
+  const total = Math.max(0, Math.round(semantic * 0.42 + durationScore * 0.24 + shot * 0.2 + quality * 0.14 - risk * 0.35));
+  return {
+    material,
+    score: total,
+    scores: { semantic, duration: durationScore, shot, quality, risk },
+    trim: chooseTrimWindow(material, frameTime.duration, semantic, index),
+    risks,
+  };
+}
+
 function matchMaterialsToFrames(details: ScriptDetail15s[], materials: Material[]): FrameMaterialMatch[] {
   const videos = materials.filter(item => item.type === 'video');
   const used = new Set<string>();
   return details.map((detail, index) => {
     const tokens = tokenizeForMatch(detail.visual, detail.subtitle, detail.shot, detail.camera);
-    let best: { material: Material; score: number } | null = null;
+    let best: ReturnType<typeof scoreMaterialForFrame> | null = null;
     for (const material of videos) {
-      const haystack = `${material.name} ${material.folder}`.toLowerCase();
-      let score = 0;
-      for (const token of tokens) if (haystack.includes(token)) score += token.length >= 4 ? 3 : 1;
-      if (/close|特写|texture|质地|产品|product/.test(tokens.join(' ')) && /detail|product|产品|特写|upload|hot/i.test(`${material.folder} ${material.name}`)) score += 2;
-      if (/face|skin|肤|脸|真人|model/.test(tokens.join(' ')) && /model|scene|skin|face|真人|场景/i.test(`${material.folder} ${material.name}`)) score += 2;
-      if (material.duration >= 3) score += 1;
-      if (used.has(material.id)) score -= 2;
-      if (!best || score > best.score) best = { material, score };
+      const candidate = scoreMaterialForFrame(material, detail, tokens, index, used);
+      if (!best || candidate.score > best.score) best = candidate;
     }
     const matched = best && (best.score >= 3 || (videos.length > index && !used.has(videos[index]!.id)))
       ? best
       : videos[index] && !used.has(videos[index]!.id)
-      ? { material: videos[index]!, score: 2 }
+      ? scoreMaterialForFrame(videos[index]!, detail, tokens, index, used)
       : null;
     if (matched) used.add(matched.material.id);
     return {
       detail,
       material: matched?.material,
       score: matched?.score ?? 0,
+      scores: matched?.scores,
+      trim: matched?.trim,
       reason: matched ? materialMatchReason(matched.material, tokens, matched.score) : '本地素材库暂未找到足够贴合的镜头',
+      risks: matched?.risks ?? [],
       suggestion: shootingSuggestion(detail),
     };
   });
@@ -625,7 +779,7 @@ function rewriteSubtitle(detail: ScriptDetail15s, index: number, product: Return
 function referenceAnalysisText(video: TrendVideo, analysis: ScriptAnalysis | null): string {
   if (!analysis) {
     return [
-      `参考视频标题：${video.title}`,
+      `参考视频标题仅用于判断开头钩子类型，不得在新脚本中复述：${shortenText(video.title, 80)}`,
       `平台：${video.platform}`,
       video.tags.length ? `标签：${video.tags.join('、')}` : '',
       video.views ? `热度：${video.views}` : '',
@@ -636,7 +790,7 @@ function referenceAnalysisText(video: TrendVideo, analysis: ScriptAnalysis | nul
   const details = analysis.scriptDetails15s.map(item => `${item.time} ${item.shot}/${item.camera}: ${item.visual}；原字幕/口播：${item.subtitle}`).join('\n');
   const firstTen = analysis.firstTenSeconds.map(item => `${item.dimension}: ${item.detail}`).join('\n');
   return [
-    `参考视频标题：${video.title}`,
+    `参考视频标题仅用于判断开头钩子类型，不得在新脚本中复述：${shortenText(video.title, 80)}`,
     `平台：${video.platform}`,
     `视频类型：${analysis.videoType}`,
     `信息节奏：${analysis.infoSpeed}`,
@@ -650,8 +804,8 @@ function referenceAnalysisText(video: TrendVideo, analysis: ScriptAnalysis | nul
 
 function referenceHighlights(video: TrendVideo, analysis: ScriptAnalysis | null): string[] {
   if (!analysis) return [
-    `标题钩子：${video.title}`,
-    video.tags.length ? `标签方向：${video.tags.slice(0, 4).join('、')}` : '按平台短视频节奏生成',
+    `参考标题只提炼钩子类型，不复述原文：${shortenText(video.title, 60)}`,
+    video.tags.length ? `标签只用于判断受众，不输出原 hashtag：${video.tags.slice(0, 4).join('、')}` : '按平台短视频节奏生成',
     '必须用产品真实细节替换空泛卖点',
   ].filter(Boolean);
   return [
@@ -669,9 +823,9 @@ function adaptedFrameLine(detail: ScriptDetail15s, index: number, product: Retur
     : 'BGM 保持轻快种草节奏，口播短句跟随字幕切点。';
   const note = detail.note ? `（注：保留对标视频节奏备注：${detail.note}）` : '';
   if (langCode !== 'zh') {
-    return `[${detail.time}] Shot: close-up or medium shot; Camera: simple handheld movement; Visual: ${visual}; ${voiceLine(subtitle, langCode)}; Captions match the voiceover; Audio: upbeat social commerce music.`;
+    return `[${detail.time}] Environment: ${detail.environment}; Shot: close-up or medium shot; Camera: simple handheld movement; Audio: upbeat social commerce music; ${voiceLine(subtitle, langCode)}; Visual: ${visual}; Captions match the voiceover.`;
   }
-  return `[${detail.time}] ${detail.shot}；${detail.camera}；${visual}；人物说：“${subtitle}”；字幕同口播；${audio}${note}`;
+  return `[${detail.time}] 环境：${detail.environment}；景别：${detail.shot}；运镜：${detail.camera}；配乐：${audio}；台词：人物说“${subtitle}”；画面：${visual}${note}`;
 }
 
 function makeVoiceoverDraft(_video: TrendVideo, analysis: ScriptAnalysis, productInfo: string, languageLabel?: string, langCode = 'zh'): string {
@@ -745,6 +899,7 @@ Subtitle: 留言拿报价`;
     firstTenSeconds: [],
     scriptSummary15s: { visualStyle: '真实产品实拍', coreEmotion: '可信、清楚、可询盘', competitors: [] },
     scriptDetails15s: [],
+    baseRequirements: '情绪氛围：可信、清楚、可询盘；光影：明亮干净；全片主要场景：产品实拍、包装展示、使用演示和 CTA；质感：真实产品实拍，突出产品细节；基础要求：强反转开头，真人口播，卡点剪辑，特效拉满，产品质感突出。',
     referenceHighlights: [],
     adaptTip: '',
     emotion: '',
@@ -754,34 +909,11 @@ Subtitle: 留言拿报价`;
 
 function makeStoryboardDraft(_video: TrendVideo, analysis: ScriptAnalysis, productInfo: string, languageLabel?: string, langCode = 'zh'): string {
   const product = productScriptContext(productInfo);
-  const competitors = analysis.scriptSummary15s.competitors.length
-    ? analysis.scriptSummary15s.competitors.map(item => `==${item}==`).join('；')
-    : '无明确竞品露出，复用对标视频的镜头节奏、产品展示方式和字幕口吻';
   const frames = analysis.scriptDetails15s.map((detail, index) => adaptedFrameLine(detail, index, product, langCode)).join('\n\n');
   if (langCode !== 'zh') {
-    return `Video Storyboard | Featured Product Bundle | ${languageLabel || 'English'}
-
-Creative style: realistic social commerce video
-Core emotion: quick product discovery, trust, and purchase intent
-Product replacement: use this featured product bundle, with private-label packaging, fast samples, and compliant documentation support.
-Voiceover language: ${languageLabel || 'English'}. All spoken lines must stay in this language.
-Goal: follow the reference video's rhythm while replacing the product, benefits, captions, and call to action.
-
-Storyboard:
-${frames}`;
+    return frames;
   }
-  return `**可生成视频分镜｜${product.label}｜${languageLabel || '中文'}**
-
-【分析摘要】
-指定画风：${analysis.scriptSummary15s.visualStyle}
-核心情绪：${analysis.scriptSummary15s.coreEmotion}
-竞品识别：${competitors}
-产品替换：主推「${product.label}」，参考产品范围「${shortenText(product.category, 60)}」，证明点「${shortenText(product.proof, 60)}」。
-口播语言：${languageLabel || '中文'}。所有“人物说：”引号内台词必须使用该语言。
-成片目标：按照对标视频的 15 秒时间戳逐镜复刻，只替换为我方产品、卖点、口播语言、字幕和行动引导。
-
-【分镜脚本】
-${frames}`;
+  return frames;
 }
 
 function scriptTypeLabel(type: ScriptType): string {
@@ -1053,7 +1185,10 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
         createdAt: generated.createdAt,
       },
       score: 9,
+      scores: { semantic: 10, duration: 10, shot: 9, quality: 8, risk: 0 },
+      trim: { start: 0, end: generated.duration || 5, label: `使用全段 ${formatClipTime(generated.duration || 5)}` },
       reason: 'Seedance 2.0 已按该分镜生成素材',
+      risks: [],
     } : item;
   });
   const matchedCount = frameMatches.filter(item => item.material).length;
@@ -1207,9 +1342,27 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
                             </span>
                           </div>
                           {hasMaterial && match.material ? (
-                            <div className="mt-2 rounded-lg bg-white/80 px-2 py-1.5">
-                              <p className="truncate text-[11px] font-semibold text-text-primary">{match.material.name}</p>
-                              <p className="mt-0.5 text-[10px] text-text-muted">{match.reason}</p>
+                            <div className="mt-2 space-y-1.5 rounded-lg bg-white/80 px-2 py-1.5">
+                              <div className="flex items-center gap-2">
+                                <p className="min-w-0 flex-1 truncate text-[11px] font-semibold text-text-primary">{match.material.name}</p>
+                                <span className="flex-shrink-0 rounded bg-green-100 px-1.5 py-0.5 text-[9px] font-bold text-green-700">匹配度 {match.score}</span>
+                              </div>
+                              <p className="text-[10px] text-text-muted">{match.reason}</p>
+                              {match.trim && (
+                                <p className="rounded-md bg-green-50 px-2 py-1 text-[10px] font-semibold text-green-700">{match.trim.label}</p>
+                              )}
+                              {match.scores && (
+                                <div className="grid grid-cols-5 gap-1 text-center text-[9px] font-semibold text-text-muted">
+                                  <span className="rounded bg-surface-2 px-1 py-0.5">语义 {match.scores.semantic}</span>
+                                  <span className="rounded bg-surface-2 px-1 py-0.5">时长 {match.scores.duration}</span>
+                                  <span className="rounded bg-surface-2 px-1 py-0.5">镜头 {match.scores.shot}</span>
+                                  <span className="rounded bg-surface-2 px-1 py-0.5">质量 {match.scores.quality}</span>
+                                  <span className="rounded bg-surface-2 px-1 py-0.5">风险 {match.scores.risk}</span>
+                                </div>
+                              )}
+                              {match.risks.length > 0 && (
+                                <p className="text-[10px] leading-relaxed text-amber-700">风险提示：{match.risks.join('；')}</p>
+                              )}
                             </div>
                           ) : (
                             <div className="mt-2 space-y-2">
@@ -1244,13 +1397,14 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
               </div>
               <div className="overflow-hidden rounded-xl border border-border">
                 <div className="space-y-1 border-b border-border bg-surface-2 px-3 py-2.5">
+                  <p className="text-[11px] leading-relaxed text-text-secondary"><span className="font-semibold text-text-primary">基础要求：</span>{analysis.baseRequirements}</p>
                   <p className="text-[11px] text-text-secondary"><span className="font-semibold text-text-primary">指定画风：</span>{analysis.scriptSummary15s.visualStyle}</p>
                   <p className="text-[11px] text-text-secondary"><span className="font-semibold text-text-primary">核心情绪：</span>{analysis.scriptSummary15s.coreEmotion}</p>
                   <p className="text-[11px] text-text-secondary">
-                    <span className="font-semibold text-text-primary">竞品识别：</span>
+                    <span className="font-semibold text-text-primary">参考品牌/竞品：</span>
                     {analysis.scriptSummary15s.competitors.length
                       ? analysis.scriptSummary15s.competitors.map(item => `==${item}==`).join('；')
-                      : '未识别到明确竞品/品牌露出'}
+                      : '未提取到可确认品牌/竞品'}
                   </p>
                 </div>
                 <div className="divide-y divide-border">
@@ -1258,9 +1412,7 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
                     <div key={`${item.time}-${i}`} className="px-3 py-2.5">
                       <p className="text-[11px] leading-relaxed text-text-secondary">
                         <span className="font-mono font-semibold text-accent">[{item.time}]</span>{' '}
-                        <span className="font-semibold text-text-primary">{item.shot}</span>；{item.camera}；{item.visual}
-                        {item.subtitle ? `；字幕：“${item.subtitle}”` : ''}
-                        {item.audio ? `；${item.audio}` : ''}
+                        环境：{item.environment}；景别：{item.shot}；运镜：{item.camera}；配乐：{item.audio || '按原片节奏卡点'}；{item.subtitle ? `台词：“${item.subtitle}”；` : ''}画面：{item.visual}
                         {item.note ? `（注：${item.note}）` : ''}
                       </p>
                     </div>
@@ -1433,10 +1585,10 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onFavorite, favo
       const response = await studioApi.script(
         {
           materials: [
-            `参考视频：${video.title}`,
+            `参考视频标题仅用于提炼节奏，不得复述：${shortenText(video.title, 80)}`,
             `平台：${video.platform}`,
             video.views ? `热度：${video.views}` : '',
-            video.tags.length ? `标签：${video.tags.join('、')}` : '',
+            video.tags.length ? `标签仅用于判断受众，不得原样输出：${video.tags.slice(0, 8).join('、')}` : '',
           ].filter(Boolean),
           productInfo,
           language,
@@ -1515,11 +1667,8 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onFavorite, favo
 
   const enterQuickCutFromAnalysis = () => {
     const realAnalysis = getAnalysis(video);
-    const languageLabel = LANGUAGES.find(l => l.code === language)?.label;
-    const initialScript = realAnalysis ? makeStoryboardDraft(video, realAnalysis, productInfo, languageLabel, language) : '';
     onEnterWorkflow?.({
       source: 'inspiration_analysis',
-      script: initialScript,
       video,
       scriptType: 'storyboard',
       language,
@@ -1832,6 +1981,7 @@ function VideoCard({ video, index, isSelected, onSelect, onWatch, onAnalyzeVideo
   const trendLabel = video.trend === 'hot' ? '🔥 热门' : video.trend === 'rising' ? '↑ 上升' : '— 平稳';
   const trendColor = video.trend === 'hot' ? 'text-accent' : video.trend === 'rising' ? 'text-green' : 'text-text-muted';
   const crawlRule = video.aiAnalysis?.crawlRule || '关键词检索';
+  const isImagePost = video.contentFormat === 'image';
   const crawledDate = video.crawledAt ? new Date(video.crawledAt) : null;
   const crawledLabel = crawledDate && !Number.isNaN(crawledDate.getTime())
     ? `${String(crawledDate.getMonth() + 1).padStart(2, '0')}-${String(crawledDate.getDate()).padStart(2, '0')} 入库`
@@ -1859,15 +2009,15 @@ function VideoCard({ video, index, isSelected, onSelect, onWatch, onAnalyzeVideo
           : <VideoThumbnail platform={video.platform} title={video.title} />}
         <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
           <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-white text-neutral-900">
-            <Play size={11} fill="currentColor" />{video.videoUrl ? '观看' : '原站'}
+            {isImagePost ? <Images size={11} /> : <Play size={11} fill="currentColor" />}{isImagePost ? '查看' : video.videoUrl ? '观看' : '原站'}
           </span>
-          <button onClick={e => { e.stopPropagation(); if (onAnalyzeVideo) onAnalyzeVideo(); else onSelect(); }}
+          {!isImagePost && <button onClick={e => { e.stopPropagation(); if (onAnalyzeVideo) onAnalyzeVideo(); else onSelect(); }}
             disabled={analyzingVideo}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold"
             style={{ background: meta.bg, color: meta.color }}>
             {analyzingVideo ? <Loader2 size={11} className="animate-spin" /> : <BarChart2 size={11} />}分析脚本
-          </button>
-          {video.sourceUrl && (
+          </button>}
+          {video.sourceUrl && !isImagePost && (
             <button onClick={e => { e.stopPropagation(); onFavoriteMaterial?.(); }}
               disabled={favoritingMaterial}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-white/90 text-neutral-900 disabled:opacity-70">
@@ -1876,7 +2026,7 @@ function VideoCard({ video, index, isSelected, onSelect, onWatch, onAnalyzeVideo
           )}
         </div>
         <div className="absolute bottom-2 left-2 px-1.5 py-0.5 rounded-md text-[10px] font-mono font-bold text-white bg-black/50 backdrop-blur-sm">
-          {Math.floor(video.duration / 60)}:{String(video.duration % 60).padStart(2, '0')}
+          {isImagePost ? '图文' : `${Math.floor(video.duration / 60)}:${String(video.duration % 60).padStart(2, '0')}`}
         </div>
         <div className="absolute bottom-2 right-2 max-w-[60%] truncate px-1.5 py-0.5 rounded-md text-[10px] font-bold text-white bg-black/55 backdrop-blur-sm">
           {crawlRule}
@@ -1895,7 +2045,7 @@ function VideoCard({ video, index, isSelected, onSelect, onWatch, onAnalyzeVideo
         <p className="text-xs font-semibold text-text-primary leading-snug line-clamp-2 mb-2">{video.title}</p>
         <div className="flex items-center justify-between mb-2">
           <span className={`text-[10px] font-mono font-bold ${trendColor}`}>{trendLabel}</span>
-          <span className="flex items-center gap-1 text-[10px] text-text-muted"><Clock size={9} />{video.views} views</span>
+          <span className="flex items-center gap-1 text-[10px] text-text-muted"><Clock size={9} />{video.views}{isImagePost ? '' : ' views'}</span>
         </div>
         <div className="flex flex-wrap gap-1">
           {video.tags.slice(0, 2).map(tag => <span key={tag} className="tag text-[10px]">#{tag}</span>)}
@@ -1920,6 +2070,7 @@ function VideoListItem({ video, isSelected, onSelect, onWatch, onAnalyzeVideo, o
   const trendColor = video.trend === 'hot' ? 'text-accent' : video.trend === 'rising' ? 'text-green' : 'text-text-muted';
   const trendLabel = video.trend === 'hot' ? '热门' : video.trend === 'rising' ? '上升' : '平稳';
   const crawlRule = video.aiAnalysis?.crawlRule || '关键词检索';
+  const isImagePost = video.contentFormat === 'image';
   return (
     <div className={`flex items-center gap-4 px-4 py-3 cursor-pointer transition-all group ${isSelected ? 'bg-accent-glow' : 'hover:bg-surface-2'}`} onClick={onSelect}>
       <button type="button" onClick={e => { e.stopPropagation(); onWatch(); }}
@@ -1928,7 +2079,7 @@ function VideoListItem({ video, isSelected, onSelect, onWatch, onAnalyzeVideo, o
           ? <ThumbnailImage src={video.thumbnail} platform={video.platform} title={video.title} className="w-full h-full object-cover" />
           : <VideoThumbnail platform={video.platform} title={video.title} />}
         <span className="absolute inset-0 bg-black/35 opacity-0 group-hover/thumb:opacity-100 transition-opacity flex items-center justify-center text-white">
-          <Play size={13} fill="currentColor" />
+          {isImagePost ? <Images size={13} /> : <Play size={13} fill="currentColor" />}
         </span>
       </button>
       <div className="flex-1 min-w-0">
@@ -1945,16 +2096,16 @@ function VideoListItem({ video, isSelected, onSelect, onWatch, onAnalyzeVideo, o
         {crawlRule}
       </span>
       <div className="flex-shrink-0 text-right min-w-[52px]">
-        <p className="text-xs font-mono text-text-secondary">{Math.floor(video.duration / 60)}:{String(video.duration % 60).padStart(2, '0')}</p>
+        <p className="text-xs font-mono text-text-secondary">{isImagePost ? '图文' : `${Math.floor(video.duration / 60)}:${String(video.duration % 60).padStart(2, '0')}`}</p>
         <p className="text-[10px] text-text-muted">{video.views}</p>
       </div>
-      <button onClick={e => { e.stopPropagation(); if (onAnalyzeVideo) onAnalyzeVideo(); else onSelect(); }}
+      {!isImagePost && <button onClick={e => { e.stopPropagation(); if (onAnalyzeVideo) onAnalyzeVideo(); else onSelect(); }}
         disabled={analyzingVideo}
         className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all opacity-0 group-hover:opacity-100"
         style={{ color: 'var(--color-accent)', borderColor: 'rgba(22,163,74,0.25)', background: 'var(--color-accent-glow)' }}>
         {analyzingVideo ? <Loader2 size={11} className="animate-spin" /> : <BarChart2 size={11} />}<span>分析脚本</span>
-      </button>
-      {video.sourceUrl && (
+      </button>}
+      {video.sourceUrl && !isImagePost && (
         <button onClick={e => { e.stopPropagation(); onFavoriteMaterial?.(); }} disabled={favoritingMaterial}
           className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border border-border hover:border-border-bright disabled:opacity-60">
           {favoritingMaterial ? <Loader2 size={11} className="animate-spin" /> : <Bookmark size={11} />} 收藏
@@ -2024,9 +2175,9 @@ function recordsToVideos(records: CrawlerRecord[]): TrendVideo[] {
         status: record.status,
         aiAnalysis: analysis,
         crawledAt: record.crawledAt,
+        contentFormat: contentFormatOfAnalysis(analysis),
       };
     })
-    .filter(video => isDisplayableVideoAnalysis(video.aiAnalysis))
     // 同一 sourceUrl 只保留一条（demo 数据/多次采集可能带来 id 不同的重复视频）
     .filter((video, index, all) => !video.sourceUrl || all.findIndex(v => v.sourceUrl === video.sourceUrl) === index)
     .sort((a, b) => heatValue(b.views) - heatValue(a.views));
@@ -2084,6 +2235,7 @@ const DEMO_TREND_VIDEOS: TrendVideo[] = [
     videoUrl: '/demo/mock-0627.mp4',
     status: 'analyzed',
     crawledAt: new Date().toISOString(),
+    contentFormat: 'video',
     aiAnalysis: {
       gemini: metadataFallbackAnalysis(
         '@_byjessevans dropping her routine for hydrated, healthy skin.',
@@ -2109,6 +2261,7 @@ const DEMO_TREND_VIDEOS: TrendVideo[] = [
     videoUrl: '/demo/img2video.mp4',
     status: 'analyzed',
     crawledAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
+    contentFormat: 'video',
     aiAnalysis: {
       gemini: metadataFallbackAnalysis(
         'Factory product demo video with clean packaging and fast-cut social proof.',
@@ -2211,6 +2364,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   const [watchVideo, setWatchVideo] = useState<TrendVideo | null>(null);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [sortMode, setSortMode] = useState<SortMode>('crawlTime');
+  const [contentFormat, setContentFormat] = useState<ContentFormat>('video');
   const [crawledVideos, setCrawledVideos] = useState<TrendVideo[]>([]);
   const [videoPage, setVideoPage] = useState(1);
   const [videoTotalPages, setVideoTotalPages] = useState(1);
@@ -2227,6 +2381,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const platformLabel = PLATFORM_FILTERS.find(f => f.id === platform)?.label ?? '全部平台';
   const sortLabel = sortMode === 'crawlTime' ? '按爬取时间' : '按热度';
+  const contentFormatLabel = contentFormat === 'video' ? '视频' : '图文';
 
   useEffect(() => {
     if (selectedVideo) { onScriptPanelOpen?.(); }
@@ -2251,7 +2406,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
     setVideosLoading(true);
     try {
       const perPage = 100;
-      const r = await fetch(`/api/overseas/videos?page=${nextPage}&perPage=${perPage}`, { headers: authHeader() });
+      const r = await fetch(`/api/overseas/videos?page=${nextPage}&perPage=${perPage}&contentFormat=${contentFormat}`, { headers: authHeader() });
       const data = await r.json().catch(() => ({})) as {
         items?: CrawlerRecord[];
         page?: number;
@@ -2292,7 +2447,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
     }
   };
 
-  useEffect(() => { void refreshVideos(); }, []);
+  useEffect(() => { void refreshVideos(); }, [contentFormat]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const hasPending = crawledVideos.some(v =>
@@ -2312,7 +2467,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
     const latest = crawledVideos.find(v => v.id === selectedVideo.id);
     if (selectedVideo.id.startsWith('crawl-')) {
       const next = latest || selectedVideo;
-      if (!isDisplayableVideoAnalysis(next.aiAnalysis)) {
+      if (!isDisplayableForFormat(next, contentFormat)) {
         setSelectedVideo(null);
         return;
       }
@@ -2323,7 +2478,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   const allVideos = crawledVideos;
   const visibleVideos = allVideos.filter(v =>
     ACTIVE_PLATFORMS.includes(v.platform)
-    && isDisplayableVideoAnalysis(v.aiAnalysis)
+    && isDisplayableForFormat(v, contentFormat)
   );
   const filtered = useMemo(() => {
     const lastCrawlIds = new Set(lastCrawlVideoIds);
@@ -2404,6 +2559,12 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   const handlePlatformFilter = (nextPlatform: Platform) => {
     setLastCrawlVideoIds([]);
     setPlatform(nextPlatform);
+  };
+
+  const handleContentFormatFilter = (nextFormat: ContentFormat) => {
+    setLastCrawlVideoIds([]);
+    setSelectedVideo(null);
+    setContentFormat(nextFormat);
   };
 
   const handleWatch = (video: TrendVideo) => {
@@ -2592,7 +2753,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
                   <span className="hidden sm:inline">对标账号</span>
                 </button>
               </div>
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
               <div className="relative h-14 rounded-2xl border border-border bg-surface shadow-sm transition-colors hover:border-border-bright focus-within:border-accent">
                 <Globe size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
                 <span className="absolute left-11 top-2 text-[11px] font-semibold text-text-muted pointer-events-none">社媒平台</span>
@@ -2610,6 +2771,23 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
                 </select>
                 <ChevronDown size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
                 <span className="sr-only">{platformLabel}</span>
+              </div>
+              <div className="relative h-14 rounded-2xl border border-border bg-surface shadow-sm transition-colors hover:border-border-bright focus-within:border-accent">
+                {contentFormat === 'video'
+                  ? <Film size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+                  : <Images size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />}
+                <span className="absolute left-11 top-2 text-[11px] font-semibold text-text-muted pointer-events-none">内容形式</span>
+                <select
+                  value={contentFormat}
+                  onChange={e => handleContentFormatFilter(e.target.value as ContentFormat)}
+                  aria-label="内容形式"
+                  className="h-full w-full cursor-pointer appearance-none rounded-2xl bg-transparent pl-11 pr-10 pt-4 text-base font-black text-text-primary outline-none"
+                >
+                  <option value="video">视频</option>
+                  <option value="image">图文</option>
+                </select>
+                <ChevronDown size={16} className="absolute right-4 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+                <span className="sr-only">{contentFormatLabel}</span>
               </div>
               <div className="relative h-14 rounded-2xl border border-border bg-surface shadow-sm transition-colors hover:border-border-bright focus-within:border-accent">
                 {sortMode === 'heat'
@@ -2649,7 +2827,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
 
         {innerView === 'inspiration' && <div className="mb-4 grid grid-cols-3 gap-3 max-w-xl">
           {[
-            { icon: <Zap size={13} />,       label: '热门视频', value: `${visibleVideos.length}`,    color: 'text-accent' },
+            { icon: <Zap size={13} />,       label: contentFormat === 'image' ? '热门图文' : '热门视频', value: `${visibleVideos.length}`,    color: 'text-accent' },
             { icon: <TrendingUp size={13} />, label: '上升趋势', value: `${recentThreeDayUploads}`, color: 'text-green' },
             { icon: <Globe size={13} />,      label: '覆盖平台', value: `${new Set(visibleVideos.map(v => v.platform)).size}`,       color: 'text-accent' },
           ].map(stat => (

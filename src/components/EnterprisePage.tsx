@@ -1,8 +1,14 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { Building2, Package, Megaphone, BookOpen, Save, CheckCircle2, Loader2, Compass, Zap, MessageSquare, RotateCcw, Plus, Upload, X, Image, Video, FileText, KeyRound, Copy, ExternalLink, Download as DownloadIcon } from 'lucide-react';
+import { Building2, Package, Megaphone, BookOpen, Save, CheckCircle2, Loader2, Compass, Zap, MessageSquare, RotateCcw, Plus, Upload, X, Image, Video, FileText, Copy, FileSpreadsheet } from 'lucide-react';
 import { authHeader } from '../lib/auth';
 import { completeDemoStep } from '../lib/demoProgress';
+import {
+  heuristicProductMapping,
+  mapRowToProduct,
+  parseWorkbook,
+  prepareSheet,
+} from '../lib/productImport';
 
 interface ProductAsset {
   name: string;
@@ -13,8 +19,14 @@ interface ProductAsset {
 }
 
 interface ProductItem {
+  sku?: string;
   name: string;
   category?: string;
+  color?: string;
+  size?: string;
+  tagPrice?: string;
+  material?: string;
+  imageUrl?: string;
   priceRange?: string;
   moq?: string;
   certifications?: string;
@@ -70,7 +82,7 @@ const AUTONOMY_OPTIONS: Array<{ value: AutonomyLevel; title: string; desc: strin
 const L3_ACTIONS = ['物流状态更新', '节假日祝福', '明确索要目录时发送已审批资料', '标准售后确认', '知识库内基础问答'];
 
 interface DemoTemplate { id: string; name: string; description: string; profile?: Profile }
-interface ProductApiInfo { apiKey: string; tenantId: string; docsUrl: string; createdAt?: string; lastIngestedAt?: string; lastProductName?: string }
+interface ProductApiInfo { apiKey: string; tenantId: string; createdAt?: string; lastIngestedAt?: string; lastProductName?: string }
 interface ProductApiStatus { count: number; lastIngestedAt?: string; lastProductName?: string }
 
 function matchTemplateId(profile: Profile, templates: DemoTemplate[]): string {
@@ -157,6 +169,8 @@ export default function EnterprisePage() {
   const [orderImporting, setOrderImporting] = useState(false);
   const [orderImportMessage, setOrderImportMessage] = useState('');
   const [autonomyHighlight, setAutonomyHighlight] = useState(false);
+  const [productImporting, setProductImporting] = useState(false);
+  const [productImportMessage, setProductImportMessage] = useState('');
 
   useEffect(() => {
     Promise.all([
@@ -294,16 +308,53 @@ export default function EnterprisePage() {
     }
   };
 
-  const downloadOrderTemplate = () => {
-    const headers = ['订单号', '客户名称', '商品/SKU', '市场', '渠道', '数量', 'GMV', '成本', '状态', '订单日期', '负责人', '来源', '来源凭证'];
-    const csv = `${headers.join(',')}\n`;
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = 'lingshu-orders-template.csv';
-    link.click();
-    URL.revokeObjectURL(url);
+  const importProductSheet = async (file: File | null) => {
+    if (!file) return;
+    setProductImporting(true);
+    setProductImportMessage('');
+    try {
+      const sheets = await parseWorkbook(file);
+      const selected = sheets.slice().sort((a, b) => b.rowCount - a.rowCount)[0];
+      if (!selected) throw new Error('没有读取到可导入的表格');
+      const prepared = prepareSheet(selected);
+      const mapping = heuristicProductMapping(prepared.headers);
+      const incoming = prepared.dataRows
+        .map(row => mapRowToProduct(row, mapping) as Partial<ProductItem>)
+        .filter(item => item.name || item.sku)
+        .map((item, index): ProductItem => ({
+          name: item.name || item.sku || `导入产品${index + 1}`,
+          sku: item.sku,
+          color: item.color,
+          size: item.size,
+          tagPrice: item.tagPrice,
+          material: item.material,
+          imageUrl: item.imageUrl,
+          priceRange: item.tagPrice,
+          category: profile.products.categories,
+          highlights: item.highlights,
+          images: item.imageUrl ? [{ name: item.imageUrl.split('/').pop() || '商品主图', type: 'image/url', size: 0, updatedAt: new Date().toISOString(), url: item.imageUrl }] : [],
+          videos: [],
+          documents: [],
+        }));
+      if (!incoming.length) throw new Error('没有识别到有效产品行，请检查表头是否包含商品名称或 SKU');
+      setProfile(prev => {
+        const existing = normalizeProductItems(prev.products);
+        const next = [...existing];
+        for (const item of incoming) {
+          const sku = item.sku?.trim();
+          const index = sku ? next.findIndex(product => product.sku?.trim() === sku) : -1;
+          if (index >= 0) next[index] = { ...next[index], ...item };
+          else next.push(item);
+        }
+        return { ...prev, products: { ...prev.products, items: next } };
+      });
+      const skipped = prepared.dataRows.length - incoming.length;
+      setProductImportMessage(`已导入 ${incoming.length} 个产品${skipped > 0 ? `，跳过 ${skipped} 行` : ''}，点击右上角保存后生效`);
+    } catch (e) {
+      setProductImportMessage(e instanceof Error ? e.message : '产品导入失败，请检查 CSV/XLSX 字段');
+    } finally {
+      setProductImporting(false);
+    }
   };
 
   const updateProduct = (index: number, patch: Partial<ProductItem>) => {
@@ -406,19 +457,29 @@ export default function EnterprisePage() {
           <section className="card p-4">
             <div className="flex items-start gap-3">
               <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-green-50 text-green-700">
-                <KeyRound size={16} />
+                <FileSpreadsheet size={16} />
               </span>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <p className="text-xs font-semibold text-text-primary">产品 API 接入</p>
-                    <p className="mt-1 text-[11px] leading-relaxed text-text-muted">给 ERP 服务商使用：批量 upsert、查询、删除。服装自由属性统一放 attributes JSON。</p>
+                    <p className="text-xs font-semibold text-text-primary">产品数据导入</p>
+                    <p className="mt-1 text-[11px] leading-relaxed text-text-muted">上传本地商品表，或给 ERP 服务商使用 API 批量 upsert、查询、删除。</p>
                   </div>
                   <div className="flex items-center gap-2">
-                    <a href={apiInfo?.docsUrl || '/api/overseas/enterprise/product-api/docs'} target="_blank" rel="noreferrer"
-                      className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs font-semibold text-text-secondary hover:text-text-primary">
-                      文档 <ExternalLink size={12} />
-                    </a>
+                    <label className="inline-flex cursor-pointer items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs font-semibold text-text-secondary hover:text-text-primary">
+                      {productImporting ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+                      上传产品表
+                      <input
+                        type="file"
+                        accept=".xlsx,.xls,.csv"
+                        className="hidden"
+                        disabled={productImporting}
+                        onChange={e => {
+                          void importProductSheet(e.currentTarget.files?.[0] ?? null);
+                          e.currentTarget.value = '';
+                        }}
+                      />
+                    </label>
                     <button type="button" onClick={rotateProductApiKey}
                       className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs font-semibold text-text-secondary hover:text-text-primary">
                       重置Key
@@ -432,6 +493,7 @@ export default function EnterprisePage() {
                     <Copy size={12} />复制
                   </button>
                 </div>
+                {productImportMessage && <p className="mt-2 text-[11px] font-semibold text-green-700">{productImportMessage}</p>}
                 <p className="mt-2 text-[11px] text-text-muted">已接入商品：{apiStatus.count}{apiStatus.lastIngestedAt ? ` · 最近接入 ${apiStatus.lastProductName || '商品'}` : ''}</p>
               </div>
             </div>
@@ -443,15 +505,9 @@ export default function EnterprisePage() {
                 <FileText size={16} />
               </span>
               <div className="min-w-0 flex-1">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <p className="text-xs font-semibold text-text-primary">真实订单数据导入</p>
-                    <p className="mt-1 text-[11px] leading-relaxed text-text-muted">上传 ERP、Shopify、财务表或人工整理的 CSV。我的订单页只基于导入/录入的真实订单聚合 GMV、毛利和履约状态。</p>
-                  </div>
-                  <button type="button" onClick={downloadOrderTemplate}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs font-semibold text-text-secondary hover:text-text-primary">
-                    模板 <DownloadIcon />
-                  </button>
+                <div>
+                  <p className="text-xs font-semibold text-text-primary">订单数据导入</p>
+                  <p className="mt-1 text-[11px] leading-relaxed text-text-muted">上传 ERP、Shopify、财务表或人工整理的 CSV。我的订单页只基于导入/录入的真实订单聚合 GMV、毛利和履约状态。</p>
                 </div>
                 <div className="mt-3 flex flex-wrap items-center gap-2">
                   <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg bg-slate-950 px-3 py-2 text-xs font-semibold text-white">
@@ -672,11 +728,28 @@ export default function EnterprisePage() {
                 <Package size={14} className="text-text-secondary" />
                 <h3 className="text-sm font-semibold text-text-primary">产品目录</h3>
               </div>
-              <button type="button" onClick={addProduct}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs font-semibold text-text-secondary hover:text-text-primary hover:bg-surface-2">
-                <Plus size={12} />添加产品
-              </button>
+              <div className="flex items-center gap-2">
+                <label className="inline-flex cursor-pointer items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs font-semibold text-text-secondary hover:text-text-primary hover:bg-surface-2">
+                  {productImporting ? <Loader2 size={12} className="animate-spin" /> : <FileSpreadsheet size={12} />}
+                  导入产品表
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    className="hidden"
+                    disabled={productImporting}
+                    onChange={e => {
+                      void importProductSheet(e.currentTarget.files?.[0] ?? null);
+                      e.currentTarget.value = '';
+                    }}
+                  />
+                </label>
+                <button type="button" onClick={addProduct}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs font-semibold text-text-secondary hover:text-text-primary hover:bg-surface-2">
+                  <Plus size={12} />添加产品
+                </button>
+              </div>
             </div>
+            {productImportMessage && <p className="text-[11px] font-semibold text-green-700">{productImportMessage}</p>}
             <div className="grid grid-cols-2 gap-4">
               <Field label="主营品类">
                 <input className={inputCls} placeholder="美妆个护、家居日用、消费电子" value={profile.products.categories}
