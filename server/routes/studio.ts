@@ -18,6 +18,7 @@ import {
 } from '../middleware/subscription.js';
 import { signRenderToken } from '../lib/renderToken.js';
 import { consumeDemoQuota, isDemoMode } from '../lib/demo.js';
+import { generatePosterImage, imageExt, type ReferenceImage } from '../lib/imageGen.js';
 
 /* ──────────────────────────────────────────────────────────────────────────
    Studio 路由 —— 服务于「社媒 / AI 生成内容」混剪工作台
@@ -172,6 +173,38 @@ async function createGeneratedVideoMaterial(input: {
   const list = loadMaterials().filter(item => item.url !== material.url);
   list.push(material);
   persistMaterials(list);
+  return material;
+}
+
+async function createGeneratedImageMaterial(input: {
+  title: string;
+  bytes: Buffer;
+  mimeType: string;
+  source?: string;
+}): Promise<Material> {
+  fs.mkdirSync(GENERATED_MEDIA_DIR, { recursive: true });
+  const id = randomUUID();
+  const ext = imageExt(input.mimeType);
+  const filename = `${id}.${ext}`;
+  const filePath = path.join(GENERATED_MEDIA_DIR, filename);
+  fs.writeFileSync(filePath, input.bytes);
+  const material: Material = {
+    id,
+    name: input.title || 'AI 图文海报',
+    folder: 'product',
+    type: 'image',
+    duration: 0,
+    size: humanSize(input.bytes.length),
+    file: `generated/${filename}`,
+    url: generatedMediaUrl(filename),
+    poster: generatedMediaUrl(filename),
+    scope: 'own',
+    createdAt: new Date().toISOString(),
+  };
+  const list = loadMaterials().filter(item => item.url !== material.url);
+  list.push(material);
+  persistMaterials(list);
+  console.log(`[studio] generated poster image material ${material.id} via ${input.source || 'image-model'}`);
   return material;
 }
 
@@ -1063,7 +1096,11 @@ studioRouter.post('/fb-poster', async (req, res) => {
     ? materials.slice(0, 8).map((item: any, index: number) => `${index + 1}. ${String(item?.name || item || '').slice(0, 120)}${item?.role ? ` (${item.role})` : ''}`).join('\n')
     : '';
   const modeGuide = mode === 'clone'
-    ? 'Use the reference poster only for structure: headline pattern, module order, visual style, CTA, and caption framework. Do not copy false claims.'
+    ? [
+        'First modularly deconstruct the reference poster into reusable layout modules: headline zone, product hero, background atmosphere, factory/proof strip, badges, process row, category cards, CTA/bottom bar, and caption framework.',
+        'Then map each reusable module to local/enterprise assets: replace competitor product with our product photo, reuse only generic background/composition style, match factory/proof modules with factory/certificate assets, and rebuild copy from verified enterprise/product info.',
+        'Do not copy competitor brand, logo, certifications, price, MOQ, lead time, export country, factory qualification, or any unverified commercial promise.',
+      ].join(' ')
     : mode === 'material'
       ? 'Use selected material names as evidence for product photo, factory photo, packaging, certificate, and scene sections.'
       : 'Use enterprise profile and product info as the primary source.';
@@ -1087,12 +1124,21 @@ ${String(referenceNotes || '').slice(0, 1500) || '(none)'}
 Hard rules:
 - AI may optimize expression, but must not invent commercial promises.
 - MOQ, certifications, lead time, price, export countries, factory qualifications must come from product / enterprise info or be placed in fieldsToConfirm.
+- If Generation channel is clone, output a module-level deconstruction and local asset matching plan. The final poster must be a new composition using our product/materials, not a copy of the competitor poster.
 - Poster text should be concise enough for a dense B2B OEM poster.
 - Use exact English text for poster fields when language is English.
 - Return ONLY valid JSON. No markdown.
 
 Schema:
 {
+  "layoutModules": [
+    {
+      "module": "headline zone / product hero / background / factory proof / badges / process row / category cards / CTA bar",
+      "referencePattern": "what to reuse from the viral poster structure or style",
+      "localAssetRole": "product photo / factory image / packaging image / certificate image / scene image / brand visual / none",
+      "replacementInstruction": "how to replace competitor content with our verified assets and copy"
+    }
+  ],
   "poster": {
     "headline": "string",
     "subheadline": "string",
@@ -1109,29 +1155,82 @@ Schema:
   "commentCta": "string",
   "dmOpening": "string",
   "fieldsToConfirm": ["MOQ", "certifications"],
-  "imagePrompt": "detailed prompt for a no-extra-text B2B OEM poster image model; include all poster text exactly as above; mention style, sections, product references, and layout"
+  "imagePrompt": "detailed prompt for a no-extra-text B2B OEM poster image model; include layoutModules as composition guidance, include all poster text exactly as above, mention product replacement, background/style reuse, local material roles, sections, and layout"
 }`;
 
-  try {
-    const text = await callLLM(prompt, { backend: providerOpt, systemPrompt: enterpriseCtx() || undefined });
-    const obj = extractJSON<any>(text);
-    if (obj?.poster?.headline && obj?.caption) {
-      res.json({
-        ok: true,
-        source: 'ai',
-        poster: normalizePosterBrief(obj.poster),
-        caption: String(obj.caption || ''),
-        hashtags: Array.isArray(obj.hashtags) ? obj.hashtags.map(String).slice(0, 10) : [],
-        commentCta: String(obj.commentCta || ''),
-        dmOpening: String(obj.dmOpening || ''),
-        fieldsToConfirm: Array.isArray(obj.fieldsToConfirm) ? obj.fieldsToConfirm.map(String).slice(0, 12) : [],
-        imagePrompt: String(obj.imagePrompt || ''),
-      });
-      return;
+  const backends = providerOpt
+    ? [providerOpt, providerOpt === 'qwen' ? 'gemini' : 'qwen'] as const
+    : ['qwen', 'gemini'] as const;
+  const failures: string[] = [];
+  for (const backend of backends) {
+    try {
+      const text = await callLLM(prompt, { backend, systemPrompt: enterpriseCtx() || undefined });
+      const obj = extractJSON<any>(text);
+      if (obj?.poster?.headline && obj?.caption) {
+        res.json({
+          ok: true,
+          source: 'ai',
+          provider: backend,
+          layoutModules: Array.isArray(obj.layoutModules) ? obj.layoutModules.slice(0, 12) : [],
+          poster: normalizePosterBrief(obj.poster),
+          caption: String(obj.caption || ''),
+          hashtags: Array.isArray(obj.hashtags) ? obj.hashtags.map(String).slice(0, 10) : [],
+          commentCta: String(obj.commentCta || ''),
+          dmOpening: String(obj.dmOpening || ''),
+          fieldsToConfirm: Array.isArray(obj.fieldsToConfirm) ? obj.fieldsToConfirm.map(String).slice(0, 12) : [],
+          imagePrompt: String(obj.imagePrompt || ''),
+        });
+        return;
+      }
+      failures.push(`${backend}: parse_failed`);
+    } catch (err: any) {
+      failures.push(`${backend}: ${String(err?.message || err).slice(0, 180)}`);
     }
-    throw new Error('parse');
-  } catch {
-    res.json({ ok: true, source: 'fallback', ...fallbackPosterBrief({ productInfo, platform, ratio, posterStyle, language }) });
+  }
+  console.warn('[studio] fb-poster LLM fallback:', failures.join(' | '));
+  res.json({ ok: true, source: 'fallback', ...fallbackPosterBrief({ productInfo, platform, ratio, posterStyle, language }) });
+});
+
+// POST /studio/fb-poster/render  Body: { poster, caption, imagePrompt, ratio, materialIds? }
+studioRouter.post('/fb-poster/render', async (req, res) => {
+  if (!await consumeDemoQuota(req, res, 'generation')) return;
+  const {
+    poster = null,
+    imagePrompt = '',
+    ratio = '1:1',
+    materialIds = [],
+  } = req.body ?? {};
+  const normalizedPoster = normalizePosterBrief(poster || {});
+  const headline = normalizedPoster.headline || 'AI 图文海报';
+  const references = resolveReferenceImages(materialIds);
+  const prompt = [
+    String(imagePrompt || '').trim(),
+    'Generate one finished high-end B2B OEM/ODM social media poster image.',
+    `Use this exact poster JSON as the content source:\n${JSON.stringify(normalizedPoster, null, 2)}`,
+    `Aspect ratio: ${ratio}.`,
+    'Layout should look like a premium Facebook/Instagram B2B supplier poster: product hero area, factory proof area, badges, process row, category cards, bottom CTA bar.',
+    'All visible text must match the JSON exactly. Avoid extra fake certifications, fake numbers, fake flags, watermarks, or unreadable tiny claims.',
+    references.length ? `Use the ${references.length} reference image(s) for product/factory visual guidance.` : 'No reference image was provided; create a realistic generic product/factory visual without brand-specific false claims.',
+  ].filter(Boolean).join('\n\n');
+
+  try {
+    const generated = await generatePosterImage({ prompt, ratio: String(ratio || '1:1'), references });
+    const material = await createGeneratedImageMaterial({
+      title: `AI 图文海报 · ${headline}`.slice(0, 120),
+      bytes: generated.bytes,
+      mimeType: generated.mimeType,
+      source: generated.source,
+    });
+    res.json({
+      ok: true,
+      source: generated.source,
+      model: generated.model,
+      url: material.url,
+      material,
+      references: references.length,
+    });
+  } catch (err: any) {
+    res.status(502).json({ ok: false, error: String(err?.message || err || 'image_generation_failed') });
   }
 });
 
@@ -2821,6 +2920,46 @@ function normalizePosterBrief(raw: any) {
   };
 }
 
+function mimeFromFile(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.gif') return 'image/gif';
+  return 'image/png';
+}
+
+function materialLocalFile(material: Material): string | null {
+  const raw = material.type === 'image'
+    ? material.file
+    : material.poster ? path.basename(material.poster) : '';
+  if (!raw) return null;
+  if (raw.includes('/')) return path.join(MEDIA_DIR, raw);
+  const generatedCandidate = path.join(GENERATED_MEDIA_DIR, raw);
+  if (fs.existsSync(generatedCandidate)) return generatedCandidate;
+  return path.join(MEDIA_DIR, raw);
+}
+
+function resolveReferenceImages(materialIds: unknown): ReferenceImage[] {
+  const ids = new Set(Array.isArray(materialIds) ? materialIds.map(String) : []);
+  if (!ids.size) return [];
+  const refs: ReferenceImage[] = [];
+  for (const material of loadMaterials()) {
+    if (!ids.has(material.id)) continue;
+    const filePath = materialLocalFile(material);
+    if (!filePath || !fs.existsSync(filePath)) continue;
+    try {
+      refs.push({
+        mimeType: mimeFromFile(filePath),
+        base64: fs.readFileSync(filePath).toString('base64'),
+      });
+    } catch {
+      // Skip unreadable references; generation can still proceed with remaining assets.
+    }
+    if (refs.length >= 4) break;
+  }
+  return refs;
+}
+
 function fallbackPosterBrief(input: { productInfo?: unknown; platform?: unknown; ratio?: unknown; posterStyle?: unknown; language?: unknown }) {
   const productText = String(input.productInfo || '');
   const categoryMatch = productText.match(/(?:产品类目|产品名称|主推产品|category|product)[：:]\s*([^\n]+)/i);
@@ -2841,6 +2980,26 @@ function fallbackPosterBrief(input: { productInfo?: unknown; platform?: unknown;
     cta: 'Comment “CATALOG” or DM us for sample details',
   });
   return {
+    layoutModules: [
+      {
+        module: 'headline zone',
+        referencePattern: 'Use the viral poster hook structure if clone mode is selected; otherwise use a clear OEM/ODM value proposition.',
+        localAssetRole: 'none',
+        replacementInstruction: 'Rewrite with verified product category, target buyer pain point, and CTA.',
+      },
+      {
+        module: 'product hero',
+        referencePattern: 'Large center product display with premium catalog lighting.',
+        localAssetRole: 'product photo',
+        replacementInstruction: 'Replace competitor product with selected local product images.',
+      },
+      {
+        module: 'background and proof areas',
+        referencePattern: 'Reuse only the generic background mood, module order, and information hierarchy.',
+        localAssetRole: 'factory image / certificate image / packaging image / scene image',
+        replacementInstruction: 'Match factory, certificate, packaging, and scene assets to the corresponding poster modules.',
+      },
+    ],
     poster,
     caption: `🌿 Looking to launch your own ${category} brand?\n\n🚀 We support OEM/ODM, private label packaging, product customization, and export-ready supply for overseas buyers.\n\n💎 Comment “CATALOG” or DM us to get product options and sample details.`,
     hashtags: ['OEM', 'ODM', 'PrivateLabel', 'B2B', 'Wholesale', 'FactoryDirect'],

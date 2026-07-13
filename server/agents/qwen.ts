@@ -85,3 +85,62 @@ export async function analyzeVideoFramesWithQwen(opts: {
   const parsed = parseJson<Partial<VideoAiAnalysis>>(raw, {});
   return normalizeVideoAnalysis(parsed);
 }
+
+export async function analyzeImagePostWithQwen(opts: {
+  imageBase64: string;
+  mimeType: string;
+  title?: string;
+  caption?: string;
+  platform?: string;
+  views?: string;
+  tags?: string[];
+  imageCount?: number;
+}): Promise<VideoAiAnalysis> {
+  if (!opts.imageBase64) throw new Error('Qwen image analysis requires an image');
+
+  const systemPrompt = `你是一个面向出海 B2B 社媒获客的图文海报分析专家。
+你会收到一张社媒图文帖的首图，以及标题、caption、平台、互动数据、标签等资料。
+请分析它作为“爆款图文/海报参考”的可复用模块，并输出兼容短视频分析结构的 JSON。所有字符串用简体中文。
+只输出合法 JSON，不要 markdown，不要代码块，不要前后解释。
+
+必需 JSON 字段：
+- theme: string，概括这张图文/海报的产品、场景和营销目标
+- hooks: string[], 2-4 个可复用开头钩子/爆点，必须结合 caption 与画面
+- sellingPoints: string[], 3-6 个可复用卖点表达或信息模块
+- mood: string，视觉风格/审美质感，例如“高端工厂招商海报”“洁净实验室背书”“节日促销图文”
+- structure: string，模块结构，例如“标题区 -> 产品主视觉 -> 背景氛围 -> 信息栏 -> 认证徽章 -> CTA”
+- baseRequirements: string，说明可复用的画风、构图、色彩、光影、排版密度和图文生成注意点
+- firstTenSeconds: object，虽然是静态图，也按五维输出：atmosphere、audioVisual、camera、visuals、voiceMusic；audioVisual/voiceMusic 可写“静态图无音频，caption 承担解释”
+- coarseStructure: array，把图文拆成可复用模块；每项包含 time、label、description。time 可用“标题区/产品主视觉/背景/信息栏/CTA”
+- scriptSummary15s: object，包含 visualStyle、coreEmotion、competitors
+- scriptDetails15s: array，逐模块详析，每项包含 time、environment、shot、camera、visual、subtitle、audio、note；subtitle 只写画面中能看清的文字或 caption 中确定表达，不能编造
+- recommendedScriptType: "storyboard"`;
+
+  const meta = [
+    `标题：${opts.title || '未知'}`,
+    opts.caption ? `原始 caption：${opts.caption}` : '',
+    `平台：${opts.platform || '未知'}`,
+    opts.views ? `互动/热度：${opts.views}` : '',
+    opts.imageCount ? `图组张数：${opts.imageCount}` : '',
+    opts.tags?.length ? `标签：${opts.tags.join(', ')}` : '',
+  ].filter(Boolean).join('\n');
+
+  const completion = await client().chat.completions.create({
+    model: QWEN_VL_MODEL(),
+    messages: [
+      { role: 'system', content: systemPrompt },
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: `${meta}\n\n请拆解这张图文/海报，输出上述 JSON。` },
+          { type: 'image_url', image_url: { url: `data:${opts.mimeType};base64,${opts.imageBase64.replace(/^data:[^,]+,/, '')}` } },
+        ] as any,
+      },
+    ],
+    response_format: { type: 'json_object' },
+  });
+
+  const raw = completion.choices[0]?.message?.content ?? '';
+  const parsed = parseJson<Partial<VideoAiAnalysis>>(raw, {});
+  return normalizeVideoAnalysis({ ...parsed, recommendedScriptType: 'storyboard' });
+}

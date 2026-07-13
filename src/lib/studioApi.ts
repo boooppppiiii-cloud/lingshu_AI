@@ -203,6 +203,12 @@ export interface FbPosterBrief {
 export interface FbPosterResult {
   ok: boolean;
   source?: 'ai' | 'fallback' | 'local';
+  layoutModules?: {
+    module: string;
+    referencePattern: string;
+    localAssetRole: string;
+    replacementInstruction: string;
+  }[];
   poster: FbPosterBrief;
   caption: string;
   hashtags: string[];
@@ -211,6 +217,76 @@ export interface FbPosterResult {
   fieldsToConfirm: string[];
   imagePrompt: string;
   error?: string;
+}
+
+export interface FbPosterRenderResult {
+  ok: boolean;
+  source?: 'gemini' | 'seedream' | 'local';
+  model?: string;
+  url?: string;
+  material?: Material;
+  references?: number;
+  error?: string;
+}
+
+function productCategoryFromInfo(productInfo?: string): string {
+  const text = String(productInfo || '');
+  const match = text.match(/(?:产品类目|所属类目|产品名称|主推产品|category|product)[：:]\s*([^\n]+)/i);
+  return String(match?.[1] || 'Private Label Product').trim().slice(0, 60) || 'Private Label Product';
+}
+
+function localPosterFallback(input: {
+  productInfo?: string;
+  ratio?: string;
+  posterStyle?: string;
+}): FbPosterResult {
+  const category = productCategoryFromInfo(input.productInfo);
+  const poster: FbPosterBrief = {
+    headline: `OEM/ODM ${category}`,
+    subheadline: 'Private label solution for overseas brands',
+    originBadge: 'Global export support',
+    trustBadges: ['GMP', 'ISO', 'FDA-ready'],
+    sellingPoints: ['Custom Formula', 'Premium Packaging', 'Factory Support', 'Global Export'],
+    process: ['Consultation', 'Formula Development', 'Packaging Design', 'Production', 'Quality Control', 'Delivery'],
+    categories: [
+      { name: category, description: 'Customizable product line for brand owners and distributors' },
+      { name: 'Private Label', description: 'Logo, packaging and formula support for market testing' },
+      { name: 'OEM/ODM', description: 'One-stop manufacturing service from sample to bulk order' },
+    ],
+    bottomBar: ['Low MOQ', 'Custom Formula', 'Premium Packaging', 'Fast Turnaround', 'Dedicated Support'],
+    cta: 'Comment "CATALOG" or DM us for sample details',
+  };
+  return {
+    ok: true,
+    source: 'local',
+    layoutModules: [
+      {
+        module: 'headline zone',
+        referencePattern: 'Use a strong OEM/ODM value hook or clone-mode viral opening structure.',
+        localAssetRole: 'none',
+        replacementInstruction: 'Rewrite with verified product category and buyer pain point.',
+      },
+      {
+        module: 'product hero',
+        referencePattern: 'Premium central product display with clean catalog composition.',
+        localAssetRole: 'product photo',
+        replacementInstruction: 'Replace competitor/product placeholder with selected local product images.',
+      },
+      {
+        module: 'proof modules',
+        referencePattern: 'Factory proof, badges, process row, category cards, and CTA bar.',
+        localAssetRole: 'factory image / certificate image / packaging image / scene image',
+        replacementInstruction: 'Map local assets to each proof module and keep commercial claims verified.',
+      },
+    ],
+    poster,
+    caption: `Looking to launch your own ${category} brand?\n\nWe support OEM/ODM, private label packaging, product customization, and export-ready supply for overseas buyers.\n\nComment "CATALOG" or DM us to get product options and sample details.`,
+    hashtags: ['OEM', 'ODM', 'PrivateLabel', 'B2B', 'Wholesale', 'FactoryDirect'],
+    commentCta: 'Comment "CATALOG" to get the product list and sample details.',
+    dmOpening: 'Hi, thanks for your interest. May I know your target market, product type, expected MOQ, and whether you need private label packaging?',
+    fieldsToConfirm: ['MOQ', 'certifications', 'lead time', 'price range', 'export countries', 'factory qualifications'],
+    imagePrompt: `Create a high-end B2B OEM/ODM social media poster for ${category}. Ratio ${String(input.ratio || '1:1')}. Style ${String(input.posterStyle || 'oem-factory')}. Include the exact poster text from the JSON brief, product hero area, factory proof area, trust badges, process row, product category cards, and bottom CTA bar. Premium catalog quality, clean layout, no unreadable tiny text.`,
+  };
 }
 
 async function del(path: string): Promise<{ ok: boolean }> {
@@ -268,26 +344,16 @@ export const studioApi = {
     materials?: Array<{ id?: string; name: string; type?: string; folder?: string; role?: string }>;
     referenceNotes?: string;
   }) =>
-    post<FbPosterResult>('fb-poster', b, {
-      ok: false,
-      poster: {
-        headline: '',
-        subheadline: '',
-        originBadge: '',
-        trustBadges: [],
-        sellingPoints: [],
-        process: [],
-        categories: [],
-        bottomBar: [],
-        cta: '',
-      },
-      caption: '',
-      hashtags: [],
-      commentCta: '',
-      dmOpening: '',
-      fieldsToConfirm: [],
-      imagePrompt: '',
-    }),
+    post<FbPosterResult>('fb-poster', b, localPosterFallback(b)),
+
+  fbPosterRender: (b: {
+    poster: FbPosterBrief;
+    caption?: string;
+    imagePrompt?: string;
+    ratio: string;
+    materialIds?: string[];
+  }) =>
+    post<FbPosterRenderResult>('fb-poster/render', b, { ok: false }),
 
   select: (b: SelectInput, fb: string[]) =>
     post<{ selectedIds: string[]; reason: string }>('select', b, { selectedIds: fb, reason: '本地按视频优先选取' }),

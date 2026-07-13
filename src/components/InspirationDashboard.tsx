@@ -103,6 +103,9 @@ interface VideoAnalysisPayload {
   analysisQuality?: string;
   analysisError?: string;
   analyzedAt?: string;
+  caption?: string;
+  imageUrls?: string[];
+  imageCount?: number;
   crawlerOpsTaskId?: string;
   crawlerOpsStatus?: string;
   crawlerOpsReason?: string;
@@ -1450,7 +1453,7 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
           className="flex w-full items-center justify-center gap-2 rounded-2xl py-3 text-sm font-black text-white transition-all hover:scale-[1.01] active:scale-[0.99]"
           style={{ background: 'linear-gradient(135deg, #16a34a, #059669)', boxShadow: '0 10px 24px rgba(22,163,74,0.26)' }}>
           <Sparkles size={16} />
-          AI一键爆款迭代
+          {video.contentFormat === 'image' ? '进入AI图文复刻' : 'AI一键爆款迭代'}
           <ChevronRight size={15} />
         </button>
       </div>
@@ -1668,7 +1671,7 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onFavorite, favo
   const enterQuickCutFromAnalysis = () => {
     const realAnalysis = getAnalysis(video);
     onEnterWorkflow?.({
-      source: 'inspiration_analysis',
+      source: video.contentFormat === 'image' ? 'inspiration_image_post' : 'inspiration_analysis',
       video,
       scriptType: 'storyboard',
       language,
@@ -1696,7 +1699,7 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onFavorite, favo
       {/* Header */}
       <div className="flex items-start justify-between px-4 py-3.5 border-b border-border flex-shrink-0">
         <div className="flex-1 min-w-0 pr-3">
-          <p className="text-[10px] font-mono text-text-muted uppercase tracking-widest mb-1">AI 脚本助手</p>
+          <p className="text-[10px] font-mono text-text-muted uppercase tracking-widest mb-1">{video.contentFormat === 'image' ? 'AI 图文拆解' : 'AI 脚本助手'}</p>
           <h3 className="text-sm font-semibold text-text-primary leading-snug line-clamp-2">{video.title}</h3>
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
@@ -2011,6 +2014,11 @@ function VideoCard({ video, index, isSelected, onSelect, onWatch, onAnalyzeVideo
           <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-white text-neutral-900">
             {isImagePost ? <Images size={11} /> : <Play size={11} fill="currentColor" />}{isImagePost ? '查看' : video.videoUrl ? '观看' : '原站'}
           </span>
+          {isImagePost && <button onClick={e => { e.stopPropagation(); onSelect(); }}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold"
+            style={{ background: meta.bg, color: meta.color }}>
+            <Sparkles size={11} />AI复刻
+          </button>}
           {!isImagePost && <button onClick={e => { e.stopPropagation(); if (onAnalyzeVideo) onAnalyzeVideo(); else onSelect(); }}
             disabled={analyzingVideo}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold"
@@ -2099,6 +2107,11 @@ function VideoListItem({ video, isSelected, onSelect, onWatch, onAnalyzeVideo, o
         <p className="text-xs font-mono text-text-secondary">{isImagePost ? '图文' : `${Math.floor(video.duration / 60)}:${String(video.duration % 60).padStart(2, '0')}`}</p>
         <p className="text-[10px] text-text-muted">{video.views}</p>
       </div>
+      {isImagePost && <button onClick={e => { e.stopPropagation(); onSelect(); }}
+        className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all opacity-0 group-hover:opacity-100"
+        style={{ color: 'var(--color-accent)', borderColor: 'rgba(22,163,74,0.25)', background: 'var(--color-accent-glow)' }}>
+        <Sparkles size={11} /><span>AI图文复刻</span>
+      </button>}
       {!isImagePost && <button onClick={e => { e.stopPropagation(); if (onAnalyzeVideo) onAnalyzeVideo(); else onSelect(); }}
         disabled={analyzingVideo}
         className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all opacity-0 group-hover:opacity-100"

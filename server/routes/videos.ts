@@ -11,7 +11,7 @@ import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 import { store } from '../storage/index.js';
 import { attachFile, fetchFile } from '../storage/files.js';
 import { analyzeVideo, analyzeYouTubeUrl } from '../agents/gemini.js';
-import { analyzeVideoFramesWithQwen } from '../agents/qwen.js';
+import { analyzeImagePostWithQwen, analyzeVideoFramesWithQwen } from '../agents/qwen.js';
 import type { Platform, VideoAiAnalysis, VideoStatus } from '../types/index.js';
 import { isDemoMode } from '../lib/demo.js';
 import { recordVideoAdminAlert, updateVideoAdminAlertByRecordId } from '../lib/videoAdminAlerts.js';
@@ -57,6 +57,8 @@ interface CrawledImagePost {
   title: string;
   sourceUrl: string;
   thumbnailUrl: string;
+  caption?: string;
+  imageUrls?: string[];
   views: string;
   tags: string[];
   uploadedAt?: string;
@@ -685,15 +687,22 @@ async function crawlImagePostsForTenant(input: {
       skipped += 1;
       skippedExisting += 1;
       const existingAnalysis = parseJsonRecord<Record<string, unknown>>(existingRecord.aiAnalysis, {});
+      const imageAnalysis = await analyzeImagePostBestEffort(item, keyword, existingAnalysis.gemini as VideoAiAnalysis | undefined);
       await store.update(COL, String(existingRecord.id), {
         thumbnailUrl: item.thumbnailUrl || String(existingRecord.thumbnailUrl || ''),
         aiAnalysis: JSON.stringify({
           ...existingAnalysis,
           contentFormat: 'image',
+          caption: item.caption || existingAnalysis.caption || item.title,
+          imageUrls: item.imageUrls?.length ? item.imageUrls : existingAnalysis.imageUrls,
+          imageCount: item.imageUrls?.length || existingAnalysis.imageCount || 1,
           views: item.views || existingAnalysis.views,
           uploadedAt: item.uploadedAt || existingAnalysis.uploadedAt,
           keyword,
           crawlRule: '图文检索',
+          gemini: imageAnalysis,
+          analysisSource: imageAnalysis === existingAnalysis.gemini ? existingAnalysis.analysisSource : 'qwen-image',
+          analysisQuality: 'image',
           importedAt: existingAnalysis.importedAt || new Date().toISOString(),
         }),
       });
@@ -701,6 +710,7 @@ async function crawlImagePostsForTenant(input: {
       continue;
     }
 
+    const imageAnalysis = await analyzeImagePostBestEffort(item, keyword);
     const record = await store.create(COL, {
       tenantId: input.tenantId,
       platform: item.platform,
@@ -713,14 +723,17 @@ async function crawlImagePostsForTenant(input: {
       aiAnalysis: JSON.stringify({
         contentFormat: 'image',
         source: item.source || crawlerSource,
+        caption: item.caption || item.title,
+        imageUrls: item.imageUrls?.length ? item.imageUrls : [item.thumbnailUrl].filter(Boolean),
+        imageCount: item.imageUrls?.length || 1,
         views: item.views,
         uploadedAt: item.uploadedAt,
         author: item.author,
         likes: item.likes,
         comments: item.comments,
-        gemini: imageMetadataFallbackAnalysis(item),
-        analysisSource: 'image-metadata',
-        analysisQuality: 'metadata',
+        gemini: imageAnalysis,
+        analysisSource: imageAnalysis ? 'qwen-image' : 'image-metadata',
+        analysisQuality: imageAnalysis ? 'image' : 'metadata',
         keyword,
         crawlRule: '图文检索',
         importedAt: new Date().toISOString(),
@@ -2877,6 +2890,7 @@ function apifyInstagramItemToImagePost(item: Record<string, unknown>, keyword: s
   const thumbnailUrl = firstImageUrl([item.displayUrl, item.images, item]);
   if (!thumbnailUrl) return null;
   const caption = String(item.caption || '').trim();
+  const imageUrls = imageUrlsFrom([item.displayUrl, item.images, item]).filter(url => !/\.(?:mp4|mov|webm)(?:[?#]|$)/i.test(url));
   const likes = Number(item.likesCount || 0);
   const comments = Number(item.commentsCount || 0);
   return {
@@ -2884,6 +2898,8 @@ function apifyInstagramItemToImagePost(item: Record<string, unknown>, keyword: s
     title: cleanupAnalysisTitle(caption || (author ? `Instagram post by ${author}` : 'Instagram image post')),
     sourceUrl,
     thumbnailUrl,
+    caption,
+    imageUrls: imageUrls.length ? imageUrls : [thumbnailUrl],
     views: likes > 0 ? `${compactNumber(likes)} likes` : 'Instagram',
     tags: apifyInstagramTags(item, keyword),
     uploadedAt: apifyInstagramUploadedAt(item),
@@ -2919,13 +2935,17 @@ function apifyTikTokItemToImagePost(item: Record<string, unknown>, keyword: stri
   const sourceUrl = canonicalSourceUrl('tiktok', String(item.webVideoUrl || item.url || item.shareUrl || item.link || '').trim(), author);
   if (!sourceUrl || !isPlatformUrl(sourceUrl, 'tiktok')) return null;
   const text = String(item.text || item.description || item.desc || item.title || '').trim();
+  const thumbnailUrl = firstImageUrl([item.imagePost, item.images, item.imageUrls, item.coverUrl, item.thumbnailUrl, item]);
+  const imageUrls = imageUrlsFrom([item.imagePost, item.images, item.imageUrls, item.coverUrl, item.thumbnailUrl, item]);
   const likes = Number(item.diggCount || item.likes || item.likeCount || 0);
   const comments = Number(item.commentCount || item.comments || 0);
   return {
     platform: 'tiktok',
     title: cleanupAnalysisTitle(text || (author ? `TikTok photo post by ${author}` : 'TikTok photo post')),
     sourceUrl,
-    thumbnailUrl: firstImageUrl([item.imagePost, item.images, item.imageUrls, item.coverUrl, item.thumbnailUrl, item]),
+    thumbnailUrl,
+    caption: text,
+    imageUrls: imageUrls.length ? imageUrls : [thumbnailUrl].filter(Boolean),
     views: likes > 0 ? `${compactNumber(likes)} likes` : 'TikTok',
     tags: apifyTikTokTags(item, keyword),
     uploadedAt: apifyUploadedAt(item),
@@ -2966,6 +2986,7 @@ function apifyFacebookPostToImagePost(item: Record<string, unknown>, keyword: st
   if (!media || !thumbnailUrl) return null;
   const author = String(item.pageName || asRecord(item.user).name || '').trim();
   const text = String(item.text || item.message || '').trim();
+  const imageUrls = imageUrlsFrom([media, item.media, item]);
   const likes = Number(item.likes || item.reactionLikeCount || 0);
   const comments = Number(item.comments || 0);
   return {
@@ -2973,6 +2994,8 @@ function apifyFacebookPostToImagePost(item: Record<string, unknown>, keyword: st
     title: cleanupAnalysisTitle(text || (author ? `Facebook post by ${author}` : 'Facebook image post')),
     sourceUrl: stripTrackingParams(sourceUrl),
     thumbnailUrl,
+    caption: text,
+    imageUrls: imageUrls.length ? imageUrls : [thumbnailUrl],
     views: likes > 0 ? `${compactNumber(likes)} likes` : 'Facebook',
     tags: tagsFromKeyword(keyword, 'facebook'),
     uploadedAt: apifyFacebookUploadedAt(item, media || {}),
@@ -3020,6 +3043,8 @@ async function crawlFacebookImagePostsPublicSearch(keyword: string, limit: numbe
       title: cleanupAnalysisTitle(title || `Facebook image post: ${keyword}`),
       sourceUrl: link,
       thumbnailUrl: '',
+      caption: title,
+      imageUrls: [],
       views: 'Facebook',
       tags: tagsFromKeyword(keyword, 'facebook'),
       source: 'public-search-image',
@@ -3048,6 +3073,8 @@ async function crawlYouTubeCommunityPostsPublicSearch(keyword: string, limit: nu
       title: cleanupAnalysisTitle(title || `YouTube Community post: ${keyword}`),
       sourceUrl: link,
       thumbnailUrl: '',
+      caption: title,
+      imageUrls: [],
       views: 'YouTube',
       tags: tagsFromKeyword(keyword, 'youtube'),
       source: 'public-search-image',
@@ -3063,6 +3090,63 @@ function imagePostRelevant(item: CrawledImagePost, keyword: string): boolean {
   if (!clean || /^https?:\/\//i.test(clean)) return true;
   const text = `${item.title} ${item.tags.join(' ')}`.toLowerCase();
   return clean.split(/\s+/).some(token => token.length > 1 && text.includes(token.replace(/^#/, '')));
+}
+
+async function fetchImageForAnalysis(url: string): Promise<{ base64: string; mimeType: string } | null> {
+  const normalized = normalizeThumbnailUrl(url);
+  if (!normalized) return null;
+  try {
+    let filePath = '';
+    if (normalized.startsWith('/media/')) filePath = path.join(MEDIA_DIR, path.basename(normalized));
+    if (filePath && fs.existsSync(filePath)) {
+      return { base64: fs.readFileSync(filePath).toString('base64'), mimeType: mimeFromImagePath(filePath) };
+    }
+    const resp = await fetch(normalized, {
+      signal: AbortSignal.timeout(20_000),
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/125 Safari/537.36',
+        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+      },
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const mimeType = resp.headers.get('content-type') || 'image/jpeg';
+    if (!mimeType.startsWith('image/')) return null;
+    const buf = Buffer.from(await resp.arrayBuffer());
+    if (!buf.length || buf.length > 8 * 1024 * 1024) return null;
+    return { base64: buf.toString('base64'), mimeType };
+  } catch {
+    return null;
+  }
+}
+
+function mimeFromImagePath(filePath: string): string {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === '.png') return 'image/png';
+  if (ext === '.webp') return 'image/webp';
+  if (ext === '.gif') return 'image/gif';
+  return 'image/jpeg';
+}
+
+async function analyzeImagePostBestEffort(item: CrawledImagePost, keyword: string, fallback?: VideoAiAnalysis): Promise<VideoAiAnalysis> {
+  const fallbackAnalysis = fallback || imageMetadataFallbackAnalysis(item);
+  const imageUrl = item.thumbnailUrl || item.imageUrls?.[0] || '';
+  const image = await fetchImageForAnalysis(imageUrl);
+  if (!image) return fallbackAnalysis;
+  try {
+    return await analyzeImagePostWithQwen({
+      imageBase64: image.base64,
+      mimeType: image.mimeType,
+      title: item.title,
+      caption: item.caption,
+      platform: item.platform,
+      views: item.views,
+      tags: [...new Set([...item.tags, ...tagsFromKeyword(keyword, item.platform)])],
+      imageCount: item.imageUrls?.length || 1,
+    });
+  } catch (e) {
+    console.warn('[videos] Qwen image post analysis failed:', e instanceof Error ? e.message : e);
+    return fallbackAnalysis;
+  }
 }
 
 function imageMetadataFallbackAnalysis(item: CrawledImagePost): VideoAiAnalysis {
@@ -4539,6 +4623,29 @@ function firstImageUrl(values: unknown[]): string {
     if (found) return found;
   }
   return '';
+}
+
+function imageUrlsFrom(values: unknown[], limit = 10): string[] {
+  const out: string[] = [];
+  const visit = (value: unknown, depth = 0) => {
+    if (out.length >= limit || depth > 5 || value == null) return;
+    if (typeof value === 'string') {
+      const found = normalizeThumbnailUrl(value);
+      if (found && !out.includes(found)) out.push(found);
+      return;
+    }
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item, depth + 1);
+      return;
+    }
+    if (typeof value !== 'object') return;
+    const record = value as Record<string, unknown>;
+    for (const key of ['displayUrl', 'url', 'thumbnail', 'thumbnailUrl', 'image', 'images', 'media', 'photos', 'photo_image']) {
+      visit(record[key], depth + 1);
+    }
+  };
+  values.forEach(value => visit(value));
+  return out.slice(0, limit);
 }
 
 function findImageUrl(value: unknown, depth = 0): string {
