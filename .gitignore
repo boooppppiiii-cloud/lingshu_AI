@@ -7,6 +7,7 @@ dist/
 .env.local
 *.bak.*
 pb_data/
+.local-bin/
 
 # 运行时生成的本地数据（素材上传 / 草稿作品 / BGM 曲库）
 data/media/
@@ -24,6 +25,8 @@ data/crawler-ops-queue.json
 data/apify-video-usage.json
 data/video-admin-alerts.json
 data/backups/
+data/*backup*/
+data/*.backup-*.json
 logs/
 output/
 tmp/

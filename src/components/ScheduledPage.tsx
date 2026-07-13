@@ -613,7 +613,17 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
   };
 
   return (
-    <div className="flex h-full bg-white">
+    <div className="flex h-full flex-col bg-white">
+      <div className="h-12 flex items-center justify-between px-5 border-b border-border flex-shrink-0">
+        <div className="flex items-center gap-2.5">
+          <div className="w-6 h-6 rounded-lg flex items-center justify-center" style={{ background: 'rgba(22,163,74,0.1)', color: '#16a34a' }}>
+            <Clock size={13} />
+          </div>
+          <span className="text-sm font-semibold text-text-primary">定时任务</span>
+        </div>
+      </div>
+
+      <div className="flex min-h-0 flex-1">
       {/* Left sidebar */}
       <div className="w-64 border-r border-gray-100 flex flex-col py-6 px-3">
         <p className="text-xs font-medium text-gray-400 px-3 mb-3">Agent 任务板块</p>
@@ -634,11 +644,10 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
 
       {/* Main content */}
       <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Header */}
-        <div className="px-8 pt-8 pb-4 border-b border-gray-100">
+        <div className="px-8 py-5 border-b border-gray-100">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-xl font-semibold text-gray-900">{activeGroupMeta.label}</h1>
+              <h1 className="text-base font-semibold text-gray-900">{activeGroupMeta.label}</h1>
               <p className="text-sm text-gray-500 mt-0.5">{activeGroupMeta.desc}</p>
             </div>
             <button
@@ -826,6 +835,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
             </div>
           )}
         </div>
+      </div>
       </div>
 
       {/* Add Task Modal */}

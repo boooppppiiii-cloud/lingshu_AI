@@ -131,8 +131,8 @@ function extractJsonObject(raw: string): Record<string, unknown> | null {
 
 function formatStreamError(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
-  if (/RESOURCE_EXHAUSTED|Too Many Requests|code['"]?:429|quota/i.test(raw)) {
-    return 'Gemini 当前额度或账单资源已耗尽，请在 Google AI Studio/Cloud Billing 开通或恢复额度后重试。';
+  if (/RESOURCE_EXHAUSTED|Too Many Requests|code['"]?:429|quota|rate limit/i.test(raw)) {
+    return 'Gemini 返回 429/RESOURCE_EXHAUSTED，通常是模型或联网搜索工具临时限流、项目配额限制，或当前 API Key 未开通对应模型/搜索能力；不一定是账户余额不足。请稍后重试，或先关闭联网检索再生成。';
   }
   if (/fetch failed|ECONNRESET|ETIMEDOUT|ENOTFOUND/i.test(raw)) {
     return '模型服务网络连接失败，请检查代理或稍后重试。';

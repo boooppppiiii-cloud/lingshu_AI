@@ -52,9 +52,9 @@ export default function TrafficPage({ onNavigate, restore, kickoff, onScriptPane
         suggestions: ['拆解当前素材方向', '规划本周发布节奏', '找出适合中东市场的内容角度', '把素材转成脚本任务'],
       },
       create: {
-        label: 'AI素材快剪',
-        summary: '当前在 AI 素材快剪，适合根据商品、目标市场和平台生成短视频脚本、标题、口播钩子和发布文案。',
-        suggestions: ['生成一条主推品短视频脚本', '把卖点改成阿语口播', '设计 TikTok 三条发布文案', '优化视频开头 3 秒钩子'],
+        label: 'AI智能素材',
+        summary: '当前在 AI 智能素材，适合根据商品、目标市场和平台生成图文海报、短视频脚本、标题、口播钩子和发布文案。',
+        suggestions: ['生成一套主推品图文素材', '把卖点改成阿语口播', '设计 Facebook 图文文案', '优化视频开头 3 秒钩子'],
       },
       publish: {
         label: '账号一键发布',
@@ -95,31 +95,28 @@ export default function TrafficPage({ onNavigate, restore, kickoff, onScriptPane
         </div>
       </div>
 
-      <div className="flex-shrink-0 border-b border-border bg-surface px-6 py-4">
-        <div className="flex items-center gap-2 rounded-2xl border border-border bg-surface-2 p-1.5 shadow-sm">
+      <div className="flex-shrink-0 border-b border-border bg-surface px-6 py-3">
+        <div className="grid w-full grid-cols-4 gap-1.5 rounded-2xl border border-border bg-surface-2 p-1 shadow-sm">
           {([
-            { mode: 'materials' as ViewMode, icon: <Film size={17} />, label: '灵感大屏', desc: '爆款拆解' },
-            { mode: 'create' as ViewMode,    icon: <Wand2 size={17} />, label: 'AI素材快剪', desc: '脚本成片' },
-            { mode: 'publish' as ViewMode,   icon: <Send size={17} />, label: '账号一键发布', desc: '多平台' },
-            { mode: 'accounts' as ViewMode,  icon: <BarChart3 size={17} />, label: '账号流量数据', desc: '复盘' },
-          ]).map(({ mode, icon, label, desc }) => {
+            { mode: 'materials' as ViewMode, icon: <Film size={18} />, label: '灵感大屏' },
+            { mode: 'create' as ViewMode,    icon: <Wand2 size={18} />, label: 'AI智能素材' },
+            { mode: 'publish' as ViewMode,   icon: <Send size={18} />, label: '账号一键发布' },
+            { mode: 'accounts' as ViewMode,  icon: <BarChart3 size={18} />, label: '账号流量数据' },
+          ]).map(({ mode, icon, label }) => {
             const active = viewMode === mode;
             return (
               <button
                 key={mode}
                 type="button"
                 onClick={() => setViewMode(mode)}
-                className={`flex min-h-14 flex-1 items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-left transition-all ${
+                className={`flex h-10 items-center justify-center gap-2 rounded-xl px-4 text-sm font-black transition-all ${
                   active
                     ? 'bg-white text-text-primary shadow-sm ring-1 ring-border'
                     : 'text-text-muted hover:bg-white/60 hover:text-text-secondary'
                 }`}
               >
                 <span className={active ? 'text-accent' : 'text-text-muted'}>{icon}</span>
-                <span className="min-w-0">
-                  <span className="block whitespace-nowrap text-base font-black">{label}</span>
-                  <span className="mt-0.5 block text-[11px] font-semibold opacity-70">{desc}</span>
-                </span>
+                <span className="min-w-0 truncate">{label}</span>
               </button>
             );
           })}

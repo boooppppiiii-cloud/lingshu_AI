@@ -216,15 +216,15 @@
     "guidePending": false
   },
   "lingshutest18@163.com": {
-    "status": "available",
+    "status": "expired",
     "email": "lingshutest18@163.com",
     "password": "Silver@25Echo",
     "userId": "23o9v401kwog3ie",
     "tenantId": "g4piip62eg0rob3",
     "activatedAt": null,
     "expiresAt": null,
-    "rotatedAt": null,
-    "rotationPassword": null,
+    "rotatedAt": "2026-07-10T04:46:30.974Z",
+    "rotationPassword": "Off@test18#2026",
     "guidePending": false
   },
   "lingshutest19@163.com": {

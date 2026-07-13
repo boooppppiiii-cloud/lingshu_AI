@@ -52,7 +52,6 @@ export function DailyBriefing({ customers, onSelectCustomer, onClose }: Props) {
             <img src="/brand-logo.png" alt="灵小枢" className="h-8 w-8 object-contain" />
             <div>
               <p className="text-sm font-black text-text-primary">{greeting()}，今天有 {pending.length} 件事需要你</p>
-              <p className="mt-0.5 text-[11px] text-text-muted">按同一套优先级规则排序。</p>
             </div>
           </div>
           <button type="button" onClick={onClose} className="rounded-lg p-1.5 text-text-muted hover:bg-surface-2" title="关闭">

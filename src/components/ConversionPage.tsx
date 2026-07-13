@@ -16,6 +16,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import {
   Bot,
+  Check,
   ChevronDown,
   Eye,
   FileText,
@@ -27,6 +28,7 @@ import {
   RefreshCw,
   Send,
   Sparkles,
+  Users,
   X,
 } from 'lucide-react';
 import { authHeader } from '../lib/auth';
@@ -44,6 +46,18 @@ import type { AutonomyLevel, CustomerProfile, CustomerStage, HandlingMode, Timel
 type CustomerView = 'inbox' | 'leads' | 'won' | 'silent';
 type AutomationLevel = 'auto' | 'confirm' | 'manual';
 type DraftIntent = 'reply' | 'opener' | 'followup' | 'reactivate' | 'post_call' | 'polish' | 'handoff_summary';
+type CustomerFilterKey = 'source' | 'country' | 'language' | 'stage' | 'handling' | 'tag';
+
+interface CustomerListFilters {
+  source: string;
+  country: string;
+  language: string;
+  stage: string;
+  handling: string;
+  tag: string;
+  unreadOnly: boolean;
+  highIntentOnly: boolean;
+}
 
 declare global {
   interface Window {
@@ -87,6 +101,17 @@ const STAGE_META: Record<CustomerStage, { color: string; bg: string }> = {
   won: { color: '#16a34a', bg: 'rgba(22,163,74,0.1)' },
   silent30: { color: '#ca8a04', bg: 'rgba(202,138,4,0.1)' },
   silent60: { color: '#dc2626', bg: 'rgba(220,38,38,0.1)' },
+};
+
+const EMPTY_CUSTOMER_FILTERS: CustomerListFilters = {
+  source: 'all',
+  country: 'all',
+  language: 'all',
+  stage: 'all',
+  handling: 'all',
+  tag: 'all',
+  unreadOnly: false,
+  highIntentOnly: false,
 };
 
 const AUTOMATION_META: Record<AutomationLevel, { label: string; desc: string; color: string; bg: string }> = {
@@ -151,6 +176,20 @@ function filterCustomers(view: CustomerView, customers: CustomerProfile[]) {
   if (view === 'leads') return customers.filter(customer => ['lead', 'inquiry', 'quoted'].includes(customer.stage)).sort((a, b) => b.intentScore - a.intentScore);
   if (view === 'won') return customers.filter(customer => customer.stage === 'won');
   return sortCustomersByPriority(customers.filter(customer => customer.stage === 'silent30' || customer.stage === 'silent60'));
+}
+
+function applyCustomerListFilters(customers: CustomerProfile[], filters: CustomerListFilters) {
+  return customers.filter(customer => {
+    if (filters.source !== 'all' && customer.source !== filters.source) return false;
+    if (filters.country !== 'all' && customer.countryName !== filters.country) return false;
+    if (filters.language !== 'all' && customer.language !== filters.language) return false;
+    if (filters.stage !== 'all' && customer.stage !== filters.stage) return false;
+    if (filters.handling !== 'all' && customer.handlingMode !== filters.handling) return false;
+    if (filters.tag !== 'all' && !customer.tags.includes(filters.tag)) return false;
+    if (filters.unreadOnly && !customer.hasUnread) return false;
+    if (filters.highIntentOnly && customer.intentScore < 80) return false;
+    return true;
+  });
 }
 
 function replyLanguage(customer: CustomerProfile): string {
@@ -357,7 +396,45 @@ function CompactCustomerList({
   onViewChange: (view: CustomerView) => void;
 }) {
   const [aiAutoExpanded, setAiAutoExpanded] = useState(false);
-  const list = filterCustomers(view, customers);
+  const [filterOpen, setFilterOpen] = useState(false);
+  const [filters, setFilters] = useState<CustomerListFilters>(EMPTY_CUSTOMER_FILTERS);
+  const baseList = filterCustomers(view, customers);
+  const list = applyCustomerListFilters(baseList, filters);
+  const activeFilterCount = [
+    filters.source !== 'all',
+    filters.country !== 'all',
+    filters.language !== 'all',
+    filters.stage !== 'all',
+    filters.handling !== 'all',
+    filters.tag !== 'all',
+    filters.unreadOnly,
+    filters.highIntentOnly,
+  ].filter(Boolean).length;
+  const setFilterValue = (key: CustomerFilterKey, value: string) => setFilters(current => ({ ...current, [key]: value }));
+  const optionList = (values: string[]) => Array.from(new Set(values.filter(Boolean)));
+  const sourceOptions = optionList(customers.map(customer => customer.source));
+  const countryOptions = optionList(customers.map(customer => customer.countryName));
+  const languageOptions = optionList(customers.map(customer => customer.language));
+  const tagOptions = optionList(customers.flatMap(customer => customer.tags));
+  const FilterSelect = ({ label, value, onChange, options, renderLabel }: {
+    label: string;
+    value: string;
+    onChange: (next: string) => void;
+    options: string[];
+    renderLabel?: (item: string) => string;
+  }) => (
+    <label className="block">
+      <span className="text-[10px] font-bold text-text-muted">{label}</span>
+      <select
+        value={value}
+        onChange={event => onChange(event.target.value)}
+        className="mt-1 w-full rounded-lg border border-border bg-white px-2.5 py-2 text-xs font-semibold text-text-primary outline-none focus:border-[#0891b2]"
+      >
+        <option value="all">全部</option>
+        {options.map(item => <option key={item} value={item}>{renderLabel ? renderLabel(item) : item}</option>)}
+      </select>
+    </label>
+  );
   const renderCustomer = (customer: CustomerProfile) => {
     const lastMessage = customer.timeline[customer.timeline.length - 1];
     const statusColor = HANDLING_COLOR[customer.handlingMode];
@@ -397,14 +474,71 @@ function CompactCustomerList({
   const aiAutoReplies = inboxGroups[2].items.reduce((sum, customer) => sum + (customer.aiAutoCount ?? 0), 0);
 
   return (
-    <aside className="h-full w-80 shrink-0 overflow-hidden border-r border-border bg-white">
+    <aside className="flex h-full w-80 shrink-0 flex-col overflow-hidden border-r border-border bg-white">
       <div className="border-b border-border px-4 py-3">
-        <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-sm font-black text-text-primary">我的客户</p>
-            <p className="mt-0.5 text-[11px] text-text-muted">{list.length} 个待处理 · 按最近动态排序</p>
-          </div>
-          <Filter size={14} className="text-text-muted" />
+        <div className="relative flex items-center justify-between gap-3">
+          <p className="text-[11px] text-text-muted">{list.length} 个待处理 · 按最近动态排序</p>
+          <button
+            type="button"
+            onClick={() => setFilterOpen(open => !open)}
+            className={`relative flex h-8 w-8 items-center justify-center rounded-lg border transition-colors ${activeFilterCount ? 'border-[#0891b2] bg-[#0891b2]/10 text-[#0891b2]' : 'border-transparent text-text-muted hover:border-border hover:bg-surface-2'}`}
+            title="筛选客户"
+          >
+            <Filter size={14} />
+            {activeFilterCount > 0 && (
+              <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-[#0891b2] px-1 text-[9px] font-black text-white">
+                {activeFilterCount}
+              </span>
+            )}
+          </button>
+          {filterOpen && (
+            <div className="absolute right-0 top-9 z-30 w-72 rounded-2xl border border-border bg-white p-3 shadow-xl">
+              <div className="mb-3 flex items-center justify-between gap-2">
+                <div>
+                  <p className="text-xs font-black text-text-primary">筛选客户</p>
+                  <p className="mt-0.5 text-[10px] text-text-muted">当前命中 {list.length}/{baseList.length}</p>
+                </div>
+                <button type="button" onClick={() => setFilterOpen(false)} className="rounded-lg p-1.5 text-text-muted hover:bg-surface-2">
+                  <X size={13} />
+                </button>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <FilterSelect label="来源渠道" value={filters.source} onChange={value => setFilterValue('source', value)} options={sourceOptions} />
+                <FilterSelect label="国家/地区" value={filters.country} onChange={value => setFilterValue('country', value)} options={countryOptions} />
+                <FilterSelect label="语言" value={filters.language} onChange={value => setFilterValue('language', value)} options={languageOptions} />
+                <FilterSelect label="客户阶段" value={filters.stage} onChange={value => setFilterValue('stage', value)} options={Object.keys(STAGE_LABEL)} renderLabel={item => STAGE_LABEL[item as CustomerStage] || item} />
+                <FilterSelect label="处理方式" value={filters.handling} onChange={value => setFilterValue('handling', value)} options={['human_needed', 'ai_draft', 'ai_auto']} renderLabel={item => item === 'human_needed' ? '需要你处理' : item === 'ai_draft' ? '等你确认' : 'AI 接待中'} />
+                <FilterSelect label="客户标签" value={filters.tag} onChange={value => setFilterValue('tag', value)} options={tagOptions} />
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                {[
+                  { key: 'unreadOnly' as const, label: '只看未读' },
+                  { key: 'highIntentOnly' as const, label: '高意向 80+' },
+                ].map(item => {
+                  const active = filters[item.key];
+                  return (
+                    <button
+                      key={item.key}
+                      type="button"
+                      onClick={() => setFilters(current => ({ ...current, [item.key]: !current[item.key] }))}
+                      className={`flex items-center justify-center gap-1.5 rounded-lg border px-2.5 py-2 text-xs font-bold transition-colors ${active ? 'border-[#0891b2] bg-[#0891b2]/10 text-[#0891b2]' : 'border-border text-text-muted hover:text-text-primary'}`}
+                    >
+                      {active && <Check size={12} />}
+                      {item.label}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="mt-3 flex items-center justify-between gap-2">
+                <button type="button" onClick={() => setFilters(EMPTY_CUSTOMER_FILTERS)} className="text-xs font-bold text-text-muted hover:text-text-primary">
+                  清空筛选
+                </button>
+                <button type="button" onClick={() => setFilterOpen(false)} className="rounded-lg bg-slate-950 px-3 py-2 text-xs font-black text-white">
+                  应用
+                </button>
+              </div>
+            </div>
+          )}
         </div>
         <div className="mt-3 flex gap-1 overflow-x-auto">
           {(Object.entries(VIEW_META) as [CustomerView, typeof VIEW_META[CustomerView]][]).map(([key, item]) => (
@@ -419,7 +553,7 @@ function CompactCustomerList({
           ))}
         </div>
       </div>
-      <div className="h-[calc(100%-84px)] overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto">
         {view !== 'inbox' && list.map(renderCustomer)}
         {view === 'inbox' && (
           <div>
@@ -1431,38 +1565,49 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
 
 
   return (
-    <div className="flex h-full min-w-0 bg-white">
-      <CompactCustomerList view={view} selectedId={selectedId} customers={customers} onOpen={openCustomer} onViewChange={setView} />
-      <ChatThread
-        customer={selected}
-        draftSuggestion={draftSuggestion}
-        input={input}
-        translatedInput={translatedInput}
-        onInputChange={(value) => { setInput(value); setTranslatedInput(''); }}
-        onTranslatedInputChange={setTranslatedInput}
-        onSend={sendReply}
-        onEditDraft={editDraft}
-        onSendDraft={sendDraftDirectly}
-        onDismissDraft={() => setDraftSuggestion(null)}
-        onPolishInput={polishInput}
-        onRegenerateDraft={regenerateDraft}
-        onSceneDraft={(intent) => void generateManualDraft('', intent)}
-        onPreviewTranslate={previewTranslate}
-        isPolishing={isPolishing}
-      />
-      <CustomerInfoRail
-        customer={selected}
-        autonomyLevel={autonomyLevel}
-        onGenerateDraft={generateManualDraft}
-        onHandlingModeChange={updateHandlingMode}
-        onCustomerPatch={(patch) => {
-          if (selected) updateCustomer(selected.id, patch);
-        }}
-        onToast={showToast}
-        onFocusReply={focusReplyInput}
-        onViewDraft={viewDraftSuggestion}
-        onCompleteTodo={markSelectedTodoCompleted}
-      />
+    <div className="flex h-full min-w-0 flex-col bg-white">
+      <div className="flex h-12 flex-shrink-0 items-center justify-between border-b border-border px-5">
+        <div className="flex items-center gap-2.5">
+          <div className="flex h-6 w-6 items-center justify-center rounded-lg" style={{ background: 'rgba(22,163,74,0.1)', color: '#16a34a' }}>
+            <Users size={13} />
+          </div>
+          <span className="text-sm font-semibold text-text-primary">我的客户</span>
+        </div>
+      </div>
+
+      <div className="flex min-h-0 flex-1">
+        <CompactCustomerList view={view} selectedId={selectedId} customers={customers} onOpen={openCustomer} onViewChange={setView} />
+        <ChatThread
+          customer={selected}
+          draftSuggestion={draftSuggestion}
+          input={input}
+          translatedInput={translatedInput}
+          onInputChange={(value) => { setInput(value); setTranslatedInput(''); }}
+          onTranslatedInputChange={setTranslatedInput}
+          onSend={sendReply}
+          onEditDraft={editDraft}
+          onSendDraft={sendDraftDirectly}
+          onDismissDraft={() => setDraftSuggestion(null)}
+          onPolishInput={polishInput}
+          onRegenerateDraft={regenerateDraft}
+          onSceneDraft={(intent) => void generateManualDraft('', intent)}
+          onPreviewTranslate={previewTranslate}
+          isPolishing={isPolishing}
+        />
+        <CustomerInfoRail
+          customer={selected}
+          autonomyLevel={autonomyLevel}
+          onGenerateDraft={generateManualDraft}
+          onHandlingModeChange={updateHandlingMode}
+          onCustomerPatch={(patch) => {
+            if (selected) updateCustomer(selected.id, patch);
+          }}
+          onToast={showToast}
+          onFocusReply={focusReplyInput}
+          onViewDraft={viewDraftSuggestion}
+          onCompleteTodo={markSelectedTodoCompleted}
+        />
+      </div>
       {dailyBriefingOpen && (
         <DailyBriefing customers={customers} onSelectCustomer={openCustomer} onClose={() => setDailyBriefingOpen(false)} />
       )}

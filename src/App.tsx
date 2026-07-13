@@ -58,7 +58,7 @@ export type AgentAction = (agent: AgentType, task: string) => void;
 
 const AGENT_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention'];
 const ALL_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention', 'orders', 'enterprise', 'plugins', 'scheduled', 'admin', 'adminDelivery', 'channels', 'youtube'];
-const BUSINESS_DIAGNOSIS_SEEN_KEY = 'ow_business_diagnosis_seen_scope_v2';
+const BUSINESS_DIAGNOSIS_SEEN_KEY = 'ow_business_diagnosis_seen_scope_v3';
 const firstUserText = (msgs?: Message[]) => (msgs?.find(m => m.role === 'user')?.content ?? '新会话').slice(0, 24);
 const customerUnifiedAgent = (agent: AgentType): AgentType => (agent === 'retention' ? 'conversion' : agent);
 const loadConvs = (): Conversation[] => {
@@ -174,7 +174,7 @@ export default function App() {
   const progressScopeFor = (s: AuthSession | null) => s?.demo?.guideScope || (s?.demo?.expiresAt ? `${s.user.id}:${s.demo.expiresAt}` : s?.user?.id || s?.tenant?.id || null);
   const diagnosisScopeFor = (s: AuthSession | null) => s?.demo?.guideScope || s?.user?.id || s?.tenant?.id || 'guest';
   const showBusinessDiagnosisFor = (s: AuthSession | null) => {
-    if (!s) return;
+    if (!s?.demo?.guideTrigger) return;
     const scope = diagnosisScopeFor(s);
     try {
       if (localStorage.getItem(BUSINESS_DIAGNOSIS_SEEN_KEY) === scope) return;
