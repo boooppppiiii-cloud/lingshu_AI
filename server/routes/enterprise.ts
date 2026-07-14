@@ -73,6 +73,11 @@ export interface EnterpriseProfile {
       images?: Array<{ name: string; type: string; size: number; updatedAt: string; url?: string }>;
       videos?: Array<{ name: string; type: string; size: number; updatedAt: string; url?: string }>;
       documents?: Array<{ name: string; type: string; size: number; updatedAt: string; url?: string }>;
+      factoryImages?: Array<{ name: string; type: string; size: number; updatedAt: string; url?: string }>;
+      packagingImages?: Array<{ name: string; type: string; size: number; updatedAt: string; url?: string }>;
+      certificateImages?: Array<{ name: string; type: string; size: number; updatedAt: string; url?: string }>;
+      sceneImages?: Array<{ name: string; type: string; size: number; updatedAt: string; url?: string }>;
+      brandAssets?: Array<{ name: string; type: string; size: number; updatedAt: string; url?: string }>;
     }>;
   };
   brand: {
@@ -370,7 +375,17 @@ function safeStoredName(originalName: string): string {
 }
 
 function emptyProduct(index: number): NonNullable<EnterpriseProfile['products']['items']>[number] {
-  return { name: `产品${index + 1}`, images: [], videos: [], documents: [] };
+  return {
+    name: `产品${index + 1}`,
+    images: [],
+    videos: [],
+    documents: [],
+    factoryImages: [],
+    packagingImages: [],
+    certificateImages: [],
+    sceneImages: [],
+    brandAssets: [],
+  };
 }
 
 function normalizeProfile(profile: EnterpriseProfile): EnterpriseProfile {
@@ -380,13 +395,20 @@ function normalizeProfile(profile: EnterpriseProfile): EnterpriseProfile {
     ? existing.filter(item =>
       item.name || item.sku || item.category || item.priceRange || item.moq || item.certifications || item.highlights ||
       item.color || item.size || item.tagPrice || item.material || item.imageUrl ||
-      item.images?.length || item.videos?.length || item.documents?.length
+      item.images?.length || item.videos?.length || item.documents?.length ||
+      item.factoryImages?.length || item.packagingImages?.length || item.certificateImages?.length ||
+      item.sceneImages?.length || item.brandAssets?.length
     ).map((item) => ({
       ...item,
       name: item.name || item.sku || '',
       images: Array.isArray(item.images) ? item.images : [],
       videos: Array.isArray(item.videos) ? item.videos : [],
       documents: Array.isArray(item.documents) ? item.documents : [],
+      factoryImages: Array.isArray(item.factoryImages) && item.factoryImages.length ? item.factoryImages : (Array.isArray(item.videos) ? item.videos : []),
+      packagingImages: Array.isArray(item.packagingImages) ? item.packagingImages : [],
+      certificateImages: Array.isArray(item.certificateImages) && item.certificateImages.length ? item.certificateImages : (Array.isArray(item.documents) ? item.documents : []),
+      sceneImages: Array.isArray(item.sceneImages) ? item.sceneImages : [],
+      brandAssets: Array.isArray(item.brandAssets) ? item.brandAssets : [],
     }))
     : [];
   const strategy = { ...(profile.strategy ?? {}), aiAutonomy: normalizeAutonomy(profile.strategy?.aiAutonomy) };
@@ -476,6 +498,11 @@ function normalizeApiProduct(input: ApiProductInput): NonNullable<EnterpriseProf
     images: imageUrl ? [{ name: '商品图片URL', type: 'image/url', size: 0, updatedAt: new Date().toISOString(), url: imageUrl }] : [],
     videos: [],
     documents: [],
+    factoryImages: [],
+    packagingImages: [],
+    certificateImages: [],
+    sceneImages: [],
+    brandAssets: [],
   };
 }
 
@@ -517,6 +544,11 @@ export function buildEnterpriseContext(profile: EnterpriseProfile): string {
         item.images?.length ? `图片附件：${item.images.map(a => a.name).join('、')}` : '',
         item.videos?.length ? `视频附件：${item.videos.map(a => a.name).join('、')}` : '',
         item.documents?.length ? `资质文书附件：${item.documents.map(a => a.name).join('、')}` : '',
+        item.factoryImages?.length ? `工厂实拍素材：${item.factoryImages.map(a => a.name).join('、')}` : '',
+        item.packagingImages?.length ? `包装定制素材：${item.packagingImages.map(a => a.name).join('、')}` : '',
+        item.certificateImages?.length ? `证书资质素材：${item.certificateImages.map(a => a.name).join('、')}` : '',
+        item.sceneImages?.length ? `使用场景素材：${item.sceneImages.map(a => a.name).join('、')}` : '',
+        item.brandAssets?.length ? `品牌视觉素材：${item.brandAssets.map(a => a.name).join('、')}` : '',
       ].filter(Boolean);
       if (details.length) parts.push(`产品${index + 1}：${details.join('；')}`);
     });

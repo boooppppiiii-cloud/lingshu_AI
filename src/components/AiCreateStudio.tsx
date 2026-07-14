@@ -65,7 +65,7 @@ const materialToClip = (m: Material): Clip => ({
   id: m.id, name: m.name, folder: m.folder, type: m.type, duration: m.duration, size: m.size, url: m.url, poster: m.poster, scope: m.scope ?? 'own',
 });
 
-type StepId = 'mode' | 'material' | 'script' | 'bgm' | 'cover' | 'preview';
+type StepId = 'mode' | 'material' | 'script' | 'bgm' | 'cover' | 'preview' | 'poster';
 
 const STEPS: { id: StepId; label: string; icon: typeof LayoutGrid; hint: string }[] = [
   { id: 'mode',     label: '选模式',  icon: LayoutGrid, hint: '选择生成起点与全局参数' },
@@ -74,6 +74,11 @@ const STEPS: { id: StepId; label: string; icon: typeof LayoutGrid; hint: string 
   { id: 'bgm',      label: '配乐',     icon: Music,      hint: 'AI 推荐背景乐与音量平衡' },
   { id: 'cover',    label: '封面',     icon: ImageIcon,  hint: '生成封面候选并选定标题' },
   { id: 'preview',  label: '成片预览', icon: Play,       hint: '确认成片并进入剪映/发布' },
+];
+const POSTER_STEPS: { id: StepId; label: string; icon: typeof LayoutGrid; hint: string }[] = [
+  { id: 'mode',     label: '选模式',   icon: LayoutGrid, hint: '确认图文生成渠道、平台和产品' },
+  { id: 'material', label: '选产品/素材', icon: ImageIcon,  hint: '确认产品并选择产品图、工厂图、包装图和证书图' },
+  { id: 'poster',   label: '图文生成', icon: Sparkles,   hint: '一次生成海报图、配文和承接话术' },
 ];
 const COVER_STEP_INDEX = STEPS.findIndex(s => s.id === 'cover');
 
@@ -99,6 +104,25 @@ const FOLDERS: MaterialFolder[] = [
   { id: 'model',   name: '模特出镜',   count: 0 },
   { id: 'detail',  name: '细节特写',   count: 0 },
 ];
+const POSTER_FOLDERS: MaterialFolder[] = [
+  { id: 'recommend', name: '素材推荐', count: 0 },
+  { id: 'all', name: '全部图文素材', count: 0 },
+  { id: 'hot', name: '爆款图文参考', count: 0 },
+  { id: 'upload', name: '我的上传', count: 0 },
+  { id: 'product', name: '产品主图', count: 0 },
+  { id: 'factory', name: '工厂实拍', count: 0 },
+  { id: 'packaging', name: '包装定制', count: 0 },
+  { id: 'certificate', name: '证书资质', count: 0 },
+  { id: 'scene', name: '使用场景', count: 0 },
+  { id: 'brand', name: '品牌视觉', count: 0 },
+];
+const POSTER_MATERIAL_GROUPS = [
+  { id: 'product', title: '产品主图', desc: '瓶身/包装/套装/产品矩阵，建议 1-4 张', folders: ['product'] },
+  { id: 'factory', title: '工厂背书', desc: '产线、灌装、质检、仓储、团队实拍', folders: ['factory'] },
+  { id: 'proof', title: '包装/证书', desc: '私标包装、认证证书、检测报告、资质墙', folders: ['packaging', 'certificate'] },
+  { id: 'scene', title: '场景/品牌', desc: '使用场景、成分氛围、品牌色和 Logo 参考', folders: ['scene', 'brand'] },
+  { id: 'hot', title: '爆款参考', desc: '仅用于拆解画风、结构、CTA，不直接复制承诺', folders: ['hot'] },
+] as const;
 
 interface Clip {
   id: string;
@@ -420,23 +444,6 @@ const POSTER_MODES: ModeCard[] = [
   { id: 'material', icon: Film,    title: '素材库选择',   desc: '选择产品实拍、工厂图和证书素材，生成高质感 B2B 海报' },
   { id: 'product',  icon: Sparkles,title: '产品信息生成', desc: '从企业中心产品资料出发，自动生成海报文案和配图 brief' },
 ] as const;
-const POSTER_MODE_GUIDES: Record<'material' | 'clone' | 'product', { source: string; iterate: string; confirm: string }> = {
-  clone: {
-    source: '主要吃竞品/爆款海报的结构信息：标题句式、模块顺序、视觉风格、CTA 和配文框架。',
-    iterate: 'AI 复用爆款的表达方式，再回填企业中心里的真实产品线、公司名和供应链能力。',
-    confirm: 'MOQ、认证、交期、出口国家、工厂资质必须来自企业中心或由用户确认，不能凭空生成。',
-  },
-  material: {
-    source: '主要吃素材库里的产品图、工厂图、包装图、证书图和使用场景图。',
-    iterate: 'AI 根据素材判断更适合做工厂背书图、产品矩阵图还是私标招商图，再补齐海报文案。',
-    confirm: '用户需要确认本次选用的 1-4 张产品/工厂参考图，以及哪些证书或工厂能力可以公开展示。',
-  },
-  product: {
-    source: '主要吃企业中心资料：产品类目、MOQ、认证、目标客户、卖点、出口市场。',
-    iterate: '适合没准备爆款参考和素材时，先生成海报 brief、FB/IG caption，再引导用户补图。',
-    confirm: '商业承诺类字段必须确认后再进入海报 JSON，包括价格、MOQ、交期、认证和出口国家。',
-  },
-};
 const POSTER_STYLES = [
   { id: 'oem-factory', label: 'OEM 工厂风' },
   { id: 'promo', label: '促销招商风' },
@@ -528,6 +535,12 @@ interface EnterpriseProfileLite {
       moq?: string;
       certifications?: string;
       highlights?: string;
+      images?: Array<{ name?: string; url?: string }>;
+      factoryImages?: Array<{ name?: string; url?: string }>;
+      packagingImages?: Array<{ name?: string; url?: string }>;
+      certificateImages?: Array<{ name?: string; url?: string }>;
+      sceneImages?: Array<{ name?: string; url?: string }>;
+      brandAssets?: Array<{ name?: string; url?: string }>;
     }>;
   };
   brand?: { tone?: string; usp?: string; preferredLanguages?: string };
@@ -536,7 +549,7 @@ interface EnterpriseProfileLite {
 }
 
 interface VideoKickoff {
-  source?: 'inspiration_analysis' | 'seedance_video' | string;
+  source?: 'inspiration_analysis' | 'inspiration_image_post' | 'seedance_video' | string;
   script?: string;
   scriptType?: 'voiceover' | 'storyboard';
   language?: string;
@@ -559,9 +572,11 @@ interface VideoKickoff {
   video?: {
     title?: string;
     platform?: string;
+    contentFormat?: 'video' | 'image';
     videoUrl?: string;
     thumbnail?: string;
     duration?: number;
+    sourceUrl?: string;
     aiAnalysis?: { materialUrl?: string; materialPoster?: string };
   };
 }
@@ -637,6 +652,11 @@ function buildAiProductOptions(profile: EnterpriseProfileLite): ProductOption[] 
       const price = compact(item.priceRange || profile.products?.priceRange);
       const moq = compact(item.moq || profile.products?.moq);
       const certifications = compact(item.certifications || profile.products?.certifications);
+      const assetNames = (list?: Array<{ name?: string }>) => (list || [])
+        .map(asset => compact(asset.name))
+        .filter(Boolean)
+        .slice(0, 6)
+        .join('、');
       return {
         id: `product-${index}-${name}`,
         label: name,
@@ -647,6 +667,12 @@ function buildAiProductOptions(profile: EnterpriseProfileLite): ProductOption[] 
           price ? `价格区间：${price}` : '',
           moq ? `起订量：${moq}` : '',
           certifications ? `认证资质：${certifications}` : '',
+          assetNames(item.images) ? `产品主图素材：${assetNames(item.images)}` : '',
+          assetNames(item.factoryImages) ? `工厂实拍素材：${assetNames(item.factoryImages)}` : '',
+          assetNames(item.packagingImages) ? `包装定制素材：${assetNames(item.packagingImages)}` : '',
+          assetNames(item.certificateImages) ? `证书资质素材：${assetNames(item.certificateImages)}` : '',
+          assetNames(item.sceneImages) ? `使用场景素材：${assetNames(item.sceneImages)}` : '',
+          assetNames(item.brandAssets) ? `品牌视觉素材：${assetNames(item.brandAssets)}` : '',
         ].filter(Boolean).join('\n'),
       };
     })
@@ -1083,7 +1109,11 @@ function materialRoleLabel(clip: Pick<Clip, 'folder' | 'type'>): string {
   if (clip.folder === 'presenter') return '真人口播素材';
   if (clip.folder === 'detail') return '产品细节素材';
   if (clip.folder === 'factory') return '工厂/实力素材';
+  if (clip.folder === 'packaging') return '包装定制素材';
+  if (clip.folder === 'certificate') return '证书资质素材';
   if (clip.folder === 'scene') return '场景使用素材';
+  if (clip.folder === 'brand') return '品牌视觉素材';
+  if (clip.folder === 'hot') return '爆款图文参考';
   if (clip.folder === 'model') return '模特/效果素材';
   if (clip.type === 'image') return '静态产品图';
   return '产品展示素材';
@@ -1469,11 +1499,12 @@ function CoverFace({ coverUrl, frameUrl, frameType, title, style, editable, onTi
 
 export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate?: (p: Page) => void; onGoPublish?: (payload: { videoPath?: string; title: string; description: string; ratio: string }) => void } = {}) {
   const [stepIdx, setStepIdx] = useState(0);
-  const step = STEPS[stepIdx].id;
 
   // 全局制作状态
   const [mode, setMode] = useState<'material' | 'clone' | 'product'>('material');
   const [contentMode, setContentMode] = useState<'video' | 'poster'>('video');
+  const activeSteps = useMemo(() => contentMode === 'poster' ? POSTER_STEPS : STEPS, [contentMode]);
+  const step = activeSteps[Math.min(stepIdx, activeSteps.length - 1)].id;
   const [posterStyle, setPosterStyle] = useState<(typeof POSTER_STYLES)[number]['id']>('oem-factory');
   const [platform, setPlatform] = useState('tiktok');
   const [ratio, setRatio] = useState('9:16');
@@ -1587,6 +1618,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   const [posterLoading, setPosterLoading] = useState(false);
   const [posterDraft, setPosterDraft] = useState<FbPosterResult | null>(null);
   const [posterJsonText, setPosterJsonText] = useState('');
+  const [posterImageUrl, setPosterImageUrl] = useState('');
 
   useEffect(() => {
     let alive = true;
@@ -1698,6 +1730,9 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     }
     if (!POSTER_RATIOS.includes(ratio)) setRatio('1:1');
   }, [contentMode, platform, ratio]);
+  useEffect(() => {
+    setStepIdx(0);
+  }, [contentMode]);
   // 选中的封面底图帧：取该素材的帧画面（视频抽帧 / 图片自身）
   const coverClip = useMemo(() => materials.find(m => m.id === cover), [cover, materials]);
   const coverFrameUrl = useMemo(() => {
@@ -1725,7 +1760,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   // 字幕样式沿用封面体系，但默认底部居中 + 适配字号
   const subStyle: CoverStyle = useMemo(() => ({ ...coverStyle, position: 'bottom', align: 'center', size: coverStyle.size === 'L' ? 'M' : 'S' }), [coverStyle]);
 
-  const canNext = step === 'material' ? selected.length > 0 : true;
+  const canNext = contentMode === 'video' && step === 'material' ? selected.length > 0 : true;
   useEffect(() => {
     if (!assignedOrderedIds.length) return;
     setSelected(current => {
@@ -1733,7 +1768,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       return current.length === deduped.length && current.every((id, index) => id === deduped[index]) ? current : deduped;
     });
   }, [assignedOrderedIds]);
-  const isLast = stepIdx === STEPS.length - 1;
+  const isLast = stepIdx === activeSteps.length - 1;
   const toggleProductSelection = (id: string) => {
     setSelectedProductIds(current => {
       if (productSelectMode === 'single') return [id];
@@ -1755,6 +1790,27 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       const kickoff = JSON.parse(raw) as VideoKickoff;
       setVideoKickoff(kickoff);
       const fromInspiration = kickoff.source === 'inspiration_analysis';
+      const fromImagePost = kickoff.source === 'inspiration_image_post' || kickoff.video?.contentFormat === 'image';
+      if (fromImagePost) {
+        setContentMode('poster');
+        setMode('clone');
+        setPlatform(kickoff.video?.platform === 'instagram' ? 'instagram' : 'facebook');
+        setRatio('1:1');
+        setActiveFolder('hot');
+        setProjectTitle(kickoff.video?.title ? `爆款图文迭代 · ${kickoff.video.title}` : 'AI 图文复刻');
+        const kickoffOption = kickoff.productInfo ? productOptionFromInfo(kickoff.productInfo) : null;
+        if (kickoffOption) {
+          setProductOptions(current => current.some(item => item.id === kickoffOption.id)
+            ? current.map(item => item.id === kickoffOption.id ? kickoffOption : item)
+            : [kickoffOption, ...current]);
+          setSelectedProductIds([kickoffOption.id]);
+        }
+        if (kickoff.productInfo) setProductInfo(kickoff.productInfo);
+        setModeNotice('已带入爆款图文参考。下一步会先拆解标题区、产品主视觉、背景氛围、信息栏、认证徽章、流程图和 CTA，再用本地素材逐模块替换。');
+        setStepIdx(1);
+        autoGen.current = true;
+        return;
+      }
       if (fromInspiration) {
         setScript('');
         setVoiceoverLines('');
@@ -1823,6 +1879,29 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     });
     setSelected([clip.id]);
   }, [duration, videoKickoff]);
+
+  useEffect(() => {
+    if (!(videoKickoff?.source === 'inspiration_image_post' || videoKickoff?.video?.contentFormat === 'image')) return;
+    const thumb = videoKickoff.video?.thumbnail || videoKickoff.video?.aiAnalysis?.materialPoster || '';
+    const sourceUrl = videoKickoff.video?.sourceUrl || '';
+    const id = `hot-image-${sourceUrl || videoKickoff.video?.title || Date.now()}`;
+    const clip: Clip = {
+      id,
+      name: videoKickoff.video?.title || '爆款图文参考',
+      folder: 'hot',
+      type: 'image',
+      duration: 0,
+      size: '图文参考',
+      url: thumb,
+      poster: thumb,
+      scope: 'own',
+    };
+    setMaterials(prev => {
+      if (prev.some(m => m.id === clip.id || (clip.url && m.url === clip.url))) return prev;
+      return [clip, ...prev];
+    });
+    setSelected([clip.id]);
+  }, [videoKickoff]);
 
   useEffect(() => {
     if (!videoKickoff || materials.length === 0) return;
@@ -2042,9 +2121,10 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   };
 
   const next = () => {
-    if (STEPS[stepIdx + 1]?.id === 'preview') return goPreview();
-    if (STEPS[stepIdx + 1]?.id === 'material') setActiveFolder('recommend');
-    setStepIdx(i => Math.min(i + 1, STEPS.length - 1));
+    const nextStep = activeSteps[stepIdx + 1]?.id;
+    if (contentMode === 'video' && nextStep === 'preview') return goPreview();
+    if (nextStep === 'material') setActiveFolder('recommend');
+    setStepIdx(i => Math.min(i + 1, activeSteps.length - 1));
   };
   const renderLanguageVersions = async () => {
     const languages = voiceoverMode === 'ai'
@@ -2954,6 +3034,14 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   };
 
   const generatePosterBrief = async () => {
+    if (mode === 'product' && !activeProductLabel) {
+      setModeNotice('产品信息生成需要先在第一步选择企业中心产品，再进入第二步选择配套素材。');
+      return;
+    }
+    if (mode === 'clone' && !selectedClips.some(item => item.folder === 'hot')) {
+      setModeNotice('爆款图文迭代需要先选择一张爆款图文参考，用于拆解模块结构、钩子、爆点和画风。');
+      return;
+    }
     setPosterLoading(true);
     setModeNotice('');
     try {
@@ -2964,6 +3052,15 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         folder: item.folder,
         role: materialRoleLabel(item),
       }));
+      const hotPosterRefs = selectedClips
+        .filter(item => item.folder === 'hot')
+        .map(item => [
+          `爆款图文参考：${item.name}`,
+          '需要模块化拆解：标题区、产品主视觉、背景氛围、工厂/证明区、徽章区、流程图、产品分类卡、CTA/底栏、配文框架。',
+          '复用方式：只复用通用版式、构图、背景氛围和信息层级；用本地产品图替换竞品产品，用本地工厂图/证书图/包装图/场景图匹配对应模块。',
+          '禁止复制：竞品品牌、Logo、认证、价格、MOQ、交期、出口国家、工厂资质和任何未验证商业承诺。',
+        ].join('。'))
+        .join('\n');
       const result = await studioApi.fbPoster({
         mode,
         productInfo: activeProductInfo,
@@ -2973,16 +3070,37 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         language: lang,
         provider,
         materials: selectedMaterials,
-        referenceNotes: mode === 'clone' && videoKickoff ? cloneReferenceAnalysisText(videoKickoff) : '',
+        referenceNotes: mode === 'clone'
+          ? [hotPosterRefs, videoKickoff ? cloneReferenceAnalysisText(videoKickoff) : ''].filter(Boolean).join('\n\n')
+          : '',
       });
       if (!result.ok && !result.poster?.headline) throw new Error(result.error || '海报文案生成失败');
       setPosterDraft(result);
       setPosterJsonText(JSON.stringify(result.poster, null, 2));
       const tags = (result.hashtags || []).map(tag => `#${String(tag).replace(/^#/, '')}`).join(' ');
       setCaption([result.caption, tags].filter(Boolean).join(' '));
-      setModeNotice(result.fieldsToConfirm?.length
-        ? `已生成海报文案 JSON；请确认：${result.fieldsToConfirm.join('、')}`
-        : '已生成海报文案 JSON 和发布配文。');
+      setModeNotice('正在生成海报图...');
+      try {
+        const rendered = await studioApi.fbPosterRender({
+          poster: result.poster,
+          caption: result.caption,
+          imagePrompt: result.imagePrompt,
+          ratio,
+          materialIds: selectedClips.filter(item => item.type !== 'audio').slice(0, 4).map(item => item.id),
+        });
+        if (!rendered.ok || !rendered.url) throw new Error(rendered.error || '图片生成失败');
+        setPosterImageUrl(rendered.url);
+        if (rendered.material?.id) setSelected(prev => [...new Set([...prev, rendered.material!.id])]);
+        await refreshMaterials();
+        setModeNotice(result.fieldsToConfirm?.length
+          ? `已一次生成海报图和文案；请确认：${result.fieldsToConfirm.join('、')}`
+          : '已一次生成海报图、海报文案 JSON 和发布配文。');
+      } catch (imageErr: any) {
+        setPosterImageUrl('');
+        setModeNotice(result.fieldsToConfirm?.length
+          ? `已生成海报文案 JSON，但图片生成失败：${imageErr?.message || '请检查图像模型 Key 或稍后重试'}；请确认：${result.fieldsToConfirm.join('、')}`
+          : `已生成海报文案 JSON，但图片生成失败：${imageErr?.message || '请检查图像模型 Key 或稍后重试'}`);
+      }
     } catch (err: any) {
       setModeNotice(err?.message || '海报文案生成失败，请稍后重试。');
     } finally {
@@ -3350,7 +3468,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     selected, scriptRecommendedMaterialIds, storyboardAssignments, assemblyName, script, scriptType, voice,
     bgm, bgmVol, voiceVol, cover, coverTitle, coverStyle, account, caption,
     subtitlesOn, subMode, clipEdits, voiceoverMode, uploadedVoiceName, customVoiceId, customVoiceName, customVoiceUrl,
-    posterDraft, posterJsonText,
+    posterDraft, posterJsonText, posterImageUrl,
   });
 
   const applySpec = (s: Record<string, unknown>) => {
@@ -3392,6 +3510,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     if (typeof s.caption === 'string') setCaption(s.caption);
     if (s.posterDraft && typeof s.posterDraft === 'object') setPosterDraft(s.posterDraft as FbPosterResult);
     if (typeof s.posterJsonText === 'string') setPosterJsonText(s.posterJsonText);
+    if (typeof s.posterImageUrl === 'string') setPosterImageUrl(s.posterImageUrl);
     if (typeof s.subtitlesOn === 'boolean') setSubtitlesOn(s.subtitlesOn);
     if (s.subMode === 'target' || s.subMode === 'bilingual') setSubMode(s.subMode);
     if (s.clipEdits && typeof s.clipEdits === 'object') setClipEdits(s.clipEdits as Record<string, ClipEdit>);
@@ -3524,27 +3643,6 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                 );
               })}
             </div>
-            {contentMode === 'poster' && (
-              <div className="mb-7 grid gap-3 md:grid-cols-3">
-                {(['clone', 'material', 'product'] as const).map(id => {
-                  const guide = POSTER_MODE_GUIDES[id];
-                  const active = mode === id;
-                  return (
-                    <div
-                      key={id}
-                      className="rounded-xl border bg-surface p-3 text-xs leading-relaxed"
-                      style={active ? { borderColor: TRAFFIC_GREEN, boxShadow: `0 0 0 1px ${TRAFFIC_GREEN}` } : { borderColor: 'var(--color-border)' }}
-                    >
-                      <p className="font-bold text-text-primary">{POSTER_MODES.find(item => item.id === id)?.title}</p>
-                      <p className="mt-2 text-text-secondary">{guide.source}</p>
-                      <p className="mt-2 text-text-muted">{guide.iterate}</p>
-                      <p className="mt-2 font-semibold text-amber-700">{guide.confirm}</p>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
             <SectionTitle title={contentMode === 'poster' ? '图文参数' : '智能素材参数'} desc="选择平台、产品和脚本输出方式" />
             <div className="space-y-4">
               <Field label="目标平台">
@@ -3562,7 +3660,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                   {visibleRatios.map(r => <Pill key={r} active={ratio === r} onClick={() => setRatio(r)}>{r}</Pill>)}
                 </div>
               </Field>
-              {contentMode === 'poster' && (
+              {false && contentMode === 'poster' && (
                 <Field label="海报风格">
                   <div className="flex flex-wrap gap-2">
                     {POSTER_STYLES.map(style => (
@@ -3576,7 +3674,11 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
               <Field label="选择产品">
                 <div className="space-y-2 max-w-2xl">
                   <div className="flex items-center justify-between gap-3">
-                    <p className="text-xs text-text-muted">产品信息从企业中心配置导入，用于后续口播脚本和素材生成。</p>
+                    <p className="text-xs text-text-muted">
+                      {contentMode === 'poster'
+                        ? '产品信息从企业中心配置导入，用于后续海报文案、参考图推荐和图文生成。'
+                        : '产品信息从企业中心配置导入，用于后续口播脚本和素材生成。'}
+                    </p>
                     <div className="flex items-center gap-0.5 rounded-lg border border-border bg-surface-2 p-0.5">
                       {([
                         ['single', '单选'],
@@ -3647,7 +3749,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                       className="btn-primary shrink-0 !px-4 !py-2 !text-xs"
                     >
                       {posterLoading ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                      生成图文文案
+                      一次生成图文
                     </button>
                   </div>
                   {modeNotice && (
@@ -3664,6 +3766,11 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                   />
                   {posterDraft && (
                     <div className="mt-3 grid gap-3 md:grid-cols-2">
+                      {posterImageUrl && (
+                        <div className="md:col-span-2 overflow-hidden rounded-xl border border-border bg-surface-2">
+                          <img src={posterImageUrl} alt="AI 图文海报" className="max-h-[520px] w-full object-contain bg-white" />
+                        </div>
+                      )}
                       <div className="rounded-xl border border-border bg-surface-2 p-3">
                         <div className="mb-2 flex items-center justify-between gap-2">
                           <p className="text-xs font-bold text-text-primary">发布配文</p>
@@ -3691,6 +3798,109 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
           </div>
         );
 
+      case 'poster':
+        return (
+          <div className="max-w-4xl">
+            <SectionTitle title="图文生成" desc="一次生成新的海报/爆款图，并按 Facebook 或 Instagram 自动适配配文和承接话术" />
+            <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
+              <div className="rounded-2xl border border-border bg-surface p-4">
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-bold text-text-primary">一键生成新海报/爆款图</p>
+                    <p className="mt-1 text-xs leading-relaxed text-text-muted">
+                      {mode === 'clone'
+                        ? `系统会先拆解对标图文的开头钩子、爆点、模块结构和画风，再用本地产品/工厂/证书/场景素材逐模块替换，并生成 ${platform === 'instagram' ? 'Instagram' : 'Facebook'} 配文。`
+                        : `系统会基于已选产品和素材生成新海报，并同步生成 ${platform === 'instagram' ? 'Instagram' : 'Facebook'} 配文、评论 CTA 和私信开场。`}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void generatePosterBrief()}
+                    disabled={posterLoading}
+                    className="btn-primary shrink-0 !px-4 !py-2 !text-xs"
+                  >
+                    {posterLoading ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
+                    一次生成图文
+                  </button>
+                </div>
+                {modeNotice && (
+                  <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
+                    {modeNotice}
+                  </div>
+                )}
+                <textarea
+                  value={posterJsonText}
+                  onChange={event => setPosterJsonText(event.target.value)}
+                  rows={posterJsonText ? 12 : 6}
+                  placeholder="生成后这里会出现海报文案 JSON：标题、副标题、认证徽章、流程六步、产品分类卡、底部卖点和 CTA。"
+                  className="mt-3 w-full rounded-xl border border-border bg-surface-2 p-3 font-mono text-xs leading-relaxed text-text-secondary outline-none focus:border-accent"
+                />
+                {posterDraft && (
+                  <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    {posterImageUrl && (
+                      <div className="md:col-span-2 overflow-hidden rounded-xl border border-border bg-surface-2">
+                        <img src={posterImageUrl} alt="AI 图文海报" className="max-h-[520px] w-full object-contain bg-white" />
+                      </div>
+                    )}
+                    {mode === 'clone' && posterDraft.layoutModules?.length ? (
+                      <div className="md:col-span-2 rounded-xl border border-border bg-surface-2 p-3">
+                        <p className="text-xs font-bold text-text-primary">爆款模块拆解与本地素材替换</p>
+                        <div className="mt-2 grid gap-2 md:grid-cols-2">
+                          {posterDraft.layoutModules.slice(0, 6).map((item, index) => (
+                            <div key={`${item.module}-${index}`} className="rounded-lg bg-white p-2 text-[11px] leading-relaxed text-text-secondary">
+                              <p className="font-bold text-text-primary">{item.module}</p>
+                              <p className="mt-1">参考：{item.referencePattern}</p>
+                              <p className="mt-1">素材：{item.localAssetRole}</p>
+                              <p className="mt-1 text-text-muted">{item.replacementInstruction}</p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ) : null}
+                    <div className="rounded-xl border border-border bg-surface-2 p-3">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <p className="text-xs font-bold text-text-primary">发布配文</p>
+                        <button type="button" onClick={() => navigator.clipboard?.writeText(caption)} className="text-xs font-bold text-accent">复制</button>
+                      </div>
+                      <p className="whitespace-pre-line text-xs leading-relaxed text-text-secondary">{caption}</p>
+                    </div>
+                    <div className="rounded-xl border border-border bg-surface-2 p-3">
+                      <p className="text-xs font-bold text-text-primary">承接话术</p>
+                      <p className="mt-2 text-xs leading-relaxed text-text-secondary">评论 CTA：{posterDraft.commentCta || '待生成'}</p>
+                      <p className="mt-2 text-xs leading-relaxed text-text-secondary">私信开场：{posterDraft.dmOpening || '待生成'}</p>
+                    </div>
+                    <div className="md:col-span-2 rounded-xl border border-border bg-surface-2 p-3">
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <p className="text-xs font-bold text-text-primary">图片模型 Prompt</p>
+                        <button type="button" onClick={() => navigator.clipboard?.writeText(posterDraft.imagePrompt || '')} className="text-xs font-bold text-accent">复制</button>
+                      </div>
+                      <p className="text-xs leading-relaxed text-text-muted">{posterDraft.imagePrompt || '待生成'}</p>
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="space-y-3">
+                <div className="rounded-2xl border border-border bg-surface p-4">
+                  <p className="text-xs font-bold text-text-primary">当前配置</p>
+                  <div className="mt-3 space-y-2 text-xs leading-relaxed text-text-secondary">
+                    <p>平台：{platform === 'instagram' ? 'Instagram' : 'Facebook'}</p>
+                    <p>比例：{ratio}</p>
+                    <p>风格：{POSTER_STYLES.find(item => item.id === posterStyle)?.label}</p>
+                    <p>模式：{POSTER_MODES.find(item => item.id === mode)?.title}</p>
+                    <p>参考素材：{selectedClips.filter(item => item.type !== 'audio').length} 个</p>
+                  </div>
+                </div>
+                <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+                  <p className="text-xs font-bold text-amber-900">生成前确认</p>
+                  <p className="mt-2 text-xs leading-relaxed text-amber-800">
+                    MOQ、认证、交期、价格、出口国家、工厂资质等商业承诺必须来自企业中心或用户确认，AI 只优化表达，不编造承诺。
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+
       /* ③ 选素材 —— 文件夹 + 网格 两栏 */
       case 'material': {
         const folderName = (id: string) => FOLDERS.find(f => f.id === id)?.name ?? '';
@@ -3705,6 +3915,227 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
           ? recommended
           : materials.filter(c => activeFolder === 'all' || c.folder === activeFolder)
         ).filter(matchSearch);
+        if (contentMode === 'poster') {
+          const posterFolderName = (id: string) => POSTER_FOLDERS.find(f => f.id === id)?.name ?? folderName(id);
+          const posterFolders = new Set(POSTER_FOLDERS.map(item => item.id));
+          const posterActiveFolder = posterFolders.has(activeFolder) ? activeFolder : 'all';
+          const posterMaterials = materials.filter(c => c.type !== 'audio');
+          const selectedPosterClips = selected
+            .map(id => materialById.get(id))
+            .filter((item): item is Clip => Boolean(item && item.type !== 'audio'));
+          const posterRecommended = selectedPosterClips.length
+            ? selectedPosterClips
+            : posterMaterials.filter(c => ['product', 'factory', 'packaging', 'certificate', 'scene', 'brand', 'hot'].includes(c.folder));
+          const visiblePoster = (posterActiveFolder === 'recommend'
+            ? posterRecommended
+            : posterMaterials.filter(c => posterActiveFolder === 'all' || c.folder === posterActiveFolder)
+          ).filter(c => q === '' || c.name.toLowerCase().includes(q) || posterFolderName(c.folder).toLowerCase().includes(q));
+          const folderCount = (folderId: string) => {
+            if (folderId === 'recommend') return posterRecommended.length;
+            if (folderId === 'all') return posterMaterials.length;
+            return posterMaterials.filter(c => c.folder === folderId).length;
+          };
+          const clipsForFolders = (folders: readonly string[]) =>
+            selectedPosterClips.filter(clip => folders.includes(clip.folder));
+          const smartSelectPosterMaterials = () => {
+            const byFolder = (folders: string[], limit = 1) => posterMaterials
+              .filter(clip => folders.includes(clip.folder))
+              .slice(0, limit)
+              .map(clip => clip.id);
+            const picked = [
+              ...byFolder(['product'], 4),
+              ...byFolder(['factory'], 2),
+              ...byFolder(['packaging', 'certificate'], 2),
+              ...byFolder(['scene', 'brand'], 2),
+              ...(mode === 'clone' ? byFolder(['hot'], 1) : []),
+            ];
+            setSelected([...new Set(picked.length ? picked : posterMaterials.slice(0, 6).map(clip => clip.id))]);
+            setActiveFolder('recommend');
+            setModeNotice(mode === 'clone'
+              ? '已按爆款图文复刻逻辑推荐素材：先拆解爆款参考，再匹配产品、工厂、包装证书和场景图。'
+              : '已按海报文案需要推荐素材：产品图优先，补充工厂背书、包装证书和使用场景。');
+          };
+
+          return (
+            <div className="flex h-full -m-6">
+              <div className="w-40 flex-shrink-0 border-r border-border p-2.5 overflow-y-auto">
+                <div className="relative mb-3">
+                  <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
+                  <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索图文素材…"
+                    className="w-full pl-8 pr-2 py-1.5 rounded-lg border border-border bg-surface text-xs outline-none focus:border-accent" />
+                </div>
+                <div className="flex items-center justify-between px-1.5 mb-1.5">
+                  <span className="text-[11px] font-semibold text-text-secondary">图文素材</span>
+                  <Plus size={13} className="text-text-muted cursor-pointer hover:text-text-primary" />
+                </div>
+                {POSTER_FOLDERS.map(f => (
+                  <button key={f.id} onClick={() => setActiveFolder(f.id)}
+                    className={`w-full flex items-center gap-1.5 px-2 py-2 rounded-lg text-xs transition-colors ${
+                      posterActiveFolder === f.id ? 'bg-accent-glow text-accent font-semibold' : 'text-text-secondary hover:bg-surface-2'}`}>
+                    <Folder size={12} className="flex-shrink-0" />
+                    <span className="flex-1 text-left truncate">{f.name}</span>
+                    {f.id === 'hot' && <span className="text-[7px] font-bold px-1 py-0.5 rounded text-white flex-shrink-0" style={{ background: '#0891b2' }}>爬取</span>}
+                    <span className="text-[10px] text-text-muted">{folderCount(f.id)}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div className="flex-1 min-w-0 flex flex-col">
+                <div className="flex items-center gap-3 px-5 py-3 border-b border-border flex-shrink-0">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-text-primary">{posterFolderName(posterActiveFolder)}</p>
+                    <p className="mt-0.5 text-[11px] text-text-muted">
+                      {mode === 'clone'
+                        ? '爆款图文参考用于拆解画风、画面和图文构成，本地素材用于生成最终海报。'
+                        : '上传产品、工厂、包装、证书、场景和品牌视觉素材，AI 会按海报文案智能推荐。'}
+                    </p>
+                  </div>
+                  <input ref={fileInputRef} type="file" multiple accept="image/*" className="hidden"
+                    onChange={e => { void handleUpload(e.target.files); e.target.value = ''; }} />
+                  <button
+                    type="button"
+                    onClick={smartSelectPosterMaterials}
+                    disabled={posterMaterials.length === 0}
+                    className="ml-auto inline-flex items-center gap-1.5 rounded-xl bg-accent px-3 py-1.5 text-xs font-bold text-white transition disabled:opacity-50"
+                  >
+                    <Sparkles size={12} />
+                    智能推荐参考图
+                  </button>
+                  <button onClick={() => fileInputRef.current?.click()} disabled={uploading}
+                    className="btn-ghost !px-3 !py-1.5 !text-xs flex items-center gap-1.5 disabled:opacity-60">
+                    {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}
+                    {uploading ? '上传中…' : '上传图片'}
+                  </button>
+                  <span className="text-xs text-text-muted">已选 {selectedPosterClips.length}</span>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-5">
+                  <div className={`mb-4 rounded-xl border px-4 py-3 text-xs leading-relaxed ${activeProductLabel ? 'border-accent/20 bg-accent-glow text-text-secondary' : 'border-amber-200 bg-amber-50 text-amber-800'}`}>
+                    <span className="font-bold text-text-primary">当前产品：</span>
+                    {activeProductLabel || '尚未选择。产品信息生成模式需要先在第一步选择企业中心产品，再补充/选择图文素材。'}
+                    {activeProductLabel && mode === 'product' ? '。请继续选择产品图、工厂图、包装图、证书图或场景图作为海报参考。' : ''}
+                  </div>
+                  {mode === 'clone' && (
+                    <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs leading-relaxed text-amber-800">
+                      爆款复刻模式需要先从「灵感大屏 - 待拍 - 图文」选择爬取图文素材。系统会把对标图文拆成标题区、产品主视觉、背景氛围、信息栏、认证徽章、流程图、CTA 等模块，再用本地素材逐模块替换。
+                    </div>
+                  )}
+                  <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+                    {visiblePoster.map(c => {
+                      const on = selected.includes(c.id);
+                      const idx = selected.indexOf(c.id);
+                      return (
+                        <button key={c.id}
+                          onClick={() => setSelected(s => on ? s.filter(x => x !== c.id) : [...s, c.id])}
+                          className="card !rounded-xl overflow-hidden text-left relative group"
+                          style={on ? { borderColor: TRAFFIC_GREEN, boxShadow: `0 0 0 1px ${TRAFFIC_GREEN}` } : undefined}>
+                          <div className="relative">
+                            {c.url
+                              ? <RealThumb clip={c} />
+                              : <Thumb seed={c.id} src={c.poster} label={c.type === 'image' ? 'IMG' : fmtDur(c.duration)} />}
+                            {on && (
+                              <span className="absolute top-1.5 left-1.5 w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold text-white z-10"
+                                style={{ background: TRAFFIC_GREEN }}>{idx + 1}</span>
+                            )}
+                            {c.folder === 'hot' && (
+                              <span className="absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded text-[8px] font-bold text-white bg-black/45 z-10">
+                                爆款参考
+                              </span>
+                            )}
+                          </div>
+                          <div className="p-2">
+                            <p className="text-[11px] font-medium text-text-primary truncate">{c.name}</p>
+                            <p className="text-[10px] text-text-muted mt-0.5">{posterFolderName(c.folder)} · {c.size}</p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {visiblePoster.length === 0 && (
+                    <div className="text-center py-16">
+                      <Upload size={26} className="mx-auto text-text-muted mb-3 opacity-30" />
+                      <p className="text-sm text-text-muted">
+                        {search.trim() ? '没有匹配的图文素材' : posterActiveFolder === 'hot' ? '暂无爆款图文参考，请从灵感大屏爬取或选择待拍图文' : '这个分类还没有图片素材'}
+                      </p>
+                      {posterActiveFolder !== 'hot' && !search.trim() && (
+                        <button onClick={() => fileInputRef.current?.click()} className="mt-2 text-xs font-semibold" style={{ color: TRAFFIC_GREEN }}>
+                          上传到{posterFolderName(posterActiveFolder)}
+                        </button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <aside className="w-[380px] flex-shrink-0 border-l border-border bg-surface/40 flex flex-col">
+                <div className="border-b border-border bg-white px-4 py-3">
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <div>
+                      <p className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">海报参考素材</p>
+                      <p className="mt-0.5 text-sm font-black text-text-primary">
+                        {mode === 'clone' ? '爆款拆解 + 本地素材回填' : '按文案推荐素材'}
+                      </p>
+                    </div>
+                    <button type="button" onClick={() => setSelected([])}
+                      className="rounded-lg border border-border px-2.5 py-1.5 text-[11px] font-bold text-text-secondary hover:bg-surface-2">
+                      清空
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between gap-2 text-[11px] text-text-muted">
+                    <span>{selectedPosterClips.length} 个已选 · 下一步生成海报 JSON 和图片</span>
+                    <button type="button" onClick={smartSelectPosterMaterials}
+                      className="font-bold text-accent disabled:opacity-40"
+                      disabled={!posterMaterials.length}>
+                      智能推荐
+                    </button>
+                  </div>
+                </div>
+                <div className="min-h-0 flex-1 overflow-y-auto p-3 space-y-3">
+                  {POSTER_MATERIAL_GROUPS.map(group => {
+                    const groupClips = clipsForFolders(group.folders);
+                    if (group.id === 'hot' && mode !== 'clone') return null;
+                    return (
+                      <div key={group.id} className={`rounded-xl border p-3 ${groupClips.length ? 'border-green-200 bg-green-50/60' : 'border-dashed border-border bg-white'}`}>
+                        <div className="mb-2 flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-xs font-bold text-text-primary">{group.title}</p>
+                            <p className="mt-0.5 text-[11px] leading-relaxed text-text-muted">{group.desc}</p>
+                          </div>
+                          <span className="rounded-md bg-slate-950 px-1.5 py-0.5 text-[10px] font-bold text-white">{groupClips.length}</span>
+                        </div>
+                        {groupClips.length ? (
+                          <div className="space-y-2">
+                            {groupClips.map(clip => (
+                              <div key={clip.id} className="flex items-center gap-2 rounded-lg bg-white p-2 shadow-sm">
+                                <div className="h-12 w-16 flex-shrink-0 overflow-hidden rounded-md bg-surface-2">
+                                  {clip.url
+                                    ? <RealThumb clip={clip} />
+                                    : <Thumb seed={clip.id} src={clip.poster} label={clip.type === 'image' ? 'IMG' : fmtDur(clip.duration)} />}
+                                </div>
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate text-[11px] font-bold text-text-primary">{clip.name}</p>
+                                  <p className="mt-0.5 text-[10px] text-text-muted">{posterFolderName(clip.folder)} · {clip.size}</p>
+                                </div>
+                                <button type="button" onClick={() => setSelected(list => list.filter(id => id !== clip.id))}
+                                  className="rounded-md p-1 text-text-muted hover:bg-surface-2 hover:text-red">
+                                  <X size={12} />
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="flex h-14 items-center justify-center rounded-lg border border-dashed border-border bg-surface-2 text-center text-[11px] font-bold text-text-muted">
+                            {group.id === 'hot' ? '从灵感大屏选择爆款图文' : '从左侧选择或上传'}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </aside>
+            </div>
+          );
+        }
         const assignClipToSlot = (slotId: string, clipId: string) => {
           const clip = materialById.get(clipId);
           const slot = storyboardSlots.find(item => item.id === slotId);
@@ -4906,7 +5337,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
           <p className="text-xs font-bold text-text-primary font-display">AI智能素材</p>
         </div>
         <div className="flex-1 px-2 space-y-0.5 overflow-y-auto">
-          {STEPS.map((s, i) => {
+          {activeSteps.map((s, i) => {
             const done = i < stepIdx;
             const active = i === stepIdx;
             return (
@@ -4950,7 +5381,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
             <ChevronLeft size={15} /> 上一步
           </button>
           <div className="flex items-center gap-1.5">
-            {STEPS.map((_, i) => (
+            {activeSteps.map((_, i) => (
               <span key={i} className="h-1 rounded-full transition-all"
                 style={{ width: i === stepIdx ? 18 : 6, background: i <= stepIdx ? TRAFFIC_GREEN : 'var(--color-border)' }} />
             ))}

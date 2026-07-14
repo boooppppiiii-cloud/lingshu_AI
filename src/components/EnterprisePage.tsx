@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { Building2, Package, Megaphone, BookOpen, Save, CheckCircle2, Loader2, Compass, Zap, MessageSquare, RotateCcw, Plus, Upload, X, Image, Video, FileText, Copy, FileSpreadsheet } from 'lucide-react';
+import { Building2, Package, Megaphone, BookOpen, Save, CheckCircle2, Loader2, Compass, Zap, MessageSquare, RotateCcw, Plus, Upload, X, Image, Video, FileText, Copy, FileSpreadsheet, type LucideIcon } from 'lucide-react';
 import { authHeader } from '../lib/auth';
 import { completeDemoStep } from '../lib/demoProgress';
 import {
@@ -34,6 +34,11 @@ interface ProductItem {
   images?: ProductAsset[];
   videos?: ProductAsset[];
   documents?: ProductAsset[];
+  factoryImages?: ProductAsset[];
+  packagingImages?: ProductAsset[];
+  certificateImages?: ProductAsset[];
+  sceneImages?: ProductAsset[];
+  brandAssets?: ProductAsset[];
 }
 
 type AutonomyLevel = 'remind' | 'draft' | 'auto';
@@ -106,10 +111,30 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 const inputCls = 'w-full px-3 py-2 text-sm bg-white border border-border rounded-lg outline-none focus:border-accent focus:ring-2 focus:ring-accent/10 transition-all placeholder:text-text-muted text-text-primary';
 const textareaCls = `${inputCls} resize-none`;
 
-const MAX_PRODUCT_ASSETS = { images: 5, videos: 2, documents: 3 } as const;
+const MAX_PRODUCT_ASSETS = {
+  images: 5,
+  videos: 2,
+  documents: 3,
+  factoryImages: 6,
+  packagingImages: 6,
+  certificateImages: 6,
+  sceneImages: 6,
+  brandAssets: 6,
+} as const;
+type ProductAssetKey = keyof typeof MAX_PRODUCT_ASSETS;
 
 function emptyProduct(index: number): ProductItem {
-  return { name: `产品${index + 1}`, images: [], videos: [], documents: [] };
+  return {
+    name: `产品${index + 1}`,
+    images: [],
+    videos: [],
+    documents: [],
+    factoryImages: [],
+    packagingImages: [],
+    certificateImages: [],
+    sceneImages: [],
+    brandAssets: [],
+  };
 }
 
 function normalizeProductItems(products: Profile['products']): ProductItem[] {
@@ -117,7 +142,9 @@ function normalizeProductItems(products: Profile['products']): ProductItem[] {
   if (existing.length) {
     return existing.filter(item =>
       item.name || item.category || item.priceRange || item.moq || item.certifications || item.highlights ||
-      item.images?.length || item.videos?.length || item.documents?.length
+      item.images?.length || item.videos?.length || item.documents?.length ||
+      item.factoryImages?.length || item.packagingImages?.length || item.certificateImages?.length ||
+      item.sceneImages?.length || item.brandAssets?.length
     ).map((item, index) => ({
       ...emptyProduct(index),
       ...item,
@@ -125,6 +152,11 @@ function normalizeProductItems(products: Profile['products']): ProductItem[] {
       images: Array.isArray(item.images) ? item.images : [],
       videos: Array.isArray(item.videos) ? item.videos : [],
       documents: Array.isArray(item.documents) ? item.documents : [],
+      factoryImages: Array.isArray(item.factoryImages) && item.factoryImages.length ? item.factoryImages : (Array.isArray(item.videos) ? item.videos : []),
+      packagingImages: Array.isArray(item.packagingImages) ? item.packagingImages : [],
+      certificateImages: Array.isArray(item.certificateImages) && item.certificateImages.length ? item.certificateImages : (Array.isArray(item.documents) ? item.documents : []),
+      sceneImages: Array.isArray(item.sceneImages) ? item.sceneImages : [],
+      brandAssets: Array.isArray(item.brandAssets) ? item.brandAssets : [],
     }));
   }
   return [];
@@ -380,7 +412,7 @@ export default function EnterprisePage() {
     });
   };
 
-  const addProductAssets = async (index: number, key: 'images' | 'videos' | 'documents', files: FileList | null) => {
+  const addProductAssets = async (index: number, key: ProductAssetKey, files: FileList | null) => {
     if (!files?.length) return;
     const picked = await Promise.all(Array.from(files).map(file => uploadEnterpriseAsset(file).catch(() => ({
       name: file.name,
@@ -396,7 +428,7 @@ export default function EnterprisePage() {
     });
   };
 
-  const removeProductAsset = (index: number, key: 'images' | 'videos' | 'documents', assetIndex: number) => {
+  const removeProductAsset = (index: number, key: ProductAssetKey, assetIndex: number) => {
     setProfile(prev => {
       const items = normalizeProductItems(prev.products);
       items[index] = { ...items[index], [key]: (items[index]?.[key] ?? []).filter((_, i) => i !== assetIndex) };
@@ -774,10 +806,13 @@ export default function EnterprisePage() {
             </Field>
             <div className="space-y-3 pt-1">
               {normalizeProductItems(profile.products).map((product, index) => {
-                const assetGroups = [
-                  { key: 'images' as const, label: '图片', limit: MAX_PRODUCT_ASSETS.images, accept: 'image/*', icon: Image, assets: product.images ?? [] },
-                  { key: 'videos' as const, label: '视频', limit: MAX_PRODUCT_ASSETS.videos, accept: 'video/*', icon: Video, assets: product.videos ?? [] },
-                  { key: 'documents' as const, label: '资质文书', limit: MAX_PRODUCT_ASSETS.documents, accept: '.pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg', icon: FileText, assets: product.documents ?? [] },
+                const assetGroups: Array<{ key: ProductAssetKey; label: string; hint: string; limit: number; accept: string; icon: LucideIcon; assets: ProductAsset[] }> = [
+                  { key: 'images', label: '产品主图', hint: '白底图/瓶身/套装/矩阵', limit: MAX_PRODUCT_ASSETS.images, accept: 'image/*', icon: Image, assets: product.images ?? [] },
+                  { key: 'factoryImages', label: '工厂实拍', hint: '产线/质检/仓库/团队', limit: MAX_PRODUCT_ASSETS.factoryImages, accept: 'image/*,video/*', icon: Building2, assets: product.factoryImages ?? [] },
+                  { key: 'packagingImages', label: '包装定制', hint: '私标包装/标签/礼盒', limit: MAX_PRODUCT_ASSETS.packagingImages, accept: 'image/*', icon: Package, assets: product.packagingImages ?? [] },
+                  { key: 'certificateImages', label: '证书资质', hint: '认证/检测/资质墙', limit: MAX_PRODUCT_ASSETS.certificateImages, accept: '.pdf,.doc,.docx,.xls,.xlsx,.png,.jpg,.jpeg,image/*', icon: FileText, assets: product.certificateImages ?? [] },
+                  { key: 'sceneImages', label: '使用场景', hint: '应用/成分/空间氛围', limit: MAX_PRODUCT_ASSETS.sceneImages, accept: 'image/*,video/*', icon: Video, assets: product.sceneImages ?? [] },
+                  { key: 'brandAssets', label: '品牌视觉', hint: 'Logo/品牌色/参考版式', limit: MAX_PRODUCT_ASSETS.brandAssets, accept: 'image/*,.pdf', icon: Megaphone, assets: product.brandAssets ?? [] },
                 ];
                 return (
                   <div key={index} className="rounded-lg border border-border bg-surface-2/40 p-4 space-y-3">
@@ -814,7 +849,10 @@ export default function EnterprisePage() {
                       <textarea className={textareaCls} rows={2} placeholder="核心卖点、适用场景、可定制项、交付优势"
                         value={product.highlights ?? ''} onChange={e => updateProduct(index, { highlights: e.target.value })} />
                     </Field>
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="rounded-lg border border-accent/15 bg-accent-glow/40 p-3 text-[11px] leading-relaxed text-text-secondary">
+                      这些图文素材会用于 AI 智能素材的海报生成：产品信息生成/素材库选择会按产品和卖点智能推荐，爆款复刻会先拆解竞品图文后再回填本地素材。
+                    </div>
+                    <div className="grid grid-cols-2 xl:grid-cols-3 gap-3">
                       {assetGroups.map(({ key, label, limit, accept, icon: Icon, assets }) => (
                         <div key={key} className="rounded-lg border border-border bg-white p-3 min-w-0">
                           <div className="flex items-center justify-between gap-2 mb-2">
@@ -823,6 +861,7 @@ export default function EnterprisePage() {
                             </span>
                             <span className="text-[10px] text-text-muted">{assets.length}/{limit}</span>
                           </div>
+                          <p className="mb-2 truncate text-[10px] text-text-muted">{assetGroups.find(group => group.key === key)?.hint}</p>
                           <label className={`flex items-center justify-center gap-1.5 h-8 rounded-md border border-dashed text-[11px] font-semibold transition-colors ${assets.length >= limit ? 'text-text-muted bg-surface-2 cursor-not-allowed' : 'text-text-secondary hover:text-text-primary hover:border-border-bright cursor-pointer'}`}>
                             <Upload size={12} />上传
                             <input
