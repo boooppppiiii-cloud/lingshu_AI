@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import { callLLM } from '../agents/llm.js';
+import { isDemoMode } from '../lib/demo.js';
+import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 import { getWhatsAppCustomers, getWhatsAppImportStatus } from '../whatsapp/historyImport.js';
+import { sendTenantWhatsAppTemplate, sendTenantWhatsAppText } from '../whatsapp/send.js';
 
 export const customerSuggestionsRouter = Router();
 
@@ -37,13 +40,14 @@ function renderTemplate(templateName: string, variables: string[]) {
   return template.body.replace(/\{\{(\d+)}}/g, (_, index) => variables[Number(index) - 1] || '');
 }
 
-customerSuggestionsRouter.get('/', (req, res) => {
+customerSuggestionsRouter.get('/', requireAuth, (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   const source = String(req.query.source || '');
   if (source && source !== 'whatsapp') {
     res.json({ items: [], source });
     return;
   }
-  res.json({ items: getWhatsAppCustomers(), source: 'whatsapp', importStatus: getWhatsAppImportStatus() });
+  res.json({ items: getWhatsAppCustomers(tenantId), source: 'whatsapp', importStatus: getWhatsAppImportStatus() });
 });
 
 customerSuggestionsRouter.get('/whatsapp/import-status', (_req, res) => {
@@ -66,12 +70,29 @@ customerSuggestionsRouter.post('/:id/manual-active', (req, res) => {
   res.json({ ok: true, suspendedUntil: new Date(until).toISOString() });
 });
 
-customerSuggestionsRouter.post('/:id/outbox', (req, res) => {
+customerSuggestionsRouter.post('/:id/outbox', requireAuth, async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   const customerId = String(req.params.id || '');
   const body = String(req.body?.body || '').trim();
   const mode = String(req.body?.mode || 'free_text');
+  const to = String(req.body?.to || '').trim();
   if (!customerId || !body) {
     res.status(400).json({ error: 'customer_id_and_body_required' });
+    return;
+  }
+  if (isDemoMode()) {
+    res.json({
+      ok: true,
+      source: 'demo',
+      outboxId: `${mode === 'template' ? 'tpl' : 'out'}_${Date.now()}`,
+      status: 'sent',
+      sentAt: new Date().toISOString(),
+      renderedBody: body,
+    });
+    return;
+  }
+  if (!to) {
+    res.status(400).json({ error: 'whatsapp_recipient_required', message: 'WhatsApp recipient is missing.' });
     return;
   }
   if (mode === 'free_text' && req.body?.outsideWindow) {
@@ -83,6 +104,21 @@ customerSuggestionsRouter.post('/:id/outbox', (req, res) => {
     const variables = Array.isArray(req.body?.variables) ? req.body.variables.map((item: unknown) => String(item || '')) : [];
     if (!isTemplateApproved(templateName)) {
       res.status(409).json({ error: 'template_pending', message: '消息模板审核中，暂时不能发送超窗触达。' });
+      return;
+    }
+    try {
+      await sendTenantWhatsAppTemplate({
+        tenantId,
+        to,
+        templateName,
+        variables,
+        languageCode: String(req.body?.languageCode || 'en_US'),
+      });
+    } catch (error) {
+      res.status(502).json({
+        error: 'whatsapp_send_failed',
+        message: error instanceof Error ? error.message : 'WhatsApp send failed',
+      });
       return;
     }
     res.json({
@@ -97,6 +133,15 @@ customerSuggestionsRouter.post('/:id/outbox', (req, res) => {
   const suspendedUntil = manualActiveUntil.get(customerId) || 0;
   if (req.body?.auto === true && suspendedUntil > Date.now()) {
     res.status(409).json({ error: 'manual_active', message: '人工正在回复，AI 自动发送已挂起，只生成草稿。' });
+    return;
+  }
+  try {
+    await sendTenantWhatsAppText(tenantId, to, body);
+  } catch (error) {
+    res.status(502).json({
+      error: 'whatsapp_send_failed',
+      message: error instanceof Error ? error.message : 'WhatsApp send failed',
+    });
     return;
   }
   res.json({

@@ -64,11 +64,11 @@ export async function checkTenantPlatformTokens(): Promise<void> {
       const expired = isMetaTokenExpiredError(error);
       await markTenantPlatformStatus(app.id, expired ? 'token_expired' : 'error', error?.message || 'token refresh failed');
       await notifyDeliveryTeam([
-        '【灵枢交付提醒】租户 Meta Token 需要处理',
-        `租户：${app.tenant_id}`,
-        `平台：${app.platform}`,
-        `状态：${expired ? 'token_expired' : 'error'}`,
-        `错误：${error?.response?.data?.error?.message || error?.message || 'unknown'}`,
+        '[LingShu delivery alert] Meta token needs attention',
+        `Tenant: ${app.tenant_id}`,
+        `Platform: ${app.platform}`,
+        `Status: ${expired ? 'token_expired' : 'error'}`,
+        `Error: ${error?.response?.data?.error?.message || error?.message || 'unknown'}`,
       ].join('\n'));
     }
   }

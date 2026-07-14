@@ -32,6 +32,7 @@ import { webhookRouter } from './routes/webhooks.js';
 import { isDemoMode, demoLimits } from './lib/demo.js';
 import { initTenantPlatformTokenMonitor } from './routes/tenantPlatformTokenMonitor.js';
 import { assistLinksRouter } from './routes/assistLinks.js';
+import { initWhatsAppCustomerMaintenance } from './whatsapp/historyImport.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
@@ -132,6 +133,7 @@ app.use('/api/webhooks', webhookRouter);
 initScheduler();
 initCrawlerOpsWorker();
 initTenantPlatformTokenMonitor();
+initWhatsAppCustomerMaintenance();
 
 // 素材库本地文件托管（POST /studio/materials 上传到 data/media/）
 const mediaDir = path.join(__dirname, '..', 'data', 'media');

@@ -2,13 +2,14 @@ import { Router, type Request, type Response } from 'express';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { sendWhatsAppText, verifyWhatsAppWebhook, getPhoneNumberInfo } from '../integrations/whatsapp.js';
+import { verifyWhatsAppWebhook, getPhoneNumberInfo } from '../integrations/whatsapp.js';
 import { getBotInfo, sendTelegramMessage } from '../integrations/telegram.js';
 import { testDingTalk } from '../integrations/dingtalk.js';
 import { testFeishu } from '../integrations/feishu.js';
 import { getShopInfo, testShopify } from '../integrations/shopify.js';
 import { isDemoMode } from '../lib/demo.js';
 import { handleMetaWebhook } from '../whatsapp/historyImport.js';
+import { sendTenantWhatsAppText } from '../whatsapp/send.js';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 import { requireAdminUser } from '../lib/demoAccounts.js';
 import { getTenantPlatformApp, type TenantPlatformAppRecord, type TenantPlatformStatus } from '../lib/tenantPlatformApps.js';
@@ -191,7 +192,8 @@ channelsRouter.post('/:id/test', async (req: Request, res: Response) => {
 });
 
 // Send message via channel
-channelsRouter.post('/:id/send', async (req: Request, res: Response) => {
+channelsRouter.post('/:id/send', requireAuth, async (req: Request, res: Response) => {
+  const { tenantId } = res.locals as AuthLocals;
   const channel = load().find(c => c.id === req.params.id);
   if (!channel) { res.status(404).json({ error: 'not found' }); return; }
   const { to, text } = req.body;
@@ -212,7 +214,7 @@ channelsRouter.post('/:id/send', async (req: Request, res: Response) => {
   try {
     switch (channel.type) {
       case 'whatsapp':
-        await sendWhatsAppText({ phoneNumberId: cfg.phoneNumberId, accessToken: cfg.accessToken, verifyToken: cfg.verifyToken }, to, text);
+        await sendTenantWhatsAppText(tenantId, to, text);
         break;
       case 'telegram':
         await sendTelegramMessage({ botToken: cfg.botToken }, to ?? cfg.defaultChatId, text);

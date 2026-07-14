@@ -5,6 +5,8 @@ import { decideAction, type AutonomyLevel } from '../autonomy/actionRules.js';
 import { guardOutbound } from '../autonomy/outboundGuard.js';
 import { prioritizeCustomer } from '../autonomy/prioritize.js';
 import { autoFaqReady, findApprovedFaqAnswer, readEnterpriseProfile } from '../routes/enterprise.js';
+import { store } from '../storage/index.js';
+import { sendTenantWhatsAppText } from './send.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '../../data');
@@ -73,14 +75,83 @@ interface IncomingMessage {
 function readJson<T>(file: string, fallback: T): T {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8')) as T;
-  } catch {
+  } catch (error) {
+    const backupFile = `${file}.bak`;
+    if (fs.existsSync(backupFile)) {
+      try {
+        return JSON.parse(fs.readFileSync(backupFile, 'utf8')) as T;
+      } catch { /* continue to corruption backup */ }
+    }
+    if (fs.existsSync(file)) {
+      const corruptFile = `${file}.corrupt-${Date.now()}`;
+      try {
+        fs.copyFileSync(file, corruptFile);
+        console.error('[whatsapp-json-corrupt]', file, 'backed up to', corruptFile, error);
+      } catch (copyError) {
+        console.error('[whatsapp-json-corrupt]', file, copyError);
+      }
+    }
     return fallback;
   }
 }
 
 function writeJson(file: string, value: unknown): void {
   fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(value, null, 2), 'utf8');
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(value, null, 2), 'utf8');
+  if (fs.existsSync(file)) {
+    try { fs.copyFileSync(file, `${file}.bak`); } catch { /* best effort backup */ }
+  }
+  fs.renameSync(tmp, file);
+}
+
+function backupWhatsAppDataFiles(now = new Date()): void {
+  const date = now.toISOString().slice(0, 10);
+  const backupDir = path.join(DATA_DIR, 'backups', date);
+  fs.mkdirSync(backupDir, { recursive: true });
+  for (const file of [CUSTOMERS_FILE, INTERACTIONS_FILE, IMPORT_STATUS_FILE, ENTERPRISE_FILE]) {
+    if (!fs.existsSync(file)) continue;
+    const target = path.join(backupDir, path.basename(file));
+    if (fs.existsSync(target)) continue;
+    try { fs.copyFileSync(file, target); } catch (error) { console.error('[whatsapp-daily-backup]', file, error); }
+  }
+}
+
+async function mirrorCustomerToPocketBase(customer: StoredCustomer): Promise<void> {
+  const payload = {
+    tenant_id: customer.tenantId,
+    customer_id: customer.id,
+    wa_number: customer.waNumber,
+    name: customer.name,
+    stage: customer.stage,
+    last_active_at: customer.lastActiveAt,
+    payload: JSON.stringify(customer),
+  };
+  const existing = await store.list<{ id: string }>('whatsapp_customers', {
+    where: { tenant_id: customer.tenantId, customer_id: customer.id },
+    perPage: 1,
+  });
+  const id = existing.items[0]?.id;
+  if (id) await store.update('whatsapp_customers', id, payload);
+  else await store.create('whatsapp_customers', payload);
+}
+
+async function mirrorInteractionToPocketBase(interaction: StoredInteraction): Promise<void> {
+  const payload = {
+    tenant_id: interaction.tenantId,
+    interaction_id: interaction.id,
+    customer_id: interaction.customerId,
+    wa_number: interaction.waNumber,
+    timestamp: interaction.timestamp,
+    payload: JSON.stringify(interaction),
+  };
+  const existing = await store.list<{ id: string }>('whatsapp_interactions', {
+    where: { tenant_id: interaction.tenantId, interaction_id: interaction.id },
+    perPage: 1,
+  });
+  const id = existing.items[0]?.id;
+  if (id) await store.update('whatsapp_interactions', id, payload);
+  else await store.create('whatsapp_interactions', payload);
 }
 
 function customers(): StoredCustomer[] {
@@ -130,10 +201,11 @@ function timestamp(value: unknown): number {
 }
 
 function detectLanguage(body: string): string {
-  if (/[\u0600-\u06ff]/.test(body)) return '阿语';
-  if (/[áéíóúñ¿¡]/i.test(body) || /\b(hola|gracias|precio|envio|cuanto|piezas)\b/i.test(body)) return '西语';
-  if (/[\u4e00-\u9fff]/.test(body)) return '中文';
-  return '英语';
+  if (/[\u0600-\u06ff]/.test(body)) return '\u963f\u8bed';
+  if (/[áéíóúãõçñ¿¡]/i.test(body) || /\b(hola|gracias|precio|env[ií]o|cu[aá]nto|piezas)\b/i.test(body)) return '\u897f\u8bed';
+  if (/\b(ol[aá]|obrigad[ao]|pre[cç]o|envio|quantidade)\b/i.test(body)) return '\u8461\u8bed';
+  if (/[\u4e00-\u9fff]/.test(body)) return '\u4e2d\u6587';
+  return '\u82f1\u8bed';
 }
 
 function stageByTimestamp(lastActiveAt: number): CustomerStage {
@@ -141,6 +213,41 @@ function stageByTimestamp(lastActiveAt: number): CustomerStage {
   if (days <= 30) return 'inquiry';
   if (days <= 60) return 'silent30';
   return 'silent60';
+}
+
+export function recomputeWhatsAppCustomerStages(now = Date.now()): number {
+  const list = customers();
+  let changed = 0;
+  const next = list.map(customer => {
+    const stage = stageByTimestamp(customer.lastActiveAt || now);
+    if (stage === customer.stage) return customer;
+    changed += 1;
+    return {
+      ...customer,
+      stage,
+      handlingMode: stage === 'silent30' || stage === 'silent60' ? 'ai_draft' as HandlingMode : customer.handlingMode,
+      handlingReason: stage === 'silent30' || stage === 'silent60'
+        ? '\u5ba2\u6237\u5df2\u6c89\u9ed8\uff0cAI \u5df2\u51c6\u5907\u5524\u9192\u8ddf\u8fdb'
+        : customer.handlingReason,
+      updatedAt: new Date(now).toISOString(),
+    };
+  });
+  if (changed > 0) writeCustomers(next);
+  return changed;
+}
+
+export function initWhatsAppCustomerMaintenance(): void {
+  const run = () => {
+    try {
+      backupWhatsAppDataFiles();
+      const changed = recomputeWhatsAppCustomerStages();
+      if (changed > 0) console.log(`[whatsapp-maintenance] recomputed ${changed} customer stages`);
+    } catch (error) {
+      console.error('[whatsapp-maintenance]', error);
+    }
+  };
+  setTimeout(run, 30_000);
+  setInterval(run, 24 * 60 * 60 * 1000);
 }
 
 function customerId(tenantId: string, waNumber: string): string {
@@ -180,6 +287,7 @@ function upsertCustomer(input: { tenantId: string; waNumber: string; name?: stri
   if (index >= 0) list[index] = next;
   else list.push(next);
   writeCustomers(list);
+  void mirrorCustomerToPocketBase(next).catch(error => console.error('[whatsapp-pb-customer]', error));
   return next;
 }
 
@@ -192,6 +300,7 @@ function addInteraction(item: StoredInteraction): boolean {
   list.push(item);
   list.sort((a, b) => a.timestamp - b.timestamp);
   writeInteractions(list);
+  void mirrorInteractionToPocketBase(item).catch(error => console.error('[whatsapp-pb-interaction]', error));
   return true;
 }
 
@@ -222,7 +331,22 @@ function messagesFromValue(value: any): IncomingMessage[] {
 
   return rawMessages.map((message: any) => {
     const waNumber = text(message.from || message.to || message.wa_id || message.recipient_id);
-    const body = text(message?.text?.body || message?.body || message?.message?.text);
+    const media = message.audio || message.voice || message.image || message.video || message.document || message.sticker;
+    const mediaType = message.audio || message.voice
+      ? '\u8bed\u97f3\u6d88\u606f'
+      : message.image
+        ? '\u56fe\u7247\u6d88\u606f'
+        : message.video
+          ? '\u89c6\u9891\u6d88\u606f'
+          : message.document
+            ? '\u6587\u4ef6\u6d88\u606f'
+            : message.sticker
+              ? '\u8868\u60c5\u6d88\u606f'
+              : '';
+    const mediaId = text(media?.id);
+    const mediaLink = mediaId ? `https://graph.facebook.com/v19.0/${mediaId}` : '';
+    const body = text(message?.text?.body || message?.body || message?.message?.text)
+      || (mediaType ? `[${mediaType}]${mediaLink ? ` ${mediaLink}` : ''}` : '');
     if (!waNumber || !body) return null;
     return {
       id: text(message.id) || `${waNumber}-${timestamp(message.timestamp)}`,
@@ -259,7 +383,7 @@ function draftForMessage(message: IncomingMessage): string {
   return 'Thanks for your message. I have received your request and will confirm the details with our team.';
 }
 
-async function handleInboundMessage(tenantId: string, message: IncomingMessage): Promise<void> {
+async function handleInboundMessage(tenantId: string, message: IncomingMessage, options: { skipAutonomy?: boolean } = {}): Promise<void> {
   const customer = upsertCustomer({
     tenantId,
     waNumber: message.waNumber,
@@ -277,7 +401,7 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage):
     body: message.body,
     timestamp: message.timestamp,
   });
-  if (message.fromBusiness) return;
+  if (message.fromBusiness || options.skipAutonomy) return;
 
   const profile = readEnterpriseProfile();
   let action = inferActionFromText(message.body);
@@ -300,6 +424,31 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage):
   if (decision.decision === 'auto') {
     const guard = await guardOutbound(draft, { tenantId, customerId: customer.id, action });
     if (guard.allowed) {
+      try {
+        await sendTenantWhatsAppText(tenantId, message.waNumber, draft);
+      } catch (error) {
+        addInteraction({
+          id: `${customer.id}-send-failed-${Date.now()}`,
+          tenantId,
+          customerId: customer.id,
+          waNumber: message.waNumber,
+          type: 'system',
+          body: `AI 自动回复发送失败，已降级为待确认草稿：${error instanceof Error ? error.message : 'WhatsApp send failed'}`,
+          timestamp: Date.now(),
+          audit: { action, risk: decision.rule.risk, autonomy, sendError: error instanceof Error ? error.message : String(error) },
+        });
+        upsertCustomer({
+          tenantId,
+          waNumber: message.waNumber,
+          patch: {
+            handlingMode: 'ai_draft',
+            handlingReason: 'AI 自动回复未真正发出，需要你确认后重发',
+            pendingDraft: draft,
+            blockedAutoReplyReason: error instanceof Error ? error.message : 'WhatsApp send failed',
+          },
+        });
+        return;
+      }
       addInteraction({
         id: `${customer.id}-ai-${Date.now()}`,
         tenantId,
@@ -374,7 +523,7 @@ export async function handleMetaWebhook(tenantId: string, payload: any): Promise
       writeImportStatus({ tenantId, status: 'importing', done: 0, total: messages.length, updatedAt: new Date().toISOString() });
       let done = 0;
       for (const message of messages) {
-        await handleInboundMessage(tenantId, message);
+        await handleInboundMessage(tenantId, message, { skipAutonomy: true });
         done += 1;
         writeImportStatus({ tenantId, status: 'importing', done, total: messages.length, updatedAt: new Date().toISOString() });
       }

@@ -1426,8 +1426,8 @@ async function sendCustomerOutbox(customer: CustomerProfile, body: string, outsi
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeader() },
     body: JSON.stringify(templatePlan
-      ? { body: templatePlan.rendered, mode: 'template', outsideWindow, templateName: templatePlan.template.name, variables: templatePlan.variables }
-      : { body, mode: 'free_text', outsideWindow }),
+      ? { body: templatePlan.rendered, mode: 'template', outsideWindow, templateName: templatePlan.template.name, variables: templatePlan.variables, to: customer.waNumber }
+      : { body, mode: 'free_text', outsideWindow, to: customer.waNumber }),
   });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error(data.message || data.error || '发送失败');
