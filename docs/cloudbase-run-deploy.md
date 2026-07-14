@@ -40,6 +40,7 @@ PB_URL=https://your-pocketbase.example.com
 PB_ADMIN_EMAIL=your-admin@example.com
 PB_ADMIN_PASSWORD=your-strong-password
 RENDER_TOKEN_SECRET=change-to-a-long-random-secret
+TENANT_PLATFORM_APP_KEY=generate-with-openssl-rand-base64-32
 PUBLIC_BASE_URL=https://your-cloudbase-domain.example.com
 ```
 

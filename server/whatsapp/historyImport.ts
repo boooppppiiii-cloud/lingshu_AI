@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { decideAction, type AutonomyLevel } from '../autonomy/actionRules.js';
 import { guardOutbound } from '../autonomy/outboundGuard.js';
 import { prioritizeCustomer } from '../autonomy/prioritize.js';
+import { autoFaqReady, findApprovedFaqAnswer, readEnterpriseProfile } from '../routes/enterprise.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '../../data');
@@ -278,10 +279,23 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage):
   });
   if (message.fromBusiness) return;
 
-  const action = inferActionFromText(message.body);
+  const profile = readEnterpriseProfile();
+  let action = inferActionFromText(message.body);
   const autonomy = autonomyLevel();
+  let draft = draftForMessage(message);
+  let blockedAutoReplyReason = '';
+  if (action === 'auto_faq_reply') {
+    const approvedFaq = findApprovedFaqAnswer(profile, message.body);
+    if (approvedFaq) {
+      draft = approvedFaq.answer;
+    } else {
+      action = 'draft_greeting';
+      blockedAutoReplyReason = autoFaqReady(profile)
+        ? '未命中已审批常见问答，已降级为草稿'
+        : '需要先录入并审批至少 5 条常见问答';
+    }
+  }
   const decision = decideAction(action, autonomy);
-  const draft = draftForMessage(message);
 
   if (decision.decision === 'auto') {
     const guard = await guardOutbound(draft, { tenantId, customerId: customer.id, action });
@@ -340,6 +354,7 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage):
       handlingMode: decision.decision === 'remind' ? 'human_needed' : 'ai_draft',
       handlingReason: decision.decision === 'remind' ? 'AI 已提醒你处理该客户' : `${decision.rule.desc}，AI 已生成草稿等待确认`,
       pendingDraft: decision.decision === 'draft' ? draft : undefined,
+      blockedAutoReplyReason: blockedAutoReplyReason || undefined,
     },
   });
 }

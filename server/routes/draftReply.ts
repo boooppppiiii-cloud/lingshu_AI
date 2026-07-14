@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { callLLM } from '../agents/llm.js';
+import { buildBizRulesInstruction, readEnterpriseProfile, shouldSuppressPrice } from './enterprise.js';
 
 export const draftReplyRouter = Router();
 
@@ -31,6 +32,9 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
   const timeline = Array.isArray(body.timeline) ? body.timeline.slice(-8) : [];
   const intent = normalizeIntent(body.intent || body.mode);
   const language = String(body.language ?? '').trim() || 'English';
+  const enterpriseProfile = readEnterpriseProfile();
+  const suppressPrice = shouldSuppressPrice(enterpriseProfile);
+  const hardNoPriceDigits = enterpriseProfile.bizRules?.quoteMode === 'human_only';
   const prompt = [
     `Customer ID: ${String(body.customerId ?? '')}`,
     `Product: ${String(body.product ?? '')}`,
@@ -41,6 +45,9 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
     `Intent: ${intent}`,
     body.mode ? `Mode: ${String(body.mode)}` : '',
     intentInstruction(intent),
+    buildBizRulesInstruction(enterpriseProfile),
+    suppressPrice ? 'Price guard: do not include concrete prices. If the buyer asks how much, say the seller will confirm after checking quantity, specs, and packaging.' : '',
+    hardNoPriceDigits ? 'Extra hard rule: the reply must not contain any Arabic numerals, currency symbols, unit prices, discount numbers, or exact amounts.' : '',
     body.instruction ? `Specific instruction: ${String(body.instruction)}` : '',
     'Recent timeline:',
     timeline.map((event: any) => {
@@ -60,9 +67,9 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
   try {
     const raw = await callLLM(prompt, { systemPrompt: intent === 'handoff_summary' ? HANDOFF_SYSTEM_PROMPT : SYSTEM_PROMPT });
     const draft = cleanDraft(raw);
-    res.json({ draft: draft || fallbackDraft(body, intent) });
+    res.json({ draft: sanitizeDraft(draft || fallbackDraft(body, intent, suppressPrice), body, intent, suppressPrice, hardNoPriceDigits) });
   } catch (error) {
-    res.json({ draft: fallbackDraft(body, intent) });
+    res.json({ draft: sanitizeDraft(fallbackDraft(body, intent, suppressPrice), body, intent, suppressPrice, hardNoPriceDigits) });
   }
 });
 
@@ -82,7 +89,44 @@ function intentInstruction(intent: ReturnType<typeof normalizeIntent>): string {
   return 'Intent instruction: Reply to the latest customer message naturally and helpfully.';
 }
 
-function fallbackDraft(body: any, intent: ReturnType<typeof normalizeIntent>): string {
+function sanitizeDraft(
+  draft: string,
+  body: any,
+  intent: ReturnType<typeof normalizeIntent>,
+  suppressPrice: boolean,
+  hardNoPriceDigits: boolean,
+): string {
+  if (!suppressPrice) return draft;
+  if (hardNoPriceDigits && /[0-9$¥€£]/.test(draft)) return noPriceFallback(body, intent);
+  if (containsPriceNumber(draft)) return noPriceFallback(body, intent);
+  return draft;
+}
+
+function containsPriceNumber(value: string): boolean {
+  return /[$¥€£]\s*\d|\b\d+(?:[.,]\d+)?\s*(?:usd|rmb|cny|dollars?|yuan|元|美元|美金|price|per|\/|%|折|off)\b/i.test(value);
+}
+
+function noPriceFallback(body: any, intent: ReturnType<typeof normalizeIntent>): string {
+  const product = String(body.product ?? 'the product');
+  if (intent === 'handoff_summary') {
+    return [
+      `客户要什么：正在确认 ${product} 的采购细节。`,
+      '聊到哪一步：客户需要卖家继续推进。',
+      '为什么需要人：涉及报价或业务规则，需要人工确认。',
+    ].join('\n');
+  }
+  const language = normalizeLanguage(body.language);
+  if (language === 'arabic') {
+    return `شكرا لرسالتك. سأراجع الكمية والمواصفات والتغليف المطلوب ثم أطلب من الزميل المسؤول تأكيد العرض المناسب لك قريبا.`;
+  }
+  if (language === 'spanish') {
+    return `Gracias por tu mensaje. Voy a revisar la cantidad, las especificaciones y el empaque, y nuestro equipo confirmará la oferta adecuada para ti.`;
+  }
+  return `Thanks for your message. I will check the quantity, specifications, and packaging requirements, then our team will confirm the right offer for you.`;
+}
+
+function fallbackDraft(body: any, intent: ReturnType<typeof normalizeIntent>, suppressPrice = false): string {
+  if (suppressPrice && intent !== 'handoff_summary') return noPriceFallback(body, intent);
   const product = String(body.product ?? 'the product');
   if (intent === 'handoff_summary') {
     return [

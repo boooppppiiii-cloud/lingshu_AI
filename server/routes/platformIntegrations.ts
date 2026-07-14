@@ -46,12 +46,32 @@ platformIntegrationsRouter.get('/:provider/status', requireAuth, async (req, res
       : null;
   if (appPlatform) {
     const app = await getTenantPlatformApp(tenantId, appPlatform);
-    if (app?.status === 'active') {
+    if (app) {
+      const userStatus = app.status === 'active'
+        ? 'connected'
+        : app.status === 'waiting_customer'
+          ? 'waiting_customer'
+          : app.status === 'importing_history'
+            ? 'importing'
+            : app.status === 'token_expired' || app.status === 'error'
+              ? 'needs_service'
+              : 'advisor_configuring';
+      const label = userStatus === 'connected'
+        ? '\u5df2\u7531\u4e13\u5c5e\u987e\u95ee\u914d\u7f6e \u2713'
+        : userStatus === 'waiting_customer'
+          ? '\u7b49\u5f85\u4f60\u626b\u7801\u6216\u5b8c\u6210\u6388\u6743'
+          : userStatus === 'importing'
+            ? '\u6b63\u5728\u5bfc\u5165\u5386\u53f2\u804a\u5929'
+            : userStatus === 'needs_service'
+              ? '\u9700\u8981\u987e\u95ee\u5904\u7406'
+              : '\u4e13\u5c5e\u987e\u95ee\u914d\u7f6e\u4e2d';
       res.json({
         provider,
-        connected: true,
+        connected: app.status === 'active',
         source: 'tenant_platform_app',
-        account: { id: app.id, name: '已由专属顾问配置 ✓' },
+        status: userStatus,
+        label,
+        account: { id: app.id, name: label },
       });
       return;
     }

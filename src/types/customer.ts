@@ -12,6 +12,9 @@ export interface TimelineEvent {
   body: string;
   time: string;
   autoSent?: boolean;
+  sendStatus?: 'draft' | 'queued' | 'sent' | 'delivered' | 'failed';
+  sendMode?: 'free_text' | 'template';
+  confirmedByHuman?: boolean;
   audit?: {
     action?: string;
     risk?: 'L1' | 'L2' | 'L3' | 'L4';

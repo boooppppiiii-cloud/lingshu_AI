@@ -246,12 +246,19 @@ adminRouter.get('/delivery/platform-apps', async (req, res) => {
             appId: '',
             appSecretSet: false,
             waConfigId: '',
+            businessId: '',
+            wabaId: '',
+            phoneNumberId: '',
+            pageId: '',
+            igUserId: '',
+            youtubeChannelId: '',
             webhookVerifyToken: '',
             webhookUrl: platform === 'meta' ? tenantWebhookUrl(req, tenantId) : '',
             tokenType: 'user_60d',
             accessTokenSet: false,
             tokenExpiresAt: '',
             status: 'pending',
+            checklist: {},
             notes: '',
           };
         }),
@@ -278,10 +285,17 @@ adminRouter.put('/delivery/platform-apps/:tenantId/:platform', async (req, res) 
       appId: bodyText(req.body?.appId),
       appSecret: bodyText(req.body?.appSecret),
       waConfigId: bodyText(req.body?.waConfigId),
+      businessId: bodyText(req.body?.businessId),
+      wabaId: bodyText(req.body?.wabaId),
+      phoneNumberId: bodyText(req.body?.phoneNumberId),
+      pageId: bodyText(req.body?.pageId),
+      igUserId: bodyText(req.body?.igUserId),
+      youtubeChannelId: bodyText(req.body?.youtubeChannelId),
       tokenType: req.body?.tokenType === 'system_user_permanent' ? 'system_user_permanent' : 'user_60d',
       accessToken: bodyText(req.body?.accessToken),
       tokenExpiresAt: bodyText(req.body?.tokenExpiresAt),
       status: bodyText(req.body?.status) as any || 'pending',
+      checklist: req.body?.checklist && typeof req.body.checklist === 'object' ? req.body.checklist : undefined,
       notes: bodyText(req.body?.notes),
     });
     res.json({ ok: true, app: publicTenantPlatformApp(req, app) });
@@ -348,10 +362,10 @@ adminRouter.post('/delivery/platform-apps/:tenantId/:platform/test/:kind', async
       return;
     }
     if (kind === 'whatsapp') {
-      if (platform !== 'meta') throw new Error('WhatsApp 自检仅适用于 Meta');
-      if (!token) throw new Error('请先录入访问 token');
-      if (!app.wa_config_id) throw new Error('请先录入 WhatsApp Embedded Signup config id 或在备注中记录 phone_number_id');
-      res.json({ ok: true, message: 'WhatsApp 配置已存在。真实测试发送需要 phone_number_id 和测试收件手机号，后续可继续扩展。' });
+      if (platform !== 'meta') throw new Error('WhatsApp ?????? Meta');
+      if (!token) throw new Error('?????? token');
+      if (!app.phone_number_id && !app.wa_config_id) throw new Error('???? Phone Number ID ? WhatsApp Embedded Signup Config ID');
+      res.json({ ok: true, message: app.phone_number_id ? 'WhatsApp Phone Number ID ?????????????' : 'WhatsApp Config ID ??????????????????' });
       return;
     }
     if (kind === 'google') {
