@@ -48,6 +48,16 @@ type AutomationLevel = 'auto' | 'confirm' | 'manual';
 type DraftIntent = 'reply' | 'opener' | 'followup' | 'reactivate' | 'post_call' | 'polish' | 'handoff_summary';
 type CustomerFilterKey = 'source' | 'country' | 'language' | 'stage' | 'handling' | 'tag';
 
+interface DraftResult {
+  draft: string;
+  knowledgeMiss?: boolean;
+  missReason?: string;
+  evidence?: string[];
+  buyerMessage?: string;
+  category?: string;
+  originalDraft?: string;
+}
+
 interface MessageTemplate {
   name: string;
   label: string;
@@ -315,7 +325,19 @@ function translateChineseReplyForCustomer(customer: CustomerProfile, text: strin
   return `Thanks for your message. I will confirm the MOQ, best price, and delivery time for ${product}, then send you the details shortly.`;
 }
 
-async function requestDraft(customer: CustomerProfile, instruction?: string, mode?: 'draft' | 'polish', intent: DraftIntent = mode === 'polish' ? 'polish' : 'reply'): Promise<string> {
+function latestBuyerText(customer: CustomerProfile): string {
+  return [...customer.timeline].reverse().find(event => event.type === 'whatsapp' && event.actor === 'buyer')?.body || '';
+}
+
+interface StyleMemoryPayload {
+  triggerMessage: string;
+  draftOriginal: string;
+  finalSent: string;
+  edited: boolean;
+  category: string;
+}
+
+async function requestDraft(customer: CustomerProfile, instruction?: string, mode?: 'draft' | 'polish', intent: DraftIntent = mode === 'polish' ? 'polish' : 'reply'): Promise<DraftResult> {
   try {
     const resp = await fetch('/api/overseas/agents/conversion/draft', {
       method: 'POST',
@@ -334,12 +356,24 @@ async function requestDraft(customer: CustomerProfile, instruction?: string, mod
     });
     if (resp.ok) {
       const data = await resp.json();
-      if (typeof data?.draft === 'string' && data.draft.trim()) return normalizeDraftForChineseEditing(data.draft.trim(), customer);
+      if (typeof data?.draft === 'string' && data.draft.trim()) {
+        const draft = normalizeDraftForChineseEditing(data.draft.trim(), customer);
+        return {
+          draft,
+          originalDraft: draft,
+          knowledgeMiss: Boolean(data.knowledgeMiss),
+          missReason: typeof data.missReason === 'string' ? data.missReason : '',
+          evidence: Array.isArray(data.evidence) ? data.evidence.map(String) : [],
+          buyerMessage: latestBuyerText(customer),
+          category: typeof data.category === 'string' ? data.category : intent,
+        };
+      }
     }
   } catch {
     // Use local fallback when the API is unavailable in local preview.
   }
-  return fallbackCustomerReplyZh(customer);
+  const draft = fallbackCustomerReplyZh(customer);
+  return { draft, originalDraft: draft, buyerMessage: latestBuyerText(customer), category: intent };
 }
 
 function fallbackHandoffSummary(customer: CustomerProfile): string {
@@ -633,6 +667,7 @@ function DraftSuggestionBar({
   isTemplate,
   templatePlan,
   priceRulesReady,
+  knowledgeMiss,
   onSend,
   onEdit,
   onDismiss,
@@ -643,6 +678,7 @@ function DraftSuggestionBar({
   isTemplate: boolean;
   templatePlan: TemplatePlan | null;
   priceRulesReady: boolean;
+  knowledgeMiss?: boolean;
   onSend: () => void;
   onEdit: () => void;
   onDismiss: () => void;
@@ -662,6 +698,9 @@ function DraftSuggestionBar({
             <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-black ${templateApproved ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
               {templateApproved ? '\u6a21\u677f\u53ef\u53d1' : '\u6a21\u677f\u5ba1\u6838\u4e2d'}
             </span>
+          )}
+          {knowledgeMiss && (
+            <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-black text-slate-600">知识库未覆盖</span>
           )}
           <button type="button" onClick={onRegenerate} className="ml-1 rounded-full p-1 text-[#0891b2] hover:bg-white" title="\u6362\u4e00\u7248">
             <RefreshCw size={12} />
@@ -773,6 +812,7 @@ function ChatThread({
   templates,
   onManualActive,
   priceRulesReady,
+  knowledgeMiss,
 }: {
   customer: CustomerProfile | null;
   draftSuggestion: string | null;
@@ -792,6 +832,7 @@ function ChatThread({
   templates: MessageTemplate[];
   onManualActive: () => void;
   priceRulesReady: boolean;
+  knowledgeMiss?: boolean;
 }) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
@@ -884,7 +925,7 @@ function ChatThread({
             );
           })}
           {draftSuggestion && (
-            <DraftSuggestionBar draft={draftSuggestion} translatedDraft={isOutsideWindow && templatePlan ? templatePlan.rendered : translateChineseReplyForCustomer(customer, draftSuggestion)} isTemplate={isOutsideWindow} templatePlan={templatePlan} priceRulesReady={priceRulesReady} onSend={onSendDraft} onEdit={onEditDraft} onDismiss={onDismissDraft} onRegenerate={onRegenerateDraft} />
+            <DraftSuggestionBar draft={draftSuggestion} translatedDraft={isOutsideWindow && templatePlan ? templatePlan.rendered : translateChineseReplyForCustomer(customer, draftSuggestion)} isTemplate={isOutsideWindow} templatePlan={templatePlan} priceRulesReady={priceRulesReady} knowledgeMiss={knowledgeMiss} onSend={onSendDraft} onEdit={onEditDraft} onDismiss={onDismissDraft} onRegenerate={onRegenerateDraft} />
           )}
         </div>
       </div>
@@ -1421,13 +1462,13 @@ function createMessageEvent(
   };
 }
 
-async function sendCustomerOutbox(customer: CustomerProfile, body: string, outsideWindow: boolean, templatePlan?: TemplatePlan | null) {
+async function sendCustomerOutbox(customer: CustomerProfile, body: string, outsideWindow: boolean, templatePlan?: TemplatePlan | null, styleMemory?: StyleMemoryPayload | null) {
   const resp = await fetch(`/api/overseas/customers/${encodeURIComponent(customer.id)}/outbox`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeader() },
     body: JSON.stringify(templatePlan
-      ? { body: templatePlan.rendered, mode: 'template', outsideWindow, templateName: templatePlan.template.name, variables: templatePlan.variables, to: customer.waNumber }
-      : { body, mode: 'free_text', outsideWindow, to: customer.waNumber }),
+      ? { body: templatePlan.rendered, mode: 'template', outsideWindow, templateName: templatePlan.template.name, variables: templatePlan.variables, to: customer.waNumber, styleMemory }
+      : { body, mode: 'free_text', outsideWindow, to: customer.waNumber, styleMemory }),
   });
   const data = await resp.json().catch(() => ({}));
   if (!resp.ok) throw new Error(data.message || data.error || '发送失败');
@@ -1441,6 +1482,9 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
   const [autonomyLevel, setAutonomyLevel] = useState<AutonomyLevel>('draft');
   const [dailyBriefingOpen, setDailyBriefingOpen] = useState(false);
   const [draftSuggestion, setDraftSuggestion] = useState<string | null>(null);
+  const [draftMeta, setDraftMeta] = useState<DraftResult | null>(null);
+  const [learnCandidate, setLearnCandidate] = useState<null | { buyerMessage: string; answer: string; question: string; saving?: boolean }>(null);
+  const [learnDialogOpen, setLearnDialogOpen] = useState(false);
   const [input, setInput] = useState('');
   const [translatedInput, setTranslatedInput] = useState('');
   const [isPolishing, setIsPolishing] = useState(false);
@@ -1526,6 +1570,7 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
 
   useEffect(() => {
     setDraftSuggestion(null);
+    setDraftMeta(null);
     setInput('');
     setTranslatedInput('');
   }, [selectedId]);
@@ -1537,7 +1582,10 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
     const key = `${selected.id}:${lastBuyer.id}`;
     if (key === lastDraftKey) return;
     setLastDraftKey(key);
-    void requestDraft(selected).then(setDraftSuggestion);
+    void requestDraft(selected).then(result => {
+      setDraftSuggestion(result.draft);
+      setDraftMeta(result);
+    });
   }, [selected, lastDraftKey]);
 
   useEffect(() => {
@@ -1577,6 +1625,47 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
   const showToast = (message: string) => {
     setToast(message);
     window.setTimeout(() => setToast(current => current === message ? null : current), 2200);
+  };
+
+  const prepareLearnCandidate = async (buyerMessage: string, answer: string) => {
+    let question = buyerMessage;
+    try {
+      const result = await fetch('/api/overseas/enterprise/faq/learned/suggest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeader() },
+        body: JSON.stringify({ buyerMessage }),
+      }).then(resp => resp.json());
+      if (typeof result?.question === 'string' && result.question.trim()) question = result.question.trim();
+    } catch {
+      // Keep buyer message as editable fallback.
+    }
+    setLearnCandidate({ buyerMessage, answer, question });
+    setLearnDialogOpen(false);
+  };
+
+  const saveLearnedFaq = async () => {
+    if (!learnCandidate) return;
+    setLearnCandidate(current => current ? { ...current, saving: true } : current);
+    try {
+      await fetch('/api/overseas/enterprise/faq/learned', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeader() },
+        body: JSON.stringify({
+          buyerMessage: learnCandidate.buyerMessage,
+          question: learnCandidate.question,
+          answer: learnCandidate.answer,
+        }),
+      }).then(resp => {
+        if (!resp.ok) throw new Error('保存失败');
+        return resp.json();
+      });
+      setLearnCandidate(null);
+      setLearnDialogOpen(false);
+      showToast('已存入知识库，待老板审批后可自动回复');
+    } catch (error) {
+      setLearnCandidate(current => current ? { ...current, saving: false } : current);
+      showToast(error instanceof Error ? error.message : '保存失败');
+    }
   };
 
   useEffect(() => {
@@ -1619,23 +1708,45 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
     updateTimelineEvent(customerId, messageId, { sendStatus: status });
   };
 
-  const queueSend = (customer: CustomerProfile, body: string, restoreText: string, templatePlan?: TemplatePlan | null) => {
+  const buildStyleMemoryPayload = (customer: CustomerProfile, finalZh: string, meta?: DraftResult | null): StyleMemoryPayload | null => {
+    const original = meta?.originalDraft || meta?.draft || '';
+    const trigger = meta?.buyerMessage || latestBuyerText(customer);
+    if (!original || !finalZh.trim() || !trigger) return null;
+    return {
+      triggerMessage: `中文概括：客户询问 ${customer.product || customer.outboundProduct} 相关问题\n原文：${trigger}`,
+      draftOriginal: original,
+      finalSent: finalZh,
+      edited: original.trim() !== finalZh.trim(),
+      category: meta?.category || 'reply',
+    };
+  };
+
+  const queueSend = (customer: CustomerProfile, body: string, restoreText: string, templatePlan?: TemplatePlan | null, meta?: DraftResult | null) => {
+    const styleMemory = buildStyleMemoryPayload(customer, restoreText, meta);
     const eventBody = templatePlan ? templatePlan.rendered : body;
     const event = createMessageEvent(customer.id, eventBody, 'seller', {
       sendStatus: 'queued',
       sendMode: templatePlan ? 'template' : 'free_text',
       confirmedByHuman: true,
+      audit: meta?.knowledgeMiss ? { knowledgeMiss: true, buyerMessage: meta.buyerMessage, evidence: meta.evidence } : undefined,
     });
     appendTimelineEvent(customer.id, event);
     updateCustomer(customer.id, { lastActive: '刚刚', hasUnread: false, todoCompletedAt: new Date().toISOString() });
     setDraftSuggestion(null);
+    setDraftMeta(null);
     setInput('');
     setTranslatedInput('');
 
     const timer = window.setTimeout(() => {
       setUndoSend(current => current?.eventId === event.id ? null : current);
-      void sendCustomerOutbox(customer, body, isOutsideWhatsAppWindow(customer), templatePlan)
-        .then(result => markMessageStatus(customer.id, event.id, result.status || 'sent'))
+      void sendCustomerOutbox(customer, body, isOutsideWhatsAppWindow(customer), templatePlan, styleMemory)
+        .then(async result => {
+          markMessageStatus(customer.id, event.id, result.status || 'sent');
+          if (meta?.knowledgeMiss && meta.buyerMessage) {
+            await prepareLearnCandidate(meta.buyerMessage, restoreText);
+            showToast('已发送，可将这条补进知识库');
+          }
+        })
         .catch(error => {
           markMessageStatus(customer.id, event.id, 'failed');
           showToast(error instanceof Error ? error.message : '发送失败');
@@ -1665,7 +1776,7 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
       showToast('消息模板审核中，暂时不能发送超窗触达。');
       return;
     }
-    queueSend(selected, body, input, templatePlan);
+    queueSend(selected, body, input, templatePlan, draftMeta?.knowledgeMiss ? draftMeta : null);
   };
 
   const sendDraftDirectly = async () => {
@@ -1676,20 +1787,23 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
       return;
     }
     const body = templatePlan?.rendered || translateChineseReplyForCustomer(selected, draftSuggestion);
-    queueSend(selected, body, draftSuggestion, templatePlan);
+    queueSend(selected, body, draftSuggestion, templatePlan, draftMeta);
   };
 
   const generateManualDraft = async (instruction: string, intent: DraftIntent = 'reply') => {
     if (!selected) return;
     setDraftSuggestion(null);
-    const draft = await requestDraft(selected, instruction, undefined, intent);
-    setDraftSuggestion(draft);
+    setDraftMeta(null);
+    const result = await requestDraft(selected, instruction, undefined, intent);
+    setDraftSuggestion(result.draft);
+    setDraftMeta(result);
   };
 
   const regenerateDraft = async () => {
     if (!selected) return;
-    const draft = await requestDraft(selected, undefined, undefined, 'reply');
-    setDraftSuggestion(draft);
+    const result = await requestDraft(selected, undefined, undefined, 'reply');
+    setDraftSuggestion(result.draft);
+    setDraftMeta(result);
   };
 
   const polishInput = async () => {
@@ -1697,7 +1811,7 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
     setIsPolishing(true);
     try {
       const polished = await requestDraft(selected, input, 'polish', 'polish');
-      setInput(polished);
+      setInput(polished.draft);
       setTranslatedInput('');
     } finally {
       setIsPolishing(false);
@@ -1785,7 +1899,7 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
           onSend={sendReply}
           onEditDraft={editDraft}
           onSendDraft={sendDraftDirectly}
-          onDismissDraft={() => setDraftSuggestion(null)}
+          onDismissDraft={() => { setDraftSuggestion(null); setDraftMeta(null); }}
           onPolishInput={polishInput}
           onRegenerateDraft={regenerateDraft}
           onSceneDraft={(intent) => void generateManualDraft('', intent)}
@@ -1794,6 +1908,7 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
           templates={templates}
           onManualActive={reportManualActive}
           priceRulesReady={priceRulesReady}
+          knowledgeMiss={Boolean(draftMeta?.knowledgeMiss)}
         />
         <CustomerInfoRail
           customer={selected}
@@ -1814,8 +1929,35 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
         <DailyBriefing customers={customers} onSelectCustomer={openCustomer} onClose={() => setDailyBriefingOpen(false)} />
       )}
       {toast && (
-        <div className="fixed bottom-24 left-1/2 z-[70] -translate-x-1/2 rounded-full bg-slate-950 px-4 py-2 text-xs font-bold text-white shadow-lg">
+        <div className="fixed bottom-24 left-1/2 z-[70] flex -translate-x-1/2 items-center gap-3 rounded-full bg-slate-950 px-4 py-2 text-xs font-bold text-white shadow-lg">
           {toast}
+          {learnCandidate && (
+            <button type="button" onClick={() => { setToast(null); setLearnDialogOpen(true); }} className="rounded-full bg-white px-2.5 py-1 text-xs font-black text-slate-950">存进知识库</button>
+          )}
+        </div>
+      )}
+      {learnCandidate && learnDialogOpen && (
+        <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/30 px-4">
+          <div className="w-full max-w-lg rounded-3xl border border-border bg-white p-5 shadow-xl">
+            <div className="mb-4">
+              <p className="text-sm font-black text-text-primary">存进知识库</p>
+              <p className="mt-1 text-xs text-text-muted">这条客户问题之前没有覆盖。保存后会进入 FAQ，默认不自动回复，等老板审批。</p>
+            </div>
+            <label className="grid gap-1 text-xs font-bold text-text-secondary">
+              Q：客户常问问题
+              <input value={learnCandidate.question} onChange={event => setLearnCandidate(current => current ? { ...current, question: event.target.value } : current)} className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm font-normal text-text-primary outline-none focus:border-primary" />
+            </label>
+            <label className="mt-3 grid gap-1 text-xs font-bold text-text-secondary">
+              A：标准答案
+              <textarea value={learnCandidate.answer} onChange={event => setLearnCandidate(current => current ? { ...current, answer: event.target.value } : current)} rows={4} className="resize-none rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm font-normal text-text-primary outline-none focus:border-primary" />
+            </label>
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" onClick={() => { setLearnCandidate(null); setLearnDialogOpen(false); }} className="rounded-xl border border-border bg-white px-4 py-2 text-xs font-bold text-text-secondary">取消</button>
+              <button type="button" onClick={() => void saveLearnedFaq()} disabled={learnCandidate.saving || !learnCandidate.question.trim() || !learnCandidate.answer.trim()} className="rounded-xl bg-slate-950 px-4 py-2 text-xs font-black text-white disabled:opacity-60">
+                {learnCandidate.saving ? '保存中...' : '确认入库'}
+              </button>
+            </div>
+          </div>
         </div>
       )}
       {undoSend && (

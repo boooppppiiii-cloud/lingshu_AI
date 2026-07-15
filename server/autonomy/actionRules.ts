@@ -28,6 +28,7 @@ export const ACTION_RULES: ActionRule[] = [
   { action: 'payment_terms', risk: 'L4', desc: '付款条款' },
   { action: 'delivery_promise', risk: 'L4', desc: '交期承诺' },
   { action: 'contract_terms', risk: 'L4', desc: '合同条款' },
+  { action: 'call_request', risk: 'L4', desc: '客户想通电话' },
   { action: 'proactive_call', risk: 'L4', desc: '主动约电话' },
   { action: 'complaint_compensation', risk: 'L4', desc: '客诉补偿' },
   { action: 'edit_customer_core', risk: 'L4', desc: '修改客户核心资料' },

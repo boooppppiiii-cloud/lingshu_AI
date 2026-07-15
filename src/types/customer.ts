@@ -20,6 +20,9 @@ export interface TimelineEvent {
     risk?: 'L1' | 'L2' | 'L3' | 'L4';
     autonomy?: AutonomyLevel;
     guardRule?: string;
+    knowledgeMiss?: boolean;
+    buyerMessage?: string;
+    evidence?: string[];
   };
 }
 

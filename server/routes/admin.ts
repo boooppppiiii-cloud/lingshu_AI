@@ -18,6 +18,7 @@ import {
 } from '../lib/demoAccounts.js';
 import { getVideoAdminAlert, listVideoAdminAlerts } from '../lib/videoAdminAlerts.js';
 import { attachManualVideoUploadAndQueue } from './videos.js';
+import { listStyleAdoptionTrends } from '../knowledge/styleMemory.js';
 import {
   decryptSecret,
   getTenantPlatformApp,
@@ -330,6 +331,15 @@ adminRouter.get('/delivery/platform-apps', async (req, res) => {
       return publicDeliveryTenant(req, tenant, apps);
     }),
   });
+});
+
+adminRouter.get('/style-adoption-trends', async (req, res) => {
+  const admin = await requireAdminUser(req);
+  if (!admin) {
+    res.status(403).json({ error: 'admin_required' });
+    return;
+  }
+  res.json({ admin: admin.email, items: await listStyleAdoptionTrends() });
 });
 
 adminRouter.post('/delivery/tenants', async (req, res) => {

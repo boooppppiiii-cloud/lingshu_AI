@@ -38,6 +38,14 @@ interface VideoAdminAlert {
   updatedAt: string;
 }
 
+interface StyleAdoptionTrend {
+  tenantId: string;
+  week: string;
+  total: number;
+  directSent: number;
+  rate: number;
+}
+
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 const TARGET_UPLOAD_BYTES = 9.2 * 1024 * 1024;
 
@@ -177,6 +185,7 @@ function recordCompressedVideo(
 export default function AdminDashboard() {
   const [accounts, setAccounts] = useState<AdminAccount[]>([]);
   const [alerts, setAlerts] = useState<VideoAdminAlert[]>([]);
+  const [styleTrends, setStyleTrends] = useState<StyleAdoptionTrend[]>([]);
   const [selectedFiles, setSelectedFiles] = useState<Record<string, File | null>>({});
   const [uploadingAlertId, setUploadingAlertId] = useState<string | null>(null);
   const [uploadSteps, setUploadSteps] = useState<Record<string, string>>({});
@@ -188,15 +197,18 @@ export default function AdminDashboard() {
     setLoading(true);
     setError(null);
     try {
-      const [resp, alertResp] = await Promise.all([
+      const [resp, alertResp, styleResp] = await Promise.all([
         fetch('/api/overseas/admin/demo-accounts', { headers: authHeader() }),
         fetch('/api/overseas/admin/video-alerts?limit=20', { headers: authHeader() }),
+        fetch('/api/overseas/admin/style-adoption-trends', { headers: authHeader() }),
       ]);
       const json = await resp.json().catch(() => ({}));
       if (!resp.ok) throw new Error(json.error || '读取失败');
       const alertJson = await alertResp.json().catch(() => ({}));
+      const styleJson = await styleResp.json().catch(() => ({}));
       setAccounts(json.accounts ?? []);
       setAlerts(alertResp.ok ? alertJson.items ?? [] : []);
+      setStyleTrends(styleResp.ok ? styleJson.items ?? [] : []);
     } catch (err) {
       setError(err instanceof Error ? err.message : '读取失败');
     } finally {
@@ -343,6 +355,37 @@ export default function AdminDashboard() {
                     {uploadSteps[alert.id] && (
                       <span className="max-w-[300px] truncate text-[10px] text-text-muted">{uploadSteps[alert.id]}</span>
                     )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="mb-4 rounded-lg border border-border bg-surface overflow-hidden">
+          <div className="px-3 py-2 border-b border-border flex items-center justify-between">
+            <span className="text-xs font-semibold text-text-primary">销售风格采纳率趋势</span>
+            <span className="text-[10px] text-text-muted">草稿未修改直接发送率，按周聚合</span>
+          </div>
+          {styleTrends.length === 0 ? (
+            <p className="px-3 py-4 text-xs text-text-muted">暂无风格学习采纳数据。</p>
+          ) : (
+            <div className="grid gap-2 p-3 md:grid-cols-2">
+              {Object.entries(styleTrends.reduce<Record<string, StyleAdoptionTrend[]>>((acc, item) => {
+                (acc[item.tenantId] ||= []).push(item);
+                return acc;
+              }, {})).slice(0, 6).map(([tenantId, items]) => (
+                <div key={tenantId} className="rounded-lg border border-border bg-white p-3">
+                  <p className="truncate text-xs font-semibold text-text-primary">tenant {tenantId}</p>
+                  <div className="mt-3 space-y-2">
+                    {items.slice(0, 6).reverse().map(item => (
+                      <div key={`${tenantId}-${item.week}`} className="grid grid-cols-[64px_1fr_48px] items-center gap-2 text-[10px] text-text-muted">
+                        <span>{item.week}</span>
+                        <div className="h-2 rounded-full bg-surface-2">
+                          <div className="h-2 rounded-full bg-accent" style={{ width: `${Math.max(4, Math.min(100, item.rate * 100))}%` }} />
+                        </div>
+                        <span className="text-right">{Math.round(item.rate * 100)}%</span>
+                      </div>
+                    ))}
                   </div>
                 </div>
               ))}

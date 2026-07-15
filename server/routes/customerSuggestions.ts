@@ -2,7 +2,11 @@ import { Router } from 'express';
 import { callLLM } from '../agents/llm.js';
 import { isDemoMode } from '../lib/demo.js';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
-import { getWhatsAppCustomers, getWhatsAppImportStatus } from '../whatsapp/historyImport.js';
+import { retrieveContext } from '../knowledge/retrieve.js';
+import { buildKnowledgePromptBlock } from '../knowledge/promptBlocks.js';
+import { aggregateKnowledgeMisses } from '../knowledge/misses.js';
+import { recordStyleMemory } from '../knowledge/styleMemory.js';
+import { getNightModeMorningBriefing, getWhatsAppCustomers, getWhatsAppImportStatus, markWhatsAppHumanReply } from '../whatsapp/historyImport.js';
 import { sendTenantWhatsAppTemplate, sendTenantWhatsAppText } from '../whatsapp/send.js';
 
 export const customerSuggestionsRouter = Router();
@@ -40,6 +44,20 @@ function renderTemplate(templateName: string, variables: string[]) {
   return template.body.replace(/\{\{(\d+)}}/g, (_, index) => variables[Number(index) - 1] || '');
 }
 
+async function maybeRecordStyleMemory(req: any, tenantId: string, customerId: string, finalBody: string) {
+  const memory = req.body?.styleMemory;
+  if (!memory || typeof memory !== 'object') return;
+  await recordStyleMemory({
+    tenantId,
+    customerId,
+    triggerMessage: String(memory.triggerMessage || ''),
+    draftOriginal: String(memory.draftOriginal || ''),
+    finalSent: String(memory.finalSent || finalBody || ''),
+    edited: Boolean(memory.edited),
+    category: String(memory.category || 'reply'),
+  }).catch(error => console.warn('[style-memory:record-failed]', error));
+}
+
 customerSuggestionsRouter.get('/', requireAuth, (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
   const source = String(req.query.source || '');
@@ -56,6 +74,21 @@ customerSuggestionsRouter.get('/whatsapp/import-status', (_req, res) => {
 
 customerSuggestionsRouter.get('/templates', (_req, res) => {
   res.json({ items: MESSAGE_TEMPLATES });
+});
+
+customerSuggestionsRouter.get('/knowledge-misses/briefing', async (_req, res) => {
+  const items = await aggregateKnowledgeMisses(7);
+  res.json({ items });
+});
+
+customerSuggestionsRouter.get('/night-mode/briefing', requireAuth, (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  res.json({ item: getNightModeMorningBriefing(tenantId) });
+});
+
+customerSuggestionsRouter.post('/knowledge-misses/recompute', async (_req, res) => {
+  const items = await aggregateKnowledgeMisses(7);
+  res.json({ ok: true, items });
 });
 
 customerSuggestionsRouter.post('/:id/manual-active', (req, res) => {
@@ -121,12 +154,15 @@ customerSuggestionsRouter.post('/:id/outbox', requireAuth, async (req, res) => {
       });
       return;
     }
+    const renderedBody = renderTemplate(templateName, variables) || body;
+    markWhatsAppHumanReply({ tenantId, customerId, body: renderedBody, waNumber: to });
+    await maybeRecordStyleMemory(req, tenantId, customerId, renderedBody);
     res.json({
       ok: true,
       outboxId: `tpl_${Date.now()}`,
       status: 'sent',
       sentAt: new Date().toISOString(),
-      renderedBody: renderTemplate(templateName, variables) || body,
+      renderedBody,
     });
     return;
   }
@@ -144,6 +180,8 @@ customerSuggestionsRouter.post('/:id/outbox', requireAuth, async (req, res) => {
     });
     return;
   }
+  markWhatsAppHumanReply({ tenantId, customerId, body, waNumber: to });
+  await maybeRecordStyleMemory(req, tenantId, customerId, body);
   res.json({
     ok: true,
     outboxId: `out_${Date.now()}`,
@@ -233,6 +271,14 @@ customerSuggestionsRouter.get('/:id/suggestions', async (req, res) => {
   const id = String(req.params.id ?? '');
   const hint = CUSTOMER_HINTS[id] ?? fallbackHint(id);
   const fallback = fallbackSuggestions(hint);
+  const latestMessage = hint.timeline.at(-1) || hint.product || hint.stage;
+  const tenantId = String(req.query.tenantId || req.headers['x-tenant-id'] || 'local_tenant_default');
+  const context = await retrieveContext(tenantId, {
+    id,
+    name: hint.name,
+    stage: hint.stage,
+    product: hint.product,
+  }, latestMessage);
 
   const prompt = [
     `Customer: ${hint.name}`,
@@ -242,15 +288,17 @@ customerSuggestionsRouter.get('/:id/suggestions', async (req, res) => {
     'Recent timeline:',
     hint.timeline.map(item => `- ${item}`).join('\n'),
     '',
+    buildKnowledgePromptBlock(context),
+    '',
     'Return only 2-3 short suggestions, one per line.',
   ].join('\n');
 
   try {
     const raw = await callLLM(prompt, { systemPrompt: SYSTEM_PROMPT });
     const items = parseSuggestions(raw);
-    res.json({ items: items.length > 0 ? items : fallback });
+    res.json({ items: items.length > 0 ? items : fallback, evidence: context.evidence });
   } catch {
-    res.json({ items: fallback });
+    res.json({ items: fallback, evidence: context.evidence });
   }
 });
 

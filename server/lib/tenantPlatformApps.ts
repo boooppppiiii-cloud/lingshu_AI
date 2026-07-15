@@ -315,9 +315,9 @@ export function verifyMetaSignature(appSecret: string, rawBody: Buffer, signatur
   return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
 }
 
-export async function notifyDeliveryTeam(message: string): Promise<void> {
+export async function notifyDeliveryTeam(message: string, options: { immediate?: boolean } = {}): Promise<void> {
   const enterpriseNotifications = readEnterpriseNotificationSettings();
-  if (enterpriseNotifications?.quietOutsideHours && !isWithinWorkHours(enterpriseNotifications.workHours)) {
+  if (!options.immediate && enterpriseNotifications?.quietOutsideHours && !isWithinWorkHours(enterpriseNotifications.workHours)) {
     enqueueDailyBriefing(message);
     console.warn('[delivery-alert:queued-for-briefing]', message);
     return;

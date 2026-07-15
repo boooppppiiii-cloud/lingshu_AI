@@ -41,6 +41,7 @@ export interface FaqItem {
   question: string;
   answer: string;
   approvedForAuto: boolean;
+  source?: 'manual' | 'pack' | 'learned';
 }
 
 export interface NotificationReceiver {
@@ -53,7 +54,24 @@ export interface NotificationSettings {
   receivers: NotificationReceiver[];
   workHours: { start: string; end: string };
   quietOutsideHours: boolean;
+  nightMode: { enabled: boolean; autoCategories: 'approved' };
   lastTestAt?: string;
+}
+
+export interface HandoffRules {
+  keywords: string[];
+  missStreakToDraft: 1 | 2 | 3;
+  negativeSentiment: boolean;
+}
+
+export interface SalesStyleProfile {
+  learnedFromCount: number;
+  lastDistilledAt?: string;
+  greeting_style?: { value: string; evidence: string; manual?: boolean };
+  quoting_stance?: { value: string; evidence: string; manual?: boolean };
+  followup_rhythm?: { value: string; evidence: string; manual?: boolean };
+  taboo_phrases?: { value: string[]; evidence: string; manual?: boolean };
+  sample_pairs?: Array<{ trigger: string; final: string; evidence?: string }>;
 }
 
 interface OrderRecord {
@@ -157,6 +175,8 @@ export interface EnterpriseProfile {
   bizRules?: BizRules;
   faq?: FaqItem[];
   notifications?: NotificationSettings;
+  handoffRules?: HandoffRules;
+  salesStyleProfile?: SalesStyleProfile;
   knowledge: string;
 }
 
@@ -183,7 +203,14 @@ const DEFAULT_NOTIFICATIONS: NotificationSettings = {
   receivers: [],
   workHours: { start: '09:00', end: '22:00' },
   quietOutsideHours: true,
+  nightMode: { enabled: false, autoCategories: 'approved' },
   lastTestAt: '',
+};
+
+const DEFAULT_HANDOFF_RULES: HandoffRules = {
+  keywords: ['人工', '老板', 'manager', 'complaint', 'refund'],
+  missStreakToDraft: 2,
+  negativeSentiment: true,
 };
 
 function readProductApiSecret(): ProductApiSecret | null {
@@ -234,6 +261,8 @@ function readProfile(): EnterpriseProfile {
       bizRules: { ...DEFAULT_BIZ_RULES },
       faq: [],
       notifications: { ...DEFAULT_NOTIFICATIONS, workHours: { ...DEFAULT_NOTIFICATIONS.workHours } },
+      handoffRules: { ...DEFAULT_HANDOFF_RULES, keywords: [...DEFAULT_HANDOFF_RULES.keywords] },
+      salesStyleProfile: { learnedFromCount: 0, sample_pairs: [] },
       knowledge: '',
     });
   }
@@ -492,6 +521,8 @@ function normalizeProfile(profile: EnterpriseProfile): EnterpriseProfile {
   };
   const bizRules = normalizeBizRules(profile.bizRules, products, operations);
   const notifications = normalizeNotifications(profile.notifications);
+  const handoffRules = normalizeHandoffRules(profile.handoffRules);
+  const salesStyleProfile = normalizeSalesStyleProfile(profile.salesStyleProfile);
   const faq = normalizeFaq(profile.faq);
   const strategy = { ...(profile.strategy ?? {}), aiAutonomy: normalizeAutonomy(profile.strategy?.aiAutonomy) };
   return {
@@ -503,6 +534,46 @@ function normalizeProfile(profile: EnterpriseProfile): EnterpriseProfile {
     bizRules,
     faq,
     notifications,
+    handoffRules,
+    salesStyleProfile,
+  };
+}
+
+function styleField(input: unknown): { value: string; evidence: string; manual?: boolean } | undefined {
+  if (!input || typeof input !== 'object') return undefined;
+  const raw = input as Record<string, unknown>;
+  const value = text(raw.value);
+  const evidence = text(raw.evidence);
+  if (!value && !evidence) return undefined;
+  return { value, evidence, manual: raw.manual === true };
+}
+
+function normalizeSalesStyleProfile(input: EnterpriseProfile['salesStyleProfile']): SalesStyleProfile {
+  const tabooRaw = input?.taboo_phrases;
+  const tabooValue = Array.isArray(tabooRaw?.value) ? tabooRaw.value.map(item => text(item)).filter(Boolean) : [];
+  return {
+    learnedFromCount: Math.max(0, Number(input?.learnedFromCount || 0) || 0),
+    lastDistilledAt: text(input?.lastDistilledAt),
+    greeting_style: styleField(input?.greeting_style),
+    quoting_stance: styleField(input?.quoting_stance),
+    followup_rhythm: styleField(input?.followup_rhythm),
+    taboo_phrases: tabooValue.length || tabooRaw?.manual ? { value: tabooValue, evidence: text(tabooRaw?.evidence), manual: tabooRaw?.manual === true } : undefined,
+    sample_pairs: Array.isArray(input?.sample_pairs) ? input.sample_pairs.map(item => ({
+      trigger: text(item?.trigger),
+      final: text(item?.final),
+      evidence: text(item?.evidence),
+    })).filter(item => item.trigger || item.final).slice(0, 8) : [],
+  };
+}
+
+function normalizeHandoffRules(input: EnterpriseProfile['handoffRules']): HandoffRules {
+  const rawKeywords = Array.isArray(input?.keywords) ? input.keywords : DEFAULT_HANDOFF_RULES.keywords;
+  const keywords = Array.from(new Set(rawKeywords.map(item => text(item)).filter(Boolean))).slice(0, 20);
+  const missRaw = Number(input?.missStreakToDraft);
+  return {
+    keywords: keywords.length ? keywords : [...DEFAULT_HANDOFF_RULES.keywords],
+    missStreakToDraft: missRaw === 1 || missRaw === 3 ? missRaw : 2,
+    negativeSentiment: input?.negativeSentiment !== false,
   };
 }
 
@@ -544,7 +615,12 @@ function normalizeFaq(input: EnterpriseProfile['faq']): FaqItem[] {
     question: text(item?.question),
     answer: text(item?.answer),
     approvedForAuto: Boolean(item?.approvedForAuto),
+    source: normalizeFaqSource(item?.source),
   })).filter(item => item.question || item.answer);
+}
+
+function normalizeFaqSource(value: unknown): 'manual' | 'pack' | 'learned' {
+  return value === 'pack' || value === 'learned' ? value : 'manual';
 }
 
 function normalizeNotifications(input: EnterpriseProfile['notifications']): NotificationSettings {
@@ -562,6 +638,10 @@ function normalizeNotifications(input: EnterpriseProfile['notifications']): Noti
       end: normalizeHour(input?.workHours?.end, DEFAULT_NOTIFICATIONS.workHours.end),
     },
     quietOutsideHours: input?.quietOutsideHours !== false,
+    nightMode: {
+      enabled: Boolean(input?.nightMode?.enabled),
+      autoCategories: 'approved',
+    },
     lastTestAt: text(input?.lastTestAt),
   };
 }
@@ -817,7 +897,10 @@ export function buildEnterpriseContext(profile: EnterpriseProfile): string {
     parts.push(`Approved FAQ for auto reply:\n${approvedFaq.map(item => `Q: ${item.question}\nA: ${item.answer}`).join('\n')}`);
   }
   if (profile.notifications?.receivers?.length) {
-    parts.push(`Notification receivers: ${profile.notifications.receivers.map(item => `${item.name}/${item.channel}/${item.target}`).join('; ')}; workHours=${profile.notifications.workHours.start}-${profile.notifications.workHours.end}; quietOutsideHours=${profile.notifications.quietOutsideHours}`);
+    parts.push(`Notification receivers: ${profile.notifications.receivers.map(item => `${item.name}/${item.channel}/${item.target}`).join('; ')}; workHours=${profile.notifications.workHours.start}-${profile.notifications.workHours.end}; quietOutsideHours=${profile.notifications.quietOutsideHours}; nightMode=${profile.notifications.nightMode.enabled ? 'enabled' : 'disabled'}`);
+  }
+  if (profile.handoffRules) {
+    parts.push(`Handoff rules: keywords=${profile.handoffRules.keywords.join('/')}; missStreakToDraft=${profile.handoffRules.missStreakToDraft}; negativeSentiment=${profile.handoffRules.negativeSentiment}`);
   }
   if (profile.brand.usp) parts.push(`核心卖点：${profile.brand.usp}`);
   if (profile.brand.tone) parts.push(`品牌调性：${profile.brand.tone}`);
@@ -905,10 +988,98 @@ async function structureFaqText(raw: string): Promise<FaqItem[]> {
   return fallbackFaqStructure(source);
 }
 
+export function updateEnterpriseProfile(patch: Partial<EnterpriseProfile>): EnterpriseProfile {
+  const next = normalizeProfile({ ...readProfile(), ...patch } as EnterpriseProfile);
+  writeProfile(next);
+  return next;
+}
+
+type PackIndustry = 'apparel' | 'home' | 'general';
+type PackScenario = 'presales' | 'shipping' | 'aftersales' | 'credentials';
+interface PackEntry { q: string; a: string; vars?: string[] }
+
+const PACK_ROOT = path.join(__dirname, '../knowledge/packs');
+const INDUSTRY_LABELS: Record<PackIndustry, string> = { apparel: '服装', home: '家居', general: '通用' };
+const SCENARIO_LABELS: Record<PackScenario, string> = { presales: '售前', shipping: '物流与运费', aftersales: '售后', credentials: '公司资质' };
+
+function packVars(profile: EnterpriseProfile): Record<string, string> {
+  const rules = profile.bizRules ?? DEFAULT_BIZ_RULES;
+  return {
+    moq: text(rules.moq),
+    samplePolicy: text(rules.samplePolicy),
+    paymentTerms: text(rules.paymentTerms),
+    leadTime: text(rules.leadTime),
+    priceRange: text(rules.priceRange),
+    bargainFloor: text(rules.bargainFloor),
+  };
+}
+
+function readPack(industry: PackIndustry, scenario: PackScenario): PackEntry[] {
+  const file = path.join(PACK_ROOT, industry, `${scenario}.json`);
+  const raw = JSON.parse(fs.readFileSync(file, 'utf8')) as PackEntry[];
+  return Array.isArray(raw) ? raw : [];
+}
+
+function fillPackEntry(entry: PackEntry, vars: Record<string, string>) {
+  const required = Array.isArray(entry.vars) ? entry.vars : [];
+  const missingVars = required.filter(key => !text(vars[key]));
+  const answer = required.reduce((next, key) => next.replaceAll(`{${key}}`, vars[key] || `{${key}}`), entry.a);
+  return {
+    q: text(entry.q),
+    a: answer,
+    vars: required,
+    missingVars,
+    ready: missingVars.length === 0,
+  };
+}
+
+function inferIndustry(profile: EnterpriseProfile): PackIndustry {
+  const raw = `${profile.company?.industry || ''} ${profile.products?.categories || ''}`.toLowerCase();
+  if (/服装|服饰|衣|裤|裙|鞋|帽|apparel|fashion|garment|clothing|textile/.test(raw)) return 'apparel';
+  if (/家居|家具|家纺|收纳|厨房|home|house|furniture|decor|kitchen/.test(raw)) return 'home';
+  return 'general';
+}
+
+function buildPackPreview(profile: EnterpriseProfile, industry: PackIndustry, scenario: PackScenario) {
+  const vars = packVars(profile);
+  const items = readPack(industry, scenario).map(entry => fillPackEntry(entry, vars));
+  const existing = new Set((profile.faq ?? []).map(item => text(item.question).toLowerCase()).filter(Boolean));
+  return {
+    id: `${industry}/${scenario}`,
+    industry,
+    industryLabel: INDUSTRY_LABELS[industry],
+    scenario,
+    scenarioLabel: SCENARIO_LABELS[scenario],
+    count: items.length,
+    preview: items.slice(0, 3),
+    items: items.map(item => ({ ...item, exists: existing.has(item.q.toLowerCase()) })),
+  };
+}
+
+function allPackPreviews(profile: EnterpriseProfile) {
+  const industries = Object.keys(INDUSTRY_LABELS) as PackIndustry[];
+  const scenarios = Object.keys(SCENARIO_LABELS) as PackScenario[];
+  return industries.flatMap(industry => scenarios.map(scenario => buildPackPreview(profile, industry, scenario)));
+}
+
 export const enterpriseRouter = Router();
 
 enterpriseRouter.get('/profile', (_req, res) => {
   res.json(readProfile());
+});
+
+enterpriseRouter.post('/style-profile/distill', async (_req, res) => {
+  try {
+    const { distillSalesStyleProfile } = await import('../knowledge/styleMemory.js');
+    const profile = await distillSalesStyleProfile('local_tenant_default', true);
+    if (!profile) {
+      res.status(409).json({ error: 'not_enough_samples', message: '修改样本不足 20 条，暂时无法生成销售风格档案。' });
+      return;
+    }
+    res.json({ ok: true, salesStyleProfile: profile });
+  } catch (error) {
+    res.status(500).json({ error: error instanceof Error ? error.message : 'style_profile_distill_failed' });
+  }
 });
 
 enterpriseRouter.get('/knowledge-completion', (_req, res) => {
@@ -924,6 +1095,107 @@ enterpriseRouter.post('/faq/structure', async (req, res) => {
   }
   const items = await structureFaqText(source);
   res.json({ items });
+});
+
+enterpriseRouter.get('/faq/packs', (_req, res) => {
+  const profile = readProfile();
+  res.json({
+    recommendedIndustry: inferIndustry(profile),
+    packs: allPackPreviews(profile),
+  });
+});
+
+enterpriseRouter.post('/faq/packs/import', (req, res) => {
+  const profile = readProfile();
+  const industry = text(req.body?.industry) as PackIndustry;
+  const scenario = text(req.body?.scenario) as PackScenario;
+  const selected = Array.isArray(req.body?.questions) ? req.body.questions.map(text).filter(Boolean) : [];
+  if (!(industry in INDUSTRY_LABELS) || !(scenario in SCENARIO_LABELS)) {
+    res.status(400).json({ error: 'invalid_pack' });
+    return;
+  }
+  const pack = buildPackPreview(profile, industry, scenario);
+  const selectedSet = new Set(selected.map((item: string) => item.toLowerCase()));
+  const existing = new Set((profile.faq ?? []).map(item => text(item.question).toLowerCase()).filter(Boolean));
+  const incoming: FaqItem[] = pack.items
+    .filter((item: ReturnType<typeof fillPackEntry> & { exists?: boolean }) => item.ready && !item.exists && (!selected.length || selectedSet.has(item.q.toLowerCase())))
+    .map((item): FaqItem => ({
+      id: randomUUID(),
+      question: item.q,
+      answer: item.a,
+      approvedForAuto: false,
+      source: 'pack',
+    }))
+    .filter(item => {
+      const key = item.question.toLowerCase();
+      if (existing.has(key)) return false;
+      existing.add(key);
+      return true;
+    });
+  writeProfile({ ...profile, faq: [...(profile.faq ?? []), ...incoming] });
+  res.json({
+    ok: true,
+    imported: incoming.length,
+    skipped: pack.items.length - incoming.length,
+    profile: readProfile(),
+  });
+});
+
+enterpriseRouter.post('/faq/learned', async (req, res) => {
+  const profile = readProfile();
+  const buyerMessage = text(req.body?.buyerMessage);
+  const answer = text(req.body?.answer);
+  const questionInput = text(req.body?.question);
+  if (!buyerMessage || !answer) {
+    res.status(400).json({ error: 'buyer_message_and_answer_required' });
+    return;
+  }
+  let question = questionInput;
+  if (!question) {
+    try {
+      const prompt = [
+        '把买家原话概括成一句中文常见问题，适合放进企业知识库 FAQ。',
+        '只返回问题本身，不要解释，不要加引号。',
+        `买家原话：${buyerMessage}`,
+      ].join('\n');
+      question = text(await callLLM(prompt, { backend: 'qwen', model: process.env.KNOWLEDGE_QUERY_MODEL || 'qwen-plus' }));
+    } catch {
+      question = buyerMessage.length > 60 ? `${buyerMessage.slice(0, 57)}...` : buyerMessage;
+    }
+  }
+  const existing = new Set((profile.faq ?? []).map(item => text(item.question).toLowerCase()).filter(Boolean));
+  if (existing.has(question.toLowerCase())) {
+    res.json({ ok: true, skipped: true, profile, item: (profile.faq ?? []).find(item => text(item.question).toLowerCase() === question.toLowerCase()) });
+    return;
+  }
+  const item: FaqItem = {
+    id: randomUUID(),
+    question,
+    answer,
+    approvedForAuto: false,
+    source: 'learned',
+  };
+  writeProfile({ ...profile, faq: [...(profile.faq ?? []), item] });
+  res.json({ ok: true, item, profile: readProfile() });
+});
+
+enterpriseRouter.post('/faq/learned/suggest', async (req, res) => {
+  const buyerMessage = text(req.body?.buyerMessage);
+  if (!buyerMessage) {
+    res.status(400).json({ error: 'buyer_message_required' });
+    return;
+  }
+  try {
+    const prompt = [
+      '把买家原话概括成一句中文常见问题，适合放进企业知识库 FAQ。',
+      '只返回问题本身，不要解释，不要加引号。',
+      `买家原话：${buyerMessage}`,
+    ].join('\n');
+    const question = text(await callLLM(prompt, { backend: 'qwen', model: process.env.KNOWLEDGE_QUERY_MODEL || 'qwen-plus' }));
+    res.json({ question: question || buyerMessage });
+  } catch {
+    res.json({ question: buyerMessage.length > 60 ? `${buyerMessage.slice(0, 57)}...` : buyerMessage });
+  }
 });
 
 enterpriseRouter.post('/notifications/test', async (req, res) => {

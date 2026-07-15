@@ -62,6 +62,27 @@ interface FaqItem {
   question: string;
   answer: string;
   approvedForAuto: boolean;
+  source?: 'manual' | 'pack' | 'learned';
+}
+
+interface FaqPackItem {
+  q: string;
+  a: string;
+  vars: string[];
+  missingVars: string[];
+  ready: boolean;
+  exists?: boolean;
+}
+
+interface FaqPack {
+  id: string;
+  industry: 'apparel' | 'home' | 'general';
+  industryLabel: string;
+  scenario: 'presales' | 'shipping' | 'aftersales' | 'credentials';
+  scenarioLabel: string;
+  count: number;
+  preview: FaqPackItem[];
+  items: FaqPackItem[];
 }
 
 interface NotificationReceiver {
@@ -74,7 +95,24 @@ interface NotificationSettings {
   receivers: NotificationReceiver[];
   workHours: { start: string; end: string };
   quietOutsideHours: boolean;
+  nightMode: { enabled: boolean; autoCategories: 'approved' };
   lastTestAt?: string;
+}
+
+interface HandoffRules {
+  keywords: string[];
+  missStreakToDraft: 1 | 2 | 3;
+  negativeSentiment: boolean;
+}
+
+interface SalesStyleProfile {
+  learnedFromCount: number;
+  lastDistilledAt?: string;
+  greeting_style?: { value: string; evidence: string; manual?: boolean };
+  quoting_stance?: { value: string; evidence: string; manual?: boolean };
+  followup_rhythm?: { value: string; evidence: string; manual?: boolean };
+  taboo_phrases?: { value: string[]; evidence: string; manual?: boolean };
+  sample_pairs?: Array<{ trigger: string; final: string; evidence?: string }>;
 }
 
 interface Profile {
@@ -88,6 +126,8 @@ interface Profile {
   bizRules?: BizRules;
   faq?: FaqItem[];
   notifications?: NotificationSettings;
+  handoffRules?: HandoffRules;
+  salesStyleProfile?: SalesStyleProfile;
   knowledge: string;
 }
 
@@ -108,7 +148,9 @@ const DEFAULT: Profile = {
   agentLearning: { provenAngles: '', weakAngles: '', pendingAssumptions: '', userCorrections: '' },
   bizRules: { quoteMode: '', priceRange: '', bargainPolicy: 'no', bargainFloor: '', moq: '', samplePolicy: '', paymentTerms: '', leadTime: '' },
   faq: [],
-  notifications: { receivers: [], workHours: { start: '09:00', end: '22:00' }, quietOutsideHours: true, lastTestAt: '' },
+  notifications: { receivers: [], workHours: { start: '09:00', end: '22:00' }, quietOutsideHours: true, nightMode: { enabled: false, autoCategories: 'approved' }, lastTestAt: '' },
+  handoffRules: { keywords: ['人工', '老板', 'manager', 'complaint', 'refund'], missStreakToDraft: 2, negativeSentiment: true },
+  salesStyleProfile: { learnedFromCount: 0, sample_pairs: [] },
   knowledge: '',
 };
 
@@ -354,11 +396,19 @@ export default function EnterprisePage() {
   const [productImportMessage, setProductImportMessage] = useState('');
   const [faqPreview, setFaqPreview] = useState<FaqItem[]>([]);
   const [faqStructuring, setFaqStructuring] = useState(false);
+  const [faqPacks, setFaqPacks] = useState<FaqPack[]>([]);
+  const [recommendedPackIndustry, setRecommendedPackIndustry] = useState('general');
+  const [openPackId, setOpenPackId] = useState('');
+  const [selectedPackQuestions, setSelectedPackQuestions] = useState<Record<string, string[]>>({});
+  const [packImporting, setPackImporting] = useState('');
   const [notificationTesting, setNotificationTesting] = useState('');
   const [notificationMessage, setNotificationMessage] = useState('');
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [notificationsHighlight, setNotificationsHighlight] = useState(false);
   const [bizRulesHighlight, setBizRulesHighlight] = useState(false);
+  const [handoffKeywordInput, setHandoffKeywordInput] = useState('');
+  const [styleDistilling, setStyleDistilling] = useState(false);
+  const [styleMessage, setStyleMessage] = useState('');
 
   useEffect(() => {
     Promise.all([
@@ -366,8 +416,9 @@ export default function EnterprisePage() {
       fetch('/api/overseas/enterprise/demo/templates').then(r => r.json()).catch(() => []),
       fetch('/api/overseas/enterprise/product-api', { headers: authHeader() }).then(r => r.json()).catch(() => null),
       fetch('/api/overseas/enterprise/product-api/status', { headers: authHeader() }).then(r => r.json()).catch(() => ({ count: 0 })),
+      fetch('/api/overseas/enterprise/faq/packs').then(r => r.json()).catch(() => ({ packs: [], recommendedIndustry: 'general' })),
     ])
-      .then(([data, list, productApi, productApiStatus]: [Partial<Profile>, DemoTemplate[], ProductApiInfo | null, ProductApiStatus]) => {
+      .then(([data, list, productApi, productApiStatus, packData]: [Partial<Profile>, DemoTemplate[], ProductApiInfo | null, ProductApiStatus, { packs?: FaqPack[]; recommendedIndustry?: string }]) => {
         const next: Profile = {
           ...DEFAULT,
           ...data,
@@ -394,7 +445,27 @@ export default function EnterprisePage() {
             ...DEFAULT.notifications!,
             ...data.notifications,
             workHours: { ...DEFAULT.notifications!.workHours, ...data.notifications?.workHours },
+            nightMode: {
+              enabled: Boolean(data.notifications?.nightMode?.enabled),
+              autoCategories: 'approved',
+            },
             receivers: Array.isArray(data.notifications?.receivers) ? data.notifications!.receivers : [],
+          },
+          handoffRules: {
+            ...DEFAULT.handoffRules!,
+            ...data.handoffRules,
+            keywords: Array.isArray(data.handoffRules?.keywords) && data.handoffRules.keywords.length
+              ? data.handoffRules.keywords
+              : DEFAULT.handoffRules!.keywords,
+            missStreakToDraft: [1, 2, 3].includes(Number(data.handoffRules?.missStreakToDraft))
+              ? data.handoffRules!.missStreakToDraft
+              : DEFAULT.handoffRules!.missStreakToDraft,
+            negativeSentiment: data.handoffRules?.negativeSentiment !== false,
+          },
+          salesStyleProfile: {
+            ...DEFAULT.salesStyleProfile!,
+            ...data.salesStyleProfile,
+            sample_pairs: Array.isArray(data.salesStyleProfile?.sample_pairs) ? data.salesStyleProfile.sample_pairs : [],
           },
           knowledge: data.knowledge ?? '',
         };
@@ -404,6 +475,10 @@ export default function EnterprisePage() {
         setTemplateId(matchTemplateId(next, safeTemplates));
         if (productApi) setApiInfo(productApi);
         setApiStatus(productApiStatus);
+        const packs = Array.isArray(packData.packs) ? packData.packs : [];
+        setFaqPacks(packs);
+        setRecommendedPackIndustry(packData.recommendedIndustry || 'general');
+        setOpenPackId(packs.find(pack => pack.industry === packData.recommendedIndustry)?.id || packs[0]?.id || '');
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -418,6 +493,37 @@ export default function EnterprisePage() {
     }, 5000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    if (loading) return;
+    const raw = localStorage.getItem('lingshu:enterprise:prefill-faq');
+    if (!raw) return;
+    localStorage.removeItem('lingshu:enterprise:prefill-faq');
+    try {
+      const parsed = JSON.parse(raw) as Partial<FaqItem>;
+      const question = String(parsed.question || '').trim();
+      if (!question) return;
+      setProfile(prev => ({
+        ...prev,
+        faq: [
+          ...(prev.faq ?? []),
+          {
+            id: crypto.randomUUID(),
+            question,
+            answer: String(parsed.answer || ''),
+            approvedForAuto: false,
+            source: 'learned',
+          },
+        ],
+      }));
+      window.setTimeout(() => {
+        document.querySelector('[data-enterprise-faq]')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 100);
+    } catch {
+      // Ignore malformed prefill payload.
+    }
+  }, [loading]);
+
 
   const set = <K extends keyof Profile>(section: K) =>
     (field: string, value: string) =>
@@ -476,6 +582,45 @@ export default function EnterprisePage() {
   const importFaqPreview = () => {
     setProfile(prev => ({ ...prev, faq: [...(prev.faq ?? []), ...faqPreview] }));
     setFaqPreview([]);
+  };
+
+  const reloadFaqPacks = async () => {
+    const data = await fetch('/api/overseas/enterprise/faq/packs').then(r => r.json()).catch(() => ({ packs: [], recommendedIndustry: 'general' }));
+    const packs = Array.isArray(data.packs) ? data.packs : [];
+    setFaqPacks(packs);
+    setRecommendedPackIndustry(data.recommendedIndustry || 'general');
+    if (!openPackId && packs.length) setOpenPackId(packs.find((pack: FaqPack) => pack.industry === data.recommendedIndustry)?.id || packs[0].id);
+  };
+
+  const selectedQuestionsForPack = (pack: FaqPack) => selectedPackQuestions[pack.id] ?? pack.items.filter(item => item.ready && !item.exists).map(item => item.q);
+
+  const togglePackQuestion = (pack: FaqPack, question: string) => {
+    setSelectedPackQuestions(prev => {
+      const current = selectedQuestionsForPack(pack);
+      const next = current.includes(question) ? current.filter(item => item !== question) : [...current, question];
+      return { ...prev, [pack.id]: next };
+    });
+  };
+
+  const importFaqPack = async (pack: FaqPack) => {
+    setPackImporting(pack.id);
+    try {
+      const result = await fetch('/api/overseas/enterprise/faq/packs/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          industry: pack.industry,
+          scenario: pack.scenario,
+          questions: selectedQuestionsForPack(pack),
+        }),
+      }).then(r => r.json());
+      if (result.profile?.faq) {
+        setProfile(prev => ({ ...prev, faq: result.profile.faq }));
+      }
+      await reloadFaqPacks();
+    } finally {
+      setPackImporting('');
+    }
   };
 
   const addReceiver = () => {
@@ -567,6 +712,123 @@ export default function EnterprisePage() {
       if (!ok) return;
     }
     setProfile(prev => ({ ...prev, strategy: { ...prev.strategy, aiAutonomy: value } }));
+  };
+
+  const setNightModeEnabled = (enabled: boolean) => {
+    if (enabled && !profile.notifications?.nightMode?.enabled) {
+      const ok = window.confirm([
+        '开启夜班模式后，非工作时间 AI 只会自动回复以下安全范围：',
+        '',
+        '· 已审批的常见问题',
+        '· 物流、目录、标准售后等 L3 低风险动作',
+        '',
+        '报价、折扣、付款、交期等大事会积累到次日晨报等你确认；客户要求通话仍会立即提醒你。',
+      ].join('\n'));
+      if (!ok) return;
+    }
+    setProfile(prev => ({
+      ...prev,
+      notifications: {
+        ...(prev.notifications ?? DEFAULT.notifications!),
+        nightMode: { enabled, autoCategories: 'approved' },
+      },
+    }));
+  };
+
+  const addHandoffKeyword = () => {
+    const keyword = handoffKeywordInput.trim();
+    if (!keyword) return;
+    setProfile(prev => {
+      const current = prev.handoffRules ?? DEFAULT.handoffRules!;
+      const keywords = Array.from(new Set([...current.keywords, keyword])).slice(0, 20);
+      return { ...prev, handoffRules: { ...current, keywords } };
+    });
+    setHandoffKeywordInput('');
+  };
+
+  const removeHandoffKeyword = (keyword: string) => {
+    setProfile(prev => {
+      const current = prev.handoffRules ?? DEFAULT.handoffRules!;
+      const keywords = current.keywords.filter(item => item !== keyword);
+      return { ...prev, handoffRules: { ...current, keywords: keywords.length ? keywords : [...DEFAULT.handoffRules!.keywords] } };
+    });
+  };
+
+  const setMissStreakToDraft = (value: 1 | 2 | 3) => {
+    setProfile(prev => ({
+      ...prev,
+      handoffRules: { ...(prev.handoffRules ?? DEFAULT.handoffRules!), missStreakToDraft: value },
+    }));
+  };
+
+  const setNegativeSentiment = (value: boolean) => {
+    setProfile(prev => ({
+      ...prev,
+      handoffRules: { ...(prev.handoffRules ?? DEFAULT.handoffRules!), negativeSentiment: value },
+    }));
+  };
+
+  const updateSalesStyleField = (key: 'greeting_style' | 'quoting_stance' | 'followup_rhythm', value: string) => {
+    setProfile(prev => ({
+      ...prev,
+      salesStyleProfile: {
+        ...(prev.salesStyleProfile ?? DEFAULT.salesStyleProfile!),
+        [key]: {
+          value,
+          evidence: prev.salesStyleProfile?.[key]?.evidence ?? '',
+          manual: true,
+        },
+      },
+    }));
+  };
+
+  const deleteSalesStyleField = (key: 'greeting_style' | 'quoting_stance' | 'followup_rhythm') => {
+    setProfile(prev => {
+      const next = { ...(prev.salesStyleProfile ?? DEFAULT.salesStyleProfile!) };
+      delete next[key];
+      return { ...prev, salesStyleProfile: next };
+    });
+  };
+
+  const updateTabooPhrases = (value: string) => {
+    setProfile(prev => ({
+      ...prev,
+      salesStyleProfile: {
+        ...(prev.salesStyleProfile ?? DEFAULT.salesStyleProfile!),
+        taboo_phrases: {
+          value: value.split(/[,\n，、]+/).map(item => item.trim()).filter(Boolean),
+          evidence: prev.salesStyleProfile?.taboo_phrases?.evidence ?? '',
+          manual: true,
+        },
+      },
+    }));
+  };
+
+  const deleteTabooPhrases = () => {
+    setProfile(prev => {
+      const next = { ...(prev.salesStyleProfile ?? DEFAULT.salesStyleProfile!) };
+      delete next.taboo_phrases;
+      return { ...prev, salesStyleProfile: next };
+    });
+  };
+
+  const distillSalesStyle = async () => {
+    setStyleDistilling(true);
+    setStyleMessage('');
+    try {
+      const resp = await fetch('/api/overseas/enterprise/style-profile/distill', {
+        method: 'POST',
+        headers: authHeader(),
+      });
+      const data = await resp.json().catch(() => ({}));
+      if (!resp.ok) throw new Error(data.message || data.error || '学习失败');
+      setProfile(prev => ({ ...prev, salesStyleProfile: data.salesStyleProfile ?? prev.salesStyleProfile }));
+      setStyleMessage('销售风格档案已更新');
+    } catch (error) {
+      setStyleMessage(error instanceof Error ? error.message : '学习失败');
+    } finally {
+      setStyleDistilling(false);
+    }
   };
 
   const handleSave = async () => {
@@ -777,6 +1039,105 @@ export default function EnterprisePage() {
       <p className="mt-3 rounded-lg bg-sky-50 px-3 py-2 text-[11px] font-semibold leading-relaxed text-sky-800">
         报价、折扣、付款条款、交期承诺等高风险动作仍需人工确认；报价规则未完善时，草稿不会包含具体价格。
       </p>
+      <div className="mt-4 rounded-lg border border-emerald-100 bg-emerald-50/70 p-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-sm font-black text-emerald-950">让 AI 替你上夜班</p>
+            <p className="mt-1 text-[11px] font-semibold leading-5 text-emerald-800">
+              非工作时间，AI 自动回复已审批的常见问题；报价等大事积累到次日晨报等你处理；客户要求通话仍会立即提醒你。
+            </p>
+            <p className="mt-2 text-[11px] text-emerald-700">
+              当前工作时间：{profile.notifications?.workHours.start ?? '09:00'} - {profile.notifications?.workHours.end ?? '22:00'}，夜间自动范围固定为“已审批 FAQ + L3 低风险动作”。
+            </p>
+          </div>
+          <label className="inline-flex cursor-pointer items-center gap-2 rounded-full bg-white px-2.5 py-1.5 text-xs font-black text-emerald-900 shadow-sm">
+            <input
+              type="checkbox"
+              className="h-4 w-4 accent-emerald-600"
+              checked={Boolean(profile.notifications?.nightMode?.enabled)}
+              onChange={event => setNightModeEnabled(event.target.checked)}
+            />
+            {profile.notifications?.nightMode?.enabled ? '已开启' : '未开启'}
+          </label>
+        </div>
+      </div>
+      <div className="mt-4 rounded-lg border border-amber-100 bg-amber-50/70 p-4">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <p className="text-sm font-black text-amber-950">转人工规则</p>
+            <p className="mt-1 text-[11px] font-semibold leading-5 text-amber-800">
+              这些规则长在 L1-L4 放权体系上：触发后只改变接待方式，不扩大 AI 自动发送范围。
+            </p>
+          </div>
+          <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-black text-red-700 shadow-sm">L4 永不自动</span>
+        </div>
+
+        <div className="mt-4 space-y-4">
+          <div>
+            <p className="mb-2 text-xs font-black text-amber-950">触发人工的关键词</p>
+            <div className="flex flex-wrap gap-2">
+              {(profile.handoffRules?.keywords ?? DEFAULT.handoffRules!.keywords).map(keyword => (
+                <button
+                  key={keyword}
+                  type="button"
+                  onClick={() => removeHandoffKeyword(keyword)}
+                  className="rounded-full border border-amber-200 bg-white px-2.5 py-1 text-[11px] font-bold text-amber-900 hover:bg-amber-100"
+                  title="点击删除"
+                >
+                  {keyword} ×
+                </button>
+              ))}
+            </div>
+            <div className="mt-2 flex gap-2">
+              <input
+                className="min-w-0 flex-1 rounded-lg border border-amber-200 bg-white px-3 py-2 text-xs outline-none focus:border-amber-400"
+                value={handoffKeywordInput}
+                onChange={event => setHandoffKeywordInput(event.target.value)}
+                onKeyDown={event => {
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    addHandoffKeyword();
+                  }
+                }}
+                placeholder="输入关键词，如 refund / 老板"
+              />
+              <button type="button" onClick={addHandoffKeyword} className="rounded-lg bg-amber-600 px-3 py-2 text-xs font-black text-white hover:bg-amber-700">
+                添加
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <label className="rounded-lg border border-amber-100 bg-white p-3">
+              <span className="text-xs font-black text-amber-950">连续未命中阈值</span>
+              <select
+                className="mt-2 w-full rounded-lg border border-border bg-white px-2 py-2 text-xs font-bold text-text-primary"
+                value={profile.handoffRules?.missStreakToDraft ?? 2}
+                onChange={event => setMissStreakToDraft(Number(event.target.value) as 1 | 2 | 3)}
+              >
+                <option value={1}>1 条就转草稿</option>
+                <option value={2}>2 条连续未命中</option>
+                <option value={3}>3 条连续未命中</option>
+              </select>
+            </label>
+            <label className="flex items-center justify-between gap-3 rounded-lg border border-amber-100 bg-white p-3">
+              <span>
+                <span className="block text-xs font-black text-amber-950">负面情绪转人工</span>
+                <span className="mt-1 block text-[11px] text-amber-700">投诉、退款、愤怒语气会提醒你亲自处理</span>
+              </span>
+              <input
+                type="checkbox"
+                className="h-4 w-4 accent-amber-600"
+                checked={profile.handoffRules?.negativeSentiment !== false}
+                onChange={event => setNegativeSentiment(event.target.checked)}
+              />
+            </label>
+          </div>
+          <p className="rounded-lg bg-red-50 px-3 py-2 text-[11px] font-semibold leading-5 text-red-700">
+            红线声明：报价、折扣、付款条款、交期承诺、合同条款、赔付等 L4 动作永不自动发送，不可配置放开。
+          </p>
+        </div>
+      </div>
     </section>
   );
 
@@ -1091,7 +1452,72 @@ export default function EnterprisePage() {
             </div>
           </KnowledgeCard>
 
+          <div data-enterprise-faq>
           <KnowledgeCard icon={BookOpen} title="常见问答" purpose="客户问到这些，AI 直接用你的标准答案回复" completed={completions.faq} stat={`${profile.faq?.length ?? 0} 条 · ${approvedFaqCount} 条已审批`}>
+            {faqPacks.length > 0 && (
+              <div className="mb-4 rounded-xl border border-border bg-surface-2/40 p-3">
+                <div className="mb-3 flex items-center justify-between gap-3">
+                  <div>
+                    <p className="text-xs font-black text-text-primary">场景知识包</p>
+                    <p className="mt-1 text-[11px] text-text-muted">按行业和场景导入标准问答，导入后仍需老板逐条审批才能自动回复。</p>
+                  </div>
+                  <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-bold text-text-secondary">默认：{faqPacks.find(pack => pack.industry === recommendedPackIndustry)?.industryLabel || '通用'}</span>
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  {[...faqPacks].sort((a, b) => Number(b.industry === recommendedPackIndustry) - Number(a.industry === recommendedPackIndustry)).map(pack => {
+                    const open = openPackId === pack.id;
+                    const selected = selectedQuestionsForPack(pack);
+                    const readyCount = pack.items.filter(item => item.ready && !item.exists).length;
+                    return (
+                      <div key={pack.id} className={`rounded-xl border bg-white p-3 ${open ? 'border-sky-200 ring-2 ring-sky-50' : 'border-border'}`}>
+                        <button type="button" onClick={() => setOpenPackId(open ? '' : pack.id)} className="flex w-full items-start justify-between gap-3 text-left">
+                          <div>
+                            <p className="text-xs font-black text-text-primary">{pack.industryLabel} · {pack.scenarioLabel}</p>
+                            <p className="mt-1 text-[11px] text-text-muted">{pack.count} 条 · 可导入 {readyCount} 条</p>
+                          </div>
+                          <span className="rounded-full bg-surface-2 px-2 py-1 text-[10px] font-bold text-text-secondary">{open ? '收起' : '预览'}</span>
+                        </button>
+                        {!open && (
+                          <div className="mt-3 space-y-1.5">
+                            {pack.preview.map(item => <p key={item.q} className="truncate text-[11px] text-text-secondary">Q：{item.q}</p>)}
+                            <button type="button" onClick={() => setOpenPackId(pack.id)} className="mt-2 rounded-lg border border-border bg-white px-3 py-1.5 text-[11px] font-bold text-text-secondary hover:bg-surface-2">一键添加</button>
+                          </div>
+                        )}
+                        {open && (
+                          <div className="mt-3 border-t border-border pt-3">
+                            <div className="max-h-72 space-y-2 overflow-y-auto pr-1">
+                              {pack.items.map(item => {
+                                const disabled = !item.ready || item.exists;
+                                const checked = selected.includes(item.q) && !disabled;
+                                return (
+                                  <label key={item.q} className={`block rounded-lg border p-2 ${!item.ready ? 'border-amber-200 bg-amber-50' : item.exists ? 'border-slate-200 bg-slate-50 opacity-70' : 'border-border bg-white'}`}>
+                                    <div className="flex items-start gap-2">
+                                      <input type="checkbox" checked={checked} disabled={disabled} onChange={() => togglePackQuestion(pack, item.q)} className="mt-0.5" />
+                                      <div className="min-w-0 flex-1">
+                                        <p className="text-[11px] font-black text-text-primary">Q：{item.q}</p>
+                                        <p className="mt-1 text-[11px] leading-5 text-text-secondary">A：{item.a}</p>
+                                        {!item.ready && <p className="mt-1 text-[11px] font-bold text-amber-700">先完善报价规则板块：{item.missingVars.join('、')}</p>}
+                                        {item.exists && <p className="mt-1 text-[11px] font-bold text-slate-500">已存在，重复导入会跳过</p>}
+                                      </div>
+                                    </div>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                            <div className="mt-3 flex items-center justify-between gap-2">
+                              <p className="text-[11px] text-text-muted">已选 {selected.filter(q => pack.items.some(item => item.q === q && item.ready && !item.exists)).length} 条</p>
+                              <button type="button" onClick={() => importFaqPack(pack)} disabled={packImporting === pack.id || selected.length === 0} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-950 px-3 py-2 text-xs font-bold text-white disabled:opacity-60">
+                                {packImporting === pack.id ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />}确认导入
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
             {profile.customers?.commonQuestions?.trim() && !(profile.faq ?? []).length && (
               <div className="mb-4 rounded-lg border border-sky-200 bg-sky-50 p-3">
                 <p className="text-xs font-bold text-sky-900">检测到旧版问答内容，让 AI 帮你整理成问答条目？</p>
@@ -1122,6 +1548,9 @@ export default function EnterprisePage() {
                   <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
                     <input className={`${inputCls} flex-1`} value={item.question} onChange={e => updateFaq(item.id, { question: e.target.value })} placeholder="客户会怎么问？" />
                     <div className="flex items-center gap-2">
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${item.source === 'pack' ? 'bg-sky-50 text-sky-700' : item.source === 'learned' ? 'bg-emerald-50 text-emerald-700' : 'bg-white text-text-muted'}`}>
+                        {item.source === 'pack' ? '知识包' : item.source === 'learned' ? '学习' : '手动'}
+                      </span>
                       <span className="text-[11px] text-text-muted">允许 AI 自动回复</span>
                       <Toggle checked={item.approvedForAuto} onChange={checked => updateFaq(item.id, { approvedForAuto: checked })} />
                       <button type="button" onClick={(event) => { event.preventDefault(); removeFaq(item.id); }} className="rounded-md p-1 text-text-muted hover:text-red"><X size={13} /></button>
@@ -1133,6 +1562,81 @@ export default function EnterprisePage() {
               {!(profile.faq ?? []).length && <p className="rounded-lg bg-surface-2 px-3 py-3 text-xs text-text-muted">还没有问答，先添加 5 条常见问题。</p>}
             </div>
           </KnowledgeCard>
+          </div>
+
+          <section className="rounded-lg border border-border bg-white p-5 shadow-sm">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-black text-text-primary">你的销售风格</p>
+                <p className="mt-1 text-[11px] leading-relaxed text-text-muted">
+                  AI 从你 {profile.salesStyleProfile?.learnedFromCount ?? 0} 次真实回复中学到的风格，持续更新，生成回复时会参考。
+                </p>
+                {styleMessage && <p className="mt-2 text-[11px] font-bold text-primary">{styleMessage}</p>}
+              </div>
+              <div className="flex items-center gap-2">
+                {profile.salesStyleProfile?.lastDistilledAt && (
+                  <span className="rounded-full bg-surface-2 px-2.5 py-1 text-[11px] font-bold text-text-muted">
+                    {new Date(profile.salesStyleProfile.lastDistilledAt).toLocaleDateString('zh-CN')} 更新
+                  </span>
+                )}
+                <button type="button" onClick={distillSalesStyle} disabled={styleDistilling} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-white px-3 py-2 text-xs font-bold text-text-secondary hover:bg-surface-2 disabled:opacity-60">
+                  {styleDistilling ? <Loader2 size={12} className="animate-spin" /> : <RotateCcw size={12} />}重新学习
+                </button>
+              </div>
+            </div>
+            <div className="mt-4 grid grid-cols-3 gap-3">
+              {([
+                ['greeting_style', '开场称呼'],
+                ['quoting_stance', '报价姿态'],
+                ['followup_rhythm', '跟进节奏'],
+              ] as const).map(([key, label]) => {
+                const item = profile.salesStyleProfile?.[key];
+                return (
+                  <div key={key} className="rounded-lg border border-border bg-surface-2/50 p-3">
+                    <div className="mb-2 flex items-center justify-between gap-2">
+                      <p className="text-xs font-black text-text-primary">{label}</p>
+                      <button type="button" onClick={() => deleteSalesStyleField(key)} className="text-[11px] font-bold text-text-muted hover:text-red">删除</button>
+                    </div>
+                    <textarea
+                      className={textareaCls}
+                      rows={3}
+                      value={item?.value ?? ''}
+                      onChange={event => updateSalesStyleField(key, event.target.value)}
+                      placeholder="暂未学习到，或手动补充"
+                    />
+                    <p className="mt-2 line-clamp-2 text-[11px] leading-5 text-text-muted">佐证：{item?.evidence || '暂无'}</p>
+                    {item?.manual && <span className="mt-2 inline-flex rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700">人工锁定</span>}
+                  </div>
+                );
+              })}
+            </div>
+            <div className="mt-3 rounded-lg border border-border bg-surface-2/50 p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <p className="text-xs font-black text-text-primary">禁用表达</p>
+                <button type="button" onClick={deleteTabooPhrases} className="text-[11px] font-bold text-text-muted hover:text-red">删除</button>
+              </div>
+              <input
+                className={inputCls}
+                value={(profile.salesStyleProfile?.taboo_phrases?.value ?? []).join('，')}
+                onChange={event => updateTabooPhrases(event.target.value)}
+                placeholder="用逗号分隔，例如：最低价，马上下单"
+              />
+              <p className="mt-2 text-[11px] text-text-muted">佐证：{profile.salesStyleProfile?.taboo_phrases?.evidence || '暂无'}</p>
+            </div>
+            {(profile.salesStyleProfile?.sample_pairs ?? []).length > 0 && (
+              <div className="mt-3 rounded-lg border border-border bg-surface-2/50 p-3">
+                <p className="text-xs font-black text-text-primary">代表样本</p>
+                <div className="mt-2 grid grid-cols-2 gap-2">
+                  {(profile.salesStyleProfile?.sample_pairs ?? []).slice(0, 4).map((pair, index) => (
+                    <div key={`${pair.trigger}-${index}`} className="rounded-lg bg-white p-2 text-[11px] leading-5 text-text-secondary">
+                      <p className="font-bold text-text-primary">买家：{pair.trigger}</p>
+                      <p className="mt-1">定稿：{pair.final}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
 
           <section className="rounded-lg border border-border bg-white shadow-sm">
             <button type="button" onClick={() => setAdvancedOpen(open => !open)} className="flex w-full items-center justify-between px-5 py-4 text-left">

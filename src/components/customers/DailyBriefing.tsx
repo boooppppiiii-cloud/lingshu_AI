@@ -1,4 +1,5 @@
-import { X } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { BookOpen, X } from 'lucide-react';
 import type { CustomerProfile } from '../../types/customer';
 import { buildPrioritySuggestion, completedTodoCustomers, pendingCustomers } from '../../lib/customerPriority';
 import { SourceIcon } from './SourceIcon';
@@ -7,6 +8,22 @@ interface Props {
   customers: CustomerProfile[];
   onSelectCustomer: (id: string) => void;
   onClose: () => void;
+}
+
+interface KnowledgeMissCluster {
+  topic: string;
+  count: number;
+  examples: string[];
+}
+
+interface NightModeBriefing {
+  customers: number;
+  autoReplies: number;
+  drafts: number;
+  calls: number;
+  autoCustomerIds: string[];
+  draftCustomerIds: string[];
+  callCustomerIds: string[];
 }
 
 function greeting() {
@@ -31,6 +48,8 @@ function priorityDot(customer: CustomerProfile) {
 }
 
 export function DailyBriefing({ customers, onSelectCustomer, onClose }: Props) {
+  const [missClusters, setMissClusters] = useState<KnowledgeMissCluster[]>([]);
+  const [nightBriefing, setNightBriefing] = useState<NightModeBriefing | null>(null);
   const pending = pendingCustomers(customers);
   const completed = completedTodoCustomers(customers);
   const grouped = [
@@ -41,6 +60,27 @@ export function DailyBriefing({ customers, onSelectCustomer, onClose }: Props) {
 
   const select = (id: string) => {
     onSelectCustomer(id);
+    onClose();
+  };
+
+  useEffect(() => {
+    fetch('/api/overseas/customers/knowledge-misses/briefing')
+      .then(resp => resp.ok ? resp.json() : null)
+      .then(data => setMissClusters(Array.isArray(data?.items) ? data.items : []))
+      .catch(() => setMissClusters([]));
+    fetch('/api/overseas/customers/night-mode/briefing')
+      .then(resp => resp.ok ? resp.json() : null)
+      .then(data => setNightBriefing(data?.item ?? null))
+      .catch(() => setNightBriefing(null));
+  }, []);
+
+  const addKnowledge = (cluster: KnowledgeMissCluster) => {
+    localStorage.setItem('lingshu:enterprise:prefill-faq', JSON.stringify({
+      question: cluster.topic,
+      answer: '',
+      source: 'learned',
+    }));
+    window.dispatchEvent(new CustomEvent('lingshu:navigate', { detail: { page: 'enterprise' } }));
     onClose();
   };
 
@@ -61,6 +101,48 @@ export function DailyBriefing({ customers, onSelectCustomer, onClose }: Props) {
 
         <div className="max-h-[52vh] overflow-y-auto px-5 py-4">
           <div className="space-y-4">
+            {nightBriefing && (
+              <section className="rounded-xl border border-emerald-100 bg-emerald-50/80 p-3">
+                <p className="text-xs font-black text-emerald-950">
+                  昨夜 AI 接待了 {nightBriefing.customers} 位客户，自动回复 {nightBriefing.autoReplies} 条 ✓
+                </p>
+                <p className="mt-1 text-[11px] font-semibold text-emerald-800">
+                  等你确认 {nightBriefing.drafts} 条 | {nightBriefing.calls} 位客户想通话
+                </p>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <button type="button" onClick={() => nightBriefing.autoCustomerIds[0] && select(nightBriefing.autoCustomerIds[0])} className="rounded-full bg-white px-2.5 py-1 text-[11px] font-black text-emerald-800 shadow-sm">
+                    看自动接待
+                  </button>
+                  <button type="button" onClick={() => nightBriefing.draftCustomerIds[0] && select(nightBriefing.draftCustomerIds[0])} className="rounded-full bg-white px-2.5 py-1 text-[11px] font-black text-amber-700 shadow-sm">
+                    看待确认
+                  </button>
+                  <button type="button" onClick={() => nightBriefing.callCustomerIds[0] && select(nightBriefing.callCustomerIds[0])} className="rounded-full bg-white px-2.5 py-1 text-[11px] font-black text-red-700 shadow-sm">
+                    看通话客户
+                  </button>
+                </div>
+              </section>
+            )}
+            {missClusters.length > 0 && (
+              <section>
+                <p className="mb-2 text-[11px] font-black text-text-muted">知识库缺口</p>
+                <div className="space-y-2">
+                  {missClusters.map(cluster => (
+                    <button
+                      key={cluster.topic}
+                      type="button"
+                      onClick={() => addKnowledge(cluster)}
+                      className="flex w-full items-start gap-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-left transition-colors hover:border-amber-300 hover:bg-amber-100"
+                    >
+                      <BookOpen size={15} className="mt-0.5 text-amber-700" />
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-black text-amber-900">本周 {cluster.count} 位客户问到「{cluster.topic}」，知识库还没有这条 → 补充</p>
+                        <p className="mt-1 line-clamp-2 text-[11px] leading-5 text-amber-800">{cluster.examples.slice(0, 2).join(' / ')}</p>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </section>
+            )}
             {grouped.map(group => (
               <section key={group.mode}>
                 <p className="mb-2 text-[11px] font-black text-text-muted">{groupLabel(group.mode)}</p>

@@ -1,6 +1,9 @@
 import { Router } from 'express';
 import { callLLM } from '../agents/llm.js';
-import { buildBizRulesInstruction, readEnterpriseProfile, shouldSuppressPrice } from './enterprise.js';
+import { retrieveContext, type RetrievedContext } from '../knowledge/retrieve.js';
+import { buildKnowledgePromptBlock } from '../knowledge/promptBlocks.js';
+import { buildStyleMemoryPromptBlock, retrieveStyleMemories } from '../knowledge/styleMemory.js';
+import { readEnterpriseProfile, type BizRules, type SalesStyleProfile } from './enterprise.js';
 
 export const draftReplyRouter = Router();
 
@@ -31,10 +34,20 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
   const body = req.body ?? {};
   const timeline = Array.isArray(body.timeline) ? body.timeline.slice(-8) : [];
   const intent = normalizeIntent(body.intent || body.mode);
+  const tenantId = String(body.tenantId || 'local_tenant_default');
   const language = String(body.language ?? '').trim() || 'English';
-  const enterpriseProfile = readEnterpriseProfile();
-  const suppressPrice = shouldSuppressPrice(enterpriseProfile);
-  const hardNoPriceDigits = enterpriseProfile.bizRules?.quoteMode === 'human_only';
+  const latestMessage = latestBuyerMessage(timeline) || String(body.message || body.instruction || body.product || '');
+  const context = await retrieveContext(tenantId, {
+    id: String(body.customerId ?? ''),
+    name: String(body.customerName ?? ''),
+    language,
+    stage: String(body.stage ?? ''),
+    product: String(body.product ?? ''),
+  }, latestMessage);
+  const styleMemories = await retrieveStyleMemories(tenantId, categoryForIntent(intent), latestMessage);
+  const salesStyleProfile = readEnterpriseProfile().salesStyleProfile;
+  const suppressPrice = shouldSuppressPriceFromRules(context.bizRules);
+  const hardNoPriceDigits = context.bizRules?.quoteMode === 'human_only';
   const prompt = [
     `Customer ID: ${String(body.customerId ?? '')}`,
     `Product: ${String(body.product ?? '')}`,
@@ -45,7 +58,9 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
     `Intent: ${intent}`,
     body.mode ? `Mode: ${String(body.mode)}` : '',
     intentInstruction(intent),
-    buildBizRulesInstruction(enterpriseProfile),
+    buildKnowledgePromptBlock(context),
+    buildSalesStyleProfilePromptBlock(salesStyleProfile),
+    buildStyleMemoryPromptBlock(styleMemories),
     suppressPrice ? 'Price guard: do not include concrete prices. If the buyer asks how much, say the seller will confirm after checking quantity, specs, and packaging.' : '',
     hardNoPriceDigits ? 'Extra hard rule: the reply must not contain any Arabic numerals, currency symbols, unit prices, discount numbers, or exact amounts.' : '',
     body.instruction ? `Specific instruction: ${String(body.instruction)}` : '',
@@ -67,16 +82,67 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
   try {
     const raw = await callLLM(prompt, { systemPrompt: intent === 'handoff_summary' ? HANDOFF_SYSTEM_PROMPT : SYSTEM_PROMPT });
     const draft = cleanDraft(raw);
-    res.json({ draft: sanitizeDraft(draft || fallbackDraft(body, intent, suppressPrice), body, intent, suppressPrice, hardNoPriceDigits) });
+    res.json({
+      draft: sanitizeDraft(draft || fallbackDraft(body, intent, suppressPrice), body, intent, suppressPrice, hardNoPriceDigits),
+      evidence: context.evidence,
+      products: context.products,
+      knowledgeMiss: context.knowledgeMiss,
+      missReason: context.missReason,
+      sentiment: context.sentiment,
+      category: categoryForIntent(intent),
+      styleMemoryUsed: styleMemories.length,
+    });
   } catch (error) {
-    res.json({ draft: sanitizeDraft(fallbackDraft(body, intent, suppressPrice), body, intent, suppressPrice, hardNoPriceDigits) });
+    res.json({
+      draft: sanitizeDraft(fallbackDraft(body, intent, suppressPrice), body, intent, suppressPrice, hardNoPriceDigits),
+      evidence: context.evidence,
+      products: context.products,
+      knowledgeMiss: context.knowledgeMiss,
+      missReason: context.missReason,
+      sentiment: context.sentiment,
+      category: categoryForIntent(intent),
+      styleMemoryUsed: styleMemories.length,
+    });
   }
 });
+
+function latestBuyerMessage(timeline: any[]): string {
+  const latest = [...timeline].reverse().find(event => String(event?.actor || '').toLowerCase() === 'buyer' || String(event?.type || '').includes('msg_in'));
+  return String(latest?.body || '');
+}
+
+function buildSalesStyleProfilePromptBlock(profile?: SalesStyleProfile): string {
+  if (!profile || profile.learnedFromCount < 20) return '';
+  const lines = [
+    `Sales style profile learned from ${profile.learnedFromCount} real seller replies:`,
+    profile.greeting_style?.value ? `Greeting style: ${profile.greeting_style.value} (evidence: ${profile.greeting_style.evidence || 'n/a'})` : '',
+    profile.quoting_stance?.value ? `Quoting stance: ${profile.quoting_stance.value} (evidence: ${profile.quoting_stance.evidence || 'n/a'})` : '',
+    profile.followup_rhythm?.value ? `Follow-up rhythm: ${profile.followup_rhythm.value} (evidence: ${profile.followup_rhythm.evidence || 'n/a'})` : '',
+    profile.taboo_phrases?.value?.length ? `Taboo phrases: never use these phrases unless the seller explicitly types them: ${profile.taboo_phrases.value.join(' / ')}. Evidence: ${profile.taboo_phrases.evidence || 'n/a'}` : '',
+    'Use this profile for wording style only. Current retrieveContext knowledge always overrides old facts, prices, MOQ, lead time, and inventory.',
+  ].filter(Boolean);
+  return lines.length > 2 ? lines.join('\n') : '';
+}
+
+function shouldSuppressPriceFromRules(rules: BizRules): boolean {
+  const ready = Boolean(rules?.quoteMode && rules.samplePolicy && rules.paymentTerms);
+  return !ready || rules.quoteMode === 'human_only';
+}
 
 function normalizeIntent(value: unknown): 'reply'|'opener'|'followup'|'reactivate'|'post_call'|'polish'|'handoff_summary' {
   const v = String(value || '').trim();
   if (['opener', 'followup', 'reactivate', 'post_call', 'polish', 'handoff_summary'].includes(v)) return v as any;
   return 'reply';
+}
+
+function categoryForIntent(intent: ReturnType<typeof normalizeIntent>): string {
+  if (intent === 'opener') return '寒暄';
+  if (intent === 'followup') return '跟进';
+  if (intent === 'reactivate') return '唤醒';
+  if (intent === 'post_call') return '通话跟进';
+  if (intent === 'polish') return '润色';
+  if (intent === 'handoff_summary') return '转人工';
+  return '报价';
 }
 
 function intentInstruction(intent: ReturnType<typeof normalizeIntent>): string {

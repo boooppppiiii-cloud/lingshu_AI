@@ -42,6 +42,25 @@ const TENANT_PLATFORM_APP_FIELDS: FieldDef[] = [
   { name: 'notes', type: 'text' },
 ];
 
+const STYLE_MEMORY_FIELDS: FieldDef[] = [
+  { name: 'tenant_id', type: 'text', required: true },
+  { name: 'customer_id', type: 'text' },
+  { name: 'trigger_message', type: 'text' },
+  { name: 'draft_original', type: 'text' },
+  { name: 'final_sent', type: 'text' },
+  { name: 'edited', type: 'bool' },
+  { name: 'category', type: 'text' },
+  { name: 'outcome', type: 'text' },
+];
+
+const STYLE_ADOPTION_STATS_FIELDS: FieldDef[] = [
+  { name: 'tenant_id', type: 'text', required: true },
+  { name: 'week', type: 'text', required: true },
+  { name: 'total', type: 'text' },
+  { name: 'direct_sent', type: 'text' },
+  { name: 'rate', type: 'text' },
+];
+
 function oldSchemaField(field: FieldDef) {
   return {
     name: field.name,
@@ -105,4 +124,6 @@ async function ensureCollection(name: string, fields: FieldDef[]): Promise<void>
 export async function ensureDeliveryCollections(): Promise<void> {
   await ensureCollection('tenants', TENANTS_FIELDS);
   await ensureCollection('tenant_platform_apps', TENANT_PLATFORM_APP_FIELDS);
+  await ensureCollection('style_memory', STYLE_MEMORY_FIELDS);
+  await ensureCollection('style_adoption_stats', STYLE_ADOPTION_STATS_FIELDS);
 }

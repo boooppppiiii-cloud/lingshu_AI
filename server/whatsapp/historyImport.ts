@@ -1,10 +1,12 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { decideAction, type AutonomyLevel } from '../autonomy/actionRules.js';
+import { decideAction, findActionRule, type AutonomyLevel } from '../autonomy/actionRules.js';
 import { guardOutbound } from '../autonomy/outboundGuard.js';
 import { prioritizeCustomer } from '../autonomy/prioritize.js';
-import { autoFaqReady, findApprovedFaqAnswer, readEnterpriseProfile } from '../routes/enterprise.js';
+import { retrieveContext, type RetrievedContext } from '../knowledge/retrieve.js';
+import { notifyDeliveryTeam } from '../lib/tenantPlatformApps.js';
+import { distillSalesStyleProfile, markStyleMemoryWonForCustomer } from '../knowledge/styleMemory.js';
 import { r2Upload } from '../storage/r2.js';
 import { store } from '../storage/index.js';
 import { sendTenantWhatsAppText } from './send.js';
@@ -14,6 +16,7 @@ const DATA_DIR = path.join(__dirname, '../../data');
 const CUSTOMERS_FILE = path.join(DATA_DIR, 'whatsapp-customers.json');
 const INTERACTIONS_FILE = path.join(DATA_DIR, 'whatsapp-interactions.json');
 const IMPORT_STATUS_FILE = path.join(DATA_DIR, 'whatsapp-import-status.json');
+const NIGHT_MODE_EVENTS_FILE = path.join(DATA_DIR, 'night-mode-events.json');
 const ENTERPRISE_FILE = path.join(DATA_DIR, 'enterprise.json');
 const BACKUP_ROOT = path.join(DATA_DIR, 'backups');
 
@@ -31,6 +34,7 @@ interface StoredInteraction {
   timestamp: number;
   autoSent?: boolean;
   audit?: Record<string, unknown>;
+  meta?: Record<string, unknown>;
 }
 
 interface StoredCustomer {
@@ -49,6 +53,16 @@ interface StoredCustomer {
   aiAutoCount?: number;
   blockedAutoReplyReason?: string;
   pendingDraft?: string;
+  needCall?: boolean;
+  knowledgeMissStreak?: number;
+}
+
+interface NightModeEvent {
+  id: string;
+  tenantId: string;
+  customerId: string;
+  kind: 'auto' | 'draft' | 'call';
+  createdAt: string;
 }
 
 interface ImportStatus {
@@ -248,6 +262,104 @@ function autonomyLevel(): AutonomyLevel {
   return value === 'remind' || value === 'draft' || value === 'auto' ? value : 'draft';
 }
 
+function enterpriseProfile(): any {
+  return readJson<any>(ENTERPRISE_FILE, {});
+}
+
+function handoffRules(): { keywords: string[]; missStreakToDraft: number; negativeSentiment: boolean } {
+  const rules = enterpriseProfile()?.handoffRules ?? {};
+  const keywords = Array.isArray(rules.keywords)
+    ? rules.keywords.map((item: unknown) => text(item)).filter(Boolean)
+    : [];
+  const missStreakToDraft = [1, 2, 3].includes(Number(rules.missStreakToDraft)) ? Number(rules.missStreakToDraft) : 2;
+  return {
+    keywords: keywords.length ? keywords : ['人工', '老板', 'manager', 'complaint', 'refund'],
+    missStreakToDraft,
+    negativeSentiment: rules.negativeSentiment !== false,
+  };
+}
+
+function normalizeForMatch(value: string): string {
+  return text(value).normalize('NFKC').toLowerCase();
+}
+
+function matchedHandoffKeyword(body: string, keywords: string[]): string {
+  const normalized = normalizeForMatch(body);
+  return keywords.find(keyword => normalized.includes(normalizeForMatch(keyword))) || '';
+}
+
+function minutesOfDay(value: string): number {
+  const [hour, minute] = String(value || '').split(':').map(Number);
+  if (!Number.isFinite(hour) || !Number.isFinite(minute)) return 0;
+  return hour * 60 + minute;
+}
+
+function currentDate(): Date {
+  const raw = process.env.LINGSHU_MOCK_NOW || process.env.NIGHT_MODE_MOCK_NOW || '';
+  const parsed = raw ? new Date(raw) : null;
+  return parsed && !Number.isNaN(parsed.getTime()) ? parsed : new Date();
+}
+
+function isWithinWorkHours(workHours: { start: string; end: string }, now = new Date()): boolean {
+  const current = now.getHours() * 60 + now.getMinutes();
+  const start = minutesOfDay(workHours.start || '09:00');
+  const end = minutesOfDay(workHours.end || '22:00');
+  if (start === end) return true;
+  if (start < end) return current >= start && current <= end;
+  return current >= start || current <= end;
+}
+
+function nightModeState(now = currentDate()): { enabled: boolean; active: boolean; workHours: { start: string; end: string } } {
+  const profile = enterpriseProfile();
+  const workHours = {
+    start: /^\d{2}:\d{2}$/.test(String(profile?.notifications?.workHours?.start || '')) ? profile.notifications.workHours.start : '09:00',
+    end: /^\d{2}:\d{2}$/.test(String(profile?.notifications?.workHours?.end || '')) ? profile.notifications.workHours.end : '22:00',
+  };
+  const enabled = Boolean(profile?.notifications?.nightMode?.enabled);
+  return { enabled, active: enabled && !isWithinWorkHours(workHours, now), workHours };
+}
+
+function nightModeEvents(): NightModeEvent[] {
+  return readJson<NightModeEvent[]>(NIGHT_MODE_EVENTS_FILE, []);
+}
+
+function writeNightModeEvents(items: NightModeEvent[]): void {
+  writeJson(NIGHT_MODE_EVENTS_FILE, items);
+}
+
+function recordNightModeEvent(input: Omit<NightModeEvent, 'id' | 'createdAt'>): void {
+  const now = currentDate();
+  const recent = nightModeEvents().filter(item => now.getTime() - new Date(item.createdAt).getTime() < 7 * 86_400_000);
+  recent.push({ ...input, id: `${input.kind}-${input.customerId}-${now.getTime()}`, createdAt: now.toISOString() });
+  writeNightModeEvents(recent);
+}
+
+export function getNightModeMorningBriefing(tenantId = 'local'): null | {
+  customers: number;
+  autoReplies: number;
+  drafts: number;
+  calls: number;
+  autoCustomerIds: string[];
+  draftCustomerIds: string[];
+  callCustomerIds: string[];
+} {
+  const since = currentDate().getTime() - 24 * 60 * 60 * 1000;
+  const items = nightModeEvents().filter(item => item.tenantId === tenantId && new Date(item.createdAt).getTime() >= since);
+  if (!items.length) return null;
+  const autoCustomerIds = Array.from(new Set(items.filter(item => item.kind === 'auto').map(item => item.customerId)));
+  const draftCustomerIds = Array.from(new Set(items.filter(item => item.kind === 'draft').map(item => item.customerId)));
+  const callCustomerIds = Array.from(new Set(items.filter(item => item.kind === 'call').map(item => item.customerId)));
+  return {
+    customers: new Set(items.map(item => item.customerId)).size,
+    autoReplies: items.filter(item => item.kind === 'auto').length,
+    drafts: items.filter(item => item.kind === 'draft').length,
+    calls: callCustomerIds.length,
+    autoCustomerIds,
+    draftCustomerIds,
+    callCustomerIds,
+  };
+}
+
 function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -299,6 +411,7 @@ export function initWhatsAppCustomerMaintenance(): void {
     try {
       backupWhatsAppDataFiles();
       void syncBackupsToR2().catch(error => console.error('[whatsapp-backup-r2]', error));
+      void distillSalesStyleProfile('local_tenant_default').catch(error => console.error('[style-memory:distill]', error));
       const changed = recomputeWhatsAppCustomerStages();
       if (changed > 0) console.log(`[whatsapp-maintenance] recomputed ${changed} customer stages`);
     } catch (error) {
@@ -346,6 +459,9 @@ function upsertCustomer(input: { tenantId: string; waNumber: string; name?: stri
   if (index >= 0) list[index] = next;
   else list.push(next);
   writeCustomers(list);
+  if (next.stage === 'won' && base.stage !== 'won') {
+    void markStyleMemoryWonForCustomer(next.tenantId, next.id).catch(error => console.error('[style-memory:won]', error));
+  }
   void mirrorCustomerToPocketBase(next).catch(error => console.error('[whatsapp-pb-customer]', error));
   return next;
 }
@@ -425,6 +541,7 @@ function contactsFromValue(value: any): IncomingContact[] {
 }
 
 function inferActionFromText(body: string): string {
+  if (/\b(can we (talk|call)|call me|phone call|voice call|speak to|talk with|talk to manager)\b|电话|通话|语音|加个微信聊|找经理聊/i.test(body)) return 'call_request';
   if (/\b(price|quote|quotation|discount|payment|deposit|delivery time|lead time)\b|报价|价格|付款|定金|交期|折扣/i.test(body)) return 'formal_quote';
   if (/\b(catalog|catalogue|brochure|collections?)\b|目录|产品册/i.test(body)) return 'auto_send_catalog';
   if (/\b(track|tracking|ship|shipping|logistics)\b|物流|运单|发货/i.test(body)) return 'auto_logistics_update';
@@ -432,7 +549,29 @@ function inferActionFromText(body: string): string {
   return 'auto_faq_reply';
 }
 
-function draftForMessage(message: IncomingMessage): string {
+function approvedFaqAnswer(context: RetrievedContext, message: string): string {
+  const normalizedMessage = text(message).toLowerCase();
+  const item = context.faqs.find(faq => faq.approvedForAuto && faq.q && faq.a && (
+    normalizedMessage.includes(faq.q.toLowerCase()) || faq.q.toLowerCase().includes(normalizedMessage)
+  ));
+  return item?.a || '';
+}
+
+function autoFaqReadyFromContext(context: RetrievedContext): boolean {
+  return context.faqs.filter(item => item.approvedForAuto).length >= 5;
+}
+
+function draftForMessage(message: IncomingMessage, context?: RetrievedContext): string {
+  const product = context?.products?.[0];
+  if (product) {
+    const details = [
+      product.sku ? `SKU ${product.sku}` : product.name,
+      product.priceRange ? `price range ${product.priceRange}` : '',
+      product.moq ? `MOQ ${product.moq}` : '',
+      product.material ? `material ${product.material}` : '',
+    ].filter(Boolean).join(', ');
+    return `Thanks for your message. I found ${details}. Please confirm your target quantity and packaging requirements, then I can prepare the next quote details.`;
+  }
   if (/\b(catalog|catalogue|brochure|collections?)\b|目录|产品册/i.test(message.body)) {
     return 'Thanks for your message. I can send our approved catalog for your review. Which product line and quantity are you interested in?';
   }
@@ -459,26 +598,190 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
     type: message.fromBusiness ? 'msg_out_human' : 'msg_in',
     body: message.body,
     timestamp: message.timestamp,
+    audit: {},
   });
-  if (message.fromBusiness || options.skipAutonomy) return;
+  if (message.fromBusiness) {
+    upsertCustomer({ tenantId, waNumber: message.waNumber, patch: { knowledgeMissStreak: 0, blockedAutoReplyReason: undefined } });
+    return;
+  }
+  if (options.skipAutonomy) return;
 
-  const profile = readEnterpriseProfile();
+  const rules = handoffRules();
+  const handoffKeyword = matchedHandoffKeyword(message.body, rules.keywords);
+  if (handoffKeyword) {
+    const reason = `客户主动要求人工/触发关键词【${handoffKeyword}】`;
+    addInteraction({
+      id: `${customer.id}-handoff-keyword-${Date.now()}`,
+      tenantId,
+      customerId: customer.id,
+      waNumber: message.waNumber,
+      type: 'system',
+      body: reason,
+      timestamp: Date.now(),
+      audit: { handoff: true, reason, keyword: handoffKeyword },
+      meta: { handoff: true, reason, keyword: handoffKeyword },
+    });
+    upsertCustomer({
+      tenantId,
+      waNumber: message.waNumber,
+      patch: {
+        handlingMode: 'human_needed',
+        handlingReason: reason,
+        pendingDraft: undefined,
+        blockedAutoReplyReason: reason,
+      },
+    });
+    return;
+  }
+
+  const context = await retrieveContext(tenantId, {
+    id: customer.id,
+    name: customer.name,
+    language: customer.language,
+    stage: customer.stage,
+  }, message.body);
+  if (context.knowledgeMiss) {
+    addInteraction({
+      id: `${customer.id}-knowledge-miss-${Date.now()}`,
+      tenantId,
+      customerId: customer.id,
+      waNumber: message.waNumber,
+      type: 'system',
+      body: '知识库未覆盖：客户在问知识库没有的问题，已降级为待确认草稿。',
+      timestamp: Date.now(),
+      audit: { knowledgeMiss: true, buyerMessage: message.body, evidence: context.evidence },
+      meta: { knowledgeMiss: true, buyerMessage: message.body, evidence: context.evidence },
+    });
+  }
+  const nextMissStreak = context.knowledgeMiss ? (customer.knowledgeMissStreak ?? 0) + 1 : 0;
+  if (context.knowledgeMiss && nextMissStreak >= rules.missStreakToDraft) {
+    const reason = `连续 ${nextMissStreak} 条超出知识库范围`;
+    const draft = draftForMessage(message, context);
+    addInteraction({
+      id: `${customer.id}-handoff-miss-streak-${Date.now()}`,
+      tenantId,
+      customerId: customer.id,
+      waNumber: message.waNumber,
+      type: 'system',
+      body: reason,
+      timestamp: Date.now(),
+      audit: { knowledgeMiss: true, handoff: true, reason, missStreak: nextMissStreak, evidence: context.evidence },
+      meta: { knowledgeMiss: true, handoff: true, reason, missStreak: nextMissStreak, evidence: context.evidence },
+    });
+    upsertCustomer({
+      tenantId,
+      waNumber: message.waNumber,
+      patch: {
+        handlingMode: 'ai_draft',
+        handlingReason: reason,
+        pendingDraft: draft,
+        blockedAutoReplyReason: 'knowledge_miss_streak',
+        knowledgeMissStreak: nextMissStreak,
+      },
+    });
+    return;
+  }
+  if (!context.knowledgeMiss && (customer.knowledgeMissStreak ?? 0) > 0) {
+    upsertCustomer({ tenantId, waNumber: message.waNumber, patch: { knowledgeMissStreak: 0 } });
+  }
+  if (rules.negativeSentiment && context.sentiment === 'negative') {
+    const reason = '客户情绪负面，建议亲自处理';
+    addInteraction({
+      id: `${customer.id}-handoff-sentiment-${Date.now()}`,
+      tenantId,
+      customerId: customer.id,
+      waNumber: message.waNumber,
+      type: 'system',
+      body: reason,
+      timestamp: Date.now(),
+      audit: { handoff: true, reason, sentiment: context.sentiment, evidence: context.evidence },
+      meta: { handoff: true, reason, sentiment: context.sentiment, evidence: context.evidence },
+    });
+    upsertCustomer({
+      tenantId,
+      waNumber: message.waNumber,
+      patch: {
+        handlingMode: 'human_needed',
+        handlingReason: reason,
+        pendingDraft: undefined,
+        blockedAutoReplyReason: 'negative_sentiment',
+        knowledgeMissStreak: nextMissStreak,
+      },
+    });
+    return;
+  }
   let action = inferActionFromText(message.body);
   const autonomy = autonomyLevel();
-  let draft = draftForMessage(message);
+  const night = nightModeState();
+  let draft = draftForMessage(message, context);
   let blockedAutoReplyReason = '';
+  let approvedFaqHit = false;
+  if (action === 'call_request') {
+    const callDraft = 'Our manager will contact you shortly. What time works best for you?';
+    addInteraction({
+      id: `${customer.id}-call-request-${Date.now()}`,
+      tenantId,
+      customerId: customer.id,
+      waNumber: message.waNumber,
+      type: 'system',
+      body: '客户想通电话，已即时提醒负责人。',
+      timestamp: Date.now(),
+      audit: { action, risk: 'L4', nightMode: night.active },
+    });
+    if (night.active) recordNightModeEvent({ tenantId, customerId: customer.id, kind: 'call' });
+    await notifyDeliveryTeam([
+      '【灵枢通话提醒】客户想通电话',
+      `客户：${customer.name}`,
+      `WhatsApp：${message.waNumber}`,
+      `消息：${message.body}`,
+      '请尽快查看客户详情并安排通话。',
+    ].join('\n'), { immediate: true });
+    upsertCustomer({
+      tenantId,
+      waNumber: message.waNumber,
+      patch: {
+        handlingMode: 'human_needed',
+        handlingReason: '客户想通电话，已即时提醒负责人',
+        pendingDraft: callDraft,
+        needCall: true,
+      },
+    });
+    return;
+  }
   if (action === 'auto_faq_reply') {
-    const approvedFaq = findApprovedFaqAnswer(profile, message.body);
-    if (approvedFaq) {
-      draft = approvedFaq.answer;
+    const approvedAnswer = approvedFaqAnswer(context, message.body);
+    if (approvedAnswer) {
+      draft = approvedAnswer;
+      approvedFaqHit = true;
     } else {
       action = 'draft_greeting';
-      blockedAutoReplyReason = autoFaqReady(profile)
+      blockedAutoReplyReason = autoFaqReadyFromContext(context)
         ? '未命中已审批常见问答，已降级为草稿'
         : '需要先录入并审批至少 5 条常见问答';
     }
   }
-  const decision = decideAction(action, autonomy);
+  const nightAllowsAuto = night.active && ((action === 'auto_faq_reply' && approvedFaqHit) || findActionRule(action).risk === 'L3');
+  const effectiveAutonomy: AutonomyLevel = night.active ? (nightAllowsAuto ? 'auto' : 'draft') : autonomy;
+  const decision = decideAction(action, effectiveAutonomy);
+  if (night.active && decision.decision !== 'auto') {
+    blockedAutoReplyReason = blockedAutoReplyReason || '夜班模式：非工作时间仅自动回复已审批常见问题和低风险动作';
+  }
+
+  if (context.knowledgeMiss && decision.decision === 'auto') {
+    if (night.active) recordNightModeEvent({ tenantId, customerId: customer.id, kind: 'draft' });
+    upsertCustomer({
+      tenantId,
+      waNumber: message.waNumber,
+      patch: {
+        handlingMode: 'ai_draft',
+        handlingReason: '客户在问知识库没有的问题',
+        pendingDraft: draft,
+        blockedAutoReplyReason: 'knowledge_miss',
+        knowledgeMissStreak: nextMissStreak,
+      },
+    });
+    return;
+  }
 
   if (decision.decision === 'auto') {
     const guard = await guardOutbound(draft, { tenantId, customerId: customer.id, action });
@@ -494,7 +797,7 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
           type: 'system',
           body: `AI 自动回复发送失败，已降级为待确认草稿：${error instanceof Error ? error.message : 'WhatsApp send failed'}`,
           timestamp: Date.now(),
-          audit: { action, risk: decision.rule.risk, autonomy, sendError: error instanceof Error ? error.message : String(error) },
+          audit: { action, risk: decision.rule.risk, autonomy, evidence: context.evidence, sendError: error instanceof Error ? error.message : String(error) },
         });
         upsertCustomer({
           tenantId,
@@ -502,10 +805,11 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
           patch: {
             handlingMode: 'ai_draft',
             handlingReason: 'AI 自动回复未真正发出，需要你确认后重发',
-            pendingDraft: draft,
-            blockedAutoReplyReason: error instanceof Error ? error.message : 'WhatsApp send failed',
-          },
-        });
+          pendingDraft: draft,
+          blockedAutoReplyReason: error instanceof Error ? error.message : 'WhatsApp send failed',
+          knowledgeMissStreak: nextMissStreak,
+        },
+      });
         return;
       }
       addInteraction({
@@ -517,8 +821,9 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
         body: draft,
         timestamp: Date.now(),
         autoSent: true,
-        audit: { action, risk: decision.rule.risk, autonomy },
+        audit: { action, risk: decision.rule.risk, autonomy, evidence: context.evidence },
       });
+      if (night.active) recordNightModeEvent({ tenantId, customerId: customer.id, kind: 'auto' });
       upsertCustomer({
         tenantId,
         waNumber: message.waNumber,
@@ -528,6 +833,7 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
           aiAutoCount: (customer.aiAutoCount ?? 0) + 1,
           pendingDraft: undefined,
           blockedAutoReplyReason: undefined,
+          knowledgeMissStreak: 0,
         },
       });
       return;
@@ -540,7 +846,7 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
       type: 'system',
       body: `AI 想回复但涉及 ${guard.matchedRule || 'L4'}，已降级为待确认草稿。`,
       timestamp: Date.now(),
-      audit: { action, risk: decision.rule.risk, autonomy, guardRule: guard.matchedRule },
+      audit: { action, risk: decision.rule.risk, autonomy, evidence: context.evidence, guardRule: guard.matchedRule },
     });
     upsertCustomer({
       tenantId,
@@ -550,11 +856,14 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
         handlingReason: `AI 想回复但涉及${guard.matchedRule || '红线'}，需要你确认`,
         pendingDraft: draft,
         blockedAutoReplyReason: guard.matchedRule || '红线',
+        knowledgeMissStreak: nextMissStreak,
       },
     });
+    if (night.active) recordNightModeEvent({ tenantId, customerId: customer.id, kind: 'draft' });
     return;
   }
 
+  if (night.active) recordNightModeEvent({ tenantId, customerId: customer.id, kind: 'draft' });
   upsertCustomer({
     tenantId,
     waNumber: message.waNumber,
@@ -563,6 +872,7 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
       handlingReason: decision.decision === 'remind' ? 'AI 已提醒你处理该客户' : `${decision.rule.desc}，AI 已生成草稿等待确认`,
       pendingDraft: decision.decision === 'draft' ? draft : undefined,
       blockedAutoReplyReason: blockedAutoReplyReason || undefined,
+      knowledgeMissStreak: nextMissStreak,
     },
   });
 }
@@ -598,6 +908,33 @@ export async function handleMetaWebhook(tenantId: string, payload: any): Promise
 
 export function getWhatsAppImportStatus(): ImportStatus {
   return importStatus();
+}
+
+export function markWhatsAppHumanReply(input: { tenantId: string; customerId: string; body: string; waNumber?: string }): void {
+  const customer = customers().find(item => item.tenantId === input.tenantId && item.id === input.customerId);
+  const waNumber = input.waNumber || customer?.waNumber;
+  if (!customer || !waNumber) return;
+  addInteraction({
+    id: `${customer.id}-human-${Date.now()}`,
+    tenantId: input.tenantId,
+    customerId: customer.id,
+    waNumber,
+    type: 'msg_out_human',
+    body: input.body,
+    timestamp: Date.now(),
+    audit: { clearsKnowledgeMissStreak: true },
+  });
+  upsertCustomer({
+    tenantId: input.tenantId,
+    waNumber,
+    patch: {
+      handlingMode: 'ai_draft',
+      handlingReason: '人工已回复，AI 继续辅助跟进',
+      knowledgeMissStreak: 0,
+      blockedAutoReplyReason: undefined,
+      pendingDraft: undefined,
+    },
+  });
 }
 
 export function getWhatsAppCustomers(tenantId?: string): any[] {
@@ -640,7 +977,7 @@ export function getWhatsAppCustomers(tenantId?: string): any[] {
       handlingMode: customer.handlingMode,
       handlingReason: customer.handlingReason,
       aiAutoCount: customer.aiAutoCount,
-      needCall: false,
+      needCall: Boolean(customer.needCall),
       hasUnread: true,
       isReal: true,
       waNumber: customer.waNumber,
