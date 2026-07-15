@@ -5,6 +5,7 @@ import { decideAction, type AutonomyLevel } from '../autonomy/actionRules.js';
 import { guardOutbound } from '../autonomy/outboundGuard.js';
 import { prioritizeCustomer } from '../autonomy/prioritize.js';
 import { autoFaqReady, findApprovedFaqAnswer, readEnterpriseProfile } from '../routes/enterprise.js';
+import { r2Upload } from '../storage/r2.js';
 import { store } from '../storage/index.js';
 import { sendTenantWhatsAppText } from './send.js';
 
@@ -14,6 +15,7 @@ const CUSTOMERS_FILE = path.join(DATA_DIR, 'whatsapp-customers.json');
 const INTERACTIONS_FILE = path.join(DATA_DIR, 'whatsapp-interactions.json');
 const IMPORT_STATUS_FILE = path.join(DATA_DIR, 'whatsapp-import-status.json');
 const ENTERPRISE_FILE = path.join(DATA_DIR, 'enterprise.json');
+const BACKUP_ROOT = path.join(DATA_DIR, 'backups');
 
 type HandlingMode = 'ai_auto' | 'ai_draft' | 'human_needed';
 type CustomerStage = 'lead' | 'inquiry' | 'quoted' | 'won' | 'silent30' | 'silent60';
@@ -107,13 +109,69 @@ function writeJson(file: string, value: unknown): void {
 
 function backupWhatsAppDataFiles(now = new Date()): void {
   const date = now.toISOString().slice(0, 10);
-  const backupDir = path.join(DATA_DIR, 'backups', date);
+  const backupDir = path.join(BACKUP_ROOT, date);
   fs.mkdirSync(backupDir, { recursive: true });
   for (const file of [CUSTOMERS_FILE, INTERACTIONS_FILE, IMPORT_STATUS_FILE, ENTERPRISE_FILE]) {
     if (!fs.existsSync(file)) continue;
     const target = path.join(backupDir, path.basename(file));
     if (fs.existsSync(target)) continue;
     try { fs.copyFileSync(file, target); } catch (error) { console.error('[whatsapp-daily-backup]', file, error); }
+  }
+}
+
+function r2BackupEnabled(): boolean {
+  return Boolean(
+    process.env.R2_ACCOUNT_ID?.trim()
+    && process.env.R2_ACCESS_KEY_ID?.trim()
+    && process.env.R2_SECRET_ACCESS_KEY?.trim()
+    && process.env.R2_BUCKET_NAME?.trim(),
+  );
+}
+
+function backupPrefix(): string {
+  return (process.env.R2_BACKUP_PREFIX || 'lingshu-backups').replace(/^\/+|\/+$/g, '');
+}
+
+function localBackupRetentionDays(): number {
+  const raw = Number(process.env.R2_BACKUP_LOCAL_RETENTION_DAYS || 7);
+  return Number.isFinite(raw) && raw >= 1 ? Math.floor(raw) : 7;
+}
+
+function listFilesRecursive(dir: string): string[] {
+  if (!fs.existsSync(dir)) return [];
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap(entry => {
+    const full = path.join(dir, entry.name);
+    return entry.isDirectory() ? listFilesRecursive(full) : [full];
+  });
+}
+
+async function syncBackupsToR2(now = new Date()): Promise<void> {
+  if (!r2BackupEnabled()) {
+    console.warn('[whatsapp-backup-r2] skipped: R2 credentials are not configured');
+    return;
+  }
+  if (!fs.existsSync(BACKUP_ROOT)) return;
+
+  const dirs = fs.readdirSync(BACKUP_ROOT, { withFileTypes: true }).filter(entry => entry.isDirectory());
+  const prefix = backupPrefix();
+  for (const dir of dirs) {
+    const backupDir = path.join(BACKUP_ROOT, dir.name);
+    const files = listFilesRecursive(backupDir);
+    for (const file of files) {
+      const relative = path.relative(BACKUP_ROOT, file).split(path.sep).join('/');
+      await r2Upload({
+        key: `${prefix}/${relative}`,
+        body: fs.readFileSync(file),
+        contentType: 'application/json',
+      });
+    }
+  }
+
+  const cutoff = now.getTime() - localBackupRetentionDays() * 86_400_000;
+  for (const dir of dirs) {
+    const time = new Date(`${dir.name}T00:00:00.000Z`).getTime();
+    if (!Number.isFinite(time) || time >= cutoff) continue;
+    fs.rmSync(path.join(BACKUP_ROOT, dir.name), { recursive: true, force: true });
   }
 }
 
@@ -240,6 +298,7 @@ export function initWhatsAppCustomerMaintenance(): void {
   const run = () => {
     try {
       backupWhatsAppDataFiles();
+      void syncBackupsToR2().catch(error => console.error('[whatsapp-backup-r2]', error));
       const changed = recomputeWhatsAppCustomerStages();
       if (changed > 0) console.log(`[whatsapp-maintenance] recomputed ${changed} customer stages`);
     } catch (error) {
