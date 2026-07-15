@@ -16,6 +16,7 @@ import {
   WifiOff,
 } from 'lucide-react';
 import { authHeader } from '../lib/auth';
+import { getWhatsAppEmbeddedSignupConfig, startWhatsAppEmbeddedSignup } from '../lib/whatsappEmbeddedSignup';
 
 type UserChannelStatus = 'advisor_configuring' | 'waiting_customer' | 'importing' | 'connected' | 'needs_service';
 
@@ -191,14 +192,33 @@ function statusView(channel: TenantChannelStatus) {
   };
 }
 
-function ChannelStatusCard({ channel }: { channel: TenantChannelStatus }) {
+function ChannelStatusCard({ channel, onConnected }: { channel: TenantChannelStatus; onConnected: () => void }) {
   const meta = CHANNEL_META[channel.id] || CHANNEL_META.whatsapp;
   const view = statusView(channel);
+  const [connecting, setConnecting] = useState(false);
+  const [error, setError] = useState('');
 
-  function startAuthorization() {
-    window.dispatchEvent(new CustomEvent('lingshu-toast', {
-      detail: { message: '授权入口由专属顾问确认后开启，本页不会要求你填写 App ID 或 Token。' },
-    }));
+  async function startAuthorization() {
+    if (channel.id !== 'whatsapp') {
+      window.dispatchEvent(new CustomEvent('lingshu-toast', {
+        detail: { message: '该渠道仍由专属顾问协助授权。' },
+      }));
+      return;
+    }
+    setConnecting(true);
+    setError('');
+    try {
+      const config = await getWhatsAppEmbeddedSignupConfig();
+      await startWhatsAppEmbeddedSignup(config);
+      window.dispatchEvent(new CustomEvent('lingshu-toast', {
+        detail: { message: 'WhatsApp 已连接，灵枢会自动同步账号信息。' },
+      }));
+      onConnected();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'WhatsApp 授权失败');
+    } finally {
+      setConnecting(false);
+    }
   }
 
   return (
@@ -225,17 +245,18 @@ function ChannelStatusCard({ channel }: { channel: TenantChannelStatus }) {
           <button
             type="button"
             onClick={startAuthorization}
-            className="inline-flex items-center gap-2 rounded-lg bg-gray-950 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800"
+            disabled={connecting}
+            className="inline-flex items-center gap-2 rounded-lg bg-gray-950 px-4 py-2 text-sm font-semibold text-white hover:bg-gray-800 disabled:opacity-60"
           >
-            <ExternalLink size={15} />
-            去确认授权
+            {connecting ? <Loader2 size={15} className="animate-spin" /> : <ExternalLink size={15} />}
+            {channel.id === 'whatsapp' ? '连接 WhatsApp' : '去确认授权'}
           </button>
         )}
       </div>
+      {error && <p className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-700">{error}</p>}
     </section>
   );
 }
-
 function AdminDiagnostics({ channels }: { channels: TenantChannelStatus[] }) {
   return (
     <section className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
@@ -562,7 +583,7 @@ export default function ChannelsPage() {
             </section>
 
             <div className="grid gap-5 xl:grid-cols-2">
-              {status.channels.map(channel => <ChannelStatusCard key={channel.id} channel={channel} />)}
+              {status.channels.map(channel => <ChannelStatusCard key={channel.id} channel={channel} onConnected={() => void refresh()} />)}
             </div>
 
             {status.isAdmin && (

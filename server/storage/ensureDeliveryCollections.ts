@@ -1,0 +1,108 @@
+import { adminFetch } from './pb.js';
+
+type FieldType = 'text' | 'select' | 'bool' | 'date' | 'json';
+
+interface FieldDef {
+  name: string;
+  type: FieldType;
+  required?: boolean;
+  values?: string[];
+}
+
+const TENANTS_FIELDS: FieldDef[] = [
+  { name: 'name', type: 'text', required: true },
+  { name: 'companyName', type: 'text' },
+  { name: 'contactName', type: 'text' },
+  { name: 'contact', type: 'text' },
+  { name: 'notes', type: 'text' },
+  { name: 'inviteCode', type: 'text' },
+  { name: 'subscriptionStatus', type: 'text' },
+  { name: 'subscriptionPlan', type: 'text' },
+  { name: 'subscriptionExpiresAt', type: 'date' },
+];
+
+const TENANT_PLATFORM_APP_FIELDS: FieldDef[] = [
+  { name: 'tenant_id', type: 'text', required: true },
+  { name: 'platform', type: 'select', required: true, values: ['meta', 'google'] },
+  { name: 'app_id', type: 'text' },
+  { name: 'app_secret', type: 'text' },
+  { name: 'wa_config_id', type: 'text' },
+  { name: 'business_id', type: 'text' },
+  { name: 'waba_id', type: 'text' },
+  { name: 'phone_number_id', type: 'text' },
+  { name: 'page_id', type: 'text' },
+  { name: 'ig_user_id', type: 'text' },
+  { name: 'youtube_channel_id', type: 'text' },
+  { name: 'webhook_verify_token', type: 'text' },
+  { name: 'token_type', type: 'select', values: ['user_60d', 'system_user_permanent'] },
+  { name: 'access_token', type: 'text' },
+  { name: 'token_expires_at', type: 'text' },
+  { name: 'status', type: 'select', values: ['pending', 'configuring', 'waiting_customer', 'importing_history', 'verifying', 'active', 'needs_permanent_token', 'token_expired', 'error'] },
+  { name: 'last_checklist', type: 'json' },
+  { name: 'notes', type: 'text' },
+];
+
+function oldSchemaField(field: FieldDef) {
+  return {
+    name: field.name,
+    type: field.type,
+    required: Boolean(field.required),
+    options: field.type === 'select' ? { values: field.values ?? [] } : {},
+  };
+}
+
+function newField(field: FieldDef) {
+  return {
+    name: field.name,
+    type: field.type,
+    required: Boolean(field.required),
+    ...(field.type === 'select' ? { values: field.values ?? [] } : {}),
+  };
+}
+
+async function collectionExists(name: string): Promise<boolean> {
+  const res = await adminFetch(`/api/collections/${encodeURIComponent(name)}`);
+  if (res.ok) return true;
+  if (res.status === 404) return false;
+  const detail = await res.text().catch(() => '');
+  throw new Error(`检查集合 ${name} 失败 (${res.status})${detail ? `: ${detail}` : ''}`);
+}
+
+async function createCollection(name: string, fields: FieldDef[]): Promise<void> {
+  const base = {
+    name,
+    type: 'base',
+    listRule: null,
+    viewRule: null,
+    createRule: null,
+    updateRule: null,
+    deleteRule: null,
+  };
+  const attempts = [
+    { ...base, fields: fields.map(newField) },
+    { ...base, schema: fields.map(oldSchemaField) },
+  ];
+
+  let lastDetail = '';
+  for (const body of attempts) {
+    const res = await adminFetch('/api/collections', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (res.ok) return;
+    lastDetail = `${res.status} ${await res.text().catch(() => '')}`;
+  }
+  throw new Error(`创建集合 ${name} 失败：${lastDetail}`);
+}
+
+async function ensureCollection(name: string, fields: FieldDef[]): Promise<void> {
+  if (await collectionExists(name)) return;
+  await createCollection(name, fields);
+  console.log(`[pb-init] created collection ${name}`);
+}
+
+export async function ensureDeliveryCollections(): Promise<void> {
+  await ensureCollection('tenants', TENANTS_FIELDS);
+  await ensureCollection('tenant_platform_apps', TENANT_PLATFORM_APP_FIELDS);
+}

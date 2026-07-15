@@ -33,11 +33,18 @@ import { isDemoMode, demoLimits } from './lib/demo.js';
 import { initTenantPlatformTokenMonitor } from './routes/tenantPlatformTokenMonitor.js';
 import { assistLinksRouter } from './routes/assistLinks.js';
 import { initWhatsAppCustomerMaintenance } from './whatsapp/historyImport.js';
+import { whatsappOAuthRouter } from './routes/whatsappOAuth.js';
+import { ensureDeliveryCollections } from './storage/ensureDeliveryCollections.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
 dotenv.config({ path: path.join(__dirname, '..', '.env.local'), override: true });
 configureNetworkProxy();
+try {
+  await ensureDeliveryCollections();
+} catch (error) {
+  console.error('[pb-init] failed to ensure tenants / tenant_platform_apps collections:', error instanceof Error ? error.message : error);
+}
 
 const PORT = Number(process.env.PORT ?? 8788);
 const app = express();
@@ -117,6 +124,7 @@ app.use('/api/overseas/agents', draftReplyRouter);
 app.use('/api/overseas/customers', customerSuggestionsRouter);
 app.use('/api/overseas/channels', channelsRouter);
 app.use('/api/channels', channelsRouter);
+app.use('/api/oauth/whatsapp', whatsappOAuthRouter);
 app.use('/api', assistLinksRouter);
 app.use('/api/overseas/youtube', youtubeRouter);
 app.use('/api/overseas/social', socialRouter);

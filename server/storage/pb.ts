@@ -59,7 +59,7 @@ export function invalidatePbAdminToken(): void {
   cachedToken = null;
 }
 
-async function adminFetch(
+export async function adminFetch(
   path: string,
   options: RequestInit = {},
 ): Promise<Response> {
@@ -193,6 +193,40 @@ export async function pbList<T = Record<string, unknown>>(
   );
   if (!res.ok) {
     return { items: [], totalItems: 0, totalPages: 0, page: 1, perPage: 20 };
+  }
+  const json = (await res.json()) as {
+    items?: T[];
+    totalItems?: number;
+    totalPages?: number;
+    page?: number;
+    perPage?: number;
+  };
+  return {
+    items: json.items ?? [],
+    totalItems: json.totalItems ?? 0,
+    totalPages: json.totalPages ?? 0,
+    page: json.page ?? 1,
+    perPage: json.perPage ?? 20,
+  };
+}
+
+export async function pbListStrict<T = Record<string, unknown>>(
+  collection: string,
+  opts: PbListOptions = {},
+): Promise<PbListResult<T>> {
+  const params = new URLSearchParams();
+  if (opts.filter) params.set('filter', opts.filter);
+  if (opts.sort) params.set('sort', opts.sort);
+  if (opts.page) params.set('page', String(opts.page));
+  if (opts.perPage) params.set('perPage', String(opts.perPage));
+  if (opts.expand) params.set('expand', opts.expand);
+
+  const res = await adminFetch(
+    `/api/collections/${encodeURIComponent(collection)}/records?${params}`,
+  );
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '');
+    throw new Error(`${collection} read failed (${res.status})${detail ? `: ${detail}` : ''}`);
   }
   const json = (await res.json()) as {
     items?: T[];

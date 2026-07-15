@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getPbUrl, getPbAdminToken, pbCreate, pbGet } from '../storage/pb.js';
+import { getPbUrl, getPbAdminToken, pbCreate, pbGet, pbListStrict } from '../storage/pb.js';
 import { auth } from '../storage/index.js';
 import { getTenantSubscription } from '../middleware/subscription.js';
 import { buildDemoStatus, isExpired } from '../lib/demo.js';
@@ -108,6 +108,25 @@ function localLogin(email: string, password: string, companyName = ''): { token:
 function publicUser(r: PbUser) {
   return { id: r.id, email: r.email ?? '', name: r.name ?? '', tenantId: r.tenantId ?? '' };
 }
+
+function pbFilterValue(value: string): string {
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+async function tenantByInviteCode(code: string): Promise<Record<string, unknown> | null> {
+  const invite = String(code || '').trim();
+  if (!invite) return null;
+  try {
+    const result = await pbListStrict<Record<string, unknown>>('tenants', {
+      perPage: 1,
+      filter: `inviteCode = ${pbFilterValue(invite)}`,
+    });
+    return result.items[0] ?? null;
+  } catch {
+    return null;
+  }
+}
+
 function publicTenant(t: Record<string, unknown> | null) {
   if (!t) return null;
   return {
@@ -128,23 +147,26 @@ authRouter.post('/register', async (req, res) => {
     res.status(403).json({ error: '该账号不在试用名单中，请使用服务顾问分配的账号。' });
     return;
   }
+  const invitedTenant = await tenantByInviteCode(String(inviteCode || ''));
   const expectedInvite = process.env.DEMO_INVITE_CODE?.trim();
-  if (expectedInvite && inviteCode !== expectedInvite) {
+  if (expectedInvite && !invitedTenant && inviteCode !== expectedInvite) {
     res.status(403).json({ error: '邀请码无效，请联系服务顾问获取访问码' });
     return;
   }
 
   const now = new Date();
   const expiresAt = trialExpiresAt(now);
-  let tenant: Record<string, unknown> | null = null;
+  let tenant: Record<string, unknown> | null = invitedTenant;
   try {
-    tenant = await pbCreate('tenants', {
-      name: companyName || String(email).split('@')[0],
-      subscriptionStatus: 'trialing',
-      subscriptionPlan: 'trial',
-      subscriptionExpiresAt: expiresAt,
-      createdAt: now.toISOString(),
-    });
+    if (!tenant) {
+      tenant = await pbCreate('tenants', {
+        name: companyName || String(email).split('@')[0],
+        subscriptionStatus: 'trialing',
+        subscriptionPlan: 'trial',
+        subscriptionExpiresAt: expiresAt,
+        createdAt: now.toISOString(),
+      });
+    }
   } catch {
     tenant = null;
   }

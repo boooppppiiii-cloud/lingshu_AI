@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, Clipboard, KeyRound, Link2, Loader2, RefreshCcw, Save, ShieldCheck } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { CheckCircle2, Clipboard, KeyRound, Link2, Loader2, Plus, RefreshCcw, Save, ShieldCheck, X } from 'lucide-react';
 import { authHeader } from '../lib/auth';
 
 type Platform = 'meta' | 'google';
@@ -24,13 +24,17 @@ interface DeliveryApp {
   accessTokenSet: boolean;
   tokenExpiresAt: string;
   status: Status;
-  checklist: Record<string, boolean>;
+  checklist: Record<string, boolean | string>;
   notes: string;
 }
 
 interface TenantCard {
   tenantId: string;
   name: string;
+  contactName?: string;
+  notes?: string;
+  inviteCode?: string;
+  inviteUrl?: string;
   apps: DeliveryApp[];
 }
 
@@ -82,6 +86,12 @@ async function jsonFetch(url: string, init?: RequestInit) {
     headers: { 'Content-Type': 'application/json', ...authHeader(), ...(init?.headers ?? {}) },
   });
   const json = await resp.json().catch(() => ({}));
+  if (!resp.ok && json.error === 'tenants_unavailable') {
+    throw new Error(`租户数据源不可用：${json.detail || '请检查 PocketBase tenants 集合'}`);
+  }
+  if (!resp.ok && json.error === 'admin_required') {
+    throw new Error('没有管理员权限：请使用管理员邮箱登录后再打开交付工作台');
+  }
   if (!resp.ok) throw new Error(json.error || '请求失败');
   return json;
 }
@@ -318,7 +328,7 @@ function PlatformWizard({
   drafts: Draft;
   setDrafts: (next: Draft | ((current: Draft) => Draft)) => void;
   tests: TestState;
-  onSave: (app: DeliveryApp) => Promise<void>;
+  onSave: (app: DeliveryApp, options?: { silent?: boolean }) => Promise<void>;
   onTest: (app: DeliveryApp, kind: string) => Promise<void>;
   onComplete: (app: DeliveryApp) => Promise<void>;
   onAssistLink: (app: DeliveryApp) => Promise<void>;
@@ -326,6 +336,7 @@ function PlatformWizard({
 }) {
   const appKey = keyOf(app.tenantId, app.platform);
   const [activeStep, setActiveStep] = useState(app.platform === 'meta' ? 'metaApp' : 'googleApp');
+  const autoSaveTimer = useRef<number | null>(null);
   const test = tests[appKey] ?? {};
   const steps = app.platform === 'meta' ? META_STEPS : GOOGLE_STEPS;
   const update = (patch: Record<string, string | Record<string, boolean>>) => {
@@ -350,8 +361,21 @@ function PlatformWizard({
         ? 'bg-amber-50 text-amber-700'
         : 'bg-surface-2 text-text-secondary';
 
+  const hasDraft = Object.keys(drafts[appKey] ?? {}).length > 0;
+  function scheduleAutoSave() {
+    if (!hasDraft) return;
+    if (autoSaveTimer.current) window.clearTimeout(autoSaveTimer.current);
+    autoSaveTimer.current = window.setTimeout(() => {
+      void onSave(app, { silent: true });
+    }, 800);
+  }
+
+  useEffect(() => () => {
+    if (autoSaveTimer.current) window.clearTimeout(autoSaveTimer.current);
+  }, []);
+
   return (
-    <div className="rounded-2xl border border-border bg-white p-4 shadow-sm">
+    <div className="rounded-2xl border border-border bg-white p-4 shadow-sm" onBlurCapture={scheduleAutoSave}>
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-sm font-black text-text-primary">{platformName}</p>
@@ -537,9 +561,13 @@ export default function AdminDeliveryPage() {
   const [tests, setTests] = useState<TestState>({});
   const [assistLinks, setAssistLinks] = useState<AssistLinkState>({});
   const [progressBusyKey, setProgressBusyKey] = useState('');
+  const [tenantDialogOpen, setTenantDialogOpen] = useState(false);
+  const [tenantForm, setTenantForm] = useState({ companyName: '', contactName: '', notes: '' });
+  const [creatingTenant, setCreatingTenant] = useState(false);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const hasUnsavedDrafts = useMemo(() => Object.values(drafts).some(draft => Object.keys(draft ?? {}).length > 0), [drafts]);
 
   const load = async () => {
     setLoading(true);
@@ -562,7 +590,17 @@ export default function AdminDeliveryPage() {
 
   useEffect(() => { void load(); }, []);
 
-  const save = async (app: DeliveryApp) => {
+  useEffect(() => {
+    if (!hasUnsavedDrafts) return;
+    const handler = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [hasUnsavedDrafts]);
+
+  const save = async (app: DeliveryApp, options: { silent?: boolean } = {}) => {
     const appKey = keyOf(app.tenantId, app.platform);
     const draft = drafts[appKey] ?? {};
     await jsonFetch(`/api/overseas/admin/delivery/platform-apps/${app.tenantId}/${app.platform}`, {
@@ -585,7 +623,12 @@ export default function AdminDeliveryPage() {
         notes: draft.notes ?? app.notes,
       }),
     });
-    setMessage('配置已保存');
+    setDrafts(current => {
+      const next = { ...current };
+      delete next[appKey];
+      return next;
+    });
+    if (!options.silent) setMessage('配置已保存');
     await load();
   };
 
@@ -602,7 +645,6 @@ export default function AdminDeliveryPage() {
         google: 'google_test_passed',
       }[kind];
       if (autoCheckId) {
-        await saveAppChecklist(app, { ...(app.checklist ?? {}), [autoCheckId]: true });
         await load();
       }
       setMessage(data.message || '自检通过');
@@ -615,12 +657,45 @@ export default function AdminDeliveryPage() {
   const complete = async (app: DeliveryApp) => {
     const appKey = keyOf(app.tenantId, app.platform);
     const draft = drafts[appKey] ?? {};
+    if (Object.keys(draft).length > 0) {
+      await save(app, { silent: true });
+    }
     await jsonFetch(`/api/overseas/admin/delivery/platform-apps/${app.tenantId}/${app.platform}/complete`, {
       method: 'POST',
       body: JSON.stringify({ notes: draft.notes ?? app.notes }),
     });
     setMessage('已标记交付完成，客户端将显示“已由专属顾问配置”。');
     await load();
+  };
+
+  const createTenant = async () => {
+    const companyName = tenantForm.companyName.trim();
+    if (!companyName) {
+      setError('公司名称必填');
+      return;
+    }
+    setCreatingTenant(true);
+    setError('');
+    try {
+      const data = await jsonFetch('/api/overseas/admin/delivery/tenants', {
+        method: 'POST',
+        body: JSON.stringify({
+          companyName,
+          contactName: tenantForm.contactName.trim(),
+          notes: tenantForm.notes.trim(),
+        }),
+      });
+      if (data.tenant) {
+        setTenants(current => [data.tenant, ...current.filter(item => item.tenantId !== data.tenant.tenantId)]);
+      }
+      setTenantForm({ companyName: '', contactName: '', notes: '' });
+      setTenantDialogOpen(false);
+      setMessage('租户已创建，Meta / Google 向导已进入待配置状态。');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '新建租户失败');
+    } finally {
+      setCreatingTenant(false);
+    }
   };
 
   const createAssistLink = async (app: DeliveryApp) => {
@@ -642,7 +717,7 @@ export default function AdminDeliveryPage() {
     }
   };
 
-  const saveAppChecklist = async (app: DeliveryApp, checklist: Record<string, boolean>) => {
+  const saveAppChecklist = async (app: DeliveryApp, checklist: Record<string, boolean | string>) => {
     await jsonFetch(`/api/overseas/admin/delivery/platform-apps/${app.tenantId}/${app.platform}`, {
       method: 'PUT',
       body: JSON.stringify({
@@ -713,6 +788,9 @@ export default function AdminDeliveryPage() {
         </div>
         <div className="flex items-center gap-2">
           <span className="rounded-full bg-surface-2 px-2.5 py-1 text-[11px] font-bold text-text-secondary">共 {summary.total} 项 · 已交付 {summary.active} · 风险 {summary.risky}</span>
+          <button type="button" onClick={() => setTenantDialogOpen(true)} className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white">
+            <Plus size={13} /> 新建租户
+          </button>
           <button type="button" onClick={() => void load()} className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-white px-3 py-2 text-xs font-bold text-text-secondary">
             {loading ? <Loader2 size={13} className="animate-spin" /> : <RefreshCcw size={13} />} 刷新
           </button>
@@ -726,8 +804,11 @@ export default function AdminDeliveryPage() {
           <div className="flex h-60 items-center justify-center text-text-muted"><Loader2 className="animate-spin" /></div>
         ) : tenants.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-border bg-surface p-8 text-center">
-            <p className="text-sm font-black text-text-primary">还没有可配置租户</p>
-            <p className="mt-2 text-xs text-text-muted">创建租户后，这里会出现交付配置卡。</p>
+            <p className="text-sm font-black text-text-primary">还没有租户</p>
+            <p className="mx-auto mt-2 max-w-md text-xs leading-6 text-text-muted">客户注册账号后会自动出现在这里，也可以手动预建。</p>
+            <button type="button" onClick={() => setTenantDialogOpen(true)} className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-4 py-2 text-xs font-black text-white">
+              <Plus size={14} /> 新建租户
+            </button>
           </div>
         ) : (
           <div className="grid gap-4">
@@ -736,7 +817,12 @@ export default function AdminDeliveryPage() {
                 <div className="mb-3 flex items-center justify-between">
                   <div>
                     <p className="text-sm font-black text-text-primary">{tenant.name}</p>
-                    <p className="mt-0.5 text-[11px] text-text-muted">Tenant ID: {tenant.tenantId}</p>
+                    <p className="mt-0.5 text-[11px] text-text-muted">Tenant ID: {tenant.tenantId}{tenant.contactName ? ` · 联系人：${tenant.contactName}` : ''}</p>
+                    {tenant.inviteUrl && (
+                      <button type="button" onClick={() => navigator.clipboard?.writeText(tenant.inviteUrl || '')} className="mt-1 text-[11px] font-bold text-primary hover:underline">
+                        复制客户注册链接
+                      </button>
+                    )}
                   </div>
                   <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-bold text-text-secondary">现场预计 3 小时</span>
                 </div>
@@ -762,6 +848,41 @@ export default function AdminDeliveryPage() {
           </div>
         )}
       </div>
+      {tenantDialogOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 px-4">
+          <div className="w-full max-w-md rounded-3xl border border-border bg-white p-5 shadow-xl">
+            <div className="mb-4 flex items-start justify-between gap-3">
+              <div>
+                <p className="text-sm font-black text-text-primary">新建租户</p>
+                <p className="mt-1 text-xs text-text-muted">先预建客户卡片，系统会生成邀请码/注册链接，客户用它注册后自动绑定到该租户。</p>
+              </div>
+              <button type="button" onClick={() => setTenantDialogOpen(false)} className="rounded-xl border border-border p-2 text-text-muted hover:text-text-primary">
+                <X size={14} />
+              </button>
+            </div>
+            <div className="grid gap-3">
+              <label className="grid gap-1 text-xs font-bold text-text-secondary">
+                公司名称
+                <input value={tenantForm.companyName} onChange={event => setTenantForm(current => ({ ...current, companyName: event.target.value }))} className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm font-normal text-text-primary outline-none focus:border-primary" placeholder="例如：义乌星河饰品有限公司" />
+              </label>
+              <label className="grid gap-1 text-xs font-bold text-text-secondary">
+                联系人
+                <input value={tenantForm.contactName} onChange={event => setTenantForm(current => ({ ...current, contactName: event.target.value }))} className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm font-normal text-text-primary outline-none focus:border-primary" placeholder="例如：王总" />
+              </label>
+              <label className="grid gap-1 text-xs font-bold text-text-secondary">
+                备注
+                <textarea value={tenantForm.notes} onChange={event => setTenantForm(current => ({ ...current, notes: event.target.value }))} rows={3} className="resize-none rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm font-normal text-text-primary outline-none focus:border-primary" placeholder="记录部署方式、客户账号、待补信息。" />
+              </label>
+            </div>
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" onClick={() => setTenantDialogOpen(false)} className="rounded-xl border border-border bg-white px-4 py-2 text-xs font-bold text-text-secondary">取消</button>
+              <button type="button" onClick={() => void createTenant()} disabled={creatingTenant} className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-4 py-2 text-xs font-black text-white disabled:opacity-60">
+                {creatingTenant ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />} 创建
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
