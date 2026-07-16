@@ -120,6 +120,15 @@ function videoAnalysisOf(record: Record<string, unknown>): Record<string, unknow
   return parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
 }
 
+function isAutoSeededVideo(record: Record<string, unknown>): boolean {
+  const analysis = videoAnalysisOf(record);
+  return Boolean(
+    analysis.seededFromRecordId ||
+    analysis.analysisSource === 'demo-local-video' ||
+    String(analysis.crawlRule || '').includes('演示素材')
+  );
+}
+
 function textPresent(value: unknown): boolean {
   return typeof value === 'string' && value.trim().length > 0;
 }
@@ -1230,65 +1239,6 @@ function videoListWhere(tenantId: string, platform?: string, status?: string): R
   return where;
 }
 
-function sharedVideoListWhere(platform?: string, status?: string): Record<string, string> | undefined {
-  const where: Record<string, string> = {};
-  if (platform) where.platform = platform;
-  if (status) where.status = status;
-  return Object.keys(where).length ? where : undefined;
-}
-
-async function seedTestTenantWithSharedVideoSamples(input: {
-  tenantId: string;
-  platform?: string;
-  status?: string;
-  target: number;
-}): Promise<void> {
-  const existingSourceUrls = await existingTenantSourceUrls(input.tenantId);
-  const created: Record<string, unknown>[] = [];
-  let page = 1;
-  let totalPages = 1;
-  do {
-    const result = await store.list<Record<string, unknown>>(COL, {
-      where: sharedVideoListWhere(input.platform, input.status),
-      sort: '-crawledAt',
-      page,
-      perPage: 100,
-    });
-    for (const record of result.items) {
-      if (String(record.tenantId || '') === input.tenantId) continue;
-      if (!isPublicTestTenantVideo(record)) continue;
-      const sourceUrl = String(record.sourceUrl || '').trim();
-      if (!sourceUrl || existingSourceUrls.has(sourceUrl)) continue;
-      const analysis = videoAnalysisOf(record);
-      const clone = await store.create(COL, {
-        tenantId: input.tenantId,
-        platform: record.platform,
-        title: record.title,
-        thumbnailUrl: record.thumbnailUrl,
-        videoFileId: record.videoFileId || '',
-        duration: record.duration || 0,
-        sourceUrl,
-        tags: record.tags || '[]',
-        aiAnalysis: JSON.stringify({
-          ...analysis,
-          userVisible: true,
-          seededFromRecordId: String(record.id || ''),
-          seededAt: new Date().toISOString(),
-        }),
-        status: record.status || 'analyzed',
-        crawledAt: record.crawledAt || new Date().toISOString(),
-      });
-      if (clone) {
-        created.push(clone);
-        existingSourceUrls.add(sourceUrl);
-      }
-      if (created.length >= input.target) return;
-    }
-    totalPages = result.totalPages || 1;
-    page += 1;
-  } while (page <= totalPages && page <= 50);
-}
-
 async function listPublicVideosForTenant(input: {
   tenantId: string;
   page: number;
@@ -1314,7 +1264,7 @@ async function listPublicVideosForTenant(input: {
         page: input.page,
         perPage: input.perPage,
       });
-      const items = result.items.filter(record => recordContentFormat(record) === 'video');
+      const items = result.items.filter(record => recordContentFormat(record) === 'video' && !isAutoSeededVideo(record));
       return { ...result, items: items.map(publicVideoRecord) };
     }
 
@@ -1346,6 +1296,7 @@ async function listPublicVideosForTenant(input: {
         perPage: 100,
       });
       for (const record of result.items) {
+        if (isAutoSeededVideo(record)) continue;
         if (contentFormat === 'image' ? !isPublicImageRecord(record) : !isPublicTestTenantVideo(record)) continue;
         const sourceUrl = String(record.sourceUrl || '').trim();
         if (sourceUrl && seenSourceUrls.has(sourceUrl)) continue;
@@ -1358,40 +1309,6 @@ async function listPublicVideosForTenant(input: {
   };
 
   await scanTenantVideos();
-  const desiredVisibleCount = Math.max(input.page * input.perPage, 20);
-  if (visible.length < desiredVisibleCount) {
-    await seedTestTenantWithSharedVideoSamples({
-      tenantId: input.tenantId,
-      platform: input.platform,
-      status: input.status,
-      target: desiredVisibleCount - visible.length,
-    });
-    await scanTenantVideos();
-  }
-
-  if (visible.length < desiredVisibleCount) {
-    let scanPage = 1;
-    let totalPages = 1;
-    do {
-    const result = await store.list<Record<string, unknown>>(COL, {
-      where: sharedVideoListWhere(input.platform, input.status),
-      sort: '-crawledAt',
-      page: scanPage,
-      perPage: 100,
-    });
-    for (const record of result.items) {
-      if (contentFormat === 'image' ? !isPublicImageRecord(record) : !isPublicTestTenantVideo(record)) continue;
-      if (String(record.tenantId || '') === input.tenantId) continue;
-      const sourceUrl = String(record.sourceUrl || '').trim();
-      if (sourceUrl && seenSourceUrls.has(sourceUrl)) continue;
-      if (sourceUrl) seenSourceUrls.add(sourceUrl);
-      visible.push(publicVideoRecord(record));
-    }
-    totalPages = result.totalPages || 1;
-    scanPage += 1;
-    } while (scanPage <= totalPages && scanPage <= 50);
-  }
-
   const totalItems = visible.length;
   const totalVisiblePages = Math.max(1, Math.ceil(totalItems / input.perPage));
   const start = (input.page - 1) * input.perPage;
@@ -1417,6 +1334,7 @@ async function scanRecordsByContentFormat(where: Record<string, string> | undefi
       perPage: 100,
     });
     for (const record of result.items) {
+      if (isAutoSeededVideo(record)) continue;
       if (recordContentFormat(record) !== contentFormat) continue;
       if (contentFormat === 'image' && !isValidImagePostRecord(record)) continue;
       const sourceUrl = String(record.sourceUrl || '').trim();

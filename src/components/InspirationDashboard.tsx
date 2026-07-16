@@ -12,8 +12,6 @@ import { authHeader } from '../lib/auth';
 import CompetitorAccountsModal from './CompetitorAccountsModal';
 import type { Page } from '../App';
 import { completeDemoStep, readDemoProgress } from '../lib/demoProgress';
-import demoCover1 from '../assets/covers/mock-1.png';
-import demoCover2 from '../assets/covers/mock-8.png';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type Platform = 'all' | 'tiktok' | 'instagram' | 'youtube' | 'facebook';
@@ -2235,61 +2233,6 @@ function metadataPanelFallback(video: TrendVideo): TrendVideo {
   };
 }
 
-const DEMO_TREND_VIDEOS: TrendVideo[] = [
-  {
-    id: 'demo-tiktok-skincare',
-    platform: 'tiktok',
-    title: '@_byjessevans dropping her routine for hydrated, healthy skin.',
-    thumbnail: demoCover1,
-    duration: 18,
-    tags: ['skincare', 'hydratedskin', 'beautyroutine'],
-    views: '1.2M',
-    trend: 'hot',
-    videoUrl: '/demo/mock-0627.mp4',
-    status: 'analyzed',
-    crawledAt: new Date().toISOString(),
-    contentFormat: 'video',
-    aiAnalysis: {
-      gemini: metadataFallbackAnalysis(
-        '@_byjessevans dropping her routine for hydrated, healthy skin.',
-        'tiktok',
-        ['skincare', 'hydratedskin', 'beautyroutine'],
-        '1.2M',
-        18,
-      ),
-      analysisSource: 'demo-local-video',
-      analysisQuality: 'metadata',
-      crawlRule: '本地演示素材',
-    },
-  },
-  {
-    id: 'demo-youtube-product-shot',
-    platform: 'youtube',
-    title: 'Factory product demo video with clean packaging and fast-cut social proof.',
-    thumbnail: demoCover2,
-    duration: 24,
-    tags: ['productdemo', 'factoryvideo', 'packaging'],
-    views: '486K',
-    trend: 'rising',
-    videoUrl: '/demo/img2video.mp4',
-    status: 'analyzed',
-    crawledAt: new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString(),
-    contentFormat: 'video',
-    aiAnalysis: {
-      gemini: metadataFallbackAnalysis(
-        'Factory product demo video with clean packaging and fast-cut social proof.',
-        'youtube',
-        ['productdemo', 'factoryvideo', 'packaging'],
-        '486K',
-        24,
-      ),
-      analysisSource: 'demo-local-video',
-      analysisQuality: 'metadata',
-      crawlRule: '本地演示素材',
-    },
-  },
-];
-
 function heatValue(views: string): number {
   const raw = String(views || '').toLowerCase().replace(/,/g, '');
   const n = Number(raw.replace(/[^\d.]/g, ''));
@@ -2427,34 +2370,13 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
       };
       if (!r.ok) throw new Error('视频列表加载失败');
       const videos = recordsToVideos(data.items || []);
-      if (!append && videos.length === 0) {
-        const demo = await fetch('/demo/trend-videos-47.json');
-        const demoData = await demo.json().catch(() => ({})) as { items?: CrawlerRecord[] };
-        const fallbackVideos = recordsToVideos(demoData.items || []);
-        if (fallbackVideos.length) {
-          setVideoPage(1);
-          setVideoTotalPages(1);
-          setCrawledVideos(fallbackVideos);
-          return;
-        }
-      }
       setVideoPage(Number(data.page || nextPage));
       setVideoTotalPages(Math.max(1, Number(data.totalPages || nextPage)));
       setCrawledVideos(prev => append
         ? [...prev, ...videos.filter(v => !prev.some(old => old.id === v.id || (!!v.sourceUrl && old.sourceUrl === v.sourceUrl)))]
         : videos);
     } catch {
-      if (!append) {
-        try {
-          const demo = await fetch('/demo/trend-videos-47.json');
-          const demoData = await demo.json().catch(() => ({})) as { items?: CrawlerRecord[] };
-          setVideoPage(1);
-          setVideoTotalPages(1);
-          setCrawledVideos(recordsToVideos(demoData.items || []));
-        } catch {
-          setCrawledVideos([]);
-        }
-      }
+      if (!append) setCrawledVideos([]);
     } finally {
       setVideosLoading(false);
     }
@@ -2864,7 +2786,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
                   </div>
                   <div>
                     <p className="text-sm font-semibold text-text-primary">暂无真实视频数据</p>
-                    <p className="text-xs text-text-muted mt-1">测试版请通过「定时任务」在北京时间 01:00 自动采集公开视频。</p>
+                    <p className="text-xs text-text-muted mt-1">请通过「定时任务」采集公开视频，或从对标账号导入真实内容。</p>
                   </div>
                 </div>
               ) : viewMode === 'grid' ? (

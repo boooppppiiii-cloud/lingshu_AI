@@ -15,7 +15,13 @@ import {
   readDemoAccountRegistry,
   requireAdminUser,
 } from '../lib/demoAccounts.js';
-import { getVideoAdminAlert, listVideoAdminAlerts } from '../lib/videoAdminAlerts.js';
+import {
+  getVideoAdminAlert,
+  listVideoAdminAlerts,
+  syncVideoAdminAlertsFromRecords,
+  type VideoAdminAlert,
+  type VideoFailureRecord,
+} from '../lib/videoAdminAlerts.js';
 import { attachManualVideoUploadAndQueue } from './videos.js';
 import { listStyleAdoptionTrends } from '../knowledge/styleMemory.js';
 import {
@@ -30,6 +36,8 @@ import {
 } from '../lib/tenantPlatformApps.js';
 import { store } from '../storage/index.js';
 import axios from 'axios';
+import { createLocalInviteTenant, listLocalTenants } from '../lib/localTenants.js';
+import { decryptRegistrationPassword } from '../lib/registrationCredentials.js';
 
 export const adminRouter = Router();
 
@@ -46,6 +54,160 @@ function accountStage(entry: { status?: string; activatedAt?: string | null; exp
   if (!entry.activatedAt) return '未激活';
   if (entry.expiresAt && new Date(entry.expiresAt).getTime() <= Date.now()) return '已到期';
   return '试用中';
+}
+
+type VideoAlertAccountType = 'trial' | 'customer' | 'admin' | 'unknown';
+
+interface VideoAlertAccountMeta {
+  accountType: VideoAlertAccountType;
+  accountTypeLabel: string;
+  tenantName: string;
+  accountEmail: string;
+}
+
+function localAccountId(value: string): string {
+  return String(value || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'demo';
+}
+
+function accountTypeLabel(type: VideoAlertAccountType): string {
+  if (type === 'trial') return '试用账号';
+  if (type === 'customer') return '正式账号';
+  if (type === 'admin') return '管理员账号';
+  return '未知账号';
+}
+
+async function listAllPbRecords<T extends Record<string, unknown>>(collection: string, sort?: string): Promise<T[]> {
+  const items: T[] = [];
+  let page = 1;
+  let totalPages = 1;
+  do {
+    const result = await pbListStrict<T>(collection, { page, perPage: 500, sort });
+    items.push(...result.items);
+    totalPages = Math.max(1, Math.min(100, result.totalPages || 1));
+    page += 1;
+  } while (page <= totalPages);
+  return items;
+}
+
+let videoAlertSyncAt = 0;
+let videoAlertSyncPromise: Promise<void> | null = null;
+
+async function reconcileStoredVideoAlerts(): Promise<void> {
+  if (Date.now() - videoAlertSyncAt < 30_000) return;
+  if (videoAlertSyncPromise) return videoAlertSyncPromise;
+
+  videoAlertSyncPromise = (async () => {
+    try {
+      const records = await listAllPbRecords<VideoFailureRecord & Record<string, unknown>>('trend_videos', '-updated');
+      syncVideoAdminAlertsFromRecords(records);
+      videoAlertSyncAt = Date.now();
+    } catch (error) {
+      console.warn('[admin] video alert reconciliation unavailable:', error instanceof Error ? error.message : error);
+    } finally {
+      videoAlertSyncPromise = null;
+    }
+  })();
+  return videoAlertSyncPromise;
+}
+
+async function enrichVideoAlerts(alerts: VideoAdminAlert[]) {
+  const directory = new Map<string, VideoAlertAccountMeta>();
+  const setAccount = (tenantId: string, input: Partial<VideoAlertAccountMeta>) => {
+    if (!tenantId) return;
+    const existing = directory.get(tenantId);
+    const accountType = input.accountType && input.accountType !== 'unknown'
+      ? input.accountType
+      : existing?.accountType || 'unknown';
+    directory.set(tenantId, {
+      accountType,
+      accountTypeLabel: accountTypeLabel(accountType),
+      tenantName: input.tenantName || existing?.tenantName || tenantId,
+      accountEmail: input.accountEmail || existing?.accountEmail || '',
+    });
+  };
+
+  const registry = readDemoAccountRegistry();
+  for (const entry of Object.values(registry)) {
+    const type: VideoAlertAccountType = entry.status === 'admin' ? 'admin' : 'trial';
+    const slug = localAccountId(entry.email);
+    const tenantIds = new Set([
+      String(entry.tenantId || ''),
+      `local_tenant_trial_${slug}`,
+      `local_tenant_${slug}`,
+      ...(type === 'admin' ? [`local_tenant_admin_${slug}`] : []),
+    ]);
+    for (const tenantId of tenantIds) {
+      setAccount(tenantId, {
+        accountType: type,
+        tenantName: entry.email.split('@')[0] || entry.email,
+        accountEmail: entry.email,
+      });
+    }
+  }
+
+  for (const tenant of listLocalTenants()) {
+    const plan = tenant.subscriptionPlan.toLowerCase();
+    const status = tenant.subscriptionStatus.toLowerCase();
+    const accountType: VideoAlertAccountType = plan === 'trial' || status === 'trialing' ? 'trial' : 'customer';
+    setAccount(tenant.id, {
+      accountType,
+      tenantName: tenant.companyName || tenant.name || tenant.id,
+      accountEmail: tenant.registeredEmail || '',
+    });
+  }
+
+  for (const alert of alerts) {
+    if (directory.has(alert.tenantId)) continue;
+    if (alert.tenantId.startsWith('local_tenant_trial_')) {
+      setAccount(alert.tenantId, { accountType: 'trial' });
+    } else if (alert.tenantId.startsWith('local_tenant_customer_')) {
+      setAccount(alert.tenantId, { accountType: 'customer' });
+    } else if (alert.tenantId.startsWith('local_tenant_admin_')) {
+      setAccount(alert.tenantId, { accountType: 'admin' });
+    }
+  }
+
+  try {
+    const [tenants, users] = await Promise.all([
+      listAllPbRecords<Record<string, unknown>>('tenants', 'name'),
+      listAllPbRecords<Record<string, unknown>>('users', 'email'),
+    ]);
+    for (const tenant of tenants) {
+      const tenantId = bodyText(tenant.id || tenant.tenantId);
+      if (!tenantId) continue;
+      const plan = bodyText(tenant.subscriptionPlan || tenant.plan).toLowerCase();
+      const status = bodyText(tenant.subscriptionStatus || tenant.status).toLowerCase();
+      const type: VideoAlertAccountType = plan === 'trial' || status === 'trialing'
+        ? 'trial'
+        : plan === 'admin' || status === 'admin'
+          ? 'admin'
+          : 'customer';
+      const accountEmail = bodyText(tenant.registeredEmail)
+        || bodyText(users.find(user => bodyText(user.tenantId) === tenantId)?.email);
+      setAccount(tenantId, {
+        accountType: type,
+        tenantName: bodyText(tenant.name || tenant.companyName || tenant.company) || tenantId,
+        accountEmail,
+      });
+    }
+  } catch (error) {
+    console.warn('[admin] video alert account metadata unavailable:', error instanceof Error ? error.message : error);
+  }
+
+  return alerts.map(alert => {
+    const fallbackType: VideoAlertAccountType = alert.tenantId.includes('_trial_')
+      ? 'trial'
+      : alert.tenantId.includes('_customer_')
+        ? 'customer'
+        : 'unknown';
+    const account = directory.get(alert.tenantId) || {
+      accountType: fallbackType,
+      accountTypeLabel: accountTypeLabel(fallbackType),
+      tenantName: alert.tenantId,
+      accountEmail: '',
+    };
+    return { ...alert, ...account };
+  });
 }
 
 async function safePbGet(collection: string, id?: string | null) {
@@ -101,14 +263,19 @@ function publicPendingPlatformApp(req: Parameters<typeof publicTenantPlatformApp
 
 function publicDeliveryTenant(req: Parameters<typeof publicTenantPlatformApp>[0], tenant: Record<string, any>, apps: Awaited<ReturnType<typeof listTenantPlatformApps>>) {
   const tenantId = String(tenant.id || tenant.tenantId || '');
+  const name = String(tenant?.name || tenant?.companyName || tenant?.company || tenantId);
+  const inviteParams = new URLSearchParams({
+    invite: String(tenant?.inviteCode || ''),
+    company: name,
+  });
   return {
     tenantId,
-    name: String(tenant?.name || tenant?.companyName || tenant?.company || tenantId),
+    name,
     contactName: String(tenant?.contactName || tenant?.contact || ''),
     industry: String(tenant?.industry || ''),
     notes: String(tenant?.notes || ''),
     inviteCode: String(tenant?.inviteCode || ''),
-    inviteUrl: tenant?.inviteCode ? `${getPublicOrigin(req)}/register?invite=${encodeURIComponent(String(tenant.inviteCode))}` : '',
+    inviteUrl: tenant?.inviteCode ? `${getPublicOrigin(req)}/register?${inviteParams.toString()}` : '',
     apps: (['meta', 'google'] as TenantPlatform[]).map(platform => {
       const app = apps.find(item => item.tenant_id === tenantId && item.platform === platform);
       return app ? publicTenantPlatformApp(req, app) : publicPendingPlatformApp(req, tenantId, platform);
@@ -179,6 +346,7 @@ adminRouter.get('/demo-accounts', async (req, res) => {
     res.status(403).json({ error: 'admin_required' });
     return;
   }
+  res.setHeader('Cache-Control', 'no-store');
 
   const limits = demoLimits();
   const registry = readDemoAccountRegistry();
@@ -218,9 +386,12 @@ adminRouter.get('/demo-accounts', async (req, res) => {
     contactName: string;
     industry: string;
     emails: string[];
+    password: string;
+    inviteCode: string;
     subscriptionPlan: string;
     subscriptionStatus: string;
     createdAt: string | null;
+    registeredAt: string | null;
     expiresAt: string | null;
   }> = [];
 
@@ -235,18 +406,24 @@ adminRouter.get('/demo-accounts', async (req, res) => {
         const tenantId = String(tenant.id || tenant.tenantId || '');
         const subscriptionPlan = String(tenant.subscriptionPlan || '未设置');
         const subscriptionStatus = String(tenant.subscriptionStatus || '未设置');
+        const registeredEmail = String(tenant.registeredEmail || '').trim().toLowerCase();
+        const emails = users.items
+          .filter(user => String(user.tenantId || '') === tenantId)
+          .map(user => String(user.email || '').trim().toLowerCase())
+          .filter(Boolean);
+        if (registeredEmail) emails.unshift(registeredEmail);
         return {
           tenantId,
           companyName: String(tenant.name || tenant.companyName || tenant.company || tenantId),
           contactName: String(tenant.contactName || tenant.contact || ''),
           industry: String(tenant.industry || ''),
-          emails: users.items
-            .filter(user => String(user.tenantId || '') === tenantId)
-            .map(user => String(user.email || ''))
-            .filter(Boolean),
+          emails: Array.from(new Set(emails)),
+          password: decryptRegistrationPassword(String(tenant.registeredPasswordCipher || '')),
+          inviteCode: String(tenant.registrationInviteCode || tenant.inviteCode || ''),
           subscriptionPlan,
           subscriptionStatus,
           createdAt: String(tenant.created || tenant.createdAt || '') || null,
+          registeredAt: String(tenant.registeredAt || '') || null,
           expiresAt: String(tenant.subscriptionExpiresAt || '') || null,
         };
       })
@@ -256,6 +433,26 @@ adminRouter.get('/demo-accounts', async (req, res) => {
   } catch (error) {
     console.warn('[admin] customer account list unavailable:', error instanceof Error ? error.message : error);
   }
+
+  const localCustomerAccounts = listLocalTenants()
+    .filter(tenant => tenant.subscriptionStatus === 'active' && tenant.subscriptionPlan === 'customer')
+    .map(tenant => ({
+      tenantId: tenant.id,
+      companyName: tenant.companyName || tenant.name,
+      contactName: tenant.contactName,
+      industry: tenant.industry,
+      emails: tenant.registeredEmail ? [tenant.registeredEmail] : [],
+      password: decryptRegistrationPassword(tenant.registeredPasswordCipher),
+      inviteCode: tenant.registrationInviteCode || tenant.inviteCode,
+      subscriptionPlan: tenant.subscriptionPlan,
+      subscriptionStatus: tenant.subscriptionStatus,
+      createdAt: tenant.createdAt || null,
+      registeredAt: tenant.registeredAt || null,
+      expiresAt: tenant.subscriptionExpiresAt,
+    }));
+  const existingCustomerIds = new Set(customerAccounts.map(account => account.tenantId));
+  customerAccounts.push(...localCustomerAccounts.filter(account => !existingCustomerIds.has(account.tenantId)));
+  customerAccounts.sort((a, b) => a.companyName.localeCompare(b.companyName));
 
   res.json({ admin: admin.email, trialAccounts, customerAccounts });
 });
@@ -267,8 +464,19 @@ adminRouter.get('/video-alerts', async (req, res) => {
     return;
   }
 
-  const limit = Math.max(1, Math.min(100, Number(req.query.limit || 50) || 50));
-  res.json({ admin: admin.email, items: listVideoAdminAlerts(limit) });
+  res.setHeader('Cache-Control', 'no-store');
+  await reconcileStoredVideoAlerts();
+
+  const limit = Math.max(1, Math.min(200, Number(req.query.limit || 100) || 100));
+  const includeResolved = req.query.includeResolved === 'true';
+  const items = await enrichVideoAlerts(listVideoAdminAlerts(limit, includeResolved));
+  const summary = items.reduce((counts, item) => {
+    counts.total += 1;
+    counts[item.accountType] += 1;
+    return counts;
+  }, { total: 0, trial: 0, customer: 0, admin: 0, unknown: 0 });
+
+  res.json({ admin: admin.email, items, summary });
 });
 
 adminRouter.post('/video-alerts/:id/upload', async (req, res) => {
@@ -353,16 +561,25 @@ adminRouter.get('/delivery/platform-apps', async (req, res) => {
     return;
   }
 
-  let tenants;
-  let apps;
+  let tenants: { items: Record<string, any>[] } | undefined;
+  let apps: TenantPlatformAppRecord[] | undefined;
   try {
     [tenants, apps] = await Promise.all([
       pbListStrict<Record<string, any>>('tenants', { perPage: 200 }),
       pbListStrict<TenantPlatformAppRecord>('tenant_platform_apps', { perPage: 500, sort: 'tenant_id' }).then(result => result.items),
     ]);
   } catch (error) {
-    const detail = error instanceof Error ? error.message : 'unknown_error';
-    res.status(503).json({ error: 'tenants_unavailable', detail });
+    if (process.env.NODE_ENV !== 'production') {
+      tenants = { items: listLocalTenants() as unknown as Record<string, any>[] };
+      apps = [];
+    } else {
+      const detail = error instanceof Error ? error.message : 'unknown_error';
+      res.status(503).json({ error: 'tenants_unavailable', detail });
+      return;
+    }
+  }
+  if (!tenants || !apps) {
+    res.status(503).json({ error: 'tenants_unavailable', detail: 'unknown_error' });
     return;
   }
   const tenantIds = new Set<string>([
@@ -403,7 +620,7 @@ adminRouter.post('/delivery/tenants', async (req, res) => {
   const code = inviteCode();
   const now = new Date().toISOString();
   try {
-    const tenant = await store.create<Record<string, any>>('tenants', {
+    let tenant = await store.create<Record<string, any>>('tenants', {
       name: companyName,
       companyName,
       contactName: bodyText(req.body?.contactName) || bodyText(req.body?.contact),
@@ -415,6 +632,15 @@ adminRouter.post('/delivery/tenants', async (req, res) => {
       subscriptionPlan: 'delivery',
       createdAt: now,
     });
+    if (!tenant && process.env.NODE_ENV !== 'production') {
+      tenant = createLocalInviteTenant({
+        companyName,
+        contactName: bodyText(req.body?.contactName) || bodyText(req.body?.contact),
+        industry: bodyText(req.body?.industry),
+        notes: bodyText(req.body?.notes),
+        inviteCode: code,
+      });
+    }
     if (!tenant) throw new Error('tenant_create_failed');
     res.json({
       ok: true,

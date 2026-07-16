@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { CheckCircle2, Clipboard, KeyRound, Link2, Loader2, Plus, RefreshCcw, Save, ShieldCheck, X } from 'lucide-react';
+import { CheckCircle2, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Clipboard, KeyRound, Link2, Loader2, Plus, RefreshCcw, Save, ShieldCheck, X } from 'lucide-react';
 import { authHeader } from '../lib/auth';
 import AdminContentOpsAlerts from './AdminContentOpsAlerts';
 
@@ -38,6 +38,12 @@ interface TenantCard {
   inviteCode?: string;
   inviteUrl?: string;
   apps: DeliveryApp[];
+}
+
+interface GeneratedInvite {
+  companyName: string;
+  inviteCode: string;
+  inviteUrl: string;
 }
 
 type Draft = Record<string, Partial<DeliveryApp> & { appSecret?: string; accessToken?: string }>;
@@ -558,6 +564,7 @@ function PlatformWizard({
 
 export default function AdminDeliveryPage() {
   const [tenants, setTenants] = useState<TenantCard[]>([]);
+  const [expandedTenantIds, setExpandedTenantIds] = useState<Set<string>>(() => new Set());
   const [knowledgeCompletion, setKnowledgeCompletion] = useState<KnowledgeCompletionState | null>(null);
   const [drafts, setDrafts] = useState<Draft>({});
   const [tests, setTests] = useState<TestState>({});
@@ -565,6 +572,8 @@ export default function AdminDeliveryPage() {
   const [progressBusyKey, setProgressBusyKey] = useState('');
   const [tenantDialogOpen, setTenantDialogOpen] = useState(false);
   const [tenantForm, setTenantForm] = useState({ companyName: '', contactName: '', industry: '', notes: '' });
+  const [generatedInvite, setGeneratedInvite] = useState<GeneratedInvite | null>(null);
+  const [copiedInvite, setCopiedInvite] = useState<'code' | 'url' | ''>('');
   const [creatingTenant, setCreatingTenant] = useState(false);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
@@ -601,6 +610,25 @@ export default function AdminDeliveryPage() {
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
   }, [hasUnsavedDrafts]);
+
+  const openInviteDialog = () => {
+    setGeneratedInvite(null);
+    setCopiedInvite('');
+    setError('');
+    setTenantDialogOpen(true);
+  };
+
+  const closeInviteDialog = () => {
+    setTenantDialogOpen(false);
+    setGeneratedInvite(null);
+    setCopiedInvite('');
+  };
+
+  const copyInvite = async (kind: 'code' | 'url', value: string) => {
+    if (!value) return;
+    await navigator.clipboard?.writeText(value);
+    setCopiedInvite(kind);
+  };
 
   const save = async (app: DeliveryApp, options: { silent?: boolean } = {}) => {
     const appKey = keyOf(app.tenantId, app.platform);
@@ -691,11 +719,18 @@ export default function AdminDeliveryPage() {
       if (data.tenant) {
         setTenants(current => [data.tenant, ...current.filter(item => item.tenantId !== data.tenant.tenantId)]);
       }
+      const inviteCode = String(data.tenant?.inviteCode || '');
+      const inviteUrl = String(data.tenant?.inviteUrl || '');
+      setGeneratedInvite({
+        companyName: String(data.tenant?.name || companyName),
+        inviteCode,
+        inviteUrl,
+      });
       setTenantForm({ companyName: '', contactName: '', industry: '', notes: '' });
-      setTenantDialogOpen(false);
-      setMessage('租户已创建，Meta / Google 向导已进入待配置状态。');
+      setCopiedInvite('');
+      setMessage(inviteCode ? '正式客户一次性邀请码已生成' : '客户租户已创建');
     } catch (err) {
-      setError(err instanceof Error ? err.message : '新建租户失败');
+      setError(err instanceof Error ? err.message : '生成邀请码失败');
     } finally {
       setCreatingTenant(false);
     }
@@ -781,6 +816,22 @@ export default function AdminDeliveryPage() {
       risky: apps.filter(app => app.status === 'token_expired' || app.status === 'needs_permanent_token' || app.status === 'error').length,
     };
   }, [tenants]);
+  const anyTenantExpanded = tenants.some(tenant => expandedTenantIds.has(tenant.tenantId));
+
+  const toggleTenant = (tenantId: string) => {
+    setExpandedTenantIds(current => {
+      const next = new Set(current);
+      if (next.has(tenantId)) next.delete(tenantId);
+      else next.add(tenantId);
+      return next;
+    });
+  };
+
+  const toggleAllTenants = () => {
+    setExpandedTenantIds(anyTenantExpanded
+      ? new Set()
+      : new Set(tenants.map(tenant => tenant.tenantId)));
+  };
 
   return (
     <div className="flex h-full flex-col bg-white">
@@ -791,8 +842,14 @@ export default function AdminDeliveryPage() {
         </div>
         <div className="flex items-center gap-2">
           <span className="rounded-full bg-surface-2 px-2.5 py-1 text-[11px] font-bold text-text-secondary">平台配置 {summary.total} 项 · 已交付 {summary.active} · 风险 {summary.risky}</span>
-          <button type="button" onClick={() => setTenantDialogOpen(true)} className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white">
-            <Plus size={13} /> 新建租户
+          {tenants.length > 0 && (
+            <button type="button" onClick={toggleAllTenants} className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-white px-3 py-2 text-xs font-bold text-text-secondary">
+              {anyTenantExpanded ? <ChevronsUp size={13} /> : <ChevronsDown size={13} />}
+              {anyTenantExpanded ? '收起全部' : '展开全部'}
+            </button>
+          )}
+          <button type="button" onClick={openInviteDialog} className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white">
+            <KeyRound size={13} /> 生成注册邀请码
           </button>
           <button type="button" onClick={() => void load()} className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-white px-3 py-2 text-xs font-bold text-text-secondary">
             {loading ? <Loader2 size={13} className="animate-spin" /> : <RefreshCcw size={13} />} 刷新
@@ -811,46 +868,86 @@ export default function AdminDeliveryPage() {
         ) : tenants.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-border bg-surface p-8 text-center">
             <p className="text-sm font-black text-text-primary">还没有租户</p>
-            <p className="mx-auto mt-2 max-w-md text-xs leading-6 text-text-muted">客户注册账号后会自动出现在这里，也可以手动预建。</p>
-            <button type="button" onClick={() => setTenantDialogOpen(true)} className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-4 py-2 text-xs font-black text-white">
-              <Plus size={14} /> 新建租户
+            <p className="mx-auto mt-2 max-w-md text-xs leading-6 text-text-muted">先为正式客户生成一次性注册邀请码。客户注册成功后会自动出现在这里。</p>
+            <button type="button" onClick={openInviteDialog} className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-4 py-2 text-xs font-black text-white">
+              <KeyRound size={14} /> 生成注册邀请码
             </button>
           </div>
         ) : (
           <div id="customer-deployment" className="grid gap-4 scroll-mt-5">
-            {tenants.map(tenant => (
-              <section key={tenant.tenantId} className="rounded-3xl border border-border bg-surface p-4">
-                <div className="mb-3 flex items-center justify-between">
-                  <div>
-                    <p className="text-sm font-black text-text-primary">{tenant.name}</p>
-                    <p className="mt-0.5 text-[11px] text-text-muted">Tenant ID: {tenant.tenantId}{tenant.contactName ? ` · 联系人：${tenant.contactName}` : ''}</p>
-                    {tenant.inviteUrl && (
-                      <button type="button" onClick={() => navigator.clipboard?.writeText(tenant.inviteUrl || '')} className="mt-1 text-[11px] font-bold text-primary hover:underline">
-                        复制客户注册链接
+            {tenants.map(tenant => {
+              const expanded = expandedTenantIds.has(tenant.tenantId);
+              const activeApps = tenant.apps.filter(app => app.status === 'active').length;
+              const riskyApps = tenant.apps.filter(app => app.status === 'token_expired' || app.status === 'needs_permanent_token' || app.status === 'error').length;
+              return (
+                <section key={tenant.tenantId} className="rounded-2xl border border-border bg-surface p-4">
+                  <div className={`flex items-center justify-between gap-4 ${expanded ? 'mb-3' : ''}`}>
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <p className="text-sm font-black text-text-primary">{tenant.name}</p>
+                        <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-text-muted">
+                          已交付 {activeApps}/{tenant.apps.length}
+                        </span>
+                        {riskyApps > 0 && (
+                          <span className="rounded-full bg-red-50 px-2 py-0.5 text-[10px] font-bold text-red-700">
+                            风险 {riskyApps}
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-0.5 text-[11px] text-text-muted">Tenant ID: {tenant.tenantId}{tenant.contactName ? ` · 联系人：${tenant.contactName}` : ''}</p>
+                      {tenant.inviteCode && (
+                        <div className="mt-2 flex flex-wrap items-center gap-2">
+                          <code className="rounded-lg border border-border bg-white px-2 py-1 text-[11px] font-bold text-text-secondary">
+                            邀请码：{tenant.inviteCode}
+                          </code>
+                          <button type="button" onClick={() => navigator.clipboard?.writeText(tenant.inviteCode || '')} className="text-[11px] font-bold text-primary hover:underline">
+                            复制邀请码
+                          </button>
+                        </div>
+                      )}
+                      {tenant.inviteUrl && (
+                        <button type="button" onClick={() => navigator.clipboard?.writeText(tenant.inviteUrl || '')} className="mt-1 text-[11px] font-bold text-primary hover:underline">
+                          复制客户注册链接
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex shrink-0 items-center gap-2">
+                      <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-bold text-text-secondary">现场预计 3 小时</span>
+                      <button
+                        type="button"
+                        onClick={() => toggleTenant(tenant.tenantId)}
+                        aria-expanded={expanded}
+                        className="inline-flex min-w-[88px] items-center justify-center gap-1.5 rounded-xl border border-border bg-white px-3 py-2 text-xs font-bold text-text-secondary hover:text-text-primary"
+                      >
+                        {expanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                        {expanded ? '收起资料' : '展开资料'}
                       </button>
-                    )}
+                    </div>
                   </div>
-                  <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-bold text-text-secondary">现场预计 3 小时</span>
-                </div>
-                <DeploymentProgressStrip tenant={tenant} busyKey={progressBusyKey} onToggle={toggleProgressStage} knowledgeCompletion={knowledgeCompletion} />
-                <div className="grid gap-3">
-                  {tenant.apps.map(app => (
-                    <PlatformWizard
-                      key={`${tenant.tenantId}-${app.platform}`}
-                      app={app}
-                      drafts={drafts}
-                      setDrafts={setDrafts}
-                      tests={tests}
-                      onSave={save}
-                      onTest={test}
-                      onComplete={complete}
-                      onAssistLink={createAssistLink}
-                      assistLink={assistLinks[keyOf(app.tenantId, app.platform)]}
-                    />
-                  ))}
-                </div>
-              </section>
-            ))}
+                  {expanded && (
+                    <>
+                      <DeploymentProgressStrip tenant={tenant} busyKey={progressBusyKey} onToggle={toggleProgressStage} knowledgeCompletion={knowledgeCompletion} />
+                      <div className="grid gap-3">
+                        {tenant.apps.map(app => (
+                          <PlatformWizard
+                            key={`${tenant.tenantId}-${app.platform}`}
+                            app={app}
+                            drafts={drafts}
+                            setDrafts={setDrafts}
+                            tests={tests}
+                            onSave={save}
+                            onTest={test}
+                            onComplete={complete}
+                            onAssistLink={createAssistLink}
+                            assistLink={assistLinks[keyOf(app.tenantId, app.platform)]}
+                          />
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </section>
+              );
+            })}
           </div>
         )}
       </div>
@@ -859,37 +956,65 @@ export default function AdminDeliveryPage() {
           <div className="w-full max-w-md rounded-3xl border border-border bg-white p-5 shadow-xl">
             <div className="mb-4 flex items-start justify-between gap-3">
               <div>
-                <p className="text-sm font-black text-text-primary">新建租户</p>
-                <p className="mt-1 text-xs text-text-muted">先预建客户卡片，系统会生成邀请码/注册链接，客户用它注册后自动绑定到该租户。</p>
+                <p className="text-sm font-black text-text-primary">{generatedInvite ? '一次性注册邀请码' : '生成注册邀请码'}</p>
+                <p className="mt-1 text-xs text-text-muted">
+                  {generatedInvite
+                    ? `${generatedInvite.companyName} 注册成功后，该邀请码立即失效。`
+                    : '填写客户信息后，系统会生成一次性随机邀请码。'}
+                </p>
               </div>
-              <button type="button" onClick={() => setTenantDialogOpen(false)} className="rounded-xl border border-border p-2 text-text-muted hover:text-text-primary">
+              <button type="button" onClick={closeInviteDialog} className="rounded-xl border border-border p-2 text-text-muted hover:text-text-primary">
                 <X size={14} />
               </button>
             </div>
-            <div className="grid gap-3">
-              <label className="grid gap-1 text-xs font-bold text-text-secondary">
-                公司名称
-                <input value={tenantForm.companyName} onChange={event => setTenantForm(current => ({ ...current, companyName: event.target.value }))} className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm font-normal text-text-primary outline-none focus:border-primary" placeholder="例如：义乌星河饰品有限公司" />
-              </label>
-              <label className="grid gap-1 text-xs font-bold text-text-secondary">
-                联系人
-                <input value={tenantForm.contactName} onChange={event => setTenantForm(current => ({ ...current, contactName: event.target.value }))} className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm font-normal text-text-primary outline-none focus:border-primary" placeholder="例如：王总" />
-              </label>
-              <label className="grid gap-1 text-xs font-bold text-text-secondary">
-                客户行业
-                <input value={tenantForm.industry} onChange={event => setTenantForm(current => ({ ...current, industry: event.target.value }))} className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm font-normal text-text-primary outline-none focus:border-primary" placeholder="例如：美妆个护 / 护肤彩妆" />
-              </label>
-              <label className="grid gap-1 text-xs font-bold text-text-secondary">
-                备注
-                <textarea value={tenantForm.notes} onChange={event => setTenantForm(current => ({ ...current, notes: event.target.value }))} rows={3} className="resize-none rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm font-normal text-text-primary outline-none focus:border-primary" placeholder="记录部署方式、客户账号、待补信息。" />
-              </label>
-            </div>
-            <div className="mt-5 flex justify-end gap-2">
-              <button type="button" onClick={() => setTenantDialogOpen(false)} className="rounded-xl border border-border bg-white px-4 py-2 text-xs font-bold text-text-secondary">取消</button>
-              <button type="button" onClick={() => void createTenant()} disabled={creatingTenant} className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-4 py-2 text-xs font-black text-white disabled:opacity-60">
-                {creatingTenant ? <Loader2 size={13} className="animate-spin" /> : <Plus size={13} />} 创建
-              </button>
-            </div>
+            {error && <p className="mb-3 rounded-xl bg-red-50 px-3 py-2 text-xs font-bold text-red-700">{error}</p>}
+            {generatedInvite ? (
+              <>
+                <div className="border-y border-border py-5 text-center">
+                  <p className="text-[11px] font-bold text-text-muted">一次性邀请码</p>
+                  <code className="mt-2 block text-2xl font-black tracking-normal text-text-primary">{generatedInvite.inviteCode || '生成失败'}</code>
+                  <p className="mt-2 text-xs text-text-muted">将邀请码或注册链接发送给客户，客户在注册页面使用。</p>
+                </div>
+                <div className="mt-5 grid grid-cols-2 gap-2">
+                  <button type="button" onClick={() => void copyInvite('code', generatedInvite.inviteCode)} disabled={!generatedInvite.inviteCode} className="inline-flex items-center justify-center gap-1.5 rounded-xl border border-border bg-white px-3 py-2.5 text-xs font-black text-text-secondary disabled:opacity-50">
+                    {copiedInvite === 'code' ? <CheckCircle2 size={14} className="text-emerald-600" /> : <Clipboard size={14} />}
+                    {copiedInvite === 'code' ? '邀请码已复制' : '复制邀请码'}
+                  </button>
+                  <button type="button" onClick={() => void copyInvite('url', generatedInvite.inviteUrl)} disabled={!generatedInvite.inviteUrl} className="inline-flex items-center justify-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2.5 text-xs font-black text-white disabled:opacity-50">
+                    {copiedInvite === 'url' ? <CheckCircle2 size={14} /> : <Link2 size={14} />}
+                    {copiedInvite === 'url' ? '链接已复制' : '复制注册链接'}
+                  </button>
+                </div>
+                <button type="button" onClick={closeInviteDialog} className="mt-2 w-full rounded-xl px-4 py-2 text-xs font-bold text-text-muted hover:text-text-primary">完成</button>
+              </>
+            ) : (
+              <>
+                <div className="grid gap-3">
+                  <label className="grid gap-1 text-xs font-bold text-text-secondary">
+                    <span>公司名称 <span className="text-red">*</span></span>
+                    <input required value={tenantForm.companyName} onChange={event => setTenantForm(current => ({ ...current, companyName: event.target.value }))} className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm font-normal text-text-primary outline-none focus:border-primary" placeholder="必填，例如：义乌星河饰品有限公司" />
+                  </label>
+                  <label className="grid gap-1 text-xs font-bold text-text-secondary">
+                    联系人
+                    <input value={tenantForm.contactName} onChange={event => setTenantForm(current => ({ ...current, contactName: event.target.value }))} className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm font-normal text-text-primary outline-none focus:border-primary" placeholder="例如：王总" />
+                  </label>
+                  <label className="grid gap-1 text-xs font-bold text-text-secondary">
+                    客户行业
+                    <input value={tenantForm.industry} onChange={event => setTenantForm(current => ({ ...current, industry: event.target.value }))} className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm font-normal text-text-primary outline-none focus:border-primary" placeholder="例如：美妆个护 / 护肤彩妆" />
+                  </label>
+                  <label className="grid gap-1 text-xs font-bold text-text-secondary">
+                    备注
+                    <textarea value={tenantForm.notes} onChange={event => setTenantForm(current => ({ ...current, notes: event.target.value }))} rows={3} className="resize-none rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm font-normal text-text-primary outline-none focus:border-primary" placeholder="记录部署方式、客户账号、待补信息。" />
+                  </label>
+                </div>
+                <div className="mt-5 flex justify-end gap-2">
+                  <button type="button" onClick={closeInviteDialog} className="rounded-xl border border-border bg-white px-4 py-2 text-xs font-bold text-text-secondary">取消</button>
+                  <button type="button" onClick={() => void createTenant()} disabled={creatingTenant} className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-4 py-2 text-xs font-black text-white disabled:opacity-60">
+                    {creatingTenant ? <Loader2 size={13} className="animate-spin" /> : <KeyRound size={13} />} 生成邀请码
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

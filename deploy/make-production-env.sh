@@ -34,6 +34,7 @@ echo
 
 render_secret="$(openssl rand -hex 32)"
 tenant_platform_app_key="$(openssl rand -base64 32 | tr -d '\n')"
+registration_credential_key="$(openssl rand -base64 32 | tr -d '\n')"
 
 cat > .env.production <<EOF
 APP_DOMAIN=${app_domain}
@@ -47,6 +48,7 @@ PB_ADMIN_PASSWORD=${pb_password}
 PORT=8788
 RENDER_TOKEN_SECRET=${render_secret}
 TENANT_PLATFORM_APP_KEY=${tenant_platform_app_key}
+REGISTRATION_CREDENTIAL_KEY=${registration_credential_key}
 SUBSCRIPTION_ENFORCED=false
 
 GEMINI_API_KEY=${gemini_key}

@@ -26,7 +26,12 @@ import type {
 
 const LOCAL_AUTH_PREFIX = 'local-demo.';
 
+function isLocalDevFallbackEnabled(): boolean {
+  return process.env.NODE_ENV !== 'production' && process.env.DISABLE_LOCAL_AUTH_FALLBACK !== 'true';
+}
+
 function parseLocalToken(authHeader: string | undefined): Identity | null {
+  if (!isLocalDevFallbackEnabled()) return null;
   const token = authHeader?.replace(/^Bearer\s+/i, '').trim();
   if (!token?.startsWith(LOCAL_AUTH_PREFIX)) return null;
   try {

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url';
 import { randomBytes, randomUUID } from 'crypto';
 import type { Request } from 'express';
 import { resetDemoUsage } from '../lib/demo.js';
-import { auth } from '../storage/index.js';
+import { auth, store } from '../storage/index.js';
 import type { AutonomyLevel } from '../autonomy/actionRules.js';
 import { callLLM } from '../agents/llm.js';
 import { notifyDeliveryTeam } from '../lib/tenantPlatformApps.js';
@@ -15,7 +15,7 @@ const DATA_FILE = path.join(__dirname, '../../data/enterprise.json');
 const TEMPLATES_FILE = path.join(__dirname, '../../data/demo-templates.json');
 const DATA_DIR = path.join(__dirname, '../../data');
 const ASSETS_DIR = path.join(DATA_DIR, 'enterprise-assets');
-const ORDERS_FILE = path.join(DATA_DIR, 'orders.json');
+const TENANT_ORDERS_DIR = path.join(DATA_DIR, 'tenant-orders');
 // 生成的 productApi 密钥单独存放，不进 data/enterprise.json（避免和会被提交/覆盖的企业资料文件混在一起）。
 const PRODUCT_API_FILE = path.join(DATA_DIR, 'product-api.json');
 
@@ -287,18 +287,76 @@ function writeJson(file: string, value: unknown): void {
   fs.writeFileSync(path.join(DATA_DIR, file), JSON.stringify(value, null, 2), 'utf8');
 }
 
-function readOrders(): OrderRecord[] {
+function localTenantOrdersFile(tenantId: string): string {
+  const key = Buffer.from(tenantId, 'utf8').toString('base64url');
+  return path.join(TENANT_ORDERS_DIR, `${key}.json`);
+}
+
+function readLocalTenantOrders(tenantId: string): OrderRecord[] {
   try {
-    const parsed = JSON.parse(fs.readFileSync(ORDERS_FILE, 'utf8'));
+    const parsed = JSON.parse(fs.readFileSync(localTenantOrdersFile(tenantId), 'utf8'));
     return Array.isArray(parsed) ? parsed.map(normalizeOrder).filter(Boolean) as OrderRecord[] : [];
   } catch {
     return [];
   }
 }
 
-function writeOrders(orders: OrderRecord[]): void {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-  fs.writeFileSync(ORDERS_FILE, JSON.stringify(orders, null, 2), 'utf8');
+function writeLocalTenantOrders(tenantId: string, orders: OrderRecord[]): void {
+  fs.mkdirSync(TENANT_ORDERS_DIR, { recursive: true });
+  fs.writeFileSync(localTenantOrdersFile(tenantId), JSON.stringify(orders, null, 2), 'utf8');
+}
+
+function storedOrder(value: unknown): OrderRecord | null {
+  if (!value || typeof value !== 'object') return null;
+  const raw = value as Record<string, unknown>;
+  let order = raw.order;
+  if (typeof order === 'string') {
+    try { order = JSON.parse(order); } catch { return null; }
+  }
+  return order && typeof order === 'object' ? normalizeOrder(order as Partial<OrderRecord>) : null;
+}
+
+async function listStoredTenantOrders(tenantId: string): Promise<Record<string, unknown>[]> {
+  const records: Record<string, unknown>[] = [];
+  let page = 1;
+  let totalPages = 1;
+  do {
+    const result = await store.list<Record<string, unknown>>('tenant_orders', {
+      where: { tenant_id: tenantId },
+      page,
+      perPage: 200,
+    });
+    records.push(...result.items);
+    totalPages = result.totalPages || 1;
+    page += 1;
+  } while (page <= totalPages);
+  return records;
+}
+
+async function readOrders(tenantId: string): Promise<OrderRecord[]> {
+  if (tenantId.startsWith('local_tenant_')) return readLocalTenantOrders(tenantId);
+  const records = await listStoredTenantOrders(tenantId);
+  return records.map(storedOrder).filter(Boolean) as OrderRecord[];
+}
+
+async function upsertOrder(tenantId: string, order: OrderRecord): Promise<boolean> {
+  if (tenantId.startsWith('local_tenant_')) {
+    const orders = readLocalTenantOrders(tenantId);
+    writeLocalTenantOrders(tenantId, [order, ...orders.filter(item => item.orderNo !== order.orderNo)]);
+    return true;
+  }
+  const result = await store.list<Record<string, unknown>>('tenant_orders', {
+    where: { tenant_id: tenantId, order_no: order.orderNo },
+    page: 1,
+    perPage: 1,
+  });
+  const existing = result.items[0];
+  if (existing?.id) return store.update('tenant_orders', String(existing.id), { order });
+  return Boolean(await store.create('tenant_orders', { tenant_id: tenantId, order_no: order.orderNo, order }));
+}
+
+async function authenticatedTenantId(req: Request): Promise<string | null> {
+  return (await auth.verifyToken(req.headers.authorization))?.tenantId || null;
 }
 
 function parseNumber(value: unknown): number {
@@ -1217,47 +1275,64 @@ enterpriseRouter.post('/notifications/test', async (req, res) => {
   res.json({ ok: true, lastTestAt: notifications.lastTestAt });
 });
 
-enterpriseRouter.get('/orders', (_req, res) => {
-  res.json({ items: readOrders() });
+enterpriseRouter.get('/orders', async (req, res) => {
+  const tenantId = await authenticatedTenantId(req);
+  if (!tenantId) { res.status(401).json({ error: 'Unauthorized' }); return; }
+  res.json({ items: await readOrders(tenantId) });
 });
 
-enterpriseRouter.post('/orders', (req, res) => {
+enterpriseRouter.post('/orders', async (req, res) => {
+  const tenantId = await authenticatedTenantId(req);
+  if (!tenantId) { res.status(401).json({ error: 'Unauthorized' }); return; }
   const order = normalizeOrder({ ...(req.body || {}), source: req.body?.source || '手工录入' });
   if (!order) {
     res.status(400).json({ error: 'invalid order payload' });
     return;
   }
-  const orders = readOrders();
-  const next = [order, ...orders.filter(item => item.orderNo !== order.orderNo)];
-  writeOrders(next);
+  if (!await upsertOrder(tenantId, order)) {
+    res.status(503).json({ error: 'order storage unavailable' });
+    return;
+  }
   res.status(201).json(order);
 });
 
-enterpriseRouter.patch('/orders/:id/status', (req, res) => {
+enterpriseRouter.patch('/orders/:id/status', async (req, res) => {
+  const tenantId = await authenticatedTenantId(req);
+  if (!tenantId) { res.status(401).json({ error: 'Unauthorized' }); return; }
   const status = normalizeStatus(req.body?.status);
-  const orders = readOrders();
+  const orders = await readOrders(tenantId);
   const index = orders.findIndex(order => order.id === req.params.id);
   if (index < 0) {
     res.status(404).json({ error: 'order not found' });
     return;
   }
   orders[index] = { ...orders[index], status, updatedAt: new Date().toISOString() };
-  writeOrders(orders);
+  if (!await upsertOrder(tenantId, orders[index])) {
+    res.status(503).json({ error: 'order storage unavailable' });
+    return;
+  }
   res.json(orders[index]);
 });
 
-enterpriseRouter.post('/orders/import', (req, res) => {
+enterpriseRouter.post('/orders/import', async (req, res) => {
+  const tenantId = await authenticatedTenantId(req);
+  if (!tenantId) { res.status(401).json({ error: 'Unauthorized' }); return; }
   const { csv } = req.body as { csv?: string };
   if (!csv?.trim()) {
     res.status(400).json({ error: 'csv is required' });
     return;
   }
   const result = importOrdersFromCsv(csv);
-  const existing = readOrders();
+  const existing = await readOrders(tenantId);
   const merged = new Map<string, OrderRecord>();
   [...existing, ...result.imported].forEach(order => merged.set(order.orderNo, order));
   const items = [...merged.values()].sort((a, b) => b.orderDate.localeCompare(a.orderDate));
-  writeOrders(items);
+  for (const order of result.imported) {
+    if (!await upsertOrder(tenantId, order)) {
+      res.status(503).json({ error: 'order storage unavailable' });
+      return;
+    }
+  }
   res.json({ ok: true, imported: result.imported.length, skipped: result.skipped, total: items.length });
 });
 

@@ -35,6 +35,7 @@ import { assistLinksRouter } from './routes/assistLinks.js';
 import { initWhatsAppCustomerMaintenance } from './whatsapp/historyImport.js';
 import { whatsappOAuthRouter } from './routes/whatsappOAuth.js';
 import { ensureDeliveryCollections } from './storage/ensureDeliveryCollections.js';
+import { supportAccessRouter } from './routes/supportAccess.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
@@ -132,6 +133,7 @@ app.use('/api/overseas/scheduler', schedulerRouter);
 app.use('/api/overseas/plugins', pluginsRouter);
 app.use('/api/overseas/auth', authRouter);
 app.use('/api/overseas/admin', adminRouter);
+app.use('/api/overseas/support-access', supportAccessRouter);
 app.use('/api/overseas/studio', studioRouter);
 app.use('/api/overseas/platform-integrations', platformIntegrationsRouter);
 app.use('/api/overseas/assistant-threads', assistantThreadsRouter);
