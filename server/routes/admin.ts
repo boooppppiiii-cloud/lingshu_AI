@@ -108,6 +108,91 @@ interface VideoAlertReconciliation {
   warning?: string;
 }
 
+type InspirationContentFormat = 'video' | 'image';
+
+function recordAnalysis(record: Record<string, unknown>): Record<string, unknown> {
+  const value = record.aiAnalysis;
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(String(value || '{}')) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? parsed as Record<string, unknown>
+      : {};
+  } catch {
+    return {};
+  }
+}
+
+function isAdminInspirationRecord(record: Record<string, unknown>, contentFormat: InspirationContentFormat): boolean {
+  const analysis = recordAnalysis(record);
+  if (
+    analysis.seededFromRecordId ||
+    analysis.analysisSource === 'demo-local-video' ||
+    String(analysis.crawlRule || '').includes('演示素材') ||
+    analysis.userVisible === false
+  ) return false;
+
+  if (contentFormat === 'image') {
+    const sourceUrl = String(record.sourceUrl || '').trim();
+    const thumbnailUrl = String(record.thumbnailUrl || '').trim();
+    if (analysis.contentFormat !== 'image' || !sourceUrl || !thumbnailUrl) return false;
+    if (/\/(?:search|explore\/tags)\b/i.test(sourceUrl)) return false;
+    return String(record.platform || '') !== 'instagram' || /\/p\//i.test(sourceUrl);
+  }
+
+  if (analysis.contentFormat === 'image' || analysis.analysisQuality !== 'video' || !analysis.gemini) return false;
+  const analysisSource = String(analysis.analysisSource || '');
+  const geminiStatus = String(analysis.geminiStatus || '');
+  const downloadStatus = String(analysis.downloadStatus || '');
+  const videoFetchStatus = String(analysis.videoFetchStatus || '');
+  if (analysisSource === 'metadata-fallback' || geminiStatus === 'metadata_fallback' || downloadStatus === 'metadata_only') return false;
+  return (!geminiStatus || geminiStatus === 'analyzed')
+    && (!downloadStatus || downloadStatus === 'analyzed' || videoFetchStatus === 'direct_url' || videoFetchStatus === 'fetched');
+}
+
+async function listAdminInspirationVideos(input: {
+  page: number;
+  perPage: number;
+  platform?: string;
+  status?: string;
+  contentFormat: InspirationContentFormat;
+}) {
+  const records: Record<string, unknown>[] = [];
+  const seenSourceUrls = new Set<string>();
+  const where: Record<string, string> = {};
+  if (input.platform) where.platform = input.platform;
+  if (input.status) where.status = input.status;
+  let scanPage = 1;
+  let totalPages = 1;
+  do {
+    const result = await store.list<Record<string, unknown>>('trend_videos', {
+      where: Object.keys(where).length ? where : undefined,
+      sort: '-crawledAt',
+      page: scanPage,
+      perPage: 100,
+    });
+    for (const record of result.items) {
+      if (!isAdminInspirationRecord(record, input.contentFormat)) continue;
+      const sourceUrl = String(record.sourceUrl || '').trim();
+      if (sourceUrl && seenSourceUrls.has(sourceUrl)) continue;
+      if (sourceUrl) seenSourceUrls.add(sourceUrl);
+      records.push(record);
+    }
+    totalPages = Math.max(1, Math.min(100, result.totalPages || 1));
+    scanPage += 1;
+  } while (scanPage <= totalPages);
+
+  const totalItems = records.length;
+  const start = (input.page - 1) * input.perPage;
+  return {
+    items: records.slice(start, start + input.perPage),
+    totalItems,
+    totalPages: Math.max(1, Math.ceil(totalItems / input.perPage)),
+    page: input.page,
+    perPage: input.perPage,
+  };
+}
+
 function readTrendVideoSnapshot(): VideoFailureRecord[] {
   try {
     const parsed = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'data/trend-videos.json'), 'utf8')) as unknown;
@@ -581,6 +666,29 @@ adminRouter.get('/video-alerts', async (req, res) => {
   }, { total: 0, trial: 0, customer: 0, admin: 0, unknown: 0 });
 
   res.json({ admin: admin.email, items, summary, reconciliation });
+});
+
+adminRouter.get('/inspiration-videos', async (req, res) => {
+  const admin = await requireAdminUser(req);
+  if (!admin) {
+    res.status(403).json({ error: 'admin_required' });
+    return;
+  }
+
+  res.setHeader('Cache-Control', 'no-store');
+  const page = Math.max(1, Number(req.query.page || 1) || 1);
+  const perPage = Math.max(1, Math.min(100, Number(req.query.perPage || 20) || 20));
+  const platform = bodyText(req.query.platform);
+  const status = bodyText(req.query.status);
+  const contentFormat: InspirationContentFormat = req.query.contentFormat === 'image' ? 'image' : 'video';
+  const result = await listAdminInspirationVideos({
+    page,
+    perPage,
+    platform: platform || undefined,
+    status: status || undefined,
+    contentFormat,
+  });
+  res.json({ admin: admin.email, ...result });
 });
 
 adminRouter.post('/video-alerts/:id/upload', async (req, res) => {

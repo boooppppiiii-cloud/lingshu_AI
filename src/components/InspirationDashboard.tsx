@@ -2362,13 +2362,24 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
     setVideosLoading(true);
     try {
       const perPage = 100;
-      const r = await fetch(`/api/overseas/videos?page=${nextPage}&perPage=${perPage}&contentFormat=${contentFormat}`, { headers: authHeader() });
-      const data = await r.json().catch(() => ({})) as {
+      const query = `page=${nextPage}&perPage=${perPage}&contentFormat=${contentFormat}`;
+      const [r, adminResponse] = await Promise.all([
+        fetch(`/api/overseas/videos?${query}`, { headers: authHeader() }),
+        fetch(`/api/overseas/admin/inspiration-videos?${query}`, {
+          headers: authHeader(),
+          cache: 'no-store',
+        }),
+      ]);
+      let data = await r.json().catch(() => ({})) as {
         items?: CrawlerRecord[];
         page?: number;
         totalPages?: number;
       };
-      if (!r.ok) throw new Error('视频列表加载失败');
+      if (adminResponse.ok) {
+        data = await adminResponse.json().catch(() => data) as typeof data;
+      } else if (!r.ok) {
+        throw new Error('视频列表加载失败');
+      }
       const videos = recordsToVideos(data.items || []);
       setVideoPage(Number(data.page || nextPage));
       setVideoTotalPages(Math.max(1, Number(data.totalPages || nextPage)));

@@ -6,7 +6,6 @@ import type { Identity } from '../storage/datastore.js';
 const REQUESTS_FILE = path.resolve(process.cwd(), 'data/support-access.json');
 const SETTINGS_FILE = path.resolve(process.cwd(), 'data/support-access-settings.json');
 const TOKEN_PREFIX = 'support-v1.';
-const DEFAULT_TTL_MS = 4 * 60 * 60 * 1000;
 
 type SupportAccessStatus = 'approved' | 'denied' | 'revoked';
 
@@ -36,7 +35,7 @@ interface SupportTokenPayload {
   tenantId: string;
   tenantName: string;
   issuedAt: number;
-  expiresAt: number;
+  expiresAt?: number;
 }
 
 function readJson<T>(file: string, fallback: T): T {
@@ -80,12 +79,6 @@ function tokenSecret(): string {
     throw new Error('SUPPORT_ACCESS_SECRET is required in production');
   }
   return configured || 'lingshu-local-support-access-secret';
-}
-
-function tokenTtlMs(): number {
-  const configured = Number(process.env.SUPPORT_ACCESS_TTL_MS || DEFAULT_TTL_MS);
-  if (!Number.isFinite(configured)) return DEFAULT_TTL_MS;
-  return Math.max(5 * 60 * 1000, Math.min(24 * 60 * 60 * 1000, configured));
 }
 
 function signature(body: string): string {
@@ -148,7 +141,7 @@ export function createSupportAccessRequest(input: {
 export function issueSupportAccessToken(
   requestId: string,
   adminUserId: string,
-): { token: string; expiresAt: string } | null {
+): { token: string } | null {
   const request = readRequests().find(item => item.id === requestId);
   if (
     !request ||
@@ -159,7 +152,6 @@ export function issueSupportAccessToken(
     return null;
   }
 
-  const expiresAt = Date.now() + tokenTtlMs();
   const payload: SupportTokenPayload = {
     requestId: request.id,
     adminUserId: request.requestedByUserId,
@@ -167,13 +159,9 @@ export function issueSupportAccessToken(
     tenantId: request.tenantId,
     tenantName: request.tenantName,
     issuedAt: Date.now(),
-    expiresAt,
   };
   const body = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
-  return {
-    token: `${TOKEN_PREFIX}${body}.${signature(body)}`,
-    expiresAt: new Date(expiresAt).toISOString(),
-  };
+  return { token: `${TOKEN_PREFIX}${body}.${signature(body)}` };
 }
 
 export function verifySupportAccessToken(authHeader: string | undefined): Identity | null {
@@ -194,7 +182,6 @@ export function verifySupportAccessToken(authHeader: string | undefined): Identi
 
   try {
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as SupportTokenPayload;
-    if (!payload.expiresAt || payload.expiresAt <= Date.now()) return null;
     if (!supportAccessDefaultAuthorized(payload.tenantId)) return null;
     const request = readRequests().find(item => item.id === payload.requestId);
     if (
@@ -212,7 +199,6 @@ export function verifySupportAccessToken(authHeader: string | undefined): Identi
         requestId: payload.requestId,
         adminEmail: payload.adminEmail,
         tenantName: payload.tenantName,
-        expiresAt: new Date(payload.expiresAt).toISOString(),
       },
     };
   } catch {

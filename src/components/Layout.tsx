@@ -470,9 +470,7 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
             <div className="flex min-w-0 items-center gap-2 text-emerald-950">
               <ShieldCheck size={14} className="shrink-0" />
               <span className="truncate font-semibold">正在协助：{supportAccess.tenantName}</span>
-              <span className="hidden text-emerald-700 sm:inline">
-                {supportAccess.expiresAt ? `有效至 ${new Date(supportAccess.expiresAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}` : '临时协助会话'}
-              </span>
+              <span className="hidden text-emerald-700 sm:inline">持续协助，直至手动退出</span>
             </div>
             <button type="button" onClick={leaveSupportSession} className="inline-flex shrink-0 items-center gap-1.5 font-semibold text-emerald-800 hover:text-emerald-950">
               <LogOut size={13} />退出协助
