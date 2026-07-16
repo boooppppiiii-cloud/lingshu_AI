@@ -1,7 +1,6 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
-import { pbGet } from '../storage/pb.js';
-import { pbListStrict } from '../storage/pb.js';
+import { pbGet, pbListStrict } from '../storage/pb.js';
 import { demoLimits } from '../lib/demo.js';
 import {
   effectiveOAuthConfig,
@@ -106,6 +105,7 @@ function publicDeliveryTenant(req: Parameters<typeof publicTenantPlatformApp>[0]
     tenantId,
     name: String(tenant?.name || tenant?.companyName || tenant?.company || tenantId),
     contactName: String(tenant?.contactName || tenant?.contact || ''),
+    industry: String(tenant?.industry || ''),
     notes: String(tenant?.notes || ''),
     inviteCode: String(tenant?.inviteCode || ''),
     inviteUrl: tenant?.inviteCode ? `${getPublicOrigin(req)}/register?invite=${encodeURIComponent(String(tenant.inviteCode))}` : '',
@@ -182,8 +182,9 @@ adminRouter.get('/demo-accounts', async (req, res) => {
 
   const limits = demoLimits();
   const registry = readDemoAccountRegistry();
-  const accounts = await Promise.all(Object.values(registry)
+  const trialAccounts = await Promise.all(Object.values(registry)
     .sort((a, b) => a.email.localeCompare(b.email))
+    .filter(entry => entry.status !== 'admin')
     .map(async entry => {
       const tenant = await safePbGet('tenants', entry.tenantId);
       const expiresAt = String(tenant?.subscriptionExpiresAt ?? entry.expiresAt ?? '') || null;
@@ -211,7 +212,52 @@ adminRouter.get('/demo-accounts', async (req, res) => {
       };
     }));
 
-  res.json({ admin: admin.email, accounts });
+  let customerAccounts: Array<{
+    tenantId: string;
+    companyName: string;
+    contactName: string;
+    industry: string;
+    emails: string[];
+    subscriptionPlan: string;
+    subscriptionStatus: string;
+    createdAt: string | null;
+    expiresAt: string | null;
+  }> = [];
+
+  try {
+    const [tenants, users] = await Promise.all([
+      pbListStrict<Record<string, unknown>>('tenants', { perPage: 500, sort: '-created' }),
+      pbListStrict<Record<string, unknown>>('users', { perPage: 500, sort: 'email' }),
+    ]);
+    const trialTenantIds = new Set(trialAccounts.map(account => String(registry[account.email]?.tenantId || '')).filter(Boolean));
+    customerAccounts = tenants.items
+      .map(tenant => {
+        const tenantId = String(tenant.id || tenant.tenantId || '');
+        const subscriptionPlan = String(tenant.subscriptionPlan || '未设置');
+        const subscriptionStatus = String(tenant.subscriptionStatus || '未设置');
+        return {
+          tenantId,
+          companyName: String(tenant.name || tenant.companyName || tenant.company || tenantId),
+          contactName: String(tenant.contactName || tenant.contact || ''),
+          industry: String(tenant.industry || ''),
+          emails: users.items
+            .filter(user => String(user.tenantId || '') === tenantId)
+            .map(user => String(user.email || ''))
+            .filter(Boolean),
+          subscriptionPlan,
+          subscriptionStatus,
+          createdAt: String(tenant.created || tenant.createdAt || '') || null,
+          expiresAt: String(tenant.subscriptionExpiresAt || '') || null,
+        };
+      })
+      .filter(account => account.tenantId && !trialTenantIds.has(account.tenantId))
+      .filter(account => !['trial', 'local', 'admin'].includes(account.subscriptionPlan.toLowerCase()))
+      .sort((a, b) => a.companyName.localeCompare(b.companyName));
+  } catch (error) {
+    console.warn('[admin] customer account list unavailable:', error instanceof Error ? error.message : error);
+  }
+
+  res.json({ admin: admin.email, trialAccounts, customerAccounts });
 });
 
 adminRouter.get('/video-alerts', async (req, res) => {
@@ -362,6 +408,7 @@ adminRouter.post('/delivery/tenants', async (req, res) => {
       companyName,
       contactName: bodyText(req.body?.contactName) || bodyText(req.body?.contact),
       contact: bodyText(req.body?.contactName) || bodyText(req.body?.contact),
+      industry: bodyText(req.body?.industry),
       notes: bodyText(req.body?.notes),
       inviteCode: code,
       subscriptionStatus: 'pending_delivery',

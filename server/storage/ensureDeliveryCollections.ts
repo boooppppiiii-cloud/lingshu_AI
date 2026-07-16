@@ -14,6 +14,7 @@ const TENANTS_FIELDS: FieldDef[] = [
   { name: 'companyName', type: 'text' },
   { name: 'contactName', type: 'text' },
   { name: 'contact', type: 'text' },
+  { name: 'industry', type: 'text' },
   { name: 'notes', type: 'text' },
   { name: 'inviteCode', type: 'text' },
   { name: 'subscriptionStatus', type: 'text' },
@@ -116,9 +117,36 @@ async function createCollection(name: string, fields: FieldDef[]): Promise<void>
 }
 
 async function ensureCollection(name: string, fields: FieldDef[]): Promise<void> {
-  if (await collectionExists(name)) return;
-  await createCollection(name, fields);
-  console.log(`[pb-init] created collection ${name}`);
+  if (!await collectionExists(name)) {
+    await createCollection(name, fields);
+    console.log(`[pb-init] created collection ${name}`);
+    return;
+  }
+
+  const res = await adminFetch(`/api/collections/${encodeURIComponent(name)}`);
+  if (!res.ok) throw new Error(`读取集合 ${name} 失败 (${res.status})`);
+  const collection = await res.json() as { fields?: Array<{ name?: string }>; schema?: Array<{ name?: string }> };
+  const existing = collection.fields ?? collection.schema ?? [];
+  const missing = fields.filter(field => !existing.some(item => item.name === field.name));
+  if (!missing.length) return;
+
+  const attempts = collection.fields
+    ? [{ fields: [...collection.fields, ...missing.map(newField)] }]
+    : [{ schema: [...collection.schema ?? [], ...missing.map(oldSchemaField)] }];
+  let lastDetail = '';
+  for (const body of attempts) {
+    const patch = await adminFetch(`/api/collections/${encodeURIComponent(name)}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    if (patch.ok) {
+      console.log(`[pb-init] added ${missing.map(field => field.name).join(', ')} to ${name}`);
+      return;
+    }
+    lastDetail = `${patch.status} ${await patch.text().catch(() => '')}`;
+  }
+  throw new Error(`更新集合 ${name} 失败：${lastDetail}`);
 }
 
 export async function ensureDeliveryCollections(): Promise<void> {

@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Home, Share2, Users, LayoutGrid,
   Building2, PlugZap, Clock,
-  ChevronRight, LogOut, Loader2, RefreshCcw, X, ShieldCheck, BookOpen,
+  ChevronRight, LogOut, Loader2, RefreshCcw, X, ShieldCheck, BookOpen, ListTree,
 } from 'lucide-react';
 import type { Page, ConversationContext, Conversation, AgentAction } from '../App';
 import { authApi, type AuthSession } from '../lib/auth';
@@ -122,6 +122,49 @@ const isAdminSession = (session?: AuthSession | null) => (
   session?.subscription?.plan === 'admin'
 );
 
+const ADMIN_PAGE_GUIDES: Partial<Record<Page, Array<{ label: string; target: string }>>> = {
+  admin: [
+    { label: '试用账号', target: 'admin-trial-accounts' },
+    { label: '客户账号', target: 'admin-customer-accounts' },
+    { label: '行业账号', target: 'admin-industry-accounts' },
+  ],
+  adminDelivery: [
+    { label: '内容运维', target: 'customer-content-ops' },
+    { label: '客户部署', target: 'customer-deployment' },
+  ],
+};
+
+function AdminPageGuide({ page }: { page: Page }) {
+  const items = ADMIN_PAGE_GUIDES[page];
+  if (!items?.length) return null;
+
+  const jumpTo = (target: string) => {
+    document.getElementById(target)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
+  return (
+    <div className="mx-3 rounded-lg border border-border bg-white p-2 shadow-sm">
+      <div className="flex items-center gap-2 px-1.5 pb-1.5 text-[11px] font-semibold text-text-secondary">
+        <ListTree size={14} className="text-accent" />
+        功能导览
+      </div>
+      <div className="space-y-0.5">
+        {items.map(item => (
+          <button
+            key={item.target}
+            type="button"
+            onClick={() => jumpTo(item.target)}
+            className="flex w-full items-center justify-between rounded-md px-2 py-1.5 text-left text-xs font-medium text-text-secondary transition-colors hover:bg-surface-2 hover:text-text-primary"
+          >
+            <span>{item.label}</span>
+            <ChevronRight size={13} className="text-text-muted" />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function Layout({ page, onNavigate, conversation, children, session, onLogout, suppressRightPanel, onAction, onSessionUpdate, demoGuideActive, onDemoGuideShown, onOpenBusinessDiagnosis }: LayoutProps) {
   const isInConversation = conversation !== null && !suppressRightPanel;
   const [quotaOpen, setQuotaOpen] = useState(false);
@@ -140,7 +183,7 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
     ? [
       ...SECONDARY_NAV.items,
       { id: 'admin' as Page, label: '账号总控', icon: <ShieldCheck size={16} /> },
-      { id: 'adminDelivery' as Page, label: '交付工作台', icon: <PlugZap size={16} /> },
+      { id: 'adminDelivery' as Page, label: '客户运维', icon: <PlugZap size={16} /> },
     ]
     : SECONDARY_NAV.items;
   const tenantName = activeSession?.tenant?.name || activeSession?.user?.name || activeSession?.user?.email?.split('@')[0] || '未命名';
@@ -248,6 +291,8 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
 
         {/* Divider */}
         <div className="mx-4 my-3 border-t border-border" />
+
+        <AdminPageGuide page={page} />
 
         <div className="flex-1 min-h-0" />
 

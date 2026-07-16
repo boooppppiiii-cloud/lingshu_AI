@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle2, Clipboard, KeyRound, Link2, Loader2, Plus, RefreshCcw, Save, ShieldCheck, X } from 'lucide-react';
 import { authHeader } from '../lib/auth';
+import AdminContentOpsAlerts from './AdminContentOpsAlerts';
 
 type Platform = 'meta' | 'google';
 type Status = 'pending' | 'configuring' | 'waiting_customer' | 'importing_history' | 'verifying' | 'active' | 'needs_permanent_token' | 'token_expired' | 'error';
@@ -32,6 +33,7 @@ interface TenantCard {
   tenantId: string;
   name: string;
   contactName?: string;
+  industry?: string;
   notes?: string;
   inviteCode?: string;
   inviteUrl?: string;
@@ -90,7 +92,7 @@ async function jsonFetch(url: string, init?: RequestInit) {
     throw new Error(`租户数据源不可用：${json.detail || '请检查 PocketBase tenants 集合'}`);
   }
   if (!resp.ok && json.error === 'admin_required') {
-    throw new Error('没有管理员权限：请使用管理员邮箱登录后再打开交付工作台');
+    throw new Error('没有管理员权限：请使用管理员邮箱登录后再打开客户运维');
   }
   if (!resp.ok) throw new Error(json.error || '请求失败');
   return json;
@@ -562,7 +564,7 @@ export default function AdminDeliveryPage() {
   const [assistLinks, setAssistLinks] = useState<AssistLinkState>({});
   const [progressBusyKey, setProgressBusyKey] = useState('');
   const [tenantDialogOpen, setTenantDialogOpen] = useState(false);
-  const [tenantForm, setTenantForm] = useState({ companyName: '', contactName: '', notes: '' });
+  const [tenantForm, setTenantForm] = useState({ companyName: '', contactName: '', industry: '', notes: '' });
   const [creatingTenant, setCreatingTenant] = useState(false);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState('');
@@ -682,13 +684,14 @@ export default function AdminDeliveryPage() {
         body: JSON.stringify({
           companyName,
           contactName: tenantForm.contactName.trim(),
+          industry: tenantForm.industry.trim(),
           notes: tenantForm.notes.trim(),
         }),
       });
       if (data.tenant) {
         setTenants(current => [data.tenant, ...current.filter(item => item.tenantId !== data.tenant.tenantId)]);
       }
-      setTenantForm({ companyName: '', contactName: '', notes: '' });
+      setTenantForm({ companyName: '', contactName: '', industry: '', notes: '' });
       setTenantDialogOpen(false);
       setMessage('租户已创建，Meta / Google 向导已进入待配置状态。');
     } catch (err) {
@@ -783,11 +786,11 @@ export default function AdminDeliveryPage() {
     <div className="flex h-full flex-col bg-white">
       <div className="flex h-14 shrink-0 items-center justify-between border-b border-border px-5">
         <div>
-          <p className="text-sm font-black text-text-primary">交付工作台</p>
-          <p className="text-[11px] text-text-muted">按内部部署指南录入每个租户的专属平台应用，不把 ID / Secret 写进代码。</p>
+          <p className="text-sm font-black text-text-primary">客户运维</p>
+          <p className="text-[11px] text-text-muted">集中处理客户部署、平台授权、验收进度和内容入库异常。</p>
         </div>
         <div className="flex items-center gap-2">
-          <span className="rounded-full bg-surface-2 px-2.5 py-1 text-[11px] font-bold text-text-secondary">共 {summary.total} 项 · 已交付 {summary.active} · 风险 {summary.risky}</span>
+          <span className="rounded-full bg-surface-2 px-2.5 py-1 text-[11px] font-bold text-text-secondary">平台配置 {summary.total} 项 · 已交付 {summary.active} · 风险 {summary.risky}</span>
           <button type="button" onClick={() => setTenantDialogOpen(true)} className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white">
             <Plus size={13} /> 新建租户
           </button>
@@ -800,6 +803,9 @@ export default function AdminDeliveryPage() {
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
         {message && <p className="mb-3 rounded-xl bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">{message}</p>}
         {error && <p className="mb-3 rounded-xl bg-red-50 px-3 py-2 text-xs font-bold text-red-700">{error}</p>}
+        <div id="customer-content-ops" className="mb-4 scroll-mt-5">
+          <AdminContentOpsAlerts />
+        </div>
         {loading ? (
           <div className="flex h-60 items-center justify-center text-text-muted"><Loader2 className="animate-spin" /></div>
         ) : tenants.length === 0 ? (
@@ -811,7 +817,7 @@ export default function AdminDeliveryPage() {
             </button>
           </div>
         ) : (
-          <div className="grid gap-4">
+          <div id="customer-deployment" className="grid gap-4 scroll-mt-5">
             {tenants.map(tenant => (
               <section key={tenant.tenantId} className="rounded-3xl border border-border bg-surface p-4">
                 <div className="mb-3 flex items-center justify-between">
@@ -868,6 +874,10 @@ export default function AdminDeliveryPage() {
               <label className="grid gap-1 text-xs font-bold text-text-secondary">
                 联系人
                 <input value={tenantForm.contactName} onChange={event => setTenantForm(current => ({ ...current, contactName: event.target.value }))} className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm font-normal text-text-primary outline-none focus:border-primary" placeholder="例如：王总" />
+              </label>
+              <label className="grid gap-1 text-xs font-bold text-text-secondary">
+                客户行业
+                <input value={tenantForm.industry} onChange={event => setTenantForm(current => ({ ...current, industry: event.target.value }))} className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm font-normal text-text-primary outline-none focus:border-primary" placeholder="例如：美妆个护 / 护肤彩妆" />
               </label>
               <label className="grid gap-1 text-xs font-bold text-text-secondary">
                 备注

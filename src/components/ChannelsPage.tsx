@@ -282,7 +282,7 @@ function AdminDiagnostics({ channels }: { channels: TenantChannelStatus[] }) {
         })}
       </div>
       <p className="mt-4 text-xs text-gray-400">
-        账号 ID、Secret、Token 只在交付工作台维护；这里用于快速判断客户侧看到的状态是否正确。
+        账号 ID、Secret、Token 只在客户运维维护；这里用于快速判断客户侧看到的状态是否正确。
       </p>
     </section>
   );
@@ -414,7 +414,7 @@ function AdminOAuthConfigPanel({
         <label className="flex items-center justify-between gap-4">
           <span>
             <span className="block text-sm font-semibold text-gray-950">允许旧版手填凭证</span>
-            <span className="mt-1 block text-xs text-gray-500">仅用于顾问排障。常规交付请在“交付工作台”完成。</span>
+            <span className="mt-1 block text-xs text-gray-500">仅用于顾问排障。常规交付请在“客户运维”完成。</span>
           </span>
           <input
             type="checkbox"
@@ -484,7 +484,7 @@ function LegacyManualChannels() {
                     <p className="text-sm font-semibold text-gray-900">{channel.label}</p>
                     <p className="text-xs text-gray-500">{channel.type} · {channel.status}</p>
                   </div>
-                  <span className="text-xs text-gray-400">请优先迁移到交付工作台</span>
+                  <span className="text-xs text-gray-400">请优先迁移到客户运维</span>
                 </div>
               ))}
             </div>
@@ -545,7 +545,7 @@ export default function ChannelsPage() {
           <div>
             <h1 className="text-xl font-semibold text-gray-950">账号连接</h1>
             <p className="mt-1 text-sm text-gray-500">
-              客户侧只展示连接进度；App ID、Secret、Token 由灵枢团队在交付工作台维护。
+              客户侧只展示连接进度；App ID、Secret、Token 由灵枢团队在客户运维维护。
             </p>
           </div>
           <button
@@ -605,7 +605,7 @@ export default function ChannelsPage() {
                   {advancedOpen && (
                     <div className="space-y-5 border-t border-gray-100 p-5">
                       <div className="rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                        手填配置只作为顾问排障工具。正式交付请优先使用“交付工作台”的租户卡片。
+                        手填配置只作为顾问排障工具。正式交付请优先使用“客户运维”的租户卡片。
                       </div>
                       {adminOAuthConfig && (
                         <AdminOAuthConfigPanel initialConfig={adminOAuthConfig} onSaved={setAdminOAuthConfig} />
