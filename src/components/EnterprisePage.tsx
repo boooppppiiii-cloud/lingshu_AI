@@ -9,6 +9,7 @@ import {
   parseWorkbook,
   prepareSheet,
 } from '../lib/productImport';
+import SupportAccessControl from './SupportAccessControl';
 
 interface ProductAsset {
   name: string;
@@ -894,7 +895,7 @@ export default function EnterprisePage() {
       const csv = await file.text();
       const result = await fetch('/api/overseas/enterprise/orders/import', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeader() },
         body: JSON.stringify({ csv }),
       }).then(r => r.json());
       if (result.error) throw new Error(result.error);
@@ -1642,13 +1643,15 @@ export default function EnterprisePage() {
             <button type="button" onClick={() => setAdvancedOpen(open => !open)} className="flex w-full items-center justify-between px-5 py-4 text-left">
               <span>
                 <span className="block text-sm font-black text-text-primary">高级设置</span>
-                <span className="mt-1 block text-[11px] text-text-muted">经营策略、品牌调性、Agent 学习记录</span>
+                <span className="mt-1 block text-[11px] text-text-muted">技术支持授权、经营策略、品牌调性、Agent 学习记录</span>
               </span>
               <ChevronDown size={16} className={`text-text-muted transition-transform ${advancedOpen ? 'rotate-180' : ''}`} />
             </button>
             {advancedOpen && (
               <div className="space-y-5 border-t border-border p-5">
                 {notificationSettingsSection}
+
+                <SupportAccessControl />
 
                 <div className="rounded-lg border border-border bg-surface-2/40 p-4">
                   <div className="mb-3 flex items-center gap-2"><Compass size={14} className="text-text-secondary" /><h3 className="text-sm font-black text-text-primary">经营策略</h3></div>

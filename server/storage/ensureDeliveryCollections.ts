@@ -17,6 +17,10 @@ const TENANTS_FIELDS: FieldDef[] = [
   { name: 'industry', type: 'text' },
   { name: 'notes', type: 'text' },
   { name: 'inviteCode', type: 'text' },
+  { name: 'registrationInviteCode', type: 'text' },
+  { name: 'registeredEmail', type: 'text' },
+  { name: 'registeredPasswordCipher', type: 'text' },
+  { name: 'registeredAt', type: 'text' },
   { name: 'subscriptionStatus', type: 'text' },
   { name: 'subscriptionPlan', type: 'text' },
   { name: 'subscriptionExpiresAt', type: 'date' },
@@ -60,6 +64,24 @@ const STYLE_ADOPTION_STATS_FIELDS: FieldDef[] = [
   { name: 'total', type: 'text' },
   { name: 'direct_sent', type: 'text' },
   { name: 'rate', type: 'text' },
+];
+
+const TENANT_PROFILE_FIELDS: FieldDef[] = [
+  { name: 'tenant_id', type: 'text', required: true },
+  { name: 'profile', type: 'json', required: true },
+  { name: 'updated_by', type: 'text' },
+];
+
+const TENANT_ORDER_FIELDS: FieldDef[] = [
+  { name: 'tenant_id', type: 'text', required: true },
+  { name: 'order_no', type: 'text', required: true },
+  { name: 'order', type: 'json', required: true },
+];
+
+const TENANT_SUPPORT_SETTINGS_FIELDS: FieldDef[] = [
+  { name: 'tenant_id', type: 'text', required: true },
+  { name: 'default_authorized', type: 'bool', required: true },
+  { name: 'updated_by', type: 'text' },
 ];
 
 function oldSchemaField(field: FieldDef) {
@@ -154,4 +176,7 @@ export async function ensureDeliveryCollections(): Promise<void> {
   await ensureCollection('tenant_platform_apps', TENANT_PLATFORM_APP_FIELDS);
   await ensureCollection('style_memory', STYLE_MEMORY_FIELDS);
   await ensureCollection('style_adoption_stats', STYLE_ADOPTION_STATS_FIELDS);
+  await ensureCollection('tenant_profiles', TENANT_PROFILE_FIELDS);
+  await ensureCollection('tenant_orders', TENANT_ORDER_FIELDS);
+  await ensureCollection('tenant_support_settings', TENANT_SUPPORT_SETTINGS_FIELDS);
 }

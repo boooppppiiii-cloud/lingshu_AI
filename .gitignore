@@ -27,6 +27,20 @@ data/video-admin-alerts.json
 data/backups/
 data/*backup*/
 data/*.backup-*.json
+# Customer and operational data must never be versioned. Keep only seed templates in Git.
+data/demo-account-registry.json
+data/demo-password-rotations.json
+data/local-auth-accounts.json
+data/local-auth-tenants.json
+data/enterprise.json
+data/enterprise-assets/
+data/orders.json
+data/tenant-orders/
+data/channels.json
+data/plugins.json
+data/tasks.json
+data/trend-videos.json
+data/daily-briefing-queue.json
 logs/
 output/
 tmp/

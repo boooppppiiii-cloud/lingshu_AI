@@ -198,69 +198,7 @@ interface CustomerHint {
   timeline: string[];
 }
 
-const CUSTOMER_HINTS: Record<string, CustomerHint> = {
-  c1: {
-    name: 'Ahmed Al-Rashid',
-    stage: 'call_request',
-    intentScore: 96,
-    product: 'custom hair wigs',
-    timeline: [
-      'Buyer asked to talk with the manager today.',
-      'Buyer needs 500 pcs custom hair wigs.',
-      'AI stopped auto-reply and asked for a suitable call time.',
-    ],
-  },
-  c2: {
-    name: 'Fatima Hassan',
-    stage: 'quoted',
-    intentScore: 88,
-    product: 'logo packaging',
-    timeline: [
-      'Buyer discussed price and custom logo packaging.',
-      'Quote draft is ready but needs owner confirmation.',
-    ],
-  },
-  c3: {
-    name: 'Maria Santos',
-    stage: 'sample_followup',
-    intentScore: 78,
-    product: 'sample policy',
-    timeline: [
-      'Buyer is waiting for sample policy and shipping address confirmation.',
-      'AI suggested a sample policy reply.',
-    ],
-  },
-  c4: {
-    name: 'John Thompson',
-    stage: 'won',
-    intentScore: 82,
-    product: '义乌小商品样品盒',
-    timeline: [
-      'Customer has confirmed a sample order.',
-      'Next step is sending the tracking number and creating delivery follow-up.',
-    ],
-  },
-  c5: {
-    name: 'Khalid Mohammed',
-    stage: 'silent60',
-    intentScore: 89,
-    product: '棕色直发 14 寸',
-    timeline: [
-      'Existing high-value customer has been silent for more than 60 days.',
-      'Retention task suggests a new catalog wake-up message.',
-    ],
-  },
-  c6: {
-    name: 'Nguyen Van A',
-    stage: 'auto_reception',
-    intentScore: 31,
-    product: '发饰批发',
-    timeline: [
-      'Buyer only asked for a catalog.',
-      'AI has sent catalog and basic wholesale pack automatically.',
-    ],
-  },
-};
+const CUSTOMER_HINTS: Record<string, CustomerHint> = {};
 
 const SYSTEM_PROMPT = `你是灵枢 AI「我的客户」里的转化助手。
 请返回 2 到 3 条给中国商家看的主动建议。

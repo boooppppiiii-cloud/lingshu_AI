@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState } from 'react';
-import { CUSTOMERS } from '../mocks/customers';
 import { authHeader } from '../lib/auth';
 import type { CustomerProfile, TimelineEvent } from '../types/customer';
 
@@ -16,7 +15,7 @@ function cloneCustomer(customer: CustomerProfile): CustomerProfile {
   };
 }
 
-export function useCustomers(): {
+export function useCustomers(refreshKey = 0): {
   customers: CustomerProfile[];
   updateCustomer: (id: string, patch: Partial<CustomerProfile>) => void;
   appendTimelineEvent: (id: string, event: TimelineEvent) => void;
@@ -24,7 +23,7 @@ export function useCustomers(): {
   removeTimelineEvent: (customerId: string, eventId: string) => void;
   loading: boolean;
 } {
-  const [customers, setCustomers] = useState<CustomerProfile[]>(() => CUSTOMERS.map(cloneCustomer));
+  const [customers, setCustomers] = useState<CustomerProfile[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
@@ -41,7 +40,7 @@ export function useCustomers(): {
         const status = await fetch('/api/overseas/platform-integrations/whatsapp/status', { headers: authHeader() }).then(resp => resp.ok ? resp.json() : null);
         const shouldUseLive = Boolean(status?.connected && status?.source !== 'demo');
         if (!shouldUseLive) {
-          if (alive) setCustomers(CUSTOMERS.map(cloneCustomer));
+          if (alive) setCustomers([]);
           return;
         }
         await loadLiveCustomers();
@@ -49,7 +48,7 @@ export function useCustomers(): {
           void loadLiveCustomers().catch(() => {});
         }, 30_000);
       } catch {
-        if (alive) setCustomers(CUSTOMERS.map(cloneCustomer));
+        if (alive) setCustomers([]);
       } finally {
         if (alive) setLoading(false);
       }
@@ -59,7 +58,7 @@ export function useCustomers(): {
       alive = false;
       if (timer) window.clearInterval(timer);
     };
-  }, []);
+  }, [refreshKey]);
 
   const updateCustomer = useCallback((id: string, patch: Partial<CustomerProfile>) => {
     setCustomers(list => list.map(customer => (

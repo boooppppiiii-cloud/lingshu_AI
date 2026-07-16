@@ -31,6 +31,16 @@ const COLLECTIONS: { name: string; fields: Field[] }[] = [
     name: 'tenants',
     fields: [
       { name: 'name', type: 'text' },
+      { name: 'companyName', type: 'text' },
+      { name: 'contactName', type: 'text' },
+      { name: 'contact', type: 'text' },
+      { name: 'industry', type: 'text' },
+      { name: 'notes', type: 'text' },
+      { name: 'inviteCode', type: 'text' },
+      { name: 'registrationInviteCode', type: 'text' },
+      { name: 'registeredEmail', type: 'text' },
+      { name: 'registeredPasswordCipher', type: 'text' },
+      { name: 'registeredAt', type: 'text' },
       { name: 'subscriptionStatus', type: 'text' },     // active/trialing/past_due/canceled/expired/none
       { name: 'subscriptionPlan', type: 'text' },
       { name: 'subscriptionExpiresAt', type: 'text' },  // ISO；空=不过期
@@ -90,6 +100,30 @@ const COLLECTIONS: { name: string; fields: Field[] }[] = [
       { name: 'videoIds', type: 'text' },
       { name: 'selectedIds', type: 'text' },
       { name: 'status', type: 'text' },
+    ],
+  },
+  {
+    name: 'tenant_profiles',
+    fields: [
+      { name: 'tenant_id', type: 'text', required: true },
+      { name: 'profile', type: 'json', required: true },
+      { name: 'updated_by', type: 'text' },
+    ],
+  },
+  {
+    name: 'tenant_orders',
+    fields: [
+      { name: 'tenant_id', type: 'text', required: true },
+      { name: 'order_no', type: 'text', required: true },
+      { name: 'order', type: 'json', required: true },
+    ],
+  },
+  {
+    name: 'tenant_support_settings',
+    fields: [
+      { name: 'tenant_id', type: 'text', required: true },
+      { name: 'default_authorized', type: 'bool', required: true },
+      { name: 'updated_by', type: 'text' },
     ],
   },
   {

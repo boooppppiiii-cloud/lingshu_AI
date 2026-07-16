@@ -152,6 +152,8 @@ class PageErrorBoundary extends Component<
 export default function App() {
   if (window.location.pathname.startsWith('/assist/')) return <AssistLinkPage />;
 
+  const isRegistrationEntry = window.location.pathname === '/register' &&
+    Boolean(new URLSearchParams(window.location.search).get('invite')?.trim());
   const [page, setPage] = useState<Page>(loadPage);
   const [conversation, setConversation] = useState<ConversationContext | null>(null);
   const [scriptPanelOpen, setScriptPanelOpen] = useState(false);
@@ -203,13 +205,17 @@ export default function App() {
   const reopenBusinessDiagnosis = () => setBusinessDiagnosisOpen(true);
 
   useEffect(() => {
+    if (isRegistrationEntry) {
+      setAuthLoading(false);
+      return;
+    }
     authApi.me().then(s => {
       setDemoProgressScope(progressScopeFor(s));
       setSession(s);
       showBusinessDiagnosisFor(s);
       setAuthLoading(false);
     });
-  }, []);
+  }, [isRegistrationEntry]);
   useEffect(() => {
     if (!session) return;
     const timer = window.setInterval(() => {
@@ -300,6 +306,9 @@ export default function App() {
   const kickoffFor = (a: AgentType) => (kickoff && kickoff.agent === a ? { text: kickoff.text, key: kickoff.key } : undefined);
 
   const handleAuthed = (s: AuthSession) => {
+    if (isRegistrationEntry) {
+      window.history.replaceState(null, '', '/');
+    }
     setDemoProgressScope(progressScopeFor(s));
     setSession(s);
     showBusinessDiagnosisFor(s);
@@ -322,6 +331,9 @@ export default function App() {
     setSession(null);
   };
 
+  if (isRegistrationEntry) {
+    return <AuthScreen onAuthed={handleAuthed} />;
+  }
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">

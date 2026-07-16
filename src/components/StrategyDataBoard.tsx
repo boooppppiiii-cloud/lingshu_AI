@@ -4,8 +4,8 @@ import TrafficDataBoard from './TrafficDataBoard';
 import InquiryDataBoard from './InquiryDataBoard';
 import CrmDataBoard from './CrmDataBoard';
 import type { AgentAction } from '../App';
-import { CUSTOMERS } from '../mocks/customers';
 import { authHeader } from '../lib/auth';
+import { useCustomers } from '../hooks/useCustomers';
 
 /* 策略页「数据大屏」——全平台经营数据只在策略 agent 看（负责"想"）；
    流量/转化/留存三个 agent 是干活的工作台，不看数据。
@@ -105,11 +105,12 @@ export default function StrategyDataBoard({ onAction }: { onAction?: AgentAction
   const [tab, setTab] = useState<TabId>('traffic');
   const [exposure, setExposure] = useState<{ ready: boolean; value: number }>({ ready: false, value: 0 });
   const [orders, setOrders] = useState<OrderRecord[]>([]);
+  const { customers } = useCustomers();
   const windowDays = 30;
 
   const Active = (TABS.find(t => t.id === tab) ?? TABS[0]).Comp;
   const selectedMetrics = new Set(selectedMetricByTab[tab]);
-  const whatsAppInquiries = useMemo(() => CUSTOMERS.filter(customer => customer.source === 'whatsapp'), []);
+  const whatsAppInquiries = useMemo(() => customers.filter(customer => customer.source === 'whatsapp'), [customers]);
   const effectiveInquiries = useMemo(() => whatsAppInquiries.filter(customer => customer.intentScore >= 70), [whatsAppInquiries]);
   const validOrders = useMemo(() => orders.filter(order => order.status !== '待付款' && order.status !== '退款'), [orders]);
   const convertedInquiries = useMemo(() => whatsAppInquiries.filter(customer => customer.stage === 'quoted' || customer.stage === 'won' || customer.orders.length > 0), [whatsAppInquiries]);

@@ -2,6 +2,8 @@ import type { Request, Response, NextFunction, RequestHandler } from 'express';
 import { auth } from '../storage/index.js';
 import { pbGet } from '../storage/pb.js';
 import type { AuthLocals } from './auth.js';
+import { readDemoAccountRegistry } from '../lib/demoAccounts.js';
+import { getLocalTenant } from '../lib/localTenants.js';
 
 /* ──────────────────────────────────────────────────────────────────────────
    订阅收费墙
@@ -41,7 +43,32 @@ export function isSubscriptionEnforced(): boolean {
 /** 读取租户当前订阅；记录缺失时返回 none */
 export async function getTenantSubscription(tenantId: string): Promise<Subscription> {
   if (tenantId.startsWith('local_tenant_')) {
-    return { status: 'trialing', plan: 'local', expiresAt: null };
+    const localTenant = getLocalTenant(tenantId);
+    if (localTenant) {
+      return {
+        status: localTenant.subscriptionStatus === 'active' ? 'active' : 'none',
+        plan: localTenant.subscriptionPlan || 'customer',
+        expiresAt: localTenant.subscriptionExpiresAt,
+      };
+    }
+
+    const registryEntry = Object.values(readDemoAccountRegistry()).find(entry => {
+      const slug = entry.email.toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'demo';
+      return entry.tenantId === tenantId ||
+        `local_tenant_trial_${slug}` === tenantId ||
+        `local_tenant_admin_${slug}` === tenantId ||
+        `local_tenant_${slug}` === tenantId;
+    });
+    if (registryEntry?.status === 'admin' || tenantId.startsWith('local_tenant_admin_')) {
+      return { status: 'active', plan: 'admin', expiresAt: null };
+    }
+    if (registryEntry || tenantId.startsWith('local_tenant_trial_')) {
+      return { status: 'trialing', plan: 'trial', expiresAt: registryEntry?.expiresAt ?? null };
+    }
+    if (tenantId.startsWith('local_tenant_customer_')) {
+      return { status: 'active', plan: 'customer', expiresAt: null };
+    }
+    return { status: 'active', plan: 'local', expiresAt: null };
   }
   let record: Record<string, unknown> | null = null;
   try {

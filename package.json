@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "start": "NODE_ENV=production NODE_USE_ENV_PROXY=1 tsx server/index.ts",
     "setup:pb": "tsx scripts/setup-pb.ts",
+    "migrate:tenant-business-data": "tsx scripts/migrate-tenant-business-data.ts",
     "demo:sync-accounts": "tsx scripts/sync-demo-accounts.ts",
     "import:trend-videos": "tsx scripts/import-trend-videos.ts",
     "demo:seed": "tsx scripts/demo-seed.ts",

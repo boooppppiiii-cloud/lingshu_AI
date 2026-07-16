@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { AlertCircle, Info, MessageSquare, RefreshCw, TrendingUp, UserCheck } from 'lucide-react';
-import { CUSTOMERS } from '../mocks/customers';
+import { useCustomers } from '../hooks/useCustomers';
 import type { CustomerProfile } from '../types/customer';
 
 const STAGE_LABEL: Record<CustomerProfile['stage'], string> = {
@@ -26,10 +26,11 @@ function isWhatsAppInquiry(customer: CustomerProfile) {
 
 export default function InquiryDataBoard(_props: { windowDays?: number }) {
   const [refreshKey, setRefreshKey] = useState(0);
+  const { customers, loading } = useCustomers(refreshKey);
 
-  const inquiries = useMemo(() => [...CUSTOMERS]
+  const inquiries = useMemo(() => [...customers]
     .filter(isWhatsAppInquiry)
-    .sort((a, b) => b.priority - a.priority || b.intentScore - a.intentScore), [refreshKey]);
+    .sort((a, b) => b.priority - a.priority || b.intentScore - a.intentScore), [customers]);
 
   const summary = useMemo(() => {
     const highIntent = inquiries.filter(item => item.intentScore >= 80).length;
@@ -51,7 +52,9 @@ export default function InquiryDataBoard(_props: { windowDays?: number }) {
         </button>
       </div>
 
-      {inquiries.length === 0 ? (
+      {loading ? (
+        <div className="rounded-xl border border-dashed border-border bg-surface p-6 text-sm text-text-muted">正在读取 WhatsApp 客户会话...</div>
+      ) : inquiries.length === 0 ? (
         <EmptyState text="我的客户 tab 中暂无 WhatsApp 会话，因此询盘页不展示无真实来源的漏斗、响应时效或来源占比组件。" />
       ) : (
         <>

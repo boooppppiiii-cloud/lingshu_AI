@@ -34,6 +34,17 @@ function localId(value: string): string {
   return norm(value).replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '') || 'demo';
 }
 
+function localTokenEmail(authHeader?: string): string {
+  const token = authHeader?.replace(/^Bearer\s+/i, '').trim();
+  if (!token?.startsWith('local-demo.')) return '';
+  try {
+    const payload = JSON.parse(Buffer.from(token.slice('local-demo.'.length), 'base64url').toString('utf8')) as { email?: string };
+    return norm(payload.email || '');
+  } catch {
+    return '';
+  }
+}
+
 function readJson<T>(file: string, fallback: T): T {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8')) as T;
@@ -149,6 +160,8 @@ export async function rotateExpiredTrialPassword(user: { id?: string; email?: st
 export function isAdminEmail(email?: string): boolean {
   const normalized = norm(email ?? '');
   if (!normalized) return false;
+  const localAdminEmail = norm(process.env.LOCAL_ADMIN_EMAIL ?? '');
+  if (localAdminEmail && normalized === localAdminEmail) return true;
   const registry = readDemoAccountRegistry();
   if (registry[normalized]?.status === 'admin') return true;
   const allowed = String(process.env.ADMIN_DASHBOARD_EMAILS ?? '')
@@ -174,7 +187,7 @@ export async function requireAdminUser(req: Request): Promise<{ userId: string; 
     `local_user_${localId(entry.email)}` === id.userId ||
     `local_tenant_${localId(entry.email)}` === id.tenantId
   );
-  const email = norm(String(user?.email ?? registryEntry?.email ?? ''));
+  const email = norm(String(user?.email ?? registryEntry?.email ?? localTokenEmail(req.headers.authorization)));
   if (!isAdminEmail(email)) return null;
   return { ...id, email };
 }

@@ -5,9 +5,9 @@ import type { AgentType } from '../App';
 import { authHeader } from '../lib/auth';
 
 const AGENTS = [
-  { type: 'strategy' as AgentType, name: '首页', desc: '经营总览、策略编排和关键动作拆解', icon: Compass, color: '#4f46e5', bg: 'rgba(79,70,229,0.08)', status: 'active' as const, recentActivity: '生成斋月中东推广方案', stats: [{ label: '本周方案', value: '6' }, { label: '协调任务', value: '14' }, { label: '采纳率', value: '91%' }] },
-  { type: 'traffic' as AgentType, name: '我的社媒', desc: '竞品视频克隆、脚本生成、素材去重矩阵', icon: Zap, color: '#d97706', bg: 'rgba(217,119,6,0.08)', status: 'running' as const, recentActivity: '分析 TikTok 10 条假发爆款', stats: [{ label: '今日脚本', value: '12' }, { label: '覆盖平台', value: '5' }, { label: '去重命中', value: '3' }] },
-  { type: 'conversion' as AgentType, name: '我的客户', desc: '询盘筛选、自动回复、跟单建议和老客唤醒', icon: MessageSquare, color: '#0891b2', bg: 'rgba(8,145,178,0.08)', status: 'idle' as const, recentActivity: '处理 3 条 WhatsApp 阿语询盘', stats: [{ label: '今日询盘', value: '23' }, { label: '高意向', value: '8' }, { label: '待唤醒', value: '65' }] },
+  { type: 'strategy' as AgentType, name: '首页', desc: '经营总览、策略编排和关键动作拆解', icon: Compass, color: '#4f46e5', bg: 'rgba(79,70,229,0.08)', status: 'active' as const, recentActivity: '等待真实经营数据接入', stats: [{ label: '本周方案', value: '—' }, { label: '协调任务', value: '—' }, { label: '采纳率', value: '—' }] },
+  { type: 'traffic' as AgentType, name: '我的社媒', desc: '竞品视频克隆、脚本生成、素材去重矩阵', icon: Zap, color: '#d97706', bg: 'rgba(217,119,6,0.08)', status: 'idle' as const, recentActivity: '等待社媒账号授权', stats: [{ label: '今日脚本', value: '—' }, { label: '覆盖平台', value: '—' }, { label: '去重命中', value: '—' }] },
+  { type: 'conversion' as AgentType, name: '我的客户', desc: '询盘筛选、自动回复、跟单建议和老客唤醒', icon: MessageSquare, color: '#0891b2', bg: 'rgba(8,145,178,0.08)', status: 'idle' as const, recentActivity: '等待 WhatsApp 客户接入', stats: [{ label: '今日询盘', value: '—' }, { label: '高意向', value: '—' }, { label: '待唤醒', value: '—' }] },
 ];
 const SM = { active: { label: '运行中', color: '#16a34a' }, running: { label: '执行中', color: '#d97706' }, idle: { label: '待机', color: '#94a3b8' } };
 

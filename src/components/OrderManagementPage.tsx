@@ -24,6 +24,7 @@ import {
   BarChart,
   Bar,
 } from 'recharts';
+import { authHeader } from '../lib/auth';
 
 type OrderStatus = '待付款' | '已付款' | '生产中' | '已发货' | '已完成' | '退款';
 
@@ -97,7 +98,7 @@ export default function OrderManagementPage() {
   const [status, setStatus] = useState<'全部' | OrderStatus>('全部');
 
   useEffect(() => {
-    fetch('/api/overseas/enterprise/orders')
+    fetch('/api/overseas/enterprise/orders', { headers: authHeader() })
       .then(r => r.json())
       .then((data: { items?: OrderRecord[] }) => setOrders(Array.isArray(data.items) ? data.items : []))
       .catch(() => setOrders([]))
@@ -167,7 +168,7 @@ export default function OrderManagementPage() {
     };
     const next = await fetch('/api/overseas/enterprise/orders', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeader() },
       body: JSON.stringify(payload),
     }).then(r => r.json());
     setOrders(prev => [next, ...prev.filter(order => order.orderNo !== next.orderNo)]);
@@ -177,7 +178,7 @@ export default function OrderManagementPage() {
   const setOrderStatus = async (id: string, nextStatus: OrderStatus) => {
     const updated = await fetch(`/api/overseas/enterprise/orders/${id}/status`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...authHeader() },
       body: JSON.stringify({ status: nextStatus }),
     }).then(r => r.json());
     setOrders(prev => prev.map(order => order.id === id ? updated : order));
@@ -389,7 +390,7 @@ export default function OrderManagementPage() {
 
         <div className="mt-4 flex flex-wrap items-center gap-2 text-[11px] text-text-muted">
           <CheckCircle2 size={12} />
-          说明：当前版本使用服务端真实订单库 data/orders.json；企业中心支持 CSV 导入，订单页支持手工补录，后续可对接 Shopify、ERP、支付和履约系统自动同步。
+          订单仅展示当前企业空间已导入或手工录入的真实记录；后续可继续接入 Shopify、ERP、支付和履约系统自动同步。
         </div>
         </div>
       </div>

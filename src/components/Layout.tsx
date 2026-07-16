@@ -201,7 +201,7 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
   const suggestedVideoSeconds = suggestedVideoJobs * 8;
   const suggestedAiVideoAnalyses = Math.min(suggestedGenerations, byToken(remainingTokens, 1200));
   const isTrialAccount = Boolean(
-    activeSession?.demo ||
+    activeSession?.demo?.enabled ||
     activeSession?.tenant?.subscriptionPlan === 'trial' ||
     activeSession?.subscription?.plan === 'trial' ||
     subStatus === 'trialing'

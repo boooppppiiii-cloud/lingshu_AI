@@ -28,9 +28,12 @@ interface CustomerAccount {
   contactName: string;
   industry: string;
   emails: string[];
+  password: string;
+  inviteCode: string;
   subscriptionPlan: string;
   subscriptionStatus: string;
   createdAt: string | null;
+  registeredAt: string | null;
   expiresAt: string | null;
 }
 
@@ -73,8 +76,8 @@ export default function AdminDashboard() {
     return groups;
   }, {})).slice(0, 6), [styleTrends]);
 
-  const load = async () => {
-    setLoading(true);
+  const load = async (options: { silent?: boolean } = {}) => {
+    if (!options.silent) setLoading(true);
     setError(null);
     try {
       const [accountResp, trendResp] = await Promise.all([
@@ -90,11 +93,17 @@ export default function AdminDashboard() {
     } catch (err) {
       setError(err instanceof Error ? err.message : '读取失败');
     } finally {
-      setLoading(false);
+      if (!options.silent) setLoading(false);
     }
   };
 
-  useEffect(() => { void load(); }, []);
+  useEffect(() => {
+    void load();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void load({ silent: true });
+    }, 10_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   return (
     <div className="h-full flex flex-col bg-white">
@@ -135,7 +144,7 @@ export default function AdminDashboard() {
         </section>
 
         <section id="admin-trial-accounts" className="scroll-mt-5">
-          <div className="mb-2 flex items-center justify-between"><div><h2 className="text-sm font-semibold text-text-primary">试用账号表</h2><p className="mt-0.5 text-xs text-text-muted">跟进激活、试用期限、额度消耗和到期密码轮换。</p></div><span className="text-xs text-text-muted">{trialAccounts.length} 个账号</span></div>
+          <div className="mb-2 flex items-center justify-between"><div><h2 className="text-sm font-semibold text-text-primary">试用账号表</h2><p className="mt-0.5 text-xs text-text-muted">备用试用账号无需注册，管理员把账号密码交给测试用户后即可直接登录。</p></div><span className="text-xs text-text-muted">{trialAccounts.length} 个账号</span></div>
           <div className="overflow-auto border border-border rounded-lg">
             <table className="min-w-[1180px] w-full text-xs"><thead className="bg-surface-2 text-text-muted"><tr className="text-left"><th className="px-3 py-2 font-semibold">账号</th><th className="px-3 py-2 font-semibold">密码</th><th className="px-3 py-2 font-semibold">流转状态</th><th className="px-3 py-2 font-semibold">试用进度</th><th className="px-3 py-2 font-semibold">激活时间</th><th className="px-3 py-2 font-semibold">到期时间</th><th className="px-3 py-2 font-semibold">Token 今日/总计</th><th className="px-3 py-2 font-semibold">今日功能次数</th><th className="px-3 py-2 font-semibold">轮换</th></tr></thead>
               <tbody className="divide-y divide-border">{loading ? <tr><td colSpan={9} className="px-3 py-8 text-center text-text-muted">读取中...</td></tr> : trialAccounts.map(account => <tr key={account.email} className="hover:bg-surface-2/60"><td className="px-3 py-2 font-semibold text-text-primary whitespace-nowrap">{account.email}</td><td className="px-3 py-2 font-mono text-text-secondary whitespace-nowrap">{account.password}</td><td className="px-3 py-2 text-text-secondary whitespace-nowrap">{account.status}</td><td className="px-3 py-2 text-text-secondary whitespace-nowrap">{account.trialDays ? `第 ${account.trialDay ?? '-'} / ${account.trialDays} 天，剩余 ${account.daysRemaining ?? '-'} 天` : '长期有效'}</td><td className="px-3 py-2 text-text-secondary whitespace-nowrap">{fmtDate(account.activatedAt)}</td><td className="px-3 py-2 text-text-secondary whitespace-nowrap">{fmtDate(account.expiresAt)}</td><td className="px-3 py-2 text-text-secondary whitespace-nowrap">{fmtTokens(account.tokenUsedToday)} / {fmtTokens(account.tokenUsedTotal)}{account.tokenLimit ? ` / ${fmtTokens(account.tokenLimit)}` : ''}</td><td className="px-3 py-2 text-text-secondary whitespace-nowrap">对话 {account.aiChatToday} · 生成 {account.generationToday} · 渲染 {account.renderToday} · 视频 {account.videoGenerationToday}</td><td className="px-3 py-2 text-text-secondary whitespace-nowrap">{account.rotatedAt ? `${fmtDate(account.rotatedAt)} · ${account.rotationPassword ?? '-'}` : '-'}</td></tr>)}{!loading && !trialAccounts.length && <tr><td colSpan={9} className="px-3 py-8 text-center text-text-muted">暂无试用账号</td></tr>}</tbody>
@@ -144,8 +153,8 @@ export default function AdminDashboard() {
         </section>
 
         <section id="admin-customer-accounts" className="mt-6 scroll-mt-5">
-          <div className="mb-2 flex items-center justify-between"><div><h2 className="text-sm font-semibold text-text-primary">客户账号表</h2><p className="mt-0.5 text-xs text-text-muted">查看已交付或订阅客户的主体、登录账号和订阅状态。</p></div><span className="text-xs text-text-muted">{customerAccounts.length} 个客户</span></div>
-          <div className="overflow-auto border border-border rounded-lg"><table className="min-w-[940px] w-full text-xs"><thead className="bg-surface-2 text-text-muted"><tr className="text-left"><th className="px-3 py-2 font-semibold">客户主体</th><th className="px-3 py-2 font-semibold">联系人</th><th className="px-3 py-2 font-semibold">所属行业</th><th className="px-3 py-2 font-semibold">登录账号</th><th className="px-3 py-2 font-semibold">订阅方案</th><th className="px-3 py-2 font-semibold">账号状态</th><th className="px-3 py-2 font-semibold">开通时间</th><th className="px-3 py-2 font-semibold">到期时间</th><th className="px-3 py-2 font-semibold">租户 ID</th></tr></thead><tbody className="divide-y divide-border">{loading ? <tr><td colSpan={9} className="px-3 py-8 text-center text-text-muted">读取中...</td></tr> : customerAccounts.map(account => <tr key={account.tenantId} className="hover:bg-surface-2/60"><td className="px-3 py-2 font-semibold text-text-primary whitespace-nowrap">{account.companyName}</td><td className="px-3 py-2 text-text-secondary whitespace-nowrap">{account.contactName || '-'}</td><td className="px-3 py-2 text-text-secondary whitespace-nowrap">{account.industry || '未标注行业'}</td><td className="px-3 py-2 text-text-secondary">{account.emails.length ? account.emails.join('、') : '待客户注册'}</td><td className="px-3 py-2 text-text-secondary whitespace-nowrap">{account.subscriptionPlan}</td><td className="px-3 py-2 text-text-secondary whitespace-nowrap">{account.subscriptionStatus}</td><td className="px-3 py-2 text-text-secondary whitespace-nowrap">{fmtDate(account.createdAt)}</td><td className="px-3 py-2 text-text-secondary whitespace-nowrap">{fmtDate(account.expiresAt)}</td><td className="px-3 py-2 font-mono text-text-muted whitespace-nowrap">{account.tenantId}</td></tr>)}{!loading && !customerAccounts.length && <tr><td colSpan={9} className="px-3 py-8 text-center text-text-muted">暂无客户账号</td></tr>}</tbody></table></div>
+          <div className="mb-2 flex items-center justify-between"><div><h2 className="text-sm font-semibold text-text-primary">客户账号表</h2><p className="mt-0.5 text-xs text-text-muted">注册码无需预设账密；客户完成注册后，账号、初始密码和已使用邀请码会自动出现在这里。</p></div><span className="text-xs text-text-muted">{customerAccounts.length} 个客户</span></div>
+          <div className="overflow-auto border border-border rounded-lg"><table className="min-w-[1260px] w-full text-xs"><thead className="bg-surface-2 text-text-muted"><tr className="text-left"><th className="px-3 py-2 font-semibold">客户主体</th><th className="px-3 py-2 font-semibold">联系人</th><th className="px-3 py-2 font-semibold">所属行业</th><th className="px-3 py-2 font-semibold">登录账号</th><th className="px-3 py-2 font-semibold">初始密码</th><th className="px-3 py-2 font-semibold">已使用邀请码</th><th className="px-3 py-2 font-semibold">订阅方案</th><th className="px-3 py-2 font-semibold">账号状态</th><th className="px-3 py-2 font-semibold">注册时间</th><th className="px-3 py-2 font-semibold">到期时间</th><th className="px-3 py-2 font-semibold">租户 ID</th></tr></thead><tbody className="divide-y divide-border">{loading ? <tr><td colSpan={11} className="px-3 py-8 text-center text-text-muted">读取中...</td></tr> : customerAccounts.map(account => <tr key={account.tenantId} className="hover:bg-surface-2/60"><td className="px-3 py-2 font-semibold text-text-primary whitespace-nowrap">{account.companyName}</td><td className="px-3 py-2 text-text-secondary whitespace-nowrap">{account.contactName || '-'}</td><td className="px-3 py-2 text-text-secondary whitespace-nowrap">{account.industry || '未标注行业'}</td><td className="px-3 py-2 text-text-secondary">{account.emails.length ? account.emails.join('、') : '待客户注册'}</td><td className="px-3 py-2 font-mono text-text-secondary whitespace-nowrap">{account.password || '待客户注册'}</td><td className="px-3 py-2 font-mono text-text-secondary whitespace-nowrap">{account.inviteCode || '-'}</td><td className="px-3 py-2 text-text-secondary whitespace-nowrap">{account.subscriptionPlan}</td><td className="px-3 py-2 text-text-secondary whitespace-nowrap">{account.subscriptionStatus}</td><td className="px-3 py-2 text-text-secondary whitespace-nowrap">{fmtDate(account.registeredAt || account.createdAt)}</td><td className="px-3 py-2 text-text-secondary whitespace-nowrap">{fmtDate(account.expiresAt)}</td><td className="px-3 py-2 font-mono text-text-muted whitespace-nowrap">{account.tenantId}</td></tr>)}{!loading && !customerAccounts.length && <tr><td colSpan={11} className="px-3 py-8 text-center text-text-muted">暂无客户账号</td></tr>}</tbody></table></div>
         </section>
 
         <section id="admin-industry-accounts" className="mt-6 scroll-mt-5">

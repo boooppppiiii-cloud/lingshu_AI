@@ -268,9 +268,9 @@ function ConversionPanel({ conversation, onAction }: { conversation: Conversatio
           <SectionHeader label="快捷工具" />
           <div className="space-y-1.5">
             {[
-              { icon: <MessageSquare size={11} />, label: '生成WhatsApp跟单模板', color: '#0891b2', task: '针对"已报价、3 天未回复"的大单询盘（客户 Ahmed，定制类 500 件，已报价：起订 200 件、500 件 95 折、标准 25 天/加急 18 天 +8%），直接写一条可立即发送的 WhatsApp 跟单话术，中英双语，含一个轻促单的优惠钩子。不要解释原理、不要反问要信息。' },
-              { icon: <Users size={11} />, label: '转人工 · 标记大单', color: '#d97706', task: '把当前大单询盘直接生成转人工交接摘要，按此格式给结果，不要反问：客户：Ahmed（沙特，定制类 500 件，$2,400）｜已报价：起订 200、500 件 95 折、标准 25 天/加急 18 天(+8%)｜风险点：价格敏感、已 3 天未回复｜建议人工首句话术：（给一句中英）' },
-              { icon: <TrendingUp size={11} />, label: '查看询盘转化漏斗', color: '#16a34a', task: '基于这份近 30 天询盘漏斗数据，直接指出主要卡点 + 给 3 条可执行优化建议，不要再问我要数据、也不要讲通用原理：询盘 642 → 响应 603(94%) → 报价 271(45%) → 成交 198(73%)，整体转化 31%；来源 WhatsApp 71%/站内 DM 18%/邮件 8%/表单 3%；首响 8 分钟、未响应 23 条；首响越快成交越高（<5分 39%、5-15分 32%、15-60分 23%、>1时 13%）；流失原因 价格 38%/物流时效 24%/MOQ 19%/缺货 11%。' },
+              { icon: <MessageSquare size={11} />, label: '生成WhatsApp跟单模板', color: '#0891b2', task: '基于当前选中的真实客户会话，生成一条可发送的 WhatsApp 跟单话术；如果没有选中客户或缺少真实会话，请先说明需要接入 WhatsApp 客户数据，不要编造客户姓名、金额或历史记录。' },
+              { icon: <Users size={11} />, label: '转人工 · 标记大单', color: '#d97706', task: '基于当前选中的真实客户会话，整理转人工交接摘要；如果缺少客户、金额、报价或交期等真实字段，请列出缺失项，不要用示例数据补齐。' },
+              { icon: <TrendingUp size={11} />, label: '查看询盘转化漏斗', color: '#16a34a', task: '只基于系统已接入的真实询盘、回复、报价和成交数据，指出转化卡点并给 3 条优化建议；如果数据未接入，请输出需要接入的数据清单，不要生成示例漏斗数字。' },
             ].map(({ icon, label, color, task }) => (
               <button key={label} onClick={() => onAction?.('conversion', task)} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg border border-border bg-surface hover:border-border-bright text-left transition-all group">
                 <span style={{ color }}>{icon}</span>
@@ -312,9 +312,9 @@ function RetentionPanel({ conversation, onAction }: { conversation: Conversation
           <SectionHeader label="快捷操作" />
           <div className="space-y-1.5">
             {[
-              { icon: <RotateCcw size={11} />, label: '筛选60天未复购老客', color: '#16a34a', task: '直接给出"60 天未复购"老客筛选结果（不要反问要数据）：本月共 412 人、平均 LTV $94。按价值列 TOP5（姓名/市场/上次购买/历史品类/LTV/建议推品/触达优先级），用表格或清单。' },
-              { icon: <Sparkles size={11} />, label: '生成个性化推品方案', color: '#4f46e5', task: '直接给 3 个老客的个性化推品方案示例（客户/市场/历史购买/推荐新品/推荐理由/一句话术），不要讲原理。示例客户：Ahmed(沙特,美妆个护)、Linh(越南,家居)、Carlos(墨西哥,消费电子)。' },
-              { icon: <MessageSquare size={11} />, label: '批量发送唤醒消息', color: '#0891b2', task: '直接给 3 条可发送的老客唤醒文案：中文、英文、阿拉伯语各一条，针对 60 天未复购老客，含一个限时优惠钩子。不要解释原理。' },
+              { icon: <RotateCcw size={11} />, label: '筛选60天未复购老客', color: '#16a34a', task: '只基于已接入的真实订单和客户互动数据，筛选 60 天未复购老客；如果没有真实数据，请说明需要接入订单或客户互动记录，不要编造名单。' },
+              { icon: <Sparkles size={11} />, label: '生成个性化推品方案', color: '#4f46e5', task: '基于真实老客的历史购买、市场和偏好生成个性化推品方案；如果没有真实老客数据，请输出需要补齐的数据字段，不要使用示例客户。' },
+              { icon: <MessageSquare size={11} />, label: '批量发送唤醒消息', color: '#0891b2', task: '基于真实老客分组生成可发送的唤醒消息；如果没有真实客户分组，请先给出接入和分组清单，不要编造发送对象或效果数据。' },
             ].map(({ icon, label, color, task }) => (
               <button key={label} onClick={() => onAction?.('retention', task)} className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg border border-border bg-surface hover:border-border-bright text-left transition-all group">
                 <span style={{ color }}>{icon}</span>

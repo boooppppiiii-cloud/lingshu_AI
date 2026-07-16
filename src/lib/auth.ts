@@ -50,10 +50,18 @@ async function call(path: string, body: unknown): Promise<{ token: string; user:
 }
 
 export const authApi = {
-  register: (email: string, password: string, companyName: string, inviteCode?: string) =>
-    call('register', { email, password, companyName, inviteCode }),
+  register: (email: string, password: string, inviteCode: string) =>
+    call('register', { email, password, inviteCode }),
   login: (email: string, password: string) =>
     call('login', { email, password }),
+  invite: async (inviteCode: string): Promise<{ valid: boolean; companyName: string }> => {
+    const r = await fetch(`/api/overseas/auth/invite/${encodeURIComponent(inviteCode)}`, {
+      headers: { 'Cache-Control': 'no-cache' },
+    });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok && !j.companyName) throw new Error(j.error || '邀请码无效或已使用');
+    return j;
+  },
   me: async (): Promise<AuthSession | null> => {
     if (!getToken()) return null;
     try {
