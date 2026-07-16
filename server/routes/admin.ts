@@ -1,5 +1,7 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { pbGet, pbListStrict } from '../storage/pb.js';
 import { demoLimits } from '../lib/demo.js';
 import {
@@ -95,24 +97,73 @@ async function listAllPbRecords<T extends Record<string, unknown>>(collection: s
 }
 
 let videoAlertSyncAt = 0;
-let videoAlertSyncPromise: Promise<void> | null = null;
+let videoAlertSyncResult: VideoAlertReconciliation | null = null;
+let videoAlertSyncPromise: Promise<VideoAlertReconciliation> | null = null;
 
-async function reconcileStoredVideoAlerts(): Promise<void> {
-  if (Date.now() - videoAlertSyncAt < 30_000) return;
+interface VideoAlertReconciliation {
+  ok: boolean;
+  source: 'pocketbase' | 'snapshot' | 'alerts-only';
+  scanned: number;
+  synced: number;
+  warning?: string;
+}
+
+function readTrendVideoSnapshot(): VideoFailureRecord[] {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.resolve(process.cwd(), 'data/trend-videos.json'), 'utf8')) as unknown;
+    if (Array.isArray(parsed)) return parsed as VideoFailureRecord[];
+    if (parsed && typeof parsed === 'object' && Array.isArray((parsed as { items?: unknown[] }).items)) {
+      return (parsed as { items: VideoFailureRecord[] }).items;
+    }
+  } catch {
+    // Snapshot is optional; the live PocketBase collection remains primary.
+  }
+  return [];
+}
+
+async function reconcileStoredVideoAlerts(): Promise<VideoAlertReconciliation> {
+  if (Date.now() - videoAlertSyncAt < 30_000 && videoAlertSyncResult) return videoAlertSyncResult;
   if (videoAlertSyncPromise) return videoAlertSyncPromise;
 
   videoAlertSyncPromise = (async () => {
     try {
-      const records = await listAllPbRecords<VideoFailureRecord & Record<string, unknown>>('trend_videos', '-updated');
-      syncVideoAdminAlertsFromRecords(records);
-      videoAlertSyncAt = Date.now();
+      const records = await listAllPbRecords<VideoFailureRecord & Record<string, unknown>>('trend_videos', '-crawledAt');
+      return {
+        ok: true,
+        source: 'pocketbase' as const,
+        scanned: records.length,
+        synced: syncVideoAdminAlertsFromRecords(records),
+      };
     } catch (error) {
-      console.warn('[admin] video alert reconciliation unavailable:', error instanceof Error ? error.message : error);
-    } finally {
-      videoAlertSyncPromise = null;
+      const detail = error instanceof Error ? error.message : String(error);
+      const snapshot = readTrendVideoSnapshot();
+      if (snapshot.length) {
+        console.warn(`[admin] video alert reconciliation using local snapshot after PocketBase failure: ${detail}`);
+        return {
+          ok: true,
+          source: 'snapshot' as const,
+          scanned: snapshot.length,
+          synced: syncVideoAdminAlertsFromRecords(snapshot),
+          warning: '实时视频数据库暂不可用，当前已从本地视频快照回扫失败记录。',
+        };
+      }
+      console.warn('[admin] video alert reconciliation unavailable:', detail);
+      return {
+        ok: false,
+        source: 'alerts-only' as const,
+        scanned: 0,
+        synced: 0,
+        warning: '实时视频数据库和本地快照均不可用，当前仅显示已经写入的历史告警。',
+      };
     }
   })();
-  return videoAlertSyncPromise;
+  try {
+    videoAlertSyncResult = await videoAlertSyncPromise;
+    videoAlertSyncAt = Date.now();
+    return videoAlertSyncResult;
+  } finally {
+    videoAlertSyncPromise = null;
+  }
 }
 
 async function enrichVideoAlerts(alerts: VideoAdminAlert[]) {
@@ -518,7 +569,7 @@ adminRouter.get('/video-alerts', async (req, res) => {
   }
 
   res.setHeader('Cache-Control', 'no-store');
-  await reconcileStoredVideoAlerts();
+  const reconciliation = await reconcileStoredVideoAlerts();
 
   const limit = Math.max(1, Math.min(200, Number(req.query.limit || 100) || 100));
   const includeResolved = req.query.includeResolved === 'true';
@@ -529,7 +580,7 @@ adminRouter.get('/video-alerts', async (req, res) => {
     return counts;
   }, { total: 0, trial: 0, customer: 0, admin: 0, unknown: 0 });
 
-  res.json({ admin: admin.email, items, summary });
+  res.json({ admin: admin.email, items, summary, reconciliation });
 });
 
 adminRouter.post('/video-alerts/:id/upload', async (req, res) => {

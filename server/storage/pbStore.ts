@@ -14,6 +14,10 @@ import {
   pbList,
   getTenantIdFromToken,
 } from './pb.js';
+import fs from 'node:fs';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import type {
   AuthProvider,
   DataStore,
@@ -26,6 +30,8 @@ import type {
 import { verifySupportAccessToken } from '../lib/supportAccess.js';
 
 const LOCAL_AUTH_PREFIX = 'local-demo.';
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const LOCAL_STORE_DIR = path.join(__dirname, '../../data/local-store');
 
 function isLocalDevFallbackEnabled(): boolean {
   return process.env.NODE_ENV !== 'production' && process.env.DISABLE_LOCAL_AUTH_FALLBACK !== 'true';
@@ -41,6 +47,98 @@ function parseLocalToken(authHeader: string | undefined): Identity | null {
   } catch {
     return null;
   }
+}
+
+function localCollectionPath(collection: string): string {
+  return path.join(LOCAL_STORE_DIR, `${collection.replace(/[^a-zA-Z0-9_-]/g, '_')}.json`);
+}
+
+function readLocalCollection<T = Record_>(collection: string): T[] {
+  if (!isLocalDevFallbackEnabled()) return [];
+  try {
+    const parsed = JSON.parse(fs.readFileSync(localCollectionPath(collection), 'utf8'));
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeLocalCollection(collection: string, records: unknown[]): void {
+  fs.mkdirSync(LOCAL_STORE_DIR, { recursive: true });
+  const file = localCollectionPath(collection);
+  fs.writeFileSync(file, JSON.stringify(records, null, 2), { encoding: 'utf8', mode: 0o600 });
+  try {
+    fs.chmodSync(file, 0o600);
+  } catch {
+    // Some platforms ignore POSIX file modes.
+  }
+}
+
+function sortLocalRecords<T extends Record<string, unknown>>(items: T[], sort?: string): T[] {
+  if (!sort) return items;
+  const desc = sort.startsWith('-');
+  const key = desc ? sort.slice(1) : sort;
+  return [...items].sort((a, b) => {
+    const av = a[key];
+    const bv = b[key];
+    const an = typeof av === 'string' ? Date.parse(av) : Number(av);
+    const bn = typeof bv === 'string' ? Date.parse(bv) : Number(bv);
+    const left = Number.isFinite(an) && Number.isFinite(bn) ? an : String(av ?? '').localeCompare(String(bv ?? ''));
+    return desc ? -left : left;
+  });
+}
+
+function filterLocalRecords<T extends Record<string, unknown>>(items: T[], where?: Where): T[] {
+  if (!where) return items;
+  return items.filter(item => Object.entries(where).every(([key, value]) => String(item[key] ?? '') === String(value)));
+}
+
+function localCreate<T = Record_>(collection: string, data: Record<string, unknown>): T | null {
+  if (!isLocalDevFallbackEnabled()) return null;
+  const records = readLocalCollection<Record_>(collection);
+  const now = new Date().toISOString();
+  const record = {
+    id: String(data.id || `${collection}_${randomUUID().replaceAll('-', '')}`),
+    created: data.created || now,
+    updated: data.updated || now,
+    ...data,
+  } as Record_;
+  records.unshift(record);
+  writeLocalCollection(collection, records);
+  return record as T;
+}
+
+function localUpdate(collection: string, id: string, data: Record<string, unknown>): boolean {
+  if (!isLocalDevFallbackEnabled()) return false;
+  const records = readLocalCollection<Record_>(collection);
+  const index = records.findIndex(record => record.id === id);
+  if (index < 0) return false;
+  records[index] = { ...records[index], ...data, updated: new Date().toISOString() };
+  writeLocalCollection(collection, records);
+  return true;
+}
+
+function localDelete(collection: string, id: string): boolean {
+  if (!isLocalDevFallbackEnabled()) return false;
+  const records = readLocalCollection<Record_>(collection);
+  const next = records.filter(record => record.id !== id);
+  if (next.length === records.length) return false;
+  writeLocalCollection(collection, next);
+  return true;
+}
+
+function localList<T = Record_>(collection: string, query: ListQuery = {}): ListResult<T> {
+  const page = query.page ?? 1;
+  const perPage = query.perPage ?? 20;
+  const filtered = sortLocalRecords(filterLocalRecords(readLocalCollection<Record<string, unknown>>(collection), query.where), query.sort);
+  const start = (page - 1) * perPage;
+  return {
+    items: filtered.slice(start, start + perPage) as T[],
+    totalItems: filtered.length,
+    totalPages: Math.ceil(filtered.length / perPage),
+    page,
+    perPage,
+  };
 }
 
 /** Escape a value for inclusion in a PocketBase filter string. */
@@ -61,46 +159,53 @@ function toPbFilter(where?: Where): string | undefined {
 export const pbStore: DataStore = {
   async getById<T = Record_>(collection: string, id: string) {
     try {
-      return await pbGet(collection, id) as T | null;
+      const remote = await pbGet(collection, id) as T | null;
+      if (remote) return remote;
+      return readLocalCollection<T & { id: string }>(collection).find(record => record.id === id) ?? null;
     } catch {
-      return null;
+      return readLocalCollection<T & { id: string }>(collection).find(record => record.id === id) ?? null;
     }
   },
 
   async create<T = Record_>(collection: string, data: Record<string, unknown>) {
     try {
-      return await pbCreate(collection, data) as T | null;
+      const remote = await pbCreate(collection, data) as T | null;
+      return remote ?? localCreate<T>(collection, data);
     } catch {
-      return null;
+      return localCreate<T>(collection, data);
     }
   },
 
   async update(collection: string, id: string, data: Record<string, unknown>) {
     try {
-      return await pbPatch(collection, id, data);
+      const remote = await pbPatch(collection, id, data);
+      return remote || localUpdate(collection, id, data);
     } catch {
-      return false;
+      return localUpdate(collection, id, data);
     }
   },
 
   async delete(collection: string, id: string) {
     try {
-      return await pbDelete(collection, id);
+      const remote = await pbDelete(collection, id);
+      return remote || localDelete(collection, id);
     } catch {
-      return false;
+      return localDelete(collection, id);
     }
   },
 
   async list<T = Record_>(collection: string, query: ListQuery = {}): Promise<ListResult<T>> {
     try {
-      return await pbList<T>(collection, {
+      const remote = await pbList<T>(collection, {
         filter: toPbFilter(query.where),
         sort: query.sort, // PB's `-field`/`field` convention matches our neutral one
         page: query.page,
         perPage: query.perPage,
       });
+      if (remote.totalItems > 0) return remote;
+      return localList<T>(collection, query);
     } catch {
-      return { items: [], totalItems: 0, totalPages: 0, page: query.page ?? 1, perPage: query.perPage ?? 20 };
+      return localList<T>(collection, query);
     }
   },
 };

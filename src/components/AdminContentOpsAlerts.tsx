@@ -30,6 +30,14 @@ interface VideoAlertSummary {
   unknown: number;
 }
 
+interface VideoAlertReconciliation {
+  ok: boolean;
+  source: 'pocketbase' | 'snapshot' | 'alerts-only';
+  scanned: number;
+  synced: number;
+  warning?: string;
+}
+
 const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 const TARGET_UPLOAD_BYTES = 9.2 * 1024 * 1024;
 
@@ -168,6 +176,7 @@ function recordCompressedVideo(
 export default function AdminContentOpsAlerts() {
   const [alerts, setAlerts] = useState<VideoAdminAlert[]>([]);
   const [summary, setSummary] = useState<VideoAlertSummary>({ total: 0, trial: 0, customer: 0, admin: 0, unknown: 0 });
+  const [reconciliation, setReconciliation] = useState<VideoAlertReconciliation | null>(null);
   const [selectedFiles, setSelectedFiles] = useState<Record<string, File | null>>({});
   const [uploadingAlertId, setUploadingAlertId] = useState<string | null>(null);
   const [uploadSteps, setUploadSteps] = useState<Record<string, string>>({});
@@ -184,6 +193,7 @@ export default function AdminContentOpsAlerts() {
       if (!resp.ok) throw new Error(json.error || '读取内容告警失败');
       const items = (json.items ?? []) as VideoAdminAlert[];
       setAlerts(items);
+      setReconciliation(json.reconciliation ?? null);
       setSummary(json.summary ?? items.reduce((counts, item) => {
         counts.total += 1;
         counts[item.accountType] += 1;
@@ -280,6 +290,15 @@ export default function AdminContentOpsAlerts() {
             <span className="rounded-lg bg-surface-2 px-2.5 py-1 text-text-muted">其他 {summary.admin + summary.unknown}</span>
           )}
         </div>
+      )}
+
+      {reconciliation?.warning && (
+        <p className={`mb-3 rounded-xl px-3 py-2 text-xs font-bold ${
+          reconciliation.ok ? 'bg-amber-50 text-amber-800' : 'bg-red-50 text-red-700'
+        }`}>
+          {reconciliation.warning}
+          {reconciliation.scanned > 0 ? ` 已扫描 ${reconciliation.scanned} 条视频记录。` : ''}
+        </p>
       )}
 
       {error && <p className="mb-3 rounded-xl bg-red-50 px-3 py-2 text-xs font-bold text-red-700">{error}</p>}
