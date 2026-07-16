@@ -38,12 +38,30 @@ export interface AuthSession {
   };
 }
 
+const wait = (milliseconds: number) => new Promise(resolve => window.setTimeout(resolve, milliseconds));
+
+async function authRequest(path: string, body: unknown): Promise<Response> {
+  const attempts = path === 'login' ? 3 : 1;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      return await fetch(`/api/overseas/auth/${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    } catch (error) {
+      lastError = error;
+      if (attempt < attempts - 1) await wait(attempt === 0 ? 500 : 1200);
+    }
+  }
+
+  throw new Error(lastError instanceof TypeError ? '服务正在启动，请稍后重试' : '服务暂时无法连接，请稍后重试');
+}
+
 async function call(path: string, body: unknown): Promise<{ token: string; user: AuthUser; tenant: AuthTenant | null; demo?: AuthSession['demo'] }> {
-  const r = await fetch(`/api/overseas/auth/${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+  const r = await authRequest(path, body);
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(j.error || '请求失败');
   return j;
