@@ -16,6 +16,11 @@ import {
   requireAdminUser,
 } from '../lib/demoAccounts.js';
 import {
+  createSupportAccessRequest,
+  issueSupportAccessToken,
+  supportAccessDefaultAuthorized,
+} from '../lib/supportAccess.js';
+import {
   getVideoAdminAlert,
   listVideoAdminAlerts,
   syncVideoAdminAlertsFromRecords,
@@ -36,7 +41,7 @@ import {
 } from '../lib/tenantPlatformApps.js';
 import { store } from '../storage/index.js';
 import axios from 'axios';
-import { createLocalInviteTenant, listLocalTenants } from '../lib/localTenants.js';
+import { createLocalInviteTenant, getLocalTenant, listLocalTenants } from '../lib/localTenants.js';
 import { decryptRegistrationPassword } from '../lib/registrationCredentials.js';
 
 export const adminRouter = Router();
@@ -361,6 +366,8 @@ adminRouter.get('/demo-accounts', async (req, res) => {
       const day = trialDay(activatedAt);
       return {
         email: entry.email,
+        tenantId: String(entry.tenantId || ''),
+        tenantName: String(tenant?.name || entry.email.split('@')[0] || entry.tenantId || ''),
         password: entry.password,
         status: accountStage({ ...entry, expiresAt }),
         activatedAt,
@@ -455,6 +462,52 @@ adminRouter.get('/demo-accounts', async (req, res) => {
   customerAccounts.sort((a, b) => a.companyName.localeCompare(b.companyName));
 
   res.json({ admin: admin.email, trialAccounts, customerAccounts });
+});
+
+adminRouter.post('/support-access/session', async (req, res) => {
+  const admin = await requireAdminUser(req);
+  if (!admin) {
+    res.status(403).json({ error: 'admin_required' });
+    return;
+  }
+
+  res.setHeader('Cache-Control', 'no-store');
+  const tenantId = bodyText(req.body?.tenantId);
+  if (!tenantId || tenantId === admin.tenantId) {
+    res.status(400).json({ error: 'invalid_tenant' });
+    return;
+  }
+  if (!supportAccessDefaultAuthorized(tenantId)) {
+    res.status(403).json({ error: 'support_access_disabled' });
+    return;
+  }
+
+  const registryEntry = Object.values(readDemoAccountRegistry()).find(entry => entry.tenantId === tenantId);
+  const localTenant = getLocalTenant(tenantId);
+  const remoteTenant = await safePbGet('tenants', tenantId);
+  if (!registryEntry && !localTenant && !remoteTenant) {
+    res.status(404).json({ error: 'tenant_not_found' });
+    return;
+  }
+
+  const tenantName = bodyText(remoteTenant?.name)
+    || localTenant?.companyName
+    || localTenant?.name
+    || bodyText(req.body?.tenantName)
+    || registryEntry?.email?.split('@')[0]
+    || tenantId;
+  const request = createSupportAccessRequest({
+    tenantId,
+    tenantName,
+    requestedByUserId: admin.userId,
+    requestedByEmail: admin.email,
+  });
+  const session = issueSupportAccessToken(request.id, admin.userId);
+  if (!session) {
+    res.status(403).json({ error: 'support_access_disabled' });
+    return;
+  }
+  res.json(session);
 });
 
 adminRouter.get('/video-alerts', async (req, res) => {

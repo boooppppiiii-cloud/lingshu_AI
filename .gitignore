@@ -32,6 +32,8 @@ data/demo-account-registry.json
 data/demo-password-rotations.json
 data/local-auth-accounts.json
 data/local-auth-tenants.json
+data/support-access.json
+data/support-access-settings.json
 data/enterprise.json
 data/enterprise-assets/
 data/orders.json

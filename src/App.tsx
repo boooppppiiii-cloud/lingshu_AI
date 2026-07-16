@@ -330,6 +330,14 @@ export default function App() {
     setBusinessDiagnosisOpen(false);
     setSession(null);
   };
+  const handleSupportSessionStarted = (supportSession: AuthSession) => {
+    setDemoProgressScope(progressScopeFor(supportSession));
+    setSession(supportSession);
+    setConversation(null);
+    setRestore(null);
+    setKickoff(null);
+    setPage('strategy');
+  };
 
   if (isRegistrationEntry) {
     return <AuthScreen onAuthed={handleAuthed} />;
@@ -449,7 +457,7 @@ export default function App() {
           {page === 'enterprise' && <EnterprisePage />}
           {page === 'plugins' && <IntegrationsPage />}
           {page === 'scheduled' && <ScheduledPage onAction={startAgentTask} />}
-          {page === 'admin' && <AdminDashboard />}
+          {page === 'admin' && <AdminDashboard onSupportSessionStarted={handleSupportSessionStarted} />}
           {page === 'adminDelivery' && <AdminDeliveryPage />}
           {(page === 'channels' || page === 'youtube') && <IntegrationsPage />}
         </Suspense>

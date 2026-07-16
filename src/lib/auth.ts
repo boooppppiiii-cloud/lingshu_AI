@@ -1,6 +1,7 @@
 /* 账号 / 登录：token 存 localStorage，注入到所有 API 请求 */
 
 const TOKEN_KEY = 'overseas_token';
+const SUPPORT_ORIGINAL_TOKEN_KEY = 'overseas_support_original_token';
 
 export function getToken(): string | null { return localStorage.getItem(TOKEN_KEY); }
 export function setToken(t: string): void { localStorage.setItem(TOKEN_KEY, t); }
@@ -36,6 +37,28 @@ export interface AuthSession {
     guideTrigger?: boolean;
     guideScope?: string;
   };
+  supportAccess?: {
+    requestId: string;
+    adminEmail: string;
+    tenantName: string;
+    expiresAt?: string;
+  };
+}
+
+export function startSupportSession(token: string): void {
+  const current = getToken();
+  if (current && !localStorage.getItem(SUPPORT_ORIGINAL_TOKEN_KEY)) {
+    localStorage.setItem(SUPPORT_ORIGINAL_TOKEN_KEY, current);
+  }
+  setToken(token);
+}
+
+export function exitSupportSession(): boolean {
+  const original = localStorage.getItem(SUPPORT_ORIGINAL_TOKEN_KEY);
+  localStorage.removeItem(SUPPORT_ORIGINAL_TOKEN_KEY);
+  if (!original) return false;
+  setToken(original);
+  return true;
 }
 
 const wait = (milliseconds: number) => new Promise(resolve => window.setTimeout(resolve, milliseconds));
@@ -85,6 +108,10 @@ export const authApi = {
     try {
       const r = await fetch('/api/overseas/auth/me', { headers: authHeader() });
       if (!r.ok) {
+        if ((r.status === 401 || r.status === 402) && exitSupportSession()) {
+          const restored = await fetch('/api/overseas/auth/me', { headers: authHeader() });
+          if (restored.ok) return (await restored.json()) as AuthSession;
+        }
         if (r.status === 401 || r.status === 402) clearToken();
         return null;
       }
@@ -97,5 +124,8 @@ export const authApi = {
     if (!getToken()) return;
     await fetch('/api/overseas/auth/guide-seen', { method: 'POST', headers: authHeader() }).catch(() => {});
   },
-  logout: () => clearToken(),
+  logout: () => {
+    clearToken();
+    localStorage.removeItem(SUPPORT_ORIGINAL_TOKEN_KEY);
+  },
 };

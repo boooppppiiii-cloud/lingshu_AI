@@ -173,7 +173,7 @@ export function isAdminEmail(email?: string): boolean {
 
 export async function requireAdminUser(req: Request): Promise<{ userId: string; tenantId: string; email: string } | null> {
   const id = await auth.verifyToken(req.headers.authorization);
-  if (!id) return null;
+  if (!id || id.supportAccess) return null;
   let user: Record<string, unknown> | null = null;
   try {
     user = await pbGet('users', id.userId);

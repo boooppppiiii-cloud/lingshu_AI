@@ -46,6 +46,12 @@ export interface DataStore {
 export interface Identity {
   userId: string;
   tenantId: string;
+  supportAccess?: {
+    requestId: string;
+    adminEmail: string;
+    tenantName: string;
+    expiresAt?: string;
+  };
 }
 
 /** Token verification surface. Swap implementations to change auth backend. */

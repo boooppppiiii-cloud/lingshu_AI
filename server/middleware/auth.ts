@@ -4,6 +4,12 @@ import { auth } from '../storage/index.js';
 export interface AuthLocals {
   userId: string;
   tenantId: string;
+  supportAccess?: {
+    requestId: string;
+    adminEmail: string;
+    tenantName: string;
+    expiresAt?: string;
+  };
 }
 
 /** Attach userId + tenantId to res.locals; return 401 if token is missing/invalid */
@@ -19,5 +25,6 @@ export async function requireAuth(
   }
   (res.locals as AuthLocals).userId = result.userId;
   (res.locals as AuthLocals).tenantId = result.tenantId;
+  (res.locals as AuthLocals).supportAccess = result.supportAccess;
   next();
 }
