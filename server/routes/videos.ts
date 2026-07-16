@@ -585,12 +585,24 @@ export interface CrawlVideosResult {
 // Body: { platform?: 'youtube' | 'tiktok' | 'facebook' | 'instagram', keyword?: string, limit?: number, dateFrom?: string, dateTo?: string }
 videosRouter.post('/crawl', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
-  const { platform = 'youtube', keyword = DEFAULT_CRAWL_KEYWORDS, limit = 5, dateFrom = '', dateTo = '' } = req.body as {
+  const {
+    platform = 'youtube',
+    keyword = DEFAULT_CRAWL_KEYWORDS,
+    limit = 5,
+    dateFrom = '',
+    dateTo = '',
+    mode,
+    accountUrl = '',
+    accountName = '',
+  } = req.body as {
     platform?: Platform;
     keyword?: string;
     limit?: number;
     dateFrom?: string;
     dateTo?: string;
+    mode?: 'keyword' | 'account';
+    accountUrl?: string;
+    accountName?: string;
   };
 
   if (!['youtube', 'tiktok', 'facebook', 'instagram'].includes(platform)) {
@@ -599,7 +611,7 @@ videosRouter.post('/crawl', async (req, res) => {
   }
 
   try {
-    const result = await crawlVideosForTenant({ tenantId, platform, keyword, limit, dateFrom, dateTo });
+    const result = await crawlVideosForTenant({ tenantId, platform, keyword, limit, dateFrom, dateTo, mode, accountUrl, accountName });
     res.json(result);
   } catch (e) {
     console.error('[videos] crawl failed:', e);
