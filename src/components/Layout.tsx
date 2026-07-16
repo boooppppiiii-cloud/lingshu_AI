@@ -6,7 +6,7 @@ import {
   ChevronRight, LogOut, Loader2, RefreshCcw, X, ShieldCheck, BookOpen, ListTree,
 } from 'lucide-react';
 import type { Page, ConversationContext, Conversation, AgentAction } from '../App';
-import { authApi, type AuthSession } from '../lib/auth';
+import { authApi, exitSupportSession, type AuthSession } from '../lib/auth';
 import RightPanel from './RightPanel';
 import DemoGuide from './DemoGuide';
 
@@ -117,9 +117,11 @@ const pct = (used?: number, limit?: number) => {
 
 const byToken = (tokens: number, reserve: number) => Math.max(0, Math.floor(tokens / reserve));
 const isAdminSession = (session?: AuthSession | null) => (
-  session?.user?.email === 'lingshu-admin@local.test' ||
-  session?.tenant?.subscriptionPlan === 'admin' ||
-  session?.subscription?.plan === 'admin'
+  !session?.supportAccess && (
+    session?.user?.email === 'lingshu-admin@local.test' ||
+    session?.tenant?.subscriptionPlan === 'admin' ||
+    session?.subscription?.plan === 'admin'
+  )
 );
 
 const ADMIN_PAGE_GUIDES: Partial<Record<Page, Array<{ label: string; target: string }>>> = {
@@ -173,12 +175,20 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
   const [liveSession, setLiveSession] = useState<AuthSession | null>(null);
   const sessionScope = session?.demo?.guideScope || session?.demo?.expiresAt || null;
   const liveSessionScope = liveSession?.demo?.guideScope || liveSession?.demo?.expiresAt || null;
-  const activeSession = liveSession?.user?.id === session?.user?.id && liveSessionScope === sessionScope ? liveSession : session;
+  const sessionIdentityScope = `${session?.user?.id || ''}:${session?.tenant?.id || ''}:${session?.supportAccess?.requestId || ''}:${sessionScope || ''}`;
+  const liveSessionIdentityScope = `${liveSession?.user?.id || ''}:${liveSession?.tenant?.id || ''}:${liveSession?.supportAccess?.requestId || ''}:${liveSessionScope || ''}`;
+  const activeSession = liveSession && liveSessionIdentityScope === sessionIdentityScope ? liveSession : session;
   const guideScope = activeSession?.demo?.guideScope || (activeSession?.demo?.expiresAt ? `${activeSession.user.id}:${activeSession.demo.expiresAt}` : activeSession?.user?.id || 'demo-guide');
+  const supportAccess = activeSession?.supportAccess;
+
+  const leaveSupportSession = () => {
+    if (!exitSupportSession()) authApi.logout();
+    window.location.assign('/');
+  };
 
   useEffect(() => {
     setLiveSession(null);
-  }, [session?.user?.id, sessionScope]);
+  }, [sessionIdentityScope]);
   const secondaryItems = isAdminSession(activeSession)
     ? [
       ...SECONDARY_NAV.items,
@@ -455,7 +465,21 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
 
       {/* ── Main content ─────────────────────────────── */}
       <main className="flex-1 min-w-0 overflow-hidden bg-white flex flex-col">
-        {children}
+        {supportAccess && (
+          <div className="flex h-10 shrink-0 items-center justify-between gap-4 border-b border-emerald-200 bg-emerald-50 px-4 text-xs">
+            <div className="flex min-w-0 items-center gap-2 text-emerald-950">
+              <ShieldCheck size={14} className="shrink-0" />
+              <span className="truncate font-semibold">正在协助：{supportAccess.tenantName}</span>
+              <span className="hidden text-emerald-700 sm:inline">
+                {supportAccess.expiresAt ? `有效至 ${new Date(supportAccess.expiresAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}` : '临时协助会话'}
+              </span>
+            </div>
+            <button type="button" onClick={leaveSupportSession} className="inline-flex shrink-0 items-center gap-1.5 font-semibold text-emerald-800 hover:text-emerald-950">
+              <LogOut size={13} />退出协助
+            </button>
+          </div>
+        )}
+        <div className="flex-1 min-h-0 overflow-hidden">{children}</div>
       </main>
 
       {/* ── Right panel (only in conversation mode) ── */}

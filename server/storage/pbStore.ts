@@ -23,6 +23,7 @@ import type {
   Record_,
   Where,
 } from './datastore.js';
+import { verifySupportAccessToken } from '../lib/supportAccess.js';
 
 const LOCAL_AUTH_PREFIX = 'local-demo.';
 
@@ -106,6 +107,8 @@ export const pbStore: DataStore = {
 
 export const pbAuth: AuthProvider = {
   async verifyToken(authHeader: string | undefined): Promise<Identity | null> {
+    const supportAccess = verifySupportAccessToken(authHeader);
+    if (supportAccess) return supportAccess;
     const local = parseLocalToken(authHeader);
     if (local) return local;
     return getTenantIdFromToken(authHeader);

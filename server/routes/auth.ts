@@ -547,8 +547,31 @@ authRouter.get('/me', async (req, res) => {
   }
   const id = await auth.verifyToken(req.headers.authorization);
   if (!id) { res.status(401).json({ error: 'Unauthorized' }); return; }
-  const [user, tenant] = await Promise.all([pbGet('users', id.userId), pbGet('tenants', id.tenantId)]);
+  const [user, remoteTenant] = await Promise.all([
+    pbGet('users', id.userId).catch(() => null),
+    pbGet('tenants', id.tenantId).catch(() => null),
+  ]);
+  const localTenant = getLocalTenant(id.tenantId);
+  const tenant = remoteTenant || (localTenant as unknown as Record<string, unknown> | null);
   const subscription = await getTenantSubscription(id.tenantId);
+  if (id.supportAccess) {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      user: user
+        ? { ...publicUser(user as unknown as PbUser), tenantId: id.tenantId }
+        : { id: id.userId, email: id.supportAccess.adminEmail, name: '灵枢技术支持', tenantId: id.tenantId },
+      tenant: publicTenant(tenant || {
+        id: id.tenantId,
+        name: id.supportAccess.tenantName,
+        subscriptionStatus: subscription.status,
+        subscriptionPlan: subscription.plan,
+        subscriptionExpiresAt: subscription.expiresAt,
+      }),
+      subscription,
+      supportAccess: id.supportAccess,
+    });
+    return;
+  }
   if (subscription?.expiresAt && isExpired(subscription.expiresAt)) {
     await rotateExpiredTrialPassword(user as unknown as PbUser | null, 'session_trial_expired');
     res.status(402).json({ error: '试用账号已到期，请重新登录或联系服务顾问开通。' });
