@@ -7,6 +7,7 @@ import { pbGet, pbPatch } from '../storage/pb.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REGISTRY_FILE = path.join(__dirname, '../../data/demo-account-registry.json');
+const REGISTRY_BACKUP_FILE = path.join(__dirname, '../../data/demo-account-registry.backup.json');
 const USAGE_FILE = path.join(__dirname, '../../data/demo-usage.json');
 
 export interface DemoAccountRegistryEntry {
@@ -53,15 +54,36 @@ function readJson<T>(file: string, fallback: T): T {
   }
 }
 
+function readStoredRegistry(): DemoAccountRegistry {
+  const primary = readJson<DemoAccountRegistry | null>(REGISTRY_FILE, null);
+  if (primary && Object.keys(primary).length > 0) return primary;
+  return readJson<DemoAccountRegistry>(REGISTRY_BACKUP_FILE, primary ?? {});
+}
+
+function writeSecureJson(file: string, contents: string): void {
+  const temporaryFile = `${file}.${process.pid}.tmp`;
+  fs.writeFileSync(temporaryFile, contents, { encoding: 'utf8', mode: 0o600 });
+  fs.renameSync(temporaryFile, file);
+  try {
+    fs.chmodSync(file, 0o600);
+  } catch {
+    // Some platforms ignore POSIX file modes.
+  }
+}
+
 function writeRegistry(registry: DemoAccountRegistry): void {
   fs.mkdirSync(path.dirname(REGISTRY_FILE), { recursive: true });
   const next = JSON.stringify(registry, null, 2);
   try {
-    if (fs.readFileSync(REGISTRY_FILE, 'utf8') === next) return;
+    if (
+      fs.readFileSync(REGISTRY_FILE, 'utf8') === next
+      && fs.readFileSync(REGISTRY_BACKUP_FILE, 'utf8') === next
+    ) return;
   } catch {
     // File may not exist yet.
   }
-  fs.writeFileSync(REGISTRY_FILE, next, 'utf8');
+  writeSecureJson(REGISTRY_BACKUP_FILE, next);
+  writeSecureJson(REGISTRY_FILE, next);
 }
 
 export function allowedDemoAccounts(): string[] {
@@ -69,7 +91,7 @@ export function allowedDemoAccounts(): string[] {
     .split(/[\s,;]+/)
     .map(norm)
     .filter(Boolean);
-  const registry = readJson<DemoAccountRegistry>(REGISTRY_FILE, {});
+  const registry = readStoredRegistry();
   return Array.from(new Set([
     ...envAccounts,
     ...Object.keys(registry).map(norm).filter(Boolean),
@@ -83,7 +105,7 @@ export function isAllowedDemoAccount(email: string): boolean {
 }
 
 export function readDemoAccountRegistry(): DemoAccountRegistry {
-  const registry = readJson<DemoAccountRegistry>(REGISTRY_FILE, {});
+  const registry = readStoredRegistry();
   for (const email of allowedDemoAccounts()) {
     registry[email] ??= { email, password: '', status: 'available' };
   }

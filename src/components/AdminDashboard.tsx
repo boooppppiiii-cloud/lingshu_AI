@@ -61,6 +61,7 @@ export default function AdminDashboard({ onSupportSessionStarted }: { onSupportS
   const [customerAccounts, setCustomerAccounts] = useState<CustomerAccount[]>([]);
   const [styleTrends, setStyleTrends] = useState<StyleAdoptionTrend[]>([]);
   const [loading, setLoading] = useState(true);
+  const [accountsLoaded, setAccountsLoaded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [supportBusyTenantId, setSupportBusyTenantId] = useState<string | null>(null);
   const [supportError, setSupportError] = useState<{ tenantId: string; message: string } | null>(null);
@@ -91,14 +92,21 @@ export default function AdminDashboard({ onSupportSessionStarted }: { onSupportS
     setError(null);
     try {
       const [accountResp, trendResp] = await Promise.all([
-        fetch('/api/overseas/admin/demo-accounts', { headers: authHeader() }),
-        fetch('/api/overseas/admin/style-adoption-trends', { headers: authHeader() }),
+        fetch(`/api/overseas/admin/demo-accounts?_=${Date.now()}`, {
+          headers: authHeader(),
+          cache: 'no-store',
+        }),
+        fetch(`/api/overseas/admin/style-adoption-trends?_=${Date.now()}`, {
+          headers: authHeader(),
+          cache: 'no-store',
+        }),
       ]);
       const accountJson = await accountResp.json().catch(() => ({}));
       if (!accountResp.ok) throw new Error(accountJson.error || '读取失败');
       const trendJson = await trendResp.json().catch(() => ({}));
-      setTrialAccounts(accountJson.trialAccounts ?? accountJson.accounts ?? []);
-      setCustomerAccounts(accountJson.customerAccounts ?? []);
+      setTrialAccounts(Array.isArray(accountJson.trialAccounts) ? accountJson.trialAccounts : accountJson.accounts ?? []);
+      setCustomerAccounts(Array.isArray(accountJson.customerAccounts) ? accountJson.customerAccounts : []);
+      setAccountsLoaded(true);
       setStyleTrends(trendResp.ok ? trendJson.items ?? [] : []);
     } catch (err) {
       setError(err instanceof Error ? err.message : '读取失败');
@@ -112,7 +120,16 @@ export default function AdminDashboard({ onSupportSessionStarted }: { onSupportS
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') void load({ silent: true });
     }, 10_000);
-    return () => window.clearInterval(timer);
+    const refreshVisible = () => {
+      if (document.visibilityState === 'visible') void load({ silent: true });
+    };
+    window.addEventListener('focus', refreshVisible);
+    document.addEventListener('visibilitychange', refreshVisible);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('focus', refreshVisible);
+      document.removeEventListener('visibilitychange', refreshVisible);
+    };
   }, []);
 
   const enterTenant = async (target: { tenantId: string; tenantName: string }) => {
@@ -184,7 +201,7 @@ export default function AdminDashboard({ onSupportSessionStarted }: { onSupportS
         </section>
 
         <section id="admin-trial-accounts" className="scroll-mt-5">
-          <div className="mb-2 flex items-center justify-between"><div><h2 className="text-sm font-semibold text-text-primary">试用账号表</h2><p className="mt-0.5 text-xs text-text-muted">备用试用账号无需注册，管理员把账号密码交给测试用户后即可直接登录。</p></div><span className="text-xs text-text-muted">{trialAccounts.length} 个账号</span></div>
+          <div className="mb-2 flex items-center justify-between"><div><h2 className="text-sm font-semibold text-text-primary">试用账号表</h2><p className="mt-0.5 text-xs text-text-muted">备用试用账号无需注册，管理员把账号密码交给测试用户后即可直接登录。</p></div><span className="text-xs text-text-muted">{accountsLoaded ? `${trialAccounts.length} 个账号` : loading ? '读取中' : '读取失败'}</span></div>
           <div className="overflow-auto border border-border rounded-lg">
             <table className="min-w-[1320px] w-full text-xs">
               <thead className="bg-surface-2 text-text-muted">
@@ -202,8 +219,8 @@ export default function AdminDashboard({ onSupportSessionStarted }: { onSupportS
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {loading && <tr><td colSpan={10} className="px-3 py-8 text-center text-text-muted">读取中...</td></tr>}
-                {!loading && trialAccounts.map(account => {
+                {loading && !accountsLoaded && <tr><td colSpan={10} className="px-3 py-8 text-center text-text-muted">读取中...</td></tr>}
+                {(!loading || accountsLoaded) && trialAccounts.map(account => {
                   const busy = supportBusyTenantId === account.tenantId;
                   return (
                     <tr key={account.email} className="hover:bg-surface-2/60">
@@ -231,14 +248,14 @@ export default function AdminDashboard({ onSupportSessionStarted }: { onSupportS
                     </tr>
                   );
                 })}
-                {!loading && !trialAccounts.length && <tr><td colSpan={10} className="px-3 py-8 text-center text-text-muted">暂无试用账号</td></tr>}
+                {accountsLoaded && !trialAccounts.length && <tr><td colSpan={10} className="px-3 py-8 text-center text-text-muted">暂无试用账号</td></tr>}
               </tbody>
             </table>
           </div>
         </section>
 
         <section id="admin-customer-accounts" className="mt-6 scroll-mt-5">
-          <div className="mb-2 flex items-center justify-between"><div><h2 className="text-sm font-semibold text-text-primary">客户账号表</h2><p className="mt-0.5 text-xs text-text-muted">注册码无需预设账密；客户完成注册后，账号、初始密码和已使用邀请码会自动出现在这里。</p></div><span className="text-xs text-text-muted">{customerAccounts.length} 个客户</span></div>
+          <div className="mb-2 flex items-center justify-between"><div><h2 className="text-sm font-semibold text-text-primary">客户账号表</h2><p className="mt-0.5 text-xs text-text-muted">注册码无需预设账密；客户完成注册后，账号、初始密码和已使用邀请码会自动出现在这里。</p></div><span className="text-xs text-text-muted">{accountsLoaded ? `${customerAccounts.length} 个客户` : loading ? '读取中' : '读取失败'}</span></div>
           <div className="overflow-auto border border-border rounded-lg">
             <table className="min-w-[1420px] w-full text-xs">
               <thead className="bg-surface-2 text-text-muted">
@@ -258,8 +275,8 @@ export default function AdminDashboard({ onSupportSessionStarted }: { onSupportS
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {loading && <tr><td colSpan={12} className="px-3 py-8 text-center text-text-muted">读取中...</td></tr>}
-                {!loading && customerAccounts.map(account => {
+                {loading && !accountsLoaded && <tr><td colSpan={12} className="px-3 py-8 text-center text-text-muted">读取中...</td></tr>}
+                {(!loading || accountsLoaded) && customerAccounts.map(account => {
                   const busy = supportBusyTenantId === account.tenantId;
                   const registered = account.emails.length > 0;
                   return (
@@ -291,7 +308,7 @@ export default function AdminDashboard({ onSupportSessionStarted }: { onSupportS
                     </tr>
                   );
                 })}
-                {!loading && !customerAccounts.length && <tr><td colSpan={12} className="px-3 py-8 text-center text-text-muted">暂无客户账号</td></tr>}
+                {accountsLoaded && !customerAccounts.length && <tr><td colSpan={12} className="px-3 py-8 text-center text-text-muted">暂无客户账号</td></tr>}
               </tbody>
             </table>
           </div>
