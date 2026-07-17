@@ -402,11 +402,57 @@ export function recomputeWhatsAppCustomerStages(now = Date.now()): number {
       updatedAt: new Date(now).toISOString(),
     };
   });
-  if (changed > 0) writeCustomers(next);
+  if (changed > 0) {
+    writeCustomers(next);
+    for (const customer of next) {
+      void mirrorCustomerToPocketBase(customer).catch(error => console.error('[whatsapp-pb-customer]', error));
+    }
+  }
   return changed;
 }
 
-export function initWhatsAppCustomerMaintenance(): void {
+function storedPayload<T>(value: unknown): T | null {
+  if (value && typeof value === 'object') return value as T;
+  if (typeof value !== 'string') return null;
+  try { return JSON.parse(value) as T; } catch { return null; }
+}
+
+async function readAllPocketBaseRecords(collection: string): Promise<Array<Record<string, unknown>>> {
+  const items: Array<Record<string, unknown>> = [];
+  let page = 1;
+  while (page <= 50) {
+    const result = await store.list<Record<string, unknown>>(collection, { page, perPage: 100 });
+    items.push(...result.items);
+    if (page >= result.totalPages || result.items.length < 100) break;
+    page += 1;
+  }
+  return items;
+}
+
+async function hydrateWhatsAppFromPocketBase(): Promise<void> {
+  try {
+    const [customerRecords, interactionRecords] = await Promise.all([
+      readAllPocketBaseRecords('whatsapp_customers'),
+      readAllPocketBaseRecords('whatsapp_interactions'),
+    ]);
+    const remoteCustomers = customerRecords
+      .map(record => storedPayload<StoredCustomer>(record.payload))
+      .filter((item): item is StoredCustomer => Boolean(item?.id && item?.tenantId));
+    const remoteInteractions = interactionRecords
+      .map(record => storedPayload<StoredInteraction>(record.payload))
+      .filter((item): item is StoredInteraction => Boolean(item?.id && item?.tenantId));
+    if (remoteCustomers.length) writeCustomers(remoteCustomers);
+    if (remoteInteractions.length) writeInteractions(remoteInteractions);
+    if (remoteCustomers.length || remoteInteractions.length) {
+      console.log(`[whatsapp] hydrated ${remoteCustomers.length} customers and ${remoteInteractions.length} interactions from PocketBase`);
+    }
+  } catch (error) {
+    console.warn('[whatsapp] using local snapshot:', error instanceof Error ? error.message : error);
+  }
+}
+
+export async function initWhatsAppCustomerMaintenance(): Promise<void> {
+  await hydrateWhatsAppFromPocketBase();
   const run = () => {
     try {
       backupWhatsAppDataFiles();
@@ -942,7 +988,7 @@ export function getWhatsAppCustomers(tenantId?: string): any[] {
   const allInteractions = interactions();
   return allCustomers.map(customer => {
     const timeline = allInteractions
-      .filter(item => item.customerId === customer.id)
+      .filter(item => item.tenantId === customer.tenantId && item.customerId === customer.id)
       .sort((a, b) => a.timestamp - b.timestamp)
       .map(item => ({
         id: item.id,

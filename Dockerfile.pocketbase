@@ -9,8 +9,11 @@ RUN apk add --no-cache ca-certificates unzip wget \
   && chmod +x /pb/pocketbase \
   && rm /tmp/pocketbase.zip
 
+COPY scripts/pocketbase-entrypoint.sh /usr/local/bin/pocketbase-entrypoint
+RUN chmod +x /usr/local/bin/pocketbase-entrypoint
+
 WORKDIR /pb
 
 EXPOSE 8090
 
-CMD ["/pb/pocketbase", "serve", "--http=0.0.0.0:8090", "--dir=/pb/pb_data", "--migrationsDir=/pb/pb_migrations", "--publicDir=/pb/pb_public"]
+CMD ["/usr/local/bin/pocketbase-entrypoint"]

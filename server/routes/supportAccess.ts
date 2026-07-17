@@ -4,6 +4,7 @@ import {
   setSupportAccessDefaultAuthorized,
   supportAccessDefaultAuthorized,
 } from '../lib/supportAccess.js';
+import { writeAuditLog } from '../lib/auditLog.js';
 
 export const supportAccessRouter = Router();
 
@@ -33,5 +34,12 @@ supportAccessRouter.put('/settings', async (req, res) => {
 
   const defaultAuthorized = mode === 'default';
   setSupportAccessDefaultAuthorized(tenantId, userId, defaultAuthorized);
+  await writeAuditLog({
+    tenantId,
+    actorUserId: userId,
+    action: defaultAuthorized ? 'support_access_enabled' : 'support_access_disabled',
+    targetType: 'tenant',
+    targetId: tenantId,
+  });
   res.json({ defaultAuthorized });
 });

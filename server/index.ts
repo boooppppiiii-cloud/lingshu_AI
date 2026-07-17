@@ -36,6 +36,7 @@ import { initWhatsAppCustomerMaintenance } from './whatsapp/historyImport.js';
 import { whatsappOAuthRouter } from './routes/whatsappOAuth.js';
 import { ensureDeliveryCollections } from './storage/ensureDeliveryCollections.js';
 import { supportAccessRouter } from './routes/supportAccess.js';
+import { crawlWorkerRouter } from './routes/crawlWorker.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
@@ -134,16 +135,17 @@ app.use('/api/overseas/plugins', pluginsRouter);
 app.use('/api/overseas/auth', authRouter);
 app.use('/api/overseas/admin', adminRouter);
 app.use('/api/overseas/support-access', supportAccessRouter);
+app.use('/api/overseas/crawl-worker', crawlWorkerRouter);
 app.use('/api/overseas/studio', studioRouter);
 app.use('/api/overseas/platform-integrations', platformIntegrationsRouter);
 app.use('/api/overseas/assistant-threads', assistantThreadsRouter);
 app.use('/api/v1/products', productApiRouter);
 app.use('/api/webhooks', webhookRouter);
 
-initScheduler();
+await initScheduler();
 initCrawlerOpsWorker();
 initTenantPlatformTokenMonitor();
-initWhatsAppCustomerMaintenance();
+await initWhatsAppCustomerMaintenance();
 
 // 素材库本地文件托管（POST /studio/materials 上传到 data/media/）
 const mediaDir = path.join(__dirname, '..', 'data', 'media');

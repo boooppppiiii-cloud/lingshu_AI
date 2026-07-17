@@ -69,9 +69,10 @@ function phoneNumberIdFrom(input: any): string {
 }
 
 async function tenantForRequest(req: any, res: any): Promise<string | null> {
-  const { tenantId } = res.locals as AuthLocals;
+  const { tenantId, supportAccess } = res.locals as AuthLocals;
   const requestedTenantId = text(req.body?.tenantId || req.query?.tenantId);
   if (!requestedTenantId || requestedTenantId === tenantId) return tenantId;
+  if (supportAccess) return null;
   const admin = await requireAdminUser(req);
   return admin ? requestedTenantId : null;
 }

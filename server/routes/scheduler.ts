@@ -55,7 +55,92 @@ function load(): ScheduledTask[] {
   try { return JSON.parse(fs.readFileSync(DATA, 'utf8')); } catch { return []; }
 }
 function save(tasks: ScheduledTask[]) {
+  fs.mkdirSync(path.dirname(DATA), { recursive: true });
   fs.writeFileSync(DATA, JSON.stringify(tasks, null, 2));
+  void mirrorTasksToPocketBase(tasks).catch(error => {
+    console.error('[scheduler] PocketBase task mirror failed:', error instanceof Error ? error.message : error);
+  });
+}
+
+function taskPayload(task: ScheduledTask): Record<string, unknown> {
+  return {
+    task_id: task.id,
+    tenant_id: task.tenantId || '',
+    name: task.name,
+    category: task.category,
+    task_type: task.taskType,
+    cron_expr: task.cronExpr,
+    cron_label: task.cronLabel,
+    enabled: task.enabled,
+    channel_id: task.channelId || '',
+    config: task.config || {},
+    last_run: task.lastRun || '',
+    last_result: task.lastResult || '',
+    created_at: task.createdAt,
+  };
+}
+
+function taskFromRecord(record: Record<string, any>): ScheduledTask | null {
+  const id = String(record.task_id || '').trim();
+  const tenantId = String(record.tenant_id || '').trim();
+  if (!id || !tenantId) return null;
+  return {
+    id,
+    tenantId,
+    name: String(record.name || id),
+    category: (record.category || 'daily') as ScheduledTask['category'],
+    taskType: (record.task_type || 'custom') as ScheduledTask['taskType'],
+    cronExpr: String(record.cron_expr || '0 8 * * *'),
+    cronLabel: String(record.cron_label || '每天 08:00'),
+    enabled: record.enabled !== false,
+    channelId: String(record.channel_id || '') || undefined,
+    config: record.config && typeof record.config === 'object' ? record.config : {},
+    lastRun: String(record.last_run || '') || undefined,
+    lastResult: String(record.last_result || '') || undefined,
+    createdAt: String(record.created_at || record.created || new Date().toISOString()),
+  };
+}
+
+async function allRemoteTasks(): Promise<Array<Record<string, any>>> {
+  const items: Array<Record<string, any>> = [];
+  let page = 1;
+  while (page <= 50) {
+    const result = await store.list<Record<string, any>>('scheduled_tasks', { page, perPage: 100, sort: 'created_at' });
+    items.push(...result.items);
+    if (page >= result.totalPages || result.items.length < 100) break;
+    page += 1;
+  }
+  return items;
+}
+
+async function mirrorTasksToPocketBase(tasks: ScheduledTask[]): Promise<void> {
+  const remote = await allRemoteTasks();
+  const remoteByTaskId = new Map(remote.map(record => [String(record.task_id || ''), record]));
+  const localIds = new Set(tasks.map(task => task.id));
+  for (const task of tasks) {
+    if (!task.tenantId) continue;
+    const existing = remoteByTaskId.get(task.id);
+    if (existing?.id) await store.update('scheduled_tasks', existing.id, taskPayload(task));
+    else await store.create('scheduled_tasks', taskPayload(task));
+  }
+  for (const record of remote) {
+    if (record.id && record.task_id && !localIds.has(String(record.task_id))) {
+      await store.delete('scheduled_tasks', String(record.id));
+    }
+  }
+}
+
+async function hydrateTasksFromPocketBase(): Promise<ScheduledTask[]> {
+  try {
+    const remote = (await allRemoteTasks()).map(taskFromRecord).filter((task): task is ScheduledTask => Boolean(task));
+    if (!remote.length) return load();
+    fs.mkdirSync(path.dirname(DATA), { recursive: true });
+    fs.writeFileSync(DATA, JSON.stringify(remote, null, 2));
+    return remote;
+  } catch (error) {
+    console.warn('[scheduler] using local task snapshot:', error instanceof Error ? error.message : error);
+    return load();
+  }
 }
 
 function tenantTasks(tenantId: string): ScheduledTask[] {
@@ -466,8 +551,8 @@ function scheduleTask(task: ScheduledTask) {
 }
 
 // Boot: restore active tasks
-export function initScheduler() {
-  const tasks = load().filter(t => t.enabled && t.tenantId);
+export async function initScheduler() {
+  const tasks = (await hydrateTasksFromPocketBase()).filter(t => t.enabled && t.tenantId);
   tasks.forEach(scheduleTask);
   console.log('[scheduler] initialized with', tasks.length, 'active tasks');
 }

@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
+import { writeAuditLog } from '../lib/auditLog.js';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pbGet, pbListStrict } from '../storage/pb.js';
@@ -540,7 +541,7 @@ adminRouter.get('/demo-accounts', async (req, res) => {
 
   try {
     const [tenants, users] = await Promise.all([
-      pbListStrict<Record<string, unknown>>('tenants', { perPage: 500, sort: '-created' }),
+      pbListStrict<Record<string, unknown>>('tenants', { perPage: 500, sort: '-createdAt' }),
       pbListStrict<Record<string, unknown>>('users', { perPage: 500, sort: 'email' }),
     ]);
     const trialTenantIds = new Set(trialAccounts.map(account => String(registry[account.email]?.tenantId || '')).filter(Boolean));
@@ -594,7 +595,11 @@ adminRouter.get('/demo-accounts', async (req, res) => {
       expiresAt: tenant.subscriptionExpiresAt,
     }));
   const existingCustomerIds = new Set(customerAccounts.map(account => account.tenantId));
-  customerAccounts.push(...localCustomerAccounts.filter(account => !existingCustomerIds.has(account.tenantId)));
+  const existingCustomerEmails = new Set(customerAccounts.flatMap(account => account.emails).map(email => email.toLowerCase()));
+  customerAccounts.push(...localCustomerAccounts.filter(account =>
+    !existingCustomerIds.has(account.tenantId)
+    && !account.emails.some(email => existingCustomerEmails.has(email.toLowerCase()))
+  ));
   customerAccounts.sort((a, b) => a.companyName.localeCompare(b.companyName));
 
   res.json({ admin: admin.email, trialAccounts, customerAccounts });
@@ -643,6 +648,15 @@ adminRouter.post('/support-access/session', async (req, res) => {
     res.status(403).json({ error: 'support_access_disabled' });
     return;
   }
+  await writeAuditLog({
+    tenantId,
+    actorUserId: admin.userId,
+    actorEmail: admin.email,
+    action: 'support_session_started',
+    targetType: 'tenant',
+    targetId: tenantId,
+    metadata: { requestId: request.id, tenantName },
+  });
   res.json(session);
 });
 

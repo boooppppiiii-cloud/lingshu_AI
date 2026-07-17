@@ -119,11 +119,88 @@ const COLLECTIONS: { name: string; fields: Field[] }[] = [
     ],
   },
   {
+    name: 'tenant_api_keys',
+    fields: [
+      { name: 'tenant_id', type: 'text', required: true },
+      { name: 'api_key', type: 'text', required: true },
+      { name: 'created_at', type: 'text', required: true },
+      { name: 'last_ingested_at', type: 'text' },
+      { name: 'last_product_name', type: 'text' },
+    ],
+  },
+  {
     name: 'tenant_support_settings',
     fields: [
       { name: 'tenant_id', type: 'text', required: true },
       { name: 'default_authorized', type: 'bool', required: true },
       { name: 'updated_by', type: 'text' },
+    ],
+  },
+  {
+    name: 'support_access_requests',
+    fields: [
+      { name: 'request_id', type: 'text', required: true },
+      { name: 'tenant_id', type: 'text', required: true },
+      { name: 'tenant_name', type: 'text' },
+      { name: 'admin_user_id', type: 'text', required: true },
+      { name: 'admin_email', type: 'text' },
+      { name: 'status', type: 'text', required: true },
+      { name: 'requested_at', type: 'text', required: true },
+      { name: 'revoked_at', type: 'text' },
+    ],
+  },
+  {
+    name: 'audit_logs',
+    fields: [
+      { name: 'tenantId', type: 'text', required: true },
+      { name: 'actorUserId', type: 'text', required: true },
+      { name: 'actorEmail', type: 'text' },
+      { name: 'action', type: 'text', required: true },
+      { name: 'targetType', type: 'text' },
+      { name: 'targetId', type: 'text' },
+      { name: 'metadata', type: 'json' },
+      { name: 'createdAt', type: 'text', required: true },
+    ],
+  },
+  {
+    name: 'scheduled_tasks',
+    fields: [
+      { name: 'task_id', type: 'text', required: true },
+      { name: 'tenant_id', type: 'text', required: true },
+      { name: 'name', type: 'text', required: true },
+      { name: 'category', type: 'text' },
+      { name: 'task_type', type: 'text', required: true },
+      { name: 'cron_expr', type: 'text', required: true },
+      { name: 'cron_label', type: 'text' },
+      { name: 'enabled', type: 'bool' },
+      { name: 'channel_id', type: 'text' },
+      { name: 'config', type: 'json' },
+      { name: 'last_run', type: 'text' },
+      { name: 'last_result', type: 'text' },
+      { name: 'created_at', type: 'text', required: true },
+    ],
+  },
+  {
+    name: 'whatsapp_customers',
+    fields: [
+      { name: 'tenant_id', type: 'text', required: true },
+      { name: 'customer_id', type: 'text', required: true },
+      { name: 'wa_number', type: 'text' },
+      { name: 'name', type: 'text' },
+      { name: 'stage', type: 'text' },
+      { name: 'last_active_at', type: 'number' },
+      { name: 'payload', type: 'json', required: true },
+    ],
+  },
+  {
+    name: 'whatsapp_interactions',
+    fields: [
+      { name: 'tenant_id', type: 'text', required: true },
+      { name: 'interaction_id', type: 'text', required: true },
+      { name: 'customer_id', type: 'text', required: true },
+      { name: 'wa_number', type: 'text' },
+      { name: 'timestamp', type: 'number' },
+      { name: 'payload', type: 'json', required: true },
     ],
   },
   {
@@ -245,12 +322,34 @@ async function ensureUsersTenantId(token: string): Promise<void> {
   console.log('  ✓ added users.tenantId');
 }
 
+async function ensureUsersCollection(token: string, existing: Map<string, unknown>): Promise<void> {
+  if (existing.has('users')) {
+    await ensureUsersTenantId(token);
+    return;
+  }
+  const res = await fetch(`${PB_URL}/api/collections`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: token },
+    body: JSON.stringify({
+      name: 'users',
+      type: 'auth',
+      fields: [
+        { name: 'name', type: 'text', required: false },
+        { name: 'tenantId', type: 'text', required: true },
+      ],
+      passwordAuth: { enabled: true, identityFields: ['email'] },
+    }),
+  });
+  if (!res.ok) throw new Error(`create users auth collection failed: ${res.status} ${await res.text()}`);
+  console.log('  ✓ created users auth collection');
+}
+
 async function main(): Promise<void> {
   console.log(`→ Provisioning PocketBase at ${PB_URL}`);
   const token = await authToken();
   const existing = await listCollections(token);
 
-  await ensureUsersTenantId(token);
+  await ensureUsersCollection(token, existing);
 
   for (const { name, fields } of COLLECTIONS) {
     if (existing.has(name)) {
