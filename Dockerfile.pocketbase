@@ -1,9 +1,11 @@
 FROM alpine:3.22
 
 ARG PB_VERSION=0.39.5
+ARG TARGETARCH
 
 RUN apk add --no-cache ca-certificates unzip wget \
-  && wget -O /tmp/pocketbase.zip "https://github.com/pocketbase/pocketbase/releases/download/v${PB_VERSION}/pocketbase_${PB_VERSION}_linux_amd64.zip" \
+  && case "${TARGETARCH:-amd64}" in amd64|arm64) ;; *) echo "Unsupported architecture: ${TARGETARCH}" >&2; exit 1 ;; esac \
+  && wget -O /tmp/pocketbase.zip "https://github.com/pocketbase/pocketbase/releases/download/v${PB_VERSION}/pocketbase_${PB_VERSION}_linux_${TARGETARCH:-amd64}.zip" \
   && mkdir -p /pb/pb_data /pb/pb_migrations /pb/pb_public \
   && unzip /tmp/pocketbase.zip -d /pb \
   && chmod +x /pb/pocketbase \

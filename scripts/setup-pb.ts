@@ -21,6 +21,9 @@ dotenv.config({ path: path.join(__dirname, '..', '.env') });
 const PB_URL = (process.env.PB_URL ?? 'http://127.0.0.1:8090').replace(/\/$/, '');
 const EMAIL = process.env.PB_ADMIN_EMAIL ?? '';
 const PASSWORD = process.env.PB_ADMIN_PASSWORD ?? '';
+const WORKBENCH_ADMIN_EMAIL = String(process.env.WORKBENCH_ADMIN_EMAIL ?? '').trim().toLowerCase();
+const WORKBENCH_ADMIN_PASSWORD = String(process.env.WORKBENCH_ADMIN_PASSWORD ?? '');
+const WORKBENCH_ADMIN_NAME = String(process.env.WORKBENCH_ADMIN_NAME ?? '灵枢管理员').trim() || '灵枢管理员';
 
 type Field = { name: string; type: string; required?: boolean; [k: string]: unknown };
 
@@ -344,6 +347,65 @@ async function ensureUsersCollection(token: string, existing: Map<string, unknow
   console.log('  ✓ created users auth collection');
 }
 
+function filterValue(value: string): string {
+  return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
+async function findRecord(token: string, collection: string, filter: string): Promise<Record<string, unknown> | null> {
+  const res = await fetch(`${PB_URL}/api/collections/${collection}/records?perPage=1&filter=${encodeURIComponent(filter)}`, {
+    headers: { Authorization: token },
+  });
+  if (!res.ok) throw new Error(`find ${collection} failed: ${res.status} ${await res.text()}`);
+  const body = await res.json() as { items?: Record<string, unknown>[] };
+  return body.items?.[0] ?? null;
+}
+
+async function writeRecord(token: string, collection: string, id: string | null, body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const res = await fetch(`${PB_URL}/api/collections/${collection}/records${id ? `/${id}` : ''}`, {
+    method: id ? 'PATCH' : 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: token },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`${id ? 'update' : 'create'} ${collection} failed: ${res.status} ${await res.text()}`);
+  return await res.json() as Record<string, unknown>;
+}
+
+async function ensureWorkbenchAdmin(token: string): Promise<void> {
+  if (!WORKBENCH_ADMIN_EMAIL && !WORKBENCH_ADMIN_PASSWORD) {
+    if (process.env.NODE_ENV === 'production') throw new Error('WORKBENCH_ADMIN_EMAIL / WORKBENCH_ADMIN_PASSWORD are required in production');
+    console.log('  ! workbench admin not configured — skipping');
+    return;
+  }
+  if (!WORKBENCH_ADMIN_EMAIL || WORKBENCH_ADMIN_PASSWORD.length < 12) {
+    throw new Error('WORKBENCH_ADMIN_EMAIL and a WORKBENCH_ADMIN_PASSWORD of at least 12 characters are required');
+  }
+
+  const tenantFilter = `registeredEmail = ${filterValue(WORKBENCH_ADMIN_EMAIL)}`;
+  const currentTenant = await findRecord(token, 'tenants', tenantFilter);
+  const tenant = await writeRecord(token, 'tenants', String(currentTenant?.id || '') || null, {
+    name: WORKBENCH_ADMIN_NAME,
+    companyName: WORKBENCH_ADMIN_NAME,
+    registeredEmail: WORKBENCH_ADMIN_EMAIL,
+    subscriptionStatus: 'active',
+    subscriptionPlan: 'admin',
+    subscriptionExpiresAt: '',
+    createdAt: String(currentTenant?.createdAt || new Date().toISOString()),
+  });
+  const tenantId = String(tenant.id || currentTenant?.id || '');
+  if (!tenantId) throw new Error('workbench admin tenant creation returned no id');
+
+  const currentUser = await findRecord(token, 'users', `email = ${filterValue(WORKBENCH_ADMIN_EMAIL)}`);
+  await writeRecord(token, 'users', String(currentUser?.id || '') || null, {
+    email: WORKBENCH_ADMIN_EMAIL,
+    emailVisibility: true,
+    name: WORKBENCH_ADMIN_NAME,
+    tenantId,
+    password: WORKBENCH_ADMIN_PASSWORD,
+    passwordConfirm: WORKBENCH_ADMIN_PASSWORD,
+  });
+  console.log(`  ✓ workbench admin ready: ${WORKBENCH_ADMIN_EMAIL}`);
+}
+
 async function main(): Promise<void> {
   console.log(`→ Provisioning PocketBase at ${PB_URL}`);
   const token = await authToken();
@@ -358,6 +420,7 @@ async function main(): Promise<void> {
     }
     await createCollection(token, name, fields);
   }
+  await ensureWorkbenchAdmin(token);
   console.log('✓ Done.');
 }
 

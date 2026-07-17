@@ -184,6 +184,8 @@ export function isAdminEmail(email?: string): boolean {
   if (!normalized) return false;
   const localAdminEmail = norm(process.env.LOCAL_ADMIN_EMAIL ?? '');
   if (localAdminEmail && normalized === localAdminEmail) return true;
+  const workbenchAdminEmail = norm(process.env.WORKBENCH_ADMIN_EMAIL ?? '');
+  if (workbenchAdminEmail && normalized === workbenchAdminEmail) return true;
   const registry = readDemoAccountRegistry();
   if (registry[normalized]?.status === 'admin') return true;
   const allowed = String(process.env.ADMIN_DASHBOARD_EMAILS ?? '')
