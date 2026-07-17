@@ -17,4 +17,4 @@ ENV NODE_ENV=production
 
 EXPOSE 8788
 
-CMD ["npm", "run", "start"]
+CMD ["sh", "-c", "npm run setup:pb && npm run start"]

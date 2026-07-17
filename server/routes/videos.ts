@@ -3138,6 +3138,7 @@ async function crawlYtDlpMetadataNow(platform: Platform, url: string, keyword: s
   try {
     ({ stdout } = await execFileAsync('python3', buildYtDlpArgs(['--dump-json', '--skip-download'], url, false), { maxBuffer: 8 * 1024 * 1024, timeout: 45_000, env: crawlerExecEnv() }));
   } catch {
+    if (!usesServerCookiesForCrawl(platform)) throw new Error(`${platform} anonymous metadata crawl failed`);
     stdout = await execYtDlpWithCookieFallback(['--dump-json', '--skip-download'], url, 60_000, 8 * 1024 * 1024);
   }
   const line = stdout.split('\n').find(Boolean);
@@ -3178,11 +3179,13 @@ async function downloadVideoToMaterial(input: {
     await execFileAsync('python3', buildYtDlpArgs(downloadArgs, input.sourceUrl, false), { maxBuffer: 4 * 1024 * 1024, timeout: 180_000, env: crawlerExecEnv() });
   } catch (e) {
     ytDlpError = e;
-    try {
-      await execYtDlpWithCookieFallback(downloadArgs, input.sourceUrl, 180_000, 4 * 1024 * 1024);
-      ytDlpError = null;
-    } catch (cookieError) {
-      ytDlpError = cookieError;
+    if (usesServerCookiesForCrawl(input.platform)) {
+      try {
+        await execYtDlpWithCookieFallback(downloadArgs, input.sourceUrl, 180_000, 4 * 1024 * 1024);
+        ytDlpError = null;
+      } catch (cookieError) {
+        ytDlpError = cookieError;
+      }
     }
   }
   if (ytDlpError && (input.platform === 'instagram' || input.platform === 'tiktok')) {
@@ -3243,12 +3246,13 @@ async function downloadVideoForAnalysis(input: {
     '-o', outTpl,
   ];
   const formatCandidates: Array<{ format?: string; section?: boolean; label: string }> = [
-    { format: 'bv*[height<=360]+ba/bv*[height<=360]/b[height<=360][vcodec!=none]/best[height<=360][vcodec!=none]/best[vcodec!=none]', section: true, label: '360-section' },
-    { format: 'bv*[height<=480]+ba/bv*[height<=480]/b[height<=480][vcodec!=none]/best[height<=480][vcodec!=none]/best[vcodec!=none]', section: true, label: '480-section' },
-    { format: 'bv*+ba/bv*/b[vcodec!=none]/best[vcodec!=none]', section: true, label: 'best-section' },
+    { format: 'h264_720p_1023806-1/h264_720p_1023806-0/download/best[height<=720]/best', section: false, label: 'tiktok-h264-full' },
     { format: 'bv*[height<=480]+ba/bv*[height<=480]/b[height<=480][vcodec!=none]/best[height<=480][vcodec!=none]/best[vcodec!=none]', section: false, label: '480-full' },
     { format: 'bv*+ba/bv*/b[vcodec!=none]/best[vcodec!=none]', section: false, label: 'best-full' },
     { section: false, label: 'auto-full' },
+    { format: 'bv*[height<=360]+ba/bv*[height<=360]/b[height<=360][vcodec!=none]/best[height<=360][vcodec!=none]/best[vcodec!=none]', section: true, label: '360-section' },
+    { format: 'bv*[height<=480]+ba/bv*[height<=480]/b[height<=480][vcodec!=none]/best[height<=480][vcodec!=none]/best[vcodec!=none]', section: true, label: '480-section' },
+    { format: 'bv*+ba/bv*/b[vcodec!=none]/best[vcodec!=none]', section: true, label: 'best-section' },
   ];
 
   let lastError: unknown = null;
@@ -3264,7 +3268,7 @@ async function downloadVideoForAnalysis(input: {
       break;
     } catch (e) {
       lastError = e;
-      if (cookieBrowsers().length > 0 || cookieFiles().length > 0) {
+      if (usesServerCookiesForCrawl(input.platform) && (cookieBrowsers().length > 0 || cookieFiles().length > 0)) {
         try {
           await execYtDlpWithCookieFallback(downloadArgs, input.sourceUrl, downloadTimeoutMs, 4 * 1024 * 1024);
           lastError = null;
@@ -4377,46 +4381,113 @@ function normalizeAccountListUrl(platform: Platform, url: string): string {
   return clean;
 }
 
+function accountListUrlCandidates(platform: Platform, url: string): string[] {
+  const primary = normalizeAccountListUrl(platform, url);
+  if (platform !== 'youtube') return [primary];
+
+  const clean = stripTrackingParams(String(url || '').trim()).replace(/\/+$/, '');
+  const base = clean.replace(/\/(?:videos|shorts|streams|featured)$/i, '');
+  return Array.from(new Set([
+    primary,
+    `${base}/shorts`,
+    `${base}/streams`,
+    clean,
+  ]));
+}
+
 // 采集某个对标账号主页的最新视频列表（flat-playlist 枚举，最多 limit 条）。
 async function crawlAccountHomepage(platform: Platform, accountUrl: string, limit: number, dateFrom = '', dateTo = ''): Promise<CrawledVideo[]> {
-  if (platform === 'instagram' && canUseApifyInstagramCrawlFallback()) {
-    try {
-      const apifyItems = await crawlInstagramApify(accountUrl, Math.max(1, limit), dateFrom, dateTo);
-      if (apifyItems.length > 0) return apifyItems.slice(0, limit);
-    } catch (e) {
-      console.warn('[videos] Instagram account Apify crawl failed, falling back to yt-dlp:', e instanceof Error ? e.message : e);
+  if (platform === 'instagram') {
+    let instagramItems: CrawledVideo[] = [];
+    if (canUseApifyInstagramCrawlFallback()) {
+      try {
+        instagramItems = await crawlInstagramApify(accountUrl, Math.max(1, limit), dateFrom, dateTo);
+      } catch (e) {
+        console.warn('[videos] Instagram account Apify crawl failed:', e instanceof Error ? e.message : e);
+      }
     }
+    try {
+      instagramItems = mergeCrawledVideos(instagramItems, await crawlYtDlpSearch(platform, normalizeAccountListUrl(platform, accountUrl), '', Math.max(1, limit), '', ''));
+    } catch (e) {
+      console.warn('[videos] Instagram account public crawl failed:', e instanceof Error ? e.message : e);
+    }
+    if (instagramItems.length === 0) throw new Error('Instagram 账号主页未抓到可用视频：请配置 APIFY_TOKEN 默认采集');
+    return instagramItems.slice(0, limit);
   }
   const listUrl = normalizeAccountListUrl(platform, accountUrl);
   const safeLimit = Math.max(1, limit);
   let items: CrawledVideo[];
-  try {
-    items = await crawlYtDlpSearch(platform, listUrl, '', safeLimit, '', '');
-  } catch (e) {
-    // TikTok/部分主页枚举需要登录态；退回带 cookies 的 flat-playlist 枚举。
-    console.warn('[videos] account homepage flat enumeration failed, retrying with cookies:', e);
-    try {
-      items = await enumerateAccountWithCookies(platform, listUrl, safeLimit);
-    } catch (cookieError) {
-      if (platform !== 'facebook') throw cookieError;
-      if (canUseApifyFacebookCrawlFallback()) {
-        try {
-          console.warn('[videos] Facebook account cookie enumeration failed, trying Apify:', cookieError instanceof Error ? cookieError.message : cookieError);
-          items = await crawlFacebookAccountApify(accountUrl, safeLimit, dateFrom, dateTo);
-        } catch (apifyError) {
-          console.warn('[videos] Facebook account Apify crawl failed, trying public URL search:', apifyError instanceof Error ? apifyError.message : apifyError);
-          items = await crawlFacebookAccountByPublicSearch(accountUrl, safeLimit);
-        }
-      } else {
-        console.warn('[videos] Facebook account cookie enumeration failed, trying public URL search:', cookieError instanceof Error ? cookieError.message : cookieError);
-        items = await crawlFacebookAccountByPublicSearch(accountUrl, safeLimit);
+  if (platform === 'facebook') {
+    items = [];
+    if (canUseApifyFacebookCrawlFallback()) {
+      try {
+        const apifyItems = await crawlFacebookAccountApify(accountUrl, safeLimit, dateFrom, dateTo);
+        items = mergeCrawledVideos(items, apifyItems);
+      } catch (apifyError) {
+        console.warn('[videos] Facebook account Apify crawl failed:', apifyError instanceof Error ? apifyError.message : apifyError);
       }
     }
+
+    if (items.length < safeLimit) {
+      try {
+        const publicItems = await crawlFacebookAccountByPublicSearch(accountUrl, safeLimit - items.length);
+        items = mergeCrawledVideos(items, publicItems);
+      } catch (publicError) {
+        console.warn('[videos] Facebook account public URL search failed:', publicError instanceof Error ? publicError.message : publicError);
+      }
+    }
+
+    if (items.length === 0) {
+      throw new Error('Facebook 账号主页未抓到可用视频：请配置 APIFY_TOKEN 默认采集');
+    }
+    const withinRange = hasDateRange(dateFrom, dateTo)
+      ? items.filter(item => isWithinDateRange(item.uploadedAt, dateFrom, dateTo))
+      : items;
+    return (withinRange.length ? withinRange : items).slice(0, limit);
+  }
+  const candidates = accountListUrlCandidates(platform, accountUrl);
+  const errors: unknown[] = [];
+  for (const candidate of candidates) {
+    try {
+      items = await crawlYtDlpSearch(platform, candidate, '', safeLimit, '', '');
+      break;
+    } catch (e) {
+      errors.push(e);
+      console.warn('[videos] account homepage flat enumeration failed:', e);
+    }
+  }
+  if (!items!) {
+    for (const candidate of candidates) {
+      try {
+        items = await enumerateAccountWithCookies(platform, candidate, safeLimit);
+        break;
+      } catch (cookieError) {
+        errors.push(cookieError);
+        console.warn('[videos] account homepage cookie enumeration failed:', cookieError);
+      }
+    }
+  }
+  if (!items!) {
+    const lastError = errors[errors.length - 1];
+    throw lastError instanceof Error ? lastError : new Error(`${platform} 账号主页未抓到可用视频`);
   }
   const withinRange = hasDateRange(dateFrom, dateTo)
     ? items.filter(item => isWithinDateRange(item.uploadedAt, dateFrom, dateTo))
     : items;
   return (withinRange.length ? withinRange : items).slice(0, limit);
+}
+
+function mergeCrawledVideos(existing: CrawledVideo[], incoming: CrawledVideo[]): CrawledVideo[] {
+  const seen = new Set(existing.map(item => videoDedupeKey(item)));
+  const out = [...existing];
+  for (const item of incoming) {
+    const normalized = normalizeCrawledVideo(item);
+    const key = videoDedupeKey(normalized);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(normalized);
+  }
+  return out;
 }
 
 async function crawlFacebookAccountByPublicSearch(accountUrl: string, limit: number): Promise<CrawledVideo[]> {
@@ -5215,6 +5286,10 @@ function cookieFiles(): string[] {
     .split(',')
     .map(file => file.trim())
     .filter(file => file && fs.existsSync(file));
+}
+
+function usesServerCookiesForCrawl(platform: Platform): boolean {
+  return platform === 'youtube' || platform === 'tiktok';
 }
 
 function crawlerProxyPool(): string[] {

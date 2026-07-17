@@ -9,6 +9,7 @@ import { auth, store } from '../storage/index.js';
 import type { AutonomyLevel } from '../autonomy/actionRules.js';
 import { callLLM } from '../agents/llm.js';
 import { notifyDeliveryTeam } from '../lib/tenantPlatformApps.js';
+import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_FILE = path.join(__dirname, '../../data/enterprise.json');
@@ -334,13 +335,13 @@ async function listStoredTenantOrders(tenantId: string): Promise<Record<string, 
 }
 
 async function readOrders(tenantId: string): Promise<OrderRecord[]> {
-  if (tenantId.startsWith('local_tenant_')) return readLocalTenantOrders(tenantId);
+  if (process.env.NODE_ENV !== 'production' && tenantId.startsWith('local_tenant_')) return readLocalTenantOrders(tenantId);
   const records = await listStoredTenantOrders(tenantId);
   return records.map(storedOrder).filter(Boolean) as OrderRecord[];
 }
 
 async function upsertOrder(tenantId: string, order: OrderRecord): Promise<boolean> {
-  if (tenantId.startsWith('local_tenant_')) {
+  if (process.env.NODE_ENV !== 'production' && tenantId.startsWith('local_tenant_')) {
     const orders = readLocalTenantOrders(tenantId);
     writeLocalTenantOrders(tenantId, [order, ...orders.filter(item => item.orderNo !== order.orderNo)]);
     return true;
@@ -723,6 +724,36 @@ function writeProfile(profile: EnterpriseProfile): void {
   fs.writeFileSync(DATA_FILE, JSON.stringify(clean, null, 2), 'utf8');
 }
 
+function storedProfile(value: unknown): EnterpriseProfile | null {
+  if (!value) return null;
+  if (typeof value === 'string') {
+    try { return normalizeProfile(JSON.parse(value)); } catch { return null; }
+  }
+  return typeof value === 'object' ? normalizeProfile(value as EnterpriseProfile) : null;
+}
+
+async function readTenantProfile(tenantId: string): Promise<EnterpriseProfile> {
+  const result = await store.list<Record<string, unknown>>('tenant_profiles', {
+    where: { tenant_id: tenantId }, page: 1, perPage: 1,
+  });
+  const profile = storedProfile(result.items[0]?.profile);
+  if (profile) return profile;
+  return process.env.NODE_ENV === 'production' ? normalizeProfile({} as EnterpriseProfile) : readProfile();
+}
+
+async function writeTenantProfile(tenantId: string, profile: EnterpriseProfile, userId: string): Promise<void> {
+  const clean = normalizeProfile(profile) as EnterpriseProfile & { integrations?: unknown };
+  delete clean.integrations;
+  const result = await store.list<Record<string, unknown>>('tenant_profiles', {
+    where: { tenant_id: tenantId }, page: 1, perPage: 1,
+  });
+  const existing = result.items[0];
+  const ok = existing?.id
+    ? await store.update('tenant_profiles', String(existing.id), { profile: clean, updated_by: userId })
+    : Boolean(await store.create('tenant_profiles', { tenant_id: tenantId, profile: clean, updated_by: userId }));
+  if (!ok) throw new Error('tenant_profile_storage_unavailable');
+}
+
 export function readEnterpriseProfile(): EnterpriseProfile {
   return readProfile();
 }
@@ -834,15 +865,36 @@ function publicProductApiInfo(secret: ProductApiSecret | null) {
   };
 }
 
-function ensureProductApiKey(tenantId: string): ProductApiSecret {
-  const current = readProductApiSecret();
-  if (current?.apiKey && current.tenantId === tenantId) return current;
+function storedProductApiSecret(record: Record<string, unknown> | undefined): ProductApiSecret | null {
+  if (!record?.api_key || !record.tenant_id) return null;
+  return {
+    tenantId: String(record.tenant_id),
+    apiKey: String(record.api_key),
+    createdAt: String(record.created_at || ''),
+    lastIngestedAt: String(record.last_ingested_at || ''),
+    lastProductName: String(record.last_product_name || ''),
+  };
+}
+
+async function productApiSecretForTenant(tenantId: string): Promise<ProductApiSecret | null> {
+  const result = await store.list<Record<string, unknown>>('tenant_api_keys', {
+    where: { tenant_id: tenantId }, page: 1, perPage: 1,
+  });
+  return storedProductApiSecret(result.items[0]);
+}
+
+async function ensureProductApiKey(tenantId: string): Promise<ProductApiSecret> {
+  const current = await productApiSecretForTenant(tenantId);
+  if (current?.apiKey) return current;
   const next: ProductApiSecret = {
     tenantId,
     apiKey: `ls_prod_${randomBytes(24).toString('base64url')}`,
     createdAt: new Date().toISOString(),
   };
-  writeProductApiSecret(next);
+  const created = await store.create('tenant_api_keys', {
+    tenant_id: tenantId, api_key: next.apiKey, created_at: next.createdAt,
+  });
+  if (!created) throw new Error('tenant_api_key_storage_unavailable');
   return next;
 }
 
@@ -851,11 +903,15 @@ function readApiKey(req: Request) {
   return String(req.headers['x-api-key'] || bearer || '').trim();
 }
 
-function verifyProductApiKey(req: Request) {
-  const expected = readProductApiSecret()?.apiKey;
+async function verifyProductApiKey(req: Request): Promise<{ profile: EnterpriseProfile; secret: ProductApiSecret } | null> {
   const provided = readApiKey(req);
-  if (!expected || !provided || expected !== provided) return null;
-  return readProfile();
+  if (!provided) return null;
+  const result = await store.list<Record<string, unknown>>('tenant_api_keys', {
+    where: { api_key: provided }, page: 1, perPage: 1,
+  });
+  const secret = storedProductApiSecret(result.items[0]);
+  if (!secret) return null;
+  return { profile: await readTenantProfile(secret.tenantId), secret };
 }
 
 type ApiProductInput = {
@@ -1121,15 +1177,18 @@ function allPackPreviews(profile: EnterpriseProfile) {
 }
 
 export const enterpriseRouter = Router();
+enterpriseRouter.use(requireAuth);
 
-enterpriseRouter.get('/profile', (_req, res) => {
-  res.json(readProfile());
+enterpriseRouter.get('/profile', async (_req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  res.json(await readTenantProfile(tenantId));
 });
 
 enterpriseRouter.post('/style-profile/distill', async (_req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   try {
     const { distillSalesStyleProfile } = await import('../knowledge/styleMemory.js');
-    const profile = await distillSalesStyleProfile('local_tenant_default', true);
+    const profile = await distillSalesStyleProfile(tenantId, true);
     if (!profile) {
       res.status(409).json({ error: 'not_enough_samples', message: '修改样本不足 20 条，暂时无法生成销售风格档案。' });
       return;
@@ -1140,8 +1199,9 @@ enterpriseRouter.post('/style-profile/distill', async (_req, res) => {
   }
 });
 
-enterpriseRouter.get('/knowledge-completion', (_req, res) => {
-  const profile = readProfile();
+enterpriseRouter.get('/knowledge-completion', async (_req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const profile = await readTenantProfile(tenantId);
   res.json(knowledgeCompletion(profile));
 });
 
@@ -1155,16 +1215,18 @@ enterpriseRouter.post('/faq/structure', async (req, res) => {
   res.json({ items });
 });
 
-enterpriseRouter.get('/faq/packs', (_req, res) => {
-  const profile = readProfile();
+enterpriseRouter.get('/faq/packs', async (_req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const profile = await readTenantProfile(tenantId);
   res.json({
     recommendedIndustry: inferIndustry(profile),
     packs: allPackPreviews(profile),
   });
 });
 
-enterpriseRouter.post('/faq/packs/import', (req, res) => {
-  const profile = readProfile();
+enterpriseRouter.post('/faq/packs/import', async (req, res) => {
+  const { tenantId, userId } = res.locals as AuthLocals;
+  const profile = await readTenantProfile(tenantId);
   const industry = text(req.body?.industry) as PackIndustry;
   const scenario = text(req.body?.scenario) as PackScenario;
   const selected = Array.isArray(req.body?.questions) ? req.body.questions.map(text).filter(Boolean) : [];
@@ -1190,17 +1252,19 @@ enterpriseRouter.post('/faq/packs/import', (req, res) => {
       existing.add(key);
       return true;
     });
-  writeProfile({ ...profile, faq: [...(profile.faq ?? []), ...incoming] });
+  const nextProfile = { ...profile, faq: [...(profile.faq ?? []), ...incoming] };
+  await writeTenantProfile(tenantId, nextProfile, userId);
   res.json({
     ok: true,
     imported: incoming.length,
     skipped: pack.items.length - incoming.length,
-    profile: readProfile(),
+    profile: nextProfile,
   });
 });
 
 enterpriseRouter.post('/faq/learned', async (req, res) => {
-  const profile = readProfile();
+  const { tenantId, userId } = res.locals as AuthLocals;
+  const profile = await readTenantProfile(tenantId);
   const buyerMessage = text(req.body?.buyerMessage);
   const answer = text(req.body?.answer);
   const questionInput = text(req.body?.question);
@@ -1233,8 +1297,9 @@ enterpriseRouter.post('/faq/learned', async (req, res) => {
     approvedForAuto: false,
     source: 'learned',
   };
-  writeProfile({ ...profile, faq: [...(profile.faq ?? []), item] });
-  res.json({ ok: true, item, profile: readProfile() });
+  const nextProfile = { ...profile, faq: [...(profile.faq ?? []), item] };
+  await writeTenantProfile(tenantId, nextProfile, userId);
+  res.json({ ok: true, item, profile: nextProfile });
 });
 
 enterpriseRouter.post('/faq/learned/suggest', async (req, res) => {
@@ -1257,7 +1322,8 @@ enterpriseRouter.post('/faq/learned/suggest', async (req, res) => {
 });
 
 enterpriseRouter.post('/notifications/test', async (req, res) => {
-  const profile = readProfile();
+  const { tenantId, userId } = res.locals as AuthLocals;
+  const profile = await readTenantProfile(tenantId);
   const receiver = req.body?.receiver as Partial<NotificationReceiver> | undefined;
   const target = text(receiver?.target);
   const name = text(receiver?.name) || '通知接收人';
@@ -1271,7 +1337,7 @@ enterpriseRouter.post('/notifications/test', async (req, res) => {
     ...(profile.notifications ?? DEFAULT_NOTIFICATIONS),
     lastTestAt: new Date().toISOString(),
   });
-  writeProfile({ ...profile, notifications });
+  await writeTenantProfile(tenantId, { ...profile, notifications }, userId);
   res.json({ ok: true, lastTestAt: notifications.lastTestAt });
 });
 
@@ -1338,7 +1404,7 @@ enterpriseRouter.post('/orders/import', async (req, res) => {
 
 enterpriseRouter.get('/product-api', async (req, res) => {
   const tenantId = await resolveTenantId(req);
-  const secret = ensureProductApiKey(tenantId);
+  const secret = await ensureProductApiKey(tenantId);
   res.json(publicProductApiInfo(secret));
 });
 
@@ -1349,14 +1415,22 @@ enterpriseRouter.post('/product-api/rotate', async (req, res) => {
     apiKey: `ls_prod_${randomBytes(24).toString('base64url')}`,
     createdAt: new Date().toISOString(),
   };
-  writeProductApiSecret(next);
+  const existing = await store.list<Record<string, unknown>>('tenant_api_keys', {
+    where: { tenant_id: tenantId }, page: 1, perPage: 1,
+  });
+  const payload = { tenant_id: tenantId, api_key: next.apiKey, created_at: next.createdAt, last_ingested_at: '', last_product_name: '' };
+  const ok = existing.items[0]?.id
+    ? await store.update('tenant_api_keys', String(existing.items[0].id), payload)
+    : Boolean(await store.create('tenant_api_keys', payload));
+  if (!ok) { res.status(503).json({ error: 'tenant_api_key_storage_unavailable' }); return; }
   res.json(publicProductApiInfo(next));
 });
 
-enterpriseRouter.get('/product-api/status', (_req, res) => {
-  const profile = readProfile();
+enterpriseRouter.get('/product-api/status', async (_req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const profile = await readTenantProfile(tenantId);
   const items = profile.products.items ?? [];
-  const secret = readProductApiSecret();
+  const secret = await productApiSecretForTenant(tenantId);
   res.json({
     count: items.length,
     lastIngestedAt: secret?.lastIngestedAt || '',
@@ -1365,6 +1439,7 @@ enterpriseRouter.get('/product-api/status', (_req, res) => {
 });
 
 enterpriseRouter.post('/assets', (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   const { name, type, dataUrl } = req.body as { name?: string; type?: string; dataUrl?: string };
   const match = String(dataUrl || '').match(/^data:([^;]+);base64,(.+)$/);
   if (!name || !match) {
@@ -1373,7 +1448,9 @@ enterpriseRouter.post('/assets', (req, res) => {
   }
   ensureAssetsDir();
   const storedName = safeStoredName(name);
-  const filePath = path.join(ASSETS_DIR, storedName);
+  const tenantDir = path.join(ASSETS_DIR, Buffer.from(tenantId, 'utf8').toString('base64url'));
+  fs.mkdirSync(tenantDir, { recursive: true });
+  const filePath = path.join(tenantDir, storedName);
   const buffer = Buffer.from(match[2], 'base64');
   fs.writeFileSync(filePath, buffer);
   res.json({
@@ -1386,8 +1463,10 @@ enterpriseRouter.post('/assets', (req, res) => {
 });
 
 enterpriseRouter.get('/assets/:file', (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   const file = path.basename(req.params.file);
-  const filePath = path.join(ASSETS_DIR, file);
+  const tenantDir = path.join(ASSETS_DIR, Buffer.from(tenantId, 'utf8').toString('base64url'));
+  const filePath = path.join(tenantDir, file);
   if (!fs.existsSync(filePath)) {
     res.status(404).end();
     return;
@@ -1395,14 +1474,16 @@ enterpriseRouter.get('/assets/:file', (req, res) => {
   res.sendFile(filePath);
 });
 
-enterpriseRouter.post('/profile', (req, res) => {
+enterpriseRouter.post('/profile', async (req, res) => {
+  const { tenantId, userId } = res.locals as AuthLocals;
   const profile = normalizeProfile(req.body as EnterpriseProfile);
-  writeProfile(profile);
+  await writeTenantProfile(tenantId, profile, userId);
   res.json({ ok: true });
 });
 
-enterpriseRouter.get('/context', (_req, res) => {
-  const profile = readProfile();
+enterpriseRouter.get('/context', async (_req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const profile = await readTenantProfile(tenantId);
   res.json({ context: buildEnterpriseContext(profile) });
 });
 
@@ -1410,15 +1491,17 @@ enterpriseRouter.get('/demo/templates', (_req, res) => {
   res.json(readTemplates().map(({ id, name, description, profile }) => ({ id, name, description, profile })));
 });
 
-enterpriseRouter.post('/demo/templates/:id/apply', (req, res) => {
+enterpriseRouter.post('/demo/templates/:id/apply', async (req, res) => {
+  const { tenantId, userId } = res.locals as AuthLocals;
   const template = readTemplates().find(t => t.id === req.params.id);
   if (!template) { res.status(404).json({ error: 'template not found' }); return; }
   const profile = normalizeProfile(template.profile);
-  fs.writeFileSync(DATA_FILE, JSON.stringify(profile, null, 2), 'utf8');
+  await writeTenantProfile(tenantId, profile, userId);
   res.json({ ok: true, profile });
 });
 
-enterpriseRouter.post('/demo/reset', (_req, res) => {
+enterpriseRouter.post('/demo/reset', async (_req, res) => {
+  const { tenantId, userId } = res.locals as AuthLocals;
   const profile = normalizeProfile({
     company: { name: '', industry: '', companyType: '', mainMarkets: '', primaryLanguages: '', founded: '', description: '' },
     products: { categories: '', priceRange: '', moq: '', certifications: '', highlights: '', items: [] },
@@ -1432,23 +1515,20 @@ enterpriseRouter.post('/demo/reset', (_req, res) => {
       notifications: { ...DEFAULT_NOTIFICATIONS, workHours: { ...DEFAULT_NOTIFICATIONS.workHours } },
       knowledge: '',
     });
-  fs.writeFileSync(DATA_FILE, JSON.stringify(profile, null, 2), 'utf8');
-  writeJson('channels.json', []);
-  writeJson('plugins.json', []);
-  writeJson('tasks.json', []);
-  writeJson('studio-projects.json', []);
+  await writeTenantProfile(tenantId, profile, userId);
   resetDemoUsage();
   res.json({ ok: true, profile });
 });
 
 export const productApiRouter = Router();
 
-productApiRouter.post('/bulk', (req, res) => {
-  const profile = verifyProductApiKey(req);
-  if (!profile) {
+productApiRouter.post('/bulk', async (req, res) => {
+  const verified = await verifyProductApiKey(req);
+  if (!verified) {
     res.status(401).json({ error: 'Invalid API Key' });
     return;
   }
+  const { profile, secret } = verified;
   const payload = Array.isArray(req.body) ? req.body : req.body?.products;
   if (!Array.isArray(payload)) {
     res.status(400).json({ error: 'Body should be { products: [...] } or an array.' });
@@ -1458,30 +1538,32 @@ productApiRouter.post('/bulk', (req, res) => {
   const existing = profile.products.items ?? [];
   const nextItems = upsertProductItems(existing, products);
   const last = products.at(-1);
-  writeProfile({ ...profile, products: { ...profile.products, items: nextItems } });
-  const secret = readProductApiSecret();
-  if (secret) writeProductApiSecret({ ...secret, lastIngestedAt: new Date().toISOString(), lastProductName: last?.name || '' });
+  await writeTenantProfile(secret.tenantId, { ...profile, products: { ...profile.products, items: nextItems } }, 'product-api');
+  const keyRecord = await store.list<Record<string, unknown>>('tenant_api_keys', { where: { tenant_id: secret.tenantId }, page: 1, perPage: 1 });
+  if (keyRecord.items[0]?.id) await store.update('tenant_api_keys', String(keyRecord.items[0].id), { last_ingested_at: new Date().toISOString(), last_product_name: last?.name || '' });
   res.json({ ok: true, received: payload.length, upserted: products.length, total: nextItems.length });
 });
 
-productApiRouter.get('/', (req, res) => {
-  const profile = verifyProductApiKey(req);
-  if (!profile) {
+productApiRouter.get('/', async (req, res) => {
+  const verified = await verifyProductApiKey(req);
+  if (!verified) {
     res.status(401).json({ error: 'Invalid API Key' });
     return;
   }
+  const { profile } = verified;
   const sku = text(req.query.sku);
   const limit = Math.min(500, Math.max(1, Number(req.query.limit || 100)));
   const items = (profile.products.items ?? []).filter(item => !sku || item.sku === sku).slice(0, limit);
   res.json({ total: items.length, items });
 });
 
-productApiRouter.delete('/:sku?', (req, res) => {
-  const profile = verifyProductApiKey(req);
-  if (!profile) {
+productApiRouter.delete('/:sku?', async (req, res) => {
+  const verified = await verifyProductApiKey(req);
+  if (!verified) {
     res.status(401).json({ error: 'Invalid API Key' });
     return;
   }
+  const { profile, secret } = verified;
   const sku = text(req.params.sku || req.query.sku || req.body?.sku);
   if (!sku) {
     res.status(400).json({ error: 'Missing sku' });
@@ -1489,6 +1571,6 @@ productApiRouter.delete('/:sku?', (req, res) => {
   }
   const before = profile.products.items ?? [];
   const after = before.filter(item => item.sku !== sku);
-  writeProfile({ ...profile, products: { ...profile.products, items: after } });
+  await writeTenantProfile(secret.tenantId, { ...profile, products: { ...profile.products, items: after } }, 'product-api');
   res.json({ ok: true, deleted: before.length - after.length, total: after.length });
 });

@@ -10,6 +10,7 @@ import { getNightModeMorningBriefing, getWhatsAppCustomers, getWhatsAppImportSta
 import { sendTenantWhatsAppTemplate, sendTenantWhatsAppText } from '../whatsapp/send.js';
 
 export const customerSuggestionsRouter = Router();
+customerSuggestionsRouter.use(requireAuth);
 
 const manualActiveUntil = new Map<string, number>();
 
@@ -92,6 +93,7 @@ customerSuggestionsRouter.post('/knowledge-misses/recompute', async (_req, res) 
 });
 
 customerSuggestionsRouter.post('/:id/manual-active', (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   const customerId = String(req.params.id || '');
   if (!customerId) {
     res.status(400).json({ error: 'customer_id_required' });
@@ -99,7 +101,7 @@ customerSuggestionsRouter.post('/:id/manual-active', (req, res) => {
   }
   const minutes = Math.max(1, Math.min(30, Number(req.body?.minutes || 10) || 10));
   const until = Date.now() + minutes * 60_000;
-  manualActiveUntil.set(customerId, until);
+  manualActiveUntil.set(`${tenantId}:${customerId}`, until);
   res.json({ ok: true, suspendedUntil: new Date(until).toISOString() });
 });
 
@@ -166,7 +168,7 @@ customerSuggestionsRouter.post('/:id/outbox', requireAuth, async (req, res) => {
     });
     return;
   }
-  const suspendedUntil = manualActiveUntil.get(customerId) || 0;
+  const suspendedUntil = manualActiveUntil.get(`${tenantId}:${customerId}`) || 0;
   if (req.body?.auto === true && suspendedUntil > Date.now()) {
     res.status(409).json({ error: 'manual_active', message: '人工正在回复，AI 自动发送已挂起，只生成草稿。' });
     return;
@@ -206,11 +208,11 @@ const SYSTEM_PROMPT = `你是灵枢 AI「我的客户」里的转化助手。
 不要写完整的客户回复，不要编号、Markdown 或解释。`;
 
 customerSuggestionsRouter.get('/:id/suggestions', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   const id = String(req.params.id ?? '');
   const hint = CUSTOMER_HINTS[id] ?? fallbackHint(id);
   const fallback = fallbackSuggestions(hint);
   const latestMessage = hint.timeline.at(-1) || hint.product || hint.stage;
-  const tenantId = String(req.query.tenantId || req.headers['x-tenant-id'] || 'local_tenant_default');
   const context = await retrieveContext(tenantId, {
     id,
     name: hint.name,

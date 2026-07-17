@@ -8,6 +8,7 @@ import {
   accountLabelFromUrl,
   inferPlatformFromUrl,
 } from './videos.js';
+import { createCrawlWorkerJob } from './crawlWorker.js';
 
 export const competitorAccountsRouter = Router();
 competitorAccountsRouter.use(requireAuth);
@@ -127,7 +128,7 @@ competitorAccountsRouter.delete('/:id', async (req, res) => {
 // ─── POST /competitor-accounts/:id/crawl ─────────────────────────────────────
 // Body: { limit?: number }  → 采集该账号主页最新视频，复用灵感大屏采集/分析管线
 competitorAccountsRouter.post('/:id/crawl', async (req, res) => {
-  const { tenantId } = res.locals as AuthLocals;
+  const { tenantId, userId } = res.locals as AuthLocals;
   const record = await store.getById<AccountRecord>(COL, req.params.id);
   if (!record || record.tenantId !== tenantId) {
     res.status(404).json({ error: 'Not found' });
@@ -136,6 +137,38 @@ competitorAccountsRouter.post('/:id/crawl', async (req, res) => {
   const limit = Math.min(30, Math.max(1, Number((req.body as { limit?: number })?.limit) || 10));
 
   try {
+    if (record.platform === 'youtube' || record.platform === 'tiktok') {
+      const job = await createCrawlWorkerJob({
+        tenantId,
+        requestedBy: userId,
+        platform: record.platform,
+        mode: 'account',
+        accountUrl: record.accountUrl,
+        accountName: record.accountName || accountLabelFromUrl(record.accountUrl),
+        limit,
+      });
+      if (!job) {
+        res.status(500).json({ error: '本地采集任务创建失败' });
+        return;
+      }
+      res.status(202).json({
+        queued: true,
+        jobId: job.id,
+        platform: record.platform,
+        requested: limit,
+        imported: 0,
+        refreshed: 0,
+        skipped: 0,
+        skippedExisting: 0,
+        returnedExisting: 0,
+        total: 0,
+        source: 'mac-local-worker',
+        message: '已提交到 Mac 本地采集队列，worker 会用我们的采集账号执行，不使用客户账号。',
+        items: [],
+      });
+      return;
+    }
+
     const result = await crawlVideosForTenant({
       tenantId,
       platform: record.platform,

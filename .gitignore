@@ -25,6 +25,7 @@ data/crawler-ops-queue.json
 data/apify-video-usage.json
 data/video-admin-alerts.json
 data/backups/
+data/migration-tenant-id-map.json
 data/*backup*/
 data/*.backup-*.json
 # Customer and operational data must never be versioned. Keep only seed templates in Git.
