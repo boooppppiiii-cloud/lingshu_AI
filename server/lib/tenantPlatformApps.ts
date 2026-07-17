@@ -8,7 +8,7 @@ import { getPublicOrigin, getMetaOAuthClient, getYouTubeOAuthClient } from './oa
 import { sendDingTalkText } from '../integrations/dingtalk.js';
 import { sendFeishuText } from '../integrations/feishu.js';
 
-export type TenantPlatform = 'meta' | 'google';
+export type TenantPlatform = 'meta' | 'google' | 'wecom';
 export type TenantTokenType = 'user_60d' | 'system_user_permanent';
 export type TenantPlatformStatus =
   | 'pending'
@@ -35,6 +35,7 @@ export interface TenantPlatformAppRecord {
   ig_user_id?: string;
   youtube_channel_id?: string;
   webhook_verify_token?: string;
+  wecom_encoding_aes_key?: string;
   token_type?: TenantTokenType;
   access_token?: string;
   token_expires_at?: string;
@@ -57,6 +58,7 @@ export interface PublicTenantPlatformApp {
   igUserId: string;
   youtubeChannelId: string;
   webhookVerifyToken: string;
+  wecomEncodingAesKeySet: boolean;
   webhookUrl: string;
   tokenType: TenantTokenType;
   accessTokenSet: boolean;
@@ -140,8 +142,9 @@ export async function listTenantPlatformApps(): Promise<TenantPlatformAppRecord[
   return result.items;
 }
 
-export function tenantWebhookUrl(req: Request, tenantId: string): string {
-  return `${getPublicOrigin(req)}/api/webhooks/meta/${encodeURIComponent(tenantId)}`;
+export function tenantWebhookUrl(req: Request, tenantId: string, platform: TenantPlatform = 'meta'): string {
+  const path = platform === 'wecom' ? 'wecom' : 'meta';
+  return `${getPublicOrigin(req)}/api/webhooks/${path}/${encodeURIComponent(tenantId)}`;
 }
 
 export function publicTenantPlatformApp(req: Request, app: TenantPlatformAppRecord): PublicTenantPlatformApp {
@@ -167,7 +170,8 @@ export function publicTenantPlatformApp(req: Request, app: TenantPlatformAppReco
     igUserId: text(app.ig_user_id),
     youtubeChannelId: text(app.youtube_channel_id),
     webhookVerifyToken: text(app.webhook_verify_token),
-    webhookUrl: app.platform === 'meta' ? tenantWebhookUrl(req, app.tenant_id) : '',
+    wecomEncodingAesKeySet: Boolean(text(app.wecom_encoding_aes_key)),
+    webhookUrl: app.platform === 'meta' || app.platform === 'wecom' ? tenantWebhookUrl(req, app.tenant_id, app.platform) : '',
     tokenType: app.token_type || 'user_60d',
     accessTokenSet: Boolean(text(app.access_token)),
     tokenExpiresAt: text(app.token_expires_at),
@@ -189,6 +193,7 @@ export async function upsertTenantPlatformApp(input: {
   pageId?: string;
   igUserId?: string;
   youtubeChannelId?: string;
+  wecomEncodingAesKey?: string;
   tokenType?: TenantTokenType;
   accessToken?: string;
   tokenExpiresAt?: string;
@@ -213,6 +218,7 @@ export async function upsertTenantPlatformApp(input: {
   if (input.pageId !== undefined) patch.page_id = input.pageId;
   if (input.igUserId !== undefined) patch.ig_user_id = input.igUserId;
   if (input.youtubeChannelId !== undefined) patch.youtube_channel_id = input.youtubeChannelId;
+  if (input.wecomEncodingAesKey) patch.wecom_encoding_aes_key = encryptSecret(input.wecomEncodingAesKey);
   if (input.accessToken) patch.access_token = encryptSecret(input.accessToken);
   if (input.tokenExpiresAt !== undefined) patch.token_expires_at = input.tokenExpiresAt;
   if (input.checklist !== undefined) patch.last_checklist = JSON.stringify(input.checklist);

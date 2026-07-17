@@ -19,7 +19,7 @@ const DATA = path.join(__dirname, '../../data/channels.json');
 
 export interface Channel {
   id: string;
-  type: 'whatsapp' | 'youtube' | 'tiktok' | 'instagram' | 'facebook' | 'telegram' | 'dingtalk' | 'feishu' | 'wechat' | 'shopify';
+  type: 'whatsapp' | 'youtube' | 'tiktok' | 'instagram' | 'facebook' | 'telegram' | 'dingtalk' | 'feishu' | 'wechat' | 'wecom' | 'shopify';
   label: string;
   enabled: boolean;
   config: Record<string, string>;
@@ -45,6 +45,7 @@ const USER_CHANNELS = [
   { id: 'instagram', name: 'Instagram', platform: 'meta' as const, oauth: true },
   { id: 'facebook', name: 'Facebook', platform: 'meta' as const, oauth: true },
   { id: 'youtube', name: 'YouTube', platform: 'google' as const, oauth: true },
+  { id: 'wecom', name: '企业微信', platform: 'wecom' as const, oauth: false },
 ] as const;
 
 function tenantStatus(status?: TenantPlatformStatus): TenantChannelStatus {
@@ -66,7 +67,8 @@ channelsRouter.get('/status', requireAuth, async (req, res) => {
   const isAdmin = Boolean(await requireAdminUser(req));
   const metaApp = await getTenantPlatformApp(tenantId, 'meta');
   const googleApp = await getTenantPlatformApp(tenantId, 'google');
-  const platformApps = { meta: metaApp, google: googleApp };
+  const wecomApp = await getTenantPlatformApp(tenantId, 'wecom');
+  const platformApps = { meta: metaApp, google: googleApp, wecom: wecomApp };
 
   res.json({
     isAdmin,

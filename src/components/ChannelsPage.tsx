@@ -36,7 +36,7 @@ interface ChannelsStatusResponse {
 
 interface Channel {
   id: string;
-  type: 'whatsapp' | 'youtube' | 'tiktok' | 'instagram' | 'facebook' | 'telegram' | 'dingtalk' | 'feishu' | 'wechat' | 'shopify';
+  type: 'whatsapp' | 'youtube' | 'tiktok' | 'instagram' | 'facebook' | 'telegram' | 'dingtalk' | 'feishu' | 'wechat' | 'wecom' | 'shopify';
   label: string;
   enabled: boolean;
   config: Record<string, string>;
@@ -98,6 +98,11 @@ const CHANNEL_META: Record<string, { icon: string; helper: string; accent: strin
     icon: 'YT',
     helper: '连接后可同步频道数据，用于视频发布与表现分析。',
     accent: 'bg-red-50 text-red-700',
+  },
+  wecom: {
+    icon: '企微',
+    helper: '连接后企业微信外部联系人会进入“我的客户”，AI 按同一套接待规则生成回复草稿与跟进建议。',
+    accent: 'bg-green-50 text-green-700',
   },
 };
 

@@ -367,7 +367,7 @@ function bodyText(value: unknown): string {
 
 function platformParam(value: unknown): TenantPlatform | null {
   const platform = bodyText(value);
-  return platform === 'meta' || platform === 'google' ? platform : null;
+  return platform === 'meta' || platform === 'google' || platform === 'wecom' ? platform : null;
 }
 
 function graphVersion() {
@@ -393,7 +393,8 @@ function publicPendingPlatformApp(req: Parameters<typeof publicTenantPlatformApp
     igUserId: '',
     youtubeChannelId: '',
     webhookVerifyToken: '',
-    webhookUrl: platform === 'meta' ? tenantWebhookUrl(req, tenantId) : '',
+    wecomEncodingAesKeySet: false,
+    webhookUrl: platform === 'meta' || platform === 'wecom' ? tenantWebhookUrl(req, tenantId, platform) : '',
     tokenType: 'user_60d',
     accessTokenSet: false,
     tokenExpiresAt: '',
@@ -418,7 +419,7 @@ function publicDeliveryTenant(req: Parameters<typeof publicTenantPlatformApp>[0]
     notes: String(tenant?.notes || ''),
     inviteCode: String(tenant?.inviteCode || ''),
     inviteUrl: tenant?.inviteCode ? `${getPublicOrigin(req)}/register?${inviteParams.toString()}` : '',
-    apps: (['meta', 'google'] as TenantPlatform[]).map(platform => {
+    apps: (['meta', 'google', 'wecom'] as TenantPlatform[]).map(platform => {
       const app = apps.find(item => item.tenant_id === tenantId && item.platform === platform);
       return app ? publicTenantPlatformApp(req, app) : publicPendingPlatformApp(req, tenantId, platform);
     }),
@@ -448,8 +449,8 @@ function missingDeliveryRequirements(platform: TenantPlatform, app: any): string
   const checklist = readChecklist(app);
   const appSecret = decryptSecret(app?.app_secret);
   const missing: string[] = [];
-  if (!bodyText(app?.app_id)) missing.push('App ID');
-  if (!appSecret) missing.push('App Secret');
+  if (!bodyText(app?.app_id)) missing.push(platform === 'wecom' ? '企业微信 CorpID' : 'App ID');
+  if (!appSecret) missing.push(platform === 'wecom' ? '企业微信应用 Secret' : 'App Secret');
   if (platform === 'meta') {
     if (!bodyText(app?.phone_number_id)) missing.push('Phone Number ID');
     if (!passedRecently(checklist, 'whatsapp_test_passed')) missing.push('WhatsApp 最近自检通过');
@@ -457,6 +458,15 @@ function missingDeliveryRequirements(platform: TenantPlatform, app: any): string
     if (!passedRecently(checklist, 'webhook_test_passed')) missing.push('Webhook 订阅最近自检通过');
   } else {
     if (!passedRecently(checklist, 'google_test_passed')) missing.push('Google OAuth 最近自检通过');
+  }
+  if (platform === 'wecom') {
+    const googleTestIndex = missing.findIndex(item => item.includes('Google OAuth'));
+    if (googleTestIndex >= 0) missing.splice(googleTestIndex, 1);
+    if (!bodyText(app?.business_id)) missing.push('企业微信 AgentId');
+    if (!bodyText(app?.webhook_verify_token)) missing.push('企业微信回调 Token');
+    if (!decryptSecret(app?.wecom_encoding_aes_key)) missing.push('企业微信 EncodingAESKey');
+    if (!passedRecently(checklist, 'wecom_callback_verified')) missing.push('企业微信回调最近自检通过');
+    if (!passedRecently(checklist, 'wecom_message_test_passed')) missing.push('企业微信消息最近自检通过');
   }
   return missing;
 }
@@ -901,6 +911,7 @@ adminRouter.put('/delivery/platform-apps/:tenantId/:platform', async (req, res) 
       pageId: bodyText(req.body?.pageId),
       igUserId: bodyText(req.body?.igUserId),
       youtubeChannelId: bodyText(req.body?.youtubeChannelId),
+      wecomEncodingAesKey: bodyText(req.body?.wecomEncodingAesKey),
       tokenType: req.body?.tokenType === 'system_user_permanent' ? 'system_user_permanent' : 'user_60d',
       accessToken: bodyText(req.body?.accessToken),
       tokenExpiresAt: bodyText(req.body?.tokenExpiresAt),
@@ -1011,6 +1022,24 @@ adminRouter.post('/delivery/platform-apps/:tenantId/:platform/test/:kind', async
       if (!app.app_id || !appSecret) throw new Error('请先录入 Google Client ID / Secret');
       await markTestPassed('google_test_passed');
       res.json({ ok: true, message: 'Google OAuth 应用信息已保存，等待用户授权验证。' });
+      return;
+    }
+    if (kind === 'wecom_webhook') {
+      if (platform !== 'wecom') throw new Error('企业微信回调自检仅适用于企业微信');
+      if (!app.app_id || !bodyText(app.webhook_verify_token) || !decryptSecret(app.wecom_encoding_aes_key)) {
+        throw new Error('请先录入 CorpID、回调 Token 和 EncodingAESKey');
+      }
+      await markTestPassed('wecom_callback_verified');
+      res.json({ ok: true, message: '企业微信回调参数已保存，请到企业微信后台完成 URL 验证。' });
+      return;
+    }
+    if (kind === 'wecom') {
+      if (platform !== 'wecom') throw new Error('企业微信消息自检仅适用于企业微信');
+      if (!app.app_id || !appSecret || !bodyText(app.business_id)) {
+        throw new Error('请先录入 CorpID、应用 Secret 和 AgentId');
+      }
+      await markTestPassed('wecom_message_test_passed');
+      res.json({ ok: true, message: '企业微信应用配置已保存；真实同步需要开通客户联系/会话内容存档后联调。' });
       return;
     }
     throw new Error('未知自检项');

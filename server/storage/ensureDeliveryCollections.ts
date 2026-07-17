@@ -28,7 +28,7 @@ const TENANTS_FIELDS: FieldDef[] = [
 
 const TENANT_PLATFORM_APP_FIELDS: FieldDef[] = [
   { name: 'tenant_id', type: 'text', required: true },
-  { name: 'platform', type: 'select', required: true, values: ['meta', 'google'] },
+  { name: 'platform', type: 'select', required: true, values: ['meta', 'google', 'wecom'] },
   { name: 'app_id', type: 'text' },
   { name: 'app_secret', type: 'text' },
   { name: 'wa_config_id', type: 'text' },
@@ -39,6 +39,7 @@ const TENANT_PLATFORM_APP_FIELDS: FieldDef[] = [
   { name: 'ig_user_id', type: 'text' },
   { name: 'youtube_channel_id', type: 'text' },
   { name: 'webhook_verify_token', type: 'text' },
+  { name: 'wecom_encoding_aes_key', type: 'text' },
   { name: 'token_type', type: 'select', values: ['user_60d', 'system_user_permanent'] },
   { name: 'access_token', type: 'text' },
   { name: 'token_expires_at', type: 'text' },
@@ -147,14 +148,34 @@ async function ensureCollection(name: string, fields: FieldDef[]): Promise<void>
 
   const res = await adminFetch(`/api/collections/${encodeURIComponent(name)}`);
   if (!res.ok) throw new Error(`读取集合 ${name} 失败 (${res.status})`);
-  const collection = await res.json() as { fields?: Array<{ name?: string }>; schema?: Array<{ name?: string }> };
+  const collection = await res.json() as { fields?: Array<{ name?: string; type?: string; values?: string[]; options?: { values?: string[] } }>; schema?: Array<{ name?: string; type?: string; values?: string[]; options?: { values?: string[] } }> };
   const existing = collection.fields ?? collection.schema ?? [];
   const missing = fields.filter(field => !existing.some(item => item.name === field.name));
-  if (!missing.length) return;
+  const selectUpdates = fields
+    .filter(field => field.type === 'select' && field.values?.length)
+    .filter(field => {
+      const current = existing.find(item => item.name === field.name);
+      const values = current?.values ?? current?.options?.values ?? [];
+      return field.values!.some(value => !values.includes(value));
+    });
+  if (!missing.length && !selectUpdates.length) return;
 
   const attempts = collection.fields
-    ? [{ fields: [...collection.fields, ...missing.map(newField)] }]
-    : [{ schema: [...collection.schema ?? [], ...missing.map(oldSchemaField)] }];
+    ? [{
+      fields: [
+        ...collection.fields.map(field => {
+          const update = selectUpdates.find(item => item.name === field.name);
+          return update ? { ...field, values: update.values ?? [] } : field;
+        }),
+        ...missing.map(newField),
+      ],
+    }]
+    : [{
+      schema: (collection.schema ?? []).map(field => {
+        const update = selectUpdates.find(item => item.name === field.name);
+        return update ? { ...field, options: { ...(field.options ?? {}), values: update.values ?? [] } } : field;
+      }).concat(missing.map(oldSchemaField)),
+    }];
   let lastDetail = '';
   for (const body of attempts) {
     const patch = await adminFetch(`/api/collections/${encodeURIComponent(name)}`, {
