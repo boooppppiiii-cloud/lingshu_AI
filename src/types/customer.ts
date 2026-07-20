@@ -1,4 +1,13 @@
-export type CustomerSource = 'whatsapp' | 'facebook' | 'instagram' | 'tiktok';
+export type CustomerSource =
+  | 'whatsapp'
+  | 'facebook'
+  | 'instagram'
+  | 'tiktok'
+  | 'whatsapp_from_youtube'
+  | 'whatsapp_from_tiktok'
+  | 'whatsapp_from_instagram'
+  | 'whatsapp_from_facebook'
+  | string;
 export type CustomerStage = 'lead' | 'inquiry' | 'quoted' | 'won' | 'silent30' | 'silent60';
 export type HandlingMode = 'ai_auto' | 'ai_draft' | 'human_needed';
 export type TimelineType = 'whatsapp' | 'call' | 'note' | 'quote' | 'task' | 'system';
@@ -43,6 +52,13 @@ export interface CustomerProfile {
   language: string;
   languageLocked: boolean;
   source: CustomerSource;
+  sourcePostId?: string;
+  sourceTrackCode?: string;
+  sourcePostTitle?: string;
+  sourcePostPlatform?: string;
+  softAttribution?: {
+    candidates: Array<{ id: string; title: string; platform: string; trackCode: string }>;
+  };
   product: string;
   outboundProduct: string;
   estimatedValue: string;

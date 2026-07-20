@@ -1,8 +1,9 @@
 import { useState } from 'react';
 import { Lock, Pencil } from 'lucide-react';
 import { Card, CardContent } from '../../ui/card';
-import { SourceIcon } from '../SourceIcon';
+import { SourceIcon, sourceLabel } from '../SourceIcon';
 import type { CustomerProfile } from '../../../types/customer';
+import { authHeader } from '../../../lib/auth';
 
 const LANGUAGE_OPTIONS = ['英语', '西语', '阿语', '葡语', '法语', '俄语', '印尼语', '越南语', '泰语', '其他'];
 
@@ -18,6 +19,38 @@ export function BasicInfoWidget({
   const updateLanguage = (language: string) => {
     onCustomerPatch?.({ language, languageLocked: true });
     setLanguageOpen(false);
+  };
+  const sourceText = customer.sourcePostTitle
+    ? `WhatsApp · 来自 ${customer.sourcePostPlatform || '内容'}《${customer.sourcePostTitle}》`
+    : customer.softAttribution?.candidates?.length
+      ? `可能来自近期发布 · ${customer.softAttribution.candidates[0].platform}《${customer.softAttribution.candidates[0].title}》`
+      : sourceLabel(customer.source);
+  const openSourcePost = async () => {
+    if (!customer.sourcePostId && customer.softAttribution?.candidates?.[0]?.id) {
+      const candidate = customer.softAttribution.candidates[0];
+      try {
+        const resp = await fetch(`/api/overseas/customers/${encodeURIComponent(customer.id)}/source-attribution`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeader() },
+          body: JSON.stringify({ postId: candidate.id }),
+        });
+        if (!resp.ok) throw new Error('confirm_failed');
+        onCustomerPatch?.({
+          source: `whatsapp_from_${candidate.platform}`,
+          sourcePostId: candidate.id,
+          sourceTrackCode: candidate.trackCode,
+          sourcePostTitle: candidate.title,
+          sourcePostPlatform: candidate.platform,
+          softAttribution: undefined,
+        });
+      } catch {
+        window.alert('来源确认失败，请稍后再试');
+      }
+      return;
+    }
+    if (!customer.sourcePostId) return;
+    localStorage.setItem('lingshu:traffic:source-post-id', customer.sourcePostId);
+    window.dispatchEvent(new CustomEvent('lingshu:navigate', { detail: { page: 'traffic', view: 'effects' } }));
   };
 
   return (
@@ -81,8 +114,17 @@ export function BasicInfoWidget({
           </div>
           <div className="rounded-xl bg-surface-2 p-3">
             <p className="text-text-muted">来源渠道</p>
-            <div className="mt-1 flex items-center">
+            <div className="mt-1 flex items-center gap-1.5">
               <SourceIcon source={customer.source} size={16} />
+              <button
+                type="button"
+                onClick={openSourcePost}
+                disabled={!customer.sourcePostId && !customer.softAttribution?.candidates?.length}
+                className="min-w-0 truncate text-left font-bold text-text-primary disabled:cursor-default enabled:hover:text-primary"
+                title={sourceText}
+              >
+                {sourceText}
+              </button>
             </div>
           </div>
         </div>

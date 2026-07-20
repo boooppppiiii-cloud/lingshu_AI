@@ -6,7 +6,7 @@ import { retrieveContext } from '../knowledge/retrieve.js';
 import { buildKnowledgePromptBlock } from '../knowledge/promptBlocks.js';
 import { aggregateKnowledgeMisses } from '../knowledge/misses.js';
 import { recordStyleMemory } from '../knowledge/styleMemory.js';
-import { getNightModeMorningBriefing, getWhatsAppCustomers, getWhatsAppImportStatus, markWhatsAppHumanReply } from '../whatsapp/historyImport.js';
+import { confirmCustomerSourceAttribution, getNightModeMorningBriefing, getWhatsAppCustomers, getWhatsAppImportStatus, markWhatsAppHumanReply } from '../whatsapp/historyImport.js';
 import { sendTenantWhatsAppTemplate, sendTenantWhatsAppText } from '../whatsapp/send.js';
 
 export const customerSuggestionsRouter = Router();
@@ -103,6 +103,29 @@ customerSuggestionsRouter.post('/:id/manual-active', (req, res) => {
   const until = Date.now() + minutes * 60_000;
   manualActiveUntil.set(`${tenantId}:${customerId}`, until);
   res.json({ ok: true, suspendedUntil: new Date(until).toISOString() });
+});
+
+customerSuggestionsRouter.post('/:id/source-attribution', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const customerId = String(req.params.id || '');
+  const postId = String(req.body?.postId || '');
+  if (!customerId || !postId) {
+    res.status(400).json({ error: 'customer_id_and_post_id_required' });
+    return;
+  }
+  const customer = await confirmCustomerSourceAttribution({ tenantId, customerId, postId });
+  if (!customer) {
+    res.status(404).json({ error: 'attribution_candidate_not_found' });
+    return;
+  }
+  res.json({
+    ok: true,
+    source: customer.source,
+    sourcePostId: customer.sourcePostId,
+    sourceTrackCode: customer.sourceTrackCode,
+    sourcePostTitle: customer.sourcePostTitle,
+    sourcePostPlatform: customer.sourcePostPlatform,
+  });
 });
 
 customerSuggestionsRouter.post('/:id/outbox', requireAuth, async (req, res) => {

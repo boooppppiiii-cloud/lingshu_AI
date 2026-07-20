@@ -34,6 +34,7 @@ import { initTenantPlatformTokenMonitor } from './routes/tenantPlatformTokenMoni
 import { assistLinksRouter } from './routes/assistLinks.js';
 import { initWhatsAppCustomerMaintenance } from './whatsapp/historyImport.js';
 import { whatsappOAuthRouter } from './routes/whatsappOAuth.js';
+import { publishingRouter } from './routes/publishing.js';
 import { ensureDeliveryCollections } from './storage/ensureDeliveryCollections.js';
 import { supportAccessRouter } from './routes/supportAccess.js';
 import { crawlWorkerRouter } from './routes/crawlWorker.js';
@@ -127,6 +128,7 @@ app.use('/api/overseas/customers', customerSuggestionsRouter);
 app.use('/api/overseas/channels', channelsRouter);
 app.use('/api/channels', channelsRouter);
 app.use('/api/oauth/whatsapp', whatsappOAuthRouter);
+app.use('/api/overseas/publishing', publishingRouter);
 app.use('/api', assistLinksRouter);
 app.use('/api/overseas/youtube', youtubeRouter);
 app.use('/api/overseas/social', socialRouter);

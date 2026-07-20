@@ -1,6 +1,6 @@
 import { adminFetch } from './pb.js';
 
-type FieldType = 'text' | 'select' | 'bool' | 'date' | 'json';
+type FieldType = 'text' | 'select' | 'bool' | 'date' | 'json' | 'number';
 
 interface FieldDef {
   name: string;
@@ -35,6 +35,7 @@ const TENANT_PLATFORM_APP_FIELDS: FieldDef[] = [
   { name: 'business_id', type: 'text' },
   { name: 'waba_id', type: 'text' },
   { name: 'phone_number_id', type: 'text' },
+  { name: 'wa_public_number', type: 'text' },
   { name: 'page_id', type: 'text' },
   { name: 'ig_user_id', type: 'text' },
   { name: 'youtube_channel_id', type: 'text' },
@@ -46,6 +47,40 @@ const TENANT_PLATFORM_APP_FIELDS: FieldDef[] = [
   { name: 'status', type: 'select', values: ['pending', 'configuring', 'waiting_customer', 'importing_history', 'verifying', 'active', 'needs_permanent_token', 'token_expired', 'error'] },
   { name: 'last_checklist', type: 'json' },
   { name: 'notes', type: 'text' },
+];
+
+const POSTS_FIELDS: FieldDef[] = [
+  { name: 'tenant_id', type: 'text', required: true },
+  { name: 'content_id', type: 'text' },
+  { name: 'platform', type: 'text', required: true },
+  { name: 'platform_post_id', type: 'text' },
+  { name: 'title', type: 'text' },
+  { name: 'published_at', type: 'text' },
+  { name: 'track_code', type: 'text', required: true },
+  { name: 'wa_link', type: 'text' },
+  { name: 'stats', type: 'json' },
+  { name: 'inquiries', type: 'number' },
+  { name: 'deals', type: 'number' },
+];
+
+const RECYCLE_LIST_FIELDS: FieldDef[] = [
+  { name: 'tenant_id', type: 'text', required: true },
+  { name: 'name', type: 'text', required: true },
+  { name: 'enabled', type: 'bool' },
+  { name: 'items', type: 'json' },
+  { name: 'slots', type: 'json' },
+  { name: 'refresh_mode', type: 'text' },
+  { name: 'cursor', type: 'number' },
+];
+
+const POSTING_STATS_FIELDS: FieldDef[] = [
+  { name: 'tenant_id', type: 'text', required: true },
+  { name: 'platform', type: 'text', required: true },
+  { name: 'weekday', type: 'number' },
+  { name: 'hour', type: 'number' },
+  { name: 'engagement', type: 'number' },
+  { name: 'post_id', type: 'text' },
+  { name: 'captured_at', type: 'text' },
 ];
 
 const STYLE_MEMORY_FIELDS: FieldDef[] = [
@@ -195,6 +230,9 @@ async function ensureCollection(name: string, fields: FieldDef[]): Promise<void>
 export async function ensureDeliveryCollections(): Promise<void> {
   await ensureCollection('tenants', TENANTS_FIELDS);
   await ensureCollection('tenant_platform_apps', TENANT_PLATFORM_APP_FIELDS);
+  await ensureCollection('posts', POSTS_FIELDS);
+  await ensureCollection('recycle_lists', RECYCLE_LIST_FIELDS);
+  await ensureCollection('posting_stats', POSTING_STATS_FIELDS);
   await ensureCollection('style_memory', STYLE_MEMORY_FIELDS);
   await ensureCollection('style_adoption_stats', STYLE_ADOPTION_STATS_FIELDS);
   await ensureCollection('tenant_profiles', TENANT_PROFILE_FIELDS);
