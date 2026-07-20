@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Home, Share2, Users, LayoutGrid,
   Building2, PlugZap, Clock,
-  ChevronRight, LogOut, Loader2, RefreshCcw, X, ShieldCheck, BookOpen, ListTree,
+  ChevronRight, LogOut, Loader2, RefreshCcw, X, ShieldCheck, BookOpen, ListTree, PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react';
 import type { Page, ConversationContext, Conversation, AgentAction } from '../App';
 import { authApi, exitSupportSession, type AuthSession } from '../lib/auth';
@@ -68,17 +68,20 @@ function NavItem({
   item,
   active,
   onClick,
+  collapsed = false,
 }: {
   item: { id: Page; label: string; icon: ReactNode };
   active: boolean;
   onClick: () => void;
+  collapsed?: boolean;
 }) {
   return (
     <motion.button
       whileTap={{ scale: 0.97 }}
       onClick={onClick}
+      title={collapsed ? item.label : undefined}
       data-demo-target={item.id}
-      className="w-full flex items-center gap-3 px-3 py-2 rounded-xl text-sm font-medium transition-colors cursor-pointer relative"
+      className={`w-full flex items-center rounded-xl py-2 text-sm font-medium transition-colors cursor-pointer relative ${collapsed ? 'justify-center px-2' : 'gap-3 px-3'}`}
       style={
         active
           ? { background: '#ffffff', color: '#0f172a', boxShadow: '0 1px 4px rgba(0,0,0,0.08)' }
@@ -96,8 +99,8 @@ function NavItem({
       <span className="relative flex-shrink-0" style={{ color: active ? 'var(--color-accent)' : undefined }}>
         {item.icon}
       </span>
-      <span className="relative flex-1 text-left">{item.label}</span>
-      {active && (
+      {!collapsed && <span className="relative flex-1 text-left">{item.label}</span>}
+      {active && !collapsed && (
         <ChevronRight size={13} className="relative flex-shrink-0" style={{ color: '#94a3b8' }} />
       )}
     </motion.button>
@@ -173,6 +176,9 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
   const [quotaLoading, setQuotaLoading] = useState(false);
   const [quotaUpdatedAt, setQuotaUpdatedAt] = useState<number | null>(null);
   const [liveSession, setLiveSession] = useState<AuthSession | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem('lingshu:sidebar-collapsed') === 'true'; } catch { return false; }
+  });
   const sessionScope = session?.demo?.guideScope || session?.demo?.expiresAt || null;
   const liveSessionScope = liveSession?.demo?.guideScope || liveSession?.demo?.expiresAt || null;
   const sessionIdentityScope = `${session?.user?.id || ''}:${session?.tenant?.id || ''}:${session?.supportAccess?.requestId || ''}:${sessionScope || ''}`;
@@ -189,6 +195,10 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
   useEffect(() => {
     setLiveSession(null);
   }, [sessionIdentityScope]);
+  useEffect(() => {
+    try { localStorage.setItem('lingshu:sidebar-collapsed', String(sidebarCollapsed)); } catch { /* storage can be unavailable */ }
+    if (sidebarCollapsed) setQuotaOpen(false);
+  }, [sidebarCollapsed]);
   const secondaryItems = isAdminSession(activeSession)
     ? [
       ...SECONDARY_NAV.items,
@@ -237,17 +247,29 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
     <div className="flex h-screen overflow-hidden">
 
       {/* ── Left sidebar ─────────────────────────────── */}
-      <aside
-        className="w-[220px] flex-shrink-0 flex flex-col border-r border-border"
+      <motion.aside
+        initial={false}
+        animate={{ width: sidebarCollapsed ? 64 : 220 }}
+        transition={{ type: 'spring', damping: 30, stiffness: 320 }}
+        className="flex-shrink-0 flex flex-col border-r border-border overflow-hidden"
         style={{ background: '#f2f3f5' }}
       >
         {/* Logo */}
-        <div className="h-14 flex items-center px-4 gap-2.5 flex-shrink-0">
-          <img src="/brand-logo.png" alt="灵枢 AI" className="w-7 h-7 object-contain flex-shrink-0" />
-          <span className="text-sm font-bold text-text-primary font-display">灵枢 AI</span>
+        <div className={`relative h-14 flex items-center flex-shrink-0 ${sidebarCollapsed ? 'justify-center px-2' : 'px-4 gap-2.5'}`}>
+          {!sidebarCollapsed && <img src="/brand-logo.png" alt="灵枢 AI" className="w-7 h-7 object-contain flex-shrink-0" />}
+          {!sidebarCollapsed && <span className="min-w-0 flex-1 truncate text-sm font-bold text-text-primary font-display">灵枢 AI</span>}
+          <button
+            type="button"
+            onClick={() => setSidebarCollapsed(value => !value)}
+            title={sidebarCollapsed ? '展开左侧栏' : '收起左侧栏'}
+            aria-label={sidebarCollapsed ? '展开左侧栏' : '收起左侧栏'}
+            className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-text-muted transition hover:bg-white hover:text-text-primary ${sidebarCollapsed ? 'border border-border bg-white shadow-sm' : ''}`}
+          >
+            {sidebarCollapsed ? <PanelLeftOpen size={15} /> : <PanelLeftClose size={15} />}
+          </button>
         </div>
 
-        {showDemoGuide && (
+        {showDemoGuide && !sidebarCollapsed && (
           <DemoGuide
             key={guideScope}
             page={page}
@@ -263,20 +285,20 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
             item={HOME_NAV_ITEM}
             active={page === HOME_NAV_ITEM.id}
             onClick={() => onNavigate(HOME_NAV_ITEM.id)}
+            collapsed={sidebarCollapsed}
           />
         </nav>
 
         {/* Primary nav */}
         <nav className="px-3 space-y-0.5">
-          <p className="px-3 pt-1 pb-1.5 text-[10px] font-semibold text-text-muted uppercase tracking-wider">
-            业务中台
-          </p>
+          {!sidebarCollapsed && <p className="px-3 pt-1 pb-1.5 text-[10px] font-semibold text-text-muted uppercase tracking-wider">业务中台</p>}
           {PRIMARY_NAV.items.map(item => (
             <NavItem
               key={item.id}
               item={item}
               active={page === item.id}
               onClick={() => onNavigate(item.id)}
+              collapsed={sidebarCollapsed}
             />
           ))}
         </nav>
@@ -286,15 +308,14 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
 
         {/* Secondary nav */}
         <nav className="px-3 space-y-0.5">
-          <p className="px-3 pb-1.5 text-[10px] font-semibold text-text-muted uppercase tracking-wider">
-            系统设置
-          </p>
+          {!sidebarCollapsed && <p className="px-3 pb-1.5 text-[10px] font-semibold text-text-muted uppercase tracking-wider">系统设置</p>}
           {secondaryItems.map(item => (
             <NavItem
               key={item.id}
               item={item}
               active={page === item.id}
               onClick={() => onNavigate(item.id)}
+              collapsed={sidebarCollapsed}
             />
           ))}
         </nav>
@@ -302,7 +323,7 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
         {/* Divider */}
         <div className="mx-4 my-3 border-t border-border" />
 
-        <AdminPageGuide page={page} />
+        {!sidebarCollapsed && <AdminPageGuide page={page} />}
 
         <div className="flex-1 min-h-0" />
 
@@ -311,11 +332,11 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
             <button
               type="button"
               onClick={onOpenBusinessDiagnosis}
-              className="flex w-full items-center gap-2 rounded-xl border border-emerald-100 bg-white px-3 py-2 text-left text-xs font-bold text-emerald-700 shadow-sm transition-colors hover:border-emerald-200 hover:bg-emerald-50"
+              className={`flex w-full items-center rounded-xl border border-emerald-100 bg-white py-2 text-left text-xs font-bold text-emerald-700 shadow-sm transition-colors hover:border-emerald-200 hover:bg-emerald-50 ${sidebarCollapsed ? 'justify-center px-2' : 'gap-2 px-3'}`}
               title="打开 3 分钟出海诊断"
             >
               <BookOpen size={14} />
-              <span className="min-w-0 flex-1 truncate">3分钟出海诊断</span>
+              {!sidebarCollapsed && <span className="min-w-0 flex-1 truncate">3分钟出海诊断</span>}
             </button>
           </div>
         )}
@@ -438,7 +459,7 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
               </motion.div>
             )}
           </AnimatePresence>
-          <div className="flex items-center gap-2.5">
+          <div className={`flex items-center ${sidebarCollapsed ? 'justify-center' : 'gap-2.5'}`}>
             <button
               onClick={openQuota}
               title="查看 Token 使用"
@@ -447,13 +468,13 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
             >
               {initial}
             </button>
-            <button onClick={openQuota} className="flex-1 min-w-0 text-left rounded-lg -my-1 py-1 hover:bg-black/5 transition-colors">
+            {!sidebarCollapsed && <button onClick={openQuota} className="flex-1 min-w-0 text-left rounded-lg -my-1 py-1 hover:bg-black/5 transition-colors">
               <p className="text-xs font-semibold text-text-primary truncate">{tenantName}</p>
               <p className="text-[10px] text-text-muted truncate">
                 {demo && isTrialAccount ? `Token 剩余 ${tokenLabel}` : (SUB_LABEL[subStatus] ?? subStatus)}
               </p>
-            </button>
-            {onLogout && (
+            </button>}
+            {onLogout && !sidebarCollapsed && (
               <button onClick={onLogout} title="退出登录"
                 className="relative p-1 rounded-md hover:bg-black/5 text-text-muted hover:text-text-primary transition-colors flex-shrink-0">
                 <LogOut size={13} />
@@ -461,7 +482,7 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
             )}
           </div>
         </div>
-      </aside>
+      </motion.aside>
 
       {/* ── Main content ─────────────────────────────── */}
       <main className="flex-1 min-w-0 overflow-hidden bg-white flex flex-col">

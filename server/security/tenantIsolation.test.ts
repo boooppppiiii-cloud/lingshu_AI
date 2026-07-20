@@ -26,6 +26,21 @@ assert.match(oauth, /if \(supportAccess\) return null/, 'support sessions must n
 const videos = read('server/routes/videos.ts');
 assert.match(videos, /const \{ tenantId \} = res\.locals as AuthLocals/, 'video routes must resolve tenant from auth locals');
 
+for (const route of ['agentChat', 'strategy', 'draftReply', 'studio']) {
+  const source = read(`server/routes/${route}.ts`);
+  assert.match(source, /Router\.use\(requireAuth\)|studioRouter\.use\(requireAuth\)/, `${route} routes must require authentication`);
+}
+assert.doesNotMatch(read('server/routes/draftReply.ts'), /body\.tenantId/, 'draft replies must not accept a caller-selected tenant id');
+assert.match(read('server/routes/agentChat.ts'), /readTenantEnterpriseProfile\(tenantId\)/, 'agent chat must use tenant enterprise context');
+assert.match(read('server/routes/strategy.ts'), /readTenantEnterpriseProfile\(tenantId\)/, 'strategy chat must use tenant enterprise context');
+
+const assetAccess = read('server/lib/assetAccess.ts');
+assert.match(assetAccess, /segments\[0\] === 'tenants' && segments\[1\] === viewerTenantId/, 'private assets must enforce tenant path ownership');
+const serverIndex = read('server/index.ts');
+for (const prefix of ['media', 'bgm', 'tts', 'voice-samples', 'covers']) {
+  assert.match(serverIndex, new RegExp(`app\\.use\\('/${prefix}', requireScopedAsset`), `${prefix} assets must use scoped access`);
+}
+
 const scheduler = read('server/routes/scheduler.ts');
 assert.match(scheduler, /findIndex\(t => t\.id === req\.params\.id && t\.tenantId === tenantId\)/, 'scheduled task updates must check tenant ownership');
 

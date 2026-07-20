@@ -30,7 +30,7 @@ import {
   type VideoAdminAlert,
   type VideoFailureRecord,
 } from '../lib/videoAdminAlerts.js';
-import { attachManualVideoUploadAndQueue } from './videos.js';
+import { attachManualVideoUploadAndQueue, backfillMissingCrawledMedia } from './videos.js';
 import { listStyleAdoptionTrends } from '../knowledge/styleMemory.js';
 import {
   decryptSecret,
@@ -712,6 +712,7 @@ adminRouter.get('/inspiration-videos', async (req, res) => {
     status: status || undefined,
     contentFormat,
   });
+  if (contentFormat === 'video') void backfillMissingCrawledMedia(result.items).catch(error => console.warn('[admin] PocketBase video backfill failed:', error instanceof Error ? error.message : error));
   res.json({ admin: admin.email, ...result });
 });
 

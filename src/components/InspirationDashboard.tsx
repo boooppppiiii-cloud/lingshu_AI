@@ -7,7 +7,7 @@ import {
   Lightbulb, Flame, BarChart2, ChevronRight, Film, Download, Plus,
   Bookmark, Maximize2, Minimize2, Lock, Upload, Users, Images,
 } from 'lucide-react';
-import { studioApi, type Material } from '../lib/studioApi';
+import { studioApi, type Material, type MaterialSegment } from '../lib/studioApi';
 import { authHeader } from '../lib/auth';
 import CompetitorAccountsModal from './CompetitorAccountsModal';
 import type { Page } from '../App';
@@ -19,6 +19,24 @@ type ScriptType = 'voiceover' | 'storyboard';
 type SortMode = 'heat' | 'crawlTime';
 type InspirationInnerView = 'inspiration' | 'library' | 'shooting';
 type ContentFormat = 'video' | 'image';
+type MaterialIndustryFilter = 'all' | 'beauty_skincare' | 'universal_manufacturing' | 'apparel_textile' | 'metalworking';
+type MaterialApplicabilityFilter = 'all' | 'universal' | 'cross_industry' | 'industry_specific';
+type MaterialOrientationFilter = 'all' | 'vertical' | 'horizontal';
+
+const MATERIAL_INDUSTRY_LABELS: Record<string, string> = {
+  all: '全部行业', beauty_skincare: '美妆护肤', universal_manufacturing: '通用制造',
+  apparel_textile: '服装纺织', metalworking: '金属加工',
+};
+const MATERIAL_FUNCTION_LABELS: Record<string, string> = {
+  all: '全部镜头功能', application: '使用/涂抹', texture_demo: '质地展示', product_demo: '产品展示',
+  device_demo: '设备演示', ingredient_visual: '成分视觉', factory_proof: '工厂背书', production: '生产过程',
+  equipment_demo: '设备展示', factory_exterior: '工厂外景', worker_operation: '工人操作',
+  quality_control: '质检/检修', packaging: '包装交付', warehouse: '仓储物流', manufacturing_process: '加工过程',
+  equipment_inspection: '设备检修', logistics_fulfillment: '物流履约', treatment_experience: '护理体验', usage_setup: '使用准备',
+};
+const MATERIAL_APPLICABILITY_LABELS: Record<string, string> = {
+  all: '全部适用范围', universal: '通用素材', cross_industry: '跨行业素材', industry_specific: '行业专属',
+};
 
 const isDemoTrafficStep = () => {
   const progress = readDemoProgress();
@@ -50,6 +68,8 @@ interface GeminiVideoAnalysis {
   mood?: string;
   structure?: string;
   baseRequirements?: string;
+  globalSettings?: { visualStyle?: string; aspectRatio?: string; lighting?: string; subtitlePolicy?: string; audioPolicy?: string; identityConsistency?: string; productConsistency?: string; negativeConstraints?: string[] };
+  spatialContinuity?: { scene?: string; subjectAnchors?: Array<{ subject?: string; position?: string; facing?: string; gazeTarget?: string; orientation?: string }>; background?: string; backgroundPriority?: 'low' | 'medium' | 'high'; depthOfField?: 'shallow' | 'moderate' | 'deep' };
   firstTenSeconds?: {
     atmosphere?: string;
     audioVisual?: string;
@@ -75,10 +95,17 @@ interface GeminiVideoAnalysis {
     environment?: string;
     shot?: string;
     camera?: string;
+    angle?: string;
+    composition?: string;
     visual?: string;
     subtitle?: string;
     audio?: string;
     note?: string;
+    purpose?: string; dialogue?: string; onScreenText?: string; ambientSound?: string; bgm?: string;
+    soundEffects?: string[]; beats?: Array<{ time?: string; action?: string; dialogue?: string; onScreenText?: string }>;
+    persistentState?: string; startState?: string; endState?: string; transitionToNext?: string;
+    backgroundPriority?: 'low' | 'medium' | 'high'; depthOfField?: 'shallow' | 'moderate' | 'deep';
+    authenticity?: string; estimatedSpeechDuration?: number; dialogueFits?: boolean; confidence?: number; needsReview?: boolean;
   }>;
   recommendedScriptType?: 'voiceover' | 'storyboard';
 }
@@ -89,6 +116,11 @@ interface VideoAnalysisPayload {
   views?: string;
   keyword?: string;
   crawlRule?: string;
+  sourceAccount?: string;
+  sourceAccountName?: string;
+  followerCount?: number;
+  accountBaselineLevel?: 'low' | 'medium' | 'high';
+  relativeViewMultiple?: number;
   dateFrom?: string;
   dateTo?: string;
   materialUrl?: string;
@@ -100,6 +132,7 @@ interface VideoAnalysisPayload {
   analysisSource?: string;
   analysisQuality?: string;
   analysisError?: string;
+  videoStorage?: string;
   analyzedAt?: string;
   caption?: string;
   imageUrls?: string[];
@@ -111,9 +144,16 @@ interface VideoAnalysisPayload {
   gemini?: GeminiVideoAnalysis;
 }
 
+interface AccountSpecialRecommendation {
+  level: '极高' | '高' | '较高';
+  baseline: '低基线账号' | '中基线账号' | '高基线账号';
+  multiple: number;
+  message: string;
+}
+
 interface StructureStep { time: string; label: string; desc: string }
 interface FirstTenSecondInsight { dimension: string; detail: string }
-interface ScriptDetail15s { time: string; environment: string; shot: string; camera: string; visual: string; subtitle: string; audio: string; note?: string }
+interface ScriptDetail15s { time: string; environment: string; shot: string; camera: string; angle?: string; composition?: string; visual: string; subtitle: string; audio: string; note?: string; purpose?: string; dialogue?: string; onScreenText?: string; ambientSound?: string; bgm?: string; soundEffects?: string[]; beats?: Array<{ time?: string; action?: string; dialogue?: string; onScreenText?: string }>; persistentState?: string; startState?: string; endState?: string; transitionToNext?: string; backgroundPriority?: 'low' | 'medium' | 'high'; depthOfField?: 'shallow' | 'moderate' | 'deep'; authenticity?: string; estimatedSpeechDuration?: number; dialogueFits?: boolean; confidence?: number; needsReview?: boolean }
 interface ScriptSummary15s { visualStyle: string; coreEmotion: string; competitors: string[] }
 interface ScriptAnalysis {
   videoType: string;
@@ -131,13 +171,17 @@ interface ScriptAnalysis {
 interface FrameMaterialMatch {
   detail: ScriptDetail15s;
   material?: Material;
+  segment?: MaterialSegment;
   score: number;
   scores?: {
-    semantic: number;
+    function: number;
+    action: number;
+    subject: number;
+    composition: number;
+    camera: number;
     duration: number;
-    shot: number;
     quality: number;
-    risk: number;
+    enterpriseFit: number;
   };
   trim?: {
     start: number;
@@ -147,6 +191,26 @@ interface FrameMaterialMatch {
   reason: string;
   risks: string[];
   suggestion: string;
+  status: 'high' | 'review' | 'adapt' | 'missing' | 'pending_analysis';
+  viralDna: {
+    purpose: string;
+    mustPreserve: string[];
+    replaceable: string[];
+    authenticityRequired: boolean;
+  };
+  viralPotential: {
+    score: number;
+    whyEffective: string;
+    mechanisms: string[];
+  };
+  replicability: {
+    score: number;
+    localCoverage: number;
+    aiFeasibility: 'high' | 'medium' | 'low';
+    recommendedExecution: 'local' | 'local_plus_ai' | 'local_plus_reshoot' | 'ai' | 'reshoot' | 'drop';
+    blockers: string[];
+  };
+  decision: 'copy_now' | 'prioritize_reshoot' | 'ai_generate' | 'supporting_only' | 'drop';
 }
 
 interface ShootingNeed {
@@ -195,6 +259,15 @@ function cleanAnalysisText(value: unknown): string {
     .replace(/基于标题、标签、平台、热度和时长推断[:：]?\s*/g, '')
     .replace(/真实视频分析完成后会回填/g, '视频级分析会补充')
     .trim();
+}
+
+function cleanAnalysisTimestamp(value: unknown): string {
+  const text = String(value || '').trim();
+  const numbers = Array.from(text.matchAll(/(\d+(?:\.\d+)?)/g)).map(match => Number(match[1]));
+  const clean = (number: number) => number.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1');
+  if (numbers.length >= 2) return `${clean(numbers[0]!)}-${clean(numbers[1]!)}s`;
+  if (numbers.length === 1) return `${clean(numbers[0]!)}s`;
+  return text;
 }
 
 function isUnusableAnalysisText(value: unknown): boolean {
@@ -318,21 +391,44 @@ function buildScriptDetails15s(gemini: GeminiVideoAnalysis, video: TrendVideo, s
     const note = cleanScriptDetailField(item.note, 'note');
     if (!visual && !subtitle) return null;
     return {
-      time: String(item.time || item.timestamp || `${Math.max(0.2, index * 1.5).toFixed(1)}s`),
+      time: cleanAnalysisTimestamp(item.time || item.timestamp || `${Math.max(0.2, index * 1.5).toFixed(1)}s`),
       environment: cleanAnalysisText(item.environment) || '真实产品/人物口播场景',
       shot: String(item.shot || '中近景'),
       camera: String(item.camera || '固定镜头'),
+      angle: cleanAnalysisText(item.angle),
+      composition: cleanAnalysisText(item.composition),
       visual: visual || `画面承接「${video.title}」的核心信息。`,
       subtitle,
       audio,
       note: note || undefined,
+      purpose: cleanAnalysisText(item.purpose), dialogue: cleanAnalysisText(item.dialogue), onScreenText: cleanAnalysisText(item.onScreenText),
+      ambientSound: cleanAnalysisText(item.ambientSound), bgm: cleanAnalysisText(item.bgm), soundEffects: Array.isArray(item.soundEffects) ? item.soundEffects.map(cleanAnalysisText).filter(Boolean) : [],
+      beats: Array.isArray(item.beats) ? item.beats : [], persistentState: cleanAnalysisText(item.persistentState),
+      startState: cleanAnalysisText(item.startState), endState: cleanAnalysisText(item.endState), transitionToNext: cleanAnalysisText(item.transitionToNext),
+      backgroundPriority: item.backgroundPriority, depthOfField: item.depthOfField, authenticity: cleanAnalysisText(item.authenticity),
+      estimatedSpeechDuration: typeof item.estimatedSpeechDuration === 'number' ? item.estimatedSpeechDuration : undefined, dialogueFits: item.dialogueFits,
+      confidence: typeof item.confidence === 'number' ? item.confidence : undefined, needsReview: Boolean(item.needsReview),
     };
   }).filter(Boolean) as ScriptDetail15s[];
-  if (normalized.length) return normalized.slice(0, 12);
+  if (normalized.length) {
+    return normalized.map((detail, index) => {
+      const currentValues = Array.from(detail.time.matchAll(/(\d+(?:\.\d+)?)/g)).map(match => Number(match[1]));
+      if (currentValues.length >= 2) return detail;
+      const start = Math.max(0, currentValues[0] ?? (index === 0 ? 0 : parseFrameTimeRange(normalized[index - 1]!.time).end));
+      const nextValues = Array.from(String(normalized[index + 1]?.time || '').matchAll(/(\d+(?:\.\d+)?)/g)).map(match => Number(match[1]));
+      const nextStart = nextValues[0];
+      const videoEnd = Number(video.duration) || 0;
+      const end = nextStart != null && nextStart > start
+        ? nextStart
+        : videoEnd > start ? Math.min(videoEnd, start + 3) : start + 0.5;
+      return { ...detail, time: `${Number(start.toFixed(1))}-${Number(end.toFixed(1))}s` };
+    });
+  }
 
-  const source = structure.length ? structure : splitStructure(video.title, Math.min(video.duration, 15));
-  return source.slice(0, 5).map((step, index) => ({
-    time: index === 0 ? '0.2s' : `${(index * 3).toFixed(1)}s-${Math.min(index * 3 + 3, 15).toFixed(1)}s`,
+  const fullDuration = Math.max(1, Number(video.duration) || 15);
+  const source = structure.length ? structure : splitStructure(video.title, fullDuration);
+  return source.map((step, index) => ({
+    time: cleanAnalysisTimestamp(`${index * 3}-${Math.min(index * 3 + 3, fullDuration)}s`),
     environment: '真实产品/人物口播场景',
     shot: index === 0 ? '特写' : '中近景',
     camera: index === 0 ? '固定镜头' : '轻微推近',
@@ -463,12 +559,6 @@ function shootingSuggestion(detail: ScriptDetail15s): string {
   return '建议补拍与该分镜描述一致的 3-5 秒短素材：主体明确、背景干净、动作从静态展示到轻微移动。';
 }
 
-function materialMatchReason(material: Material, tokens: string[], score: number): string {
-  const source = `${material.name} ${material.folder}`.toLowerCase();
-  const hits = tokens.filter(token => source.includes(token)).slice(0, 3);
-  return hits.length ? `命中关键词：${hits.join(' / ')}` : `按视频类型和时长兜底匹配，匹配度 ${score}`;
-}
-
 function parseFrameTimeRange(time: string): { start: number; end: number; duration: number } {
   const values = Array.from(String(time).matchAll(/(\d+(?:\.\d+)?)/g)).map(match => Number(match[1]));
   const start = Math.max(0, values[0] ?? 0);
@@ -486,108 +576,154 @@ function formatClipTime(seconds: number): string {
     : `${min}:${String(sec).padStart(2, '0')}`;
 }
 
-function chooseTrimWindow(material: Material, frameDuration: number, semanticScore: number, index: number): FrameMaterialMatch['trim'] {
-  const materialDuration = Math.max(0, Number(material.duration) || 0);
-  const target = Math.max(1.5, frameDuration);
-  if (material.type === 'image' || materialDuration <= 0) {
-    return { start: 0, end: target, label: `建议展示 ${target.toFixed(1)}s` };
-  }
-  if (materialDuration <= target + 0.2) {
-    return { start: 0, end: materialDuration, label: `使用全段 ${formatClipTime(materialDuration)}` };
-  }
-  const spare = Math.max(0, materialDuration - target);
-  const anchor = semanticScore >= 5 ? 0.38 : 0.5 + ((index % 3) - 1) * 0.18;
-  const start = Math.min(spare, Math.max(0, spare * anchor));
-  const end = Math.min(materialDuration, start + target);
+function viralDnaForFrame(detail: ScriptDetail15s): FrameMaterialMatch['viralDna'] {
+  const text = `${detail.visual} ${detail.subtitle} ${detail.onScreenText}`;
+  const start = parseFrameTimeRange(detail.time).start;
+  const inferredPurpose = /cta|购买|下单|咨询|选择|了解更多|关注/i.test(text) ? '行动号召'
+    : /前后|对比|效果|证明|测试|数据|认证/i.test(text) ? '效果/信任证明'
+    : /切换|下一款|另一款|系列|多款/i.test(text) ? '产品切换与信息递进'
+    : /质地|挤出|涂抹|泡沫|吸收/i.test(text) ? '质地或使用证明'
+    : /完整|正面|包装|标签|logo|产品特写/i.test(text) ? '产品揭晓与识别'
+    : start <= 3 ? '开场注意力钩子' : '叙事推进';
+  const explicitPurpose = detail.purpose?.trim() || '';
+  const purpose = !explicitPurpose || /承接叙事信息|叙事推进|画面承接/.test(explicitPurpose) ? inferredPurpose : explicitPurpose;
+  const action = detail.beats?.map(item => item.action).filter(Boolean).join(' → ') || detail.visual;
+  const authenticityRequired = /真实|不得ai|真人|证明|认证|效果|对比/i.test(`${detail.authenticity} ${purpose}`);
+  const mustPreserve = Array.from(new Set([
+    action ? `动作/信息节拍：${shortenText(action, 64)}` : '',
+    detail.shot ? `景别：${detail.shot}` : '',
+    detail.camera ? `运镜：${detail.camera}` : '',
+    detail.composition ? `构图：${shortenText(detail.composition, 36)}` : '',
+  ].filter(Boolean)));
+  const replaceable = [
+    /人物|真人|脸|手|person|face|hand/i.test(text) ? '人物换成企业适配的真人/达人' : '',
+    /产品|包装|瓶|罐|洁面|cream|cleanser|product/i.test(text) ? '产品与包装换成企业自有产品' : '',
+    detail.subtitle || detail.onScreenText ? '原字幕/品牌词改为已核验的企业卖点' : '补充企业品牌视觉，但不改变原镜头节拍',
+  ].filter(Boolean);
   return {
-    start: +start.toFixed(1),
-    end: +end.toFixed(1),
-    label: `建议截取 ${formatClipTime(start)}-${formatClipTime(end)}`,
+    purpose,
+    mustPreserve,
+    replaceable: Array.from(new Set(replaceable)),
+    authenticityRequired,
   };
 }
 
-function scoreMaterialForFrame(material: Material, detail: ScriptDetail15s, tokens: string[], index: number, used: Set<string>) {
-  const haystack = `${material.name} ${material.folder}`.toLowerCase();
-  const frameText = `${detail.visual} ${detail.subtitle} ${detail.shot} ${detail.camera}`.toLowerCase();
-  const frameTime = parseFrameTimeRange(detail.time);
-  const materialDuration = Number(material.duration) || 0;
-  let semantic = 0;
-  for (const token of tokens) if (haystack.includes(token)) semantic += token.length >= 4 ? 3 : 1;
-  semantic = Math.min(10, semantic);
-
-  let shot = 0;
-  if (/close|特写|texture|质地|产品|product/.test(frameText) && /detail|product|产品|特写|upload|hot/i.test(`${material.folder} ${material.name}`)) shot += 4;
-  if (/face|skin|肤|脸|真人|model|角色|人物/.test(frameText) && /model|scene|skin|face|真人|场景|presenter/i.test(`${material.folder} ${material.name}`)) shot += 4;
-  if (/factory|工厂|warehouse|生产|发货|ship|proof|证明/.test(frameText) && /factory|工厂|warehouse|ship|发货/i.test(`${material.folder} ${material.name}`)) shot += 4;
-  if (/推近|push|移动|handheld|手持/.test(frameText) && material.type === 'video') shot += 2;
-  shot = Math.min(10, shot);
-
-  let durationScore = 0;
-  if (material.type === 'image') {
-    durationScore = frameTime.duration <= 4 ? 6 : 3;
-  } else if (materialDuration >= frameTime.duration) {
-    durationScore = materialDuration >= frameTime.duration * 3 ? 8 : 10;
-  } else if (materialDuration >= frameTime.duration * 0.75) {
-    durationScore = 5;
-  } else if (materialDuration > 0) {
-    durationScore = 2;
-  }
-
-  const quality = material.url || material.poster ? 8 : 5;
-  let risk = 0;
-  const risks: string[] = [];
-  if (materialDuration > 0 && materialDuration < frameTime.duration) {
-    risk += 4;
-    risks.push(`素材短于分镜 ${formatClipTime(frameTime.duration - materialDuration)}`);
-  }
-  if (materialDuration >= frameTime.duration * 3) {
-    risk += 1;
-    risks.push('素材较长，已建议截取中段高可用片段');
-  }
-  if (semantic === 0) {
-    risk += 2;
-    risks.push('语义命中较弱，属于类型/时长兜底');
-  }
-  if (used.has(material.id)) {
-    risk += 3;
-    risks.push('该素材已用于其他分镜，注意连续重复感');
-  }
-
-  const total = Math.max(0, Math.round(semantic * 0.42 + durationScore * 0.24 + shot * 0.2 + quality * 0.14 - risk * 0.35));
+function viralPotentialForFrame(detail: ScriptDetail15s, dna: FrameMaterialMatch['viralDna']): FrameMaterialMatch['viralPotential'] {
+  const text = `${dna.purpose} ${detail.visual} ${detail.subtitle} ${detail.onScreenText}`;
+  const mechanisms: string[] = [];
+  let score = 38;
+  if (parseFrameTimeRange(detail.time).start <= 3) { mechanisms.push('前3秒注意力入口'); score += 16; }
+  if (/钩子|悬念|遮挡|隐藏|反差|意外|问题/i.test(text)) { mechanisms.push('悬念/反差'); score += 16; }
+  if (/揭晓|完整|正面|切换|系列|多款/i.test(text)) { mechanisms.push('渐进揭晓'); score += 12; }
+  if (/证明|效果|对比|测试|认证|口碑/i.test(text)) { mechanisms.push('证据前置'); score += 14; }
+  if (/cta|购买|咨询|选择|行动号召/i.test(text)) { mechanisms.push('转化承接'); score += 10; }
+  if (detail.beats?.length) { mechanisms.push('镜头内节拍'); score += 6; }
+  if (detail.onScreenText || detail.subtitle) { mechanisms.push('画面信息同步'); score += 4; }
+  const unique = Array.from(new Set(mechanisms));
+  const mechanismText = unique.length ? unique.slice(0, 2).join('＋') : '明确主体与信息推进';
   return {
-    material,
-    score: total,
-    scores: { semantic, duration: durationScore, shot, quality, risk },
-    trim: chooseTrimWindow(material, frameTime.duration, semantic, index),
+    score: Math.max(0, Math.min(100, score)),
+    whyEffective: `${mechanismText}，让观众在${formatClipTime(parseFrameTimeRange(detail.time).duration)}内理解“${dna.purpose}”，并推动继续观看或完成判断。`,
+    mechanisms: unique,
+  };
+}
+
+function replicabilityForFrame(detail: ScriptDetail15s, dna: FrameMaterialMatch['viralDna'], matched: ReturnType<typeof scoreSegmentForFrame> | undefined, status: FrameMaterialMatch['status']): FrameMaterialMatch['replicability'] {
+  const text = `${detail.visual} ${detail.subtitle} ${detail.onScreenText} ${detail.authenticity}`;
+  const exactProduct = /包装|标签|logo|型号|认证|效果证明|真实产品|不得ai/i.test(text);
+  const humanAction = /真人|人物|脸|眼|手部|涂抹|佩戴|口播/i.test(text);
+  const aiFeasibility: FrameMaterialMatch['replicability']['aiFeasibility'] = exactProduct ? 'low' : humanAction ? 'medium' : 'high';
+  const localCoverage = matched ? Math.max(0, Math.min(100, matched.score)) : 0;
+  const blockers = [...(matched?.risks || [])];
+  if (!matched && exactProduct) blockers.push('缺少可验证的真实产品片段');
+  if (!matched && humanAction) blockers.push('缺少符合动作与景别的真人素材');
+  if (dna.authenticityRequired && !matched?.segment.manualConfirmed) blockers.push('真实性要求尚未人工确认');
+  const uniqueBlockers = Array.from(new Set(blockers));
+  const recommendedExecution: FrameMaterialMatch['replicability']['recommendedExecution'] = matched && status === 'high' ? 'local'
+    : matched && aiFeasibility === 'low' ? 'local_plus_reshoot'
+    : matched ? 'local_plus_ai'
+    : aiFeasibility === 'high' ? 'ai'
+    : aiFeasibility === 'medium' ? 'reshoot' : 'reshoot';
+  let score = Math.round(localCoverage * .65 + (aiFeasibility === 'high' ? 28 : aiFeasibility === 'medium' ? 18 : 6) + (dna.replaceable.length ? 8 : 0));
+  if (dna.authenticityRequired && !matched?.segment.manualConfirmed) score = Math.min(score, 59);
+  return { score: Math.max(0, Math.min(100, score)), localCoverage, aiFeasibility, recommendedExecution, blockers: uniqueBlockers.slice(0, 4) };
+}
+
+function normalizedOverlap(left: string, right: string): number {
+  const tokens = tokenizeForMatch(left);
+  if (!tokens.length) return 0;
+  const haystack = right.toLowerCase();
+  return Math.min(100, Math.round(tokens.filter(token => haystack.includes(token)).length / tokens.length * 100));
+}
+
+function scoreSegmentForFrame(material: Material, segment: MaterialSegment, detail: ScriptDetail15s, used: Set<string>) {
+  const dna = viralDnaForFrame(detail);
+  const frameText = `${detail.purpose} ${detail.visual} ${detail.beats?.map(item => item.action).join(' ')} ${detail.shot} ${detail.angle} ${detail.composition} ${detail.camera}`;
+  const segmentText = `${segment.recommendedFunctions.join(' ')} ${segment.subject.join(' ')} ${segment.action} ${segment.shot} ${segment.angle} ${segment.composition} ${segment.camera} ${segment.environment}`;
+  const needsProduct = /产品|包装|瓶|罐|质地|product|package|bottle|texture/i.test(frameText);
+  const needsPerson = /人物|真人|男性|女性|脸|眼|皮肤|手|person|face|eye|skin|hand/i.test(frameText);
+  const risks: string[] = [];
+  if (needsProduct && !segment.productVisible) risks.push('硬条件不满足：分镜要求产品，但片段未识别到产品');
+  if (needsProduct && /完整|正面|清晰|特写|reveal/i.test(frameText) && segment.productClarity !== 'high') risks.push('硬条件不满足：产品揭晓需要清晰完整产品');
+  if (needsPerson && !segment.hasPerson) risks.push('硬条件不满足：分镜要求真人/手部动作');
+  if (dna.authenticityRequired && segment.needsReview && !segment.manualConfirmed) risks.push('真实性镜头尚未人工确认');
+  if (segment.hasLogo && segment.logoText.length) risks.push(`检测到文字/品牌：${segment.logoText.join('、')}`);
+
+  const functionScore = normalizedOverlap(detail.purpose || '', segment.recommendedFunctions.join(' '));
+  const action = normalizedOverlap(`${detail.visual} ${detail.beats?.map(item => item.action).join(' ')}`, segment.action);
+  const subject = normalizedOverlap(detail.visual, `${segment.subject.join(' ')} ${segment.action}`);
+  const composition = normalizedOverlap(`${detail.shot} ${detail.angle} ${detail.composition}`, `${segment.shot} ${segment.angle} ${segment.composition}`);
+  const camera = normalizedOverlap(detail.camera, segment.camera);
+  const frameDuration = parseFrameTimeRange(detail.time).duration;
+  const duration = segment.duration >= frameDuration ? 100 : Math.round(segment.duration / frameDuration * 100);
+  const quality = Math.max(0, Math.min(100, segment.quality));
+  const enterpriseFit = segment.hasLogo ? 30 : segment.productVisible || segment.hasPerson ? 85 : 60;
+  let score = Math.round(functionScore * .25 + action * .2 + subject * .15 + composition * .15 + camera * .1 + duration * .05 + enterpriseFit * .05 + quality * .05);
+  if (risks.some(item => item.startsWith('硬条件'))) score = Math.min(score, 39);
+  if (dna.authenticityRequired && segment.needsReview && !segment.manualConfirmed) score = Math.min(score, 59);
+  if (used.has(segment.id)) { score = Math.max(0, score - 10); risks.push('该片段已用于其他分镜'); }
+  return {
+    material, segment, score,
+    scores: { function: functionScore, action, subject, composition, camera, duration, quality, enterpriseFit },
+    trim: { start: segment.start, end: segment.end, label: `真实片段 ${formatClipTime(segment.start)}-${formatClipTime(segment.end)}` },
     risks,
   };
 }
 
 function matchMaterialsToFrames(details: ScriptDetail15s[], materials: Material[]): FrameMaterialMatch[] {
   const videos = materials.filter(item => item.type === 'video');
+  const analyzed = videos.flatMap(material => (material.segments || []).map(segment => ({ material, segment })));
   const used = new Set<string>();
-  return details.map((detail, index) => {
-    const tokens = tokenizeForMatch(detail.visual, detail.subtitle, detail.shot, detail.camera);
-    let best: ReturnType<typeof scoreMaterialForFrame> | null = null;
-    for (const material of videos) {
-      const candidate = scoreMaterialForFrame(material, detail, tokens, index, used);
-      if (!best || candidate.score > best.score) best = candidate;
-    }
-    const matched = best && (best.score >= 3 || (videos.length > index && !used.has(videos[index]!.id)))
-      ? best
-      : videos[index] && !used.has(videos[index]!.id)
-      ? scoreMaterialForFrame(videos[index]!, detail, tokens, index, used)
-      : null;
-    if (matched) used.add(matched.material.id);
+  return details.map(detail => {
+    const dna = viralDnaForFrame(detail);
+    const viralPotential = viralPotentialForFrame(detail, dna);
+    const candidates = analyzed.map(({ material, segment }) => scoreSegmentForFrame(material, segment, detail, used)).sort((a, b) => b.score - a.score);
+    const best = candidates[0];
+    const status: FrameMaterialMatch['status'] = !analyzed.length && videos.length ? 'pending_analysis'
+      : !best || best.score < 40 ? 'missing' : best.score >= 80 ? 'high' : best.score >= 60 ? 'review' : 'adapt';
+    const matched = best && best.score >= 40 ? best : undefined;
+    if (matched) used.add(matched.segment.id);
+    const replicability = replicabilityForFrame(detail, dna, matched, status);
+    const decision: FrameMaterialMatch['decision'] = viralPotential.score >= 70 && replicability.score >= 70 ? 'copy_now'
+      : viralPotential.score >= 70 && replicability.aiFeasibility === 'high' ? 'ai_generate'
+      : viralPotential.score >= 70 ? 'prioritize_reshoot'
+      : replicability.score >= 60 ? 'supporting_only' : 'drop';
     return {
       detail,
       material: matched?.material,
+      segment: matched?.segment,
       score: matched?.score ?? 0,
       scores: matched?.scores,
       trim: matched?.trim,
-      reason: matched ? materialMatchReason(matched.material, tokens, matched.score) : '本地素材库暂未找到足够贴合的镜头',
+      reason: status === 'pending_analysis' ? '现有视频尚未完成片段级分析，不能生成可信截取建议'
+        : matched ? `按镜头功能、动作节拍、主体、构图与运镜匹配真实片段` : '没有片段通过硬条件，请补拍、AI生成或人工选择',
       risks: matched?.risks ?? [],
       suggestion: shootingSuggestion(detail),
+      status,
+      viralDna: dna,
+      viralPotential,
+      replicability,
+      decision,
     };
   });
 }
@@ -595,6 +731,19 @@ function matchMaterialsToFrames(details: ScriptDetail15s[], materials: Material[
 function frameStartsEarly(time: string): boolean {
   const match = String(time).match(/(\d+(?:\.\d+)?)/);
   return match ? Number(match[1]) <= 3 : false;
+}
+
+const FRAME_DECISION_LABELS: Record<FrameMaterialMatch['decision'], string> = {
+  copy_now: '立即复制', prioritize_reshoot: '优先补拍', ai_generate: 'AI生成', supporting_only: '仅作辅助镜头', drop: '建议放弃',
+};
+const FRAME_EXECUTION_LABELS: Record<FrameMaterialMatch['replicability']['recommendedExecution'], string> = {
+  local: '本地真实素材', local_plus_ai: '本地素材＋AI补充', local_plus_reshoot: '本地素材＋补拍', ai: 'AI生成', reshoot: '真人/产品补拍', drop: '放弃该镜头',
+};
+const AI_FEASIBILITY_LABELS: Record<FrameMaterialMatch['replicability']['aiFeasibility'], string> = {
+  high: '高', medium: '中', low: '低',
+};
+function frameScoreGrade(score: number): '优' | '良' | '弱' {
+  return score >= 75 ? '优' : score >= 50 ? '良' : '弱';
 }
 
 function shootingNeedTitle(detail: ScriptDetail15s): string {
@@ -826,7 +975,7 @@ function adaptedFrameLine(detail: ScriptDetail15s, index: number, product: Retur
   if (langCode !== 'zh') {
     return `[${detail.time}] Environment: ${detail.environment}; Shot: close-up or medium shot; Camera: simple handheld movement; Audio: upbeat social commerce music; ${voiceLine(subtitle, langCode)}; Visual: ${visual}; Captions match the voiceover.`;
   }
-  return `[${detail.time}] 环境：${detail.environment}；景别：${detail.shot}；运镜：${detail.camera}；配乐：${audio}；台词：人物说“${subtitle}”；画面：${visual}${note}`;
+  return `[${detail.time}] 环境：${detail.environment}；景别：${detail.shot}；运镜：${detail.camera}；${detail.angle ? `视角：${detail.angle}；` : ''}${detail.composition ? `构图：${detail.composition}；` : ''}配乐：${audio}；台词：人物说“${subtitle}”；画面：${visual}${detail.startState ? `；初始状态：${detail.startState}` : ''}${detail.endState ? `；结束状态：${detail.endState}` : ''}${detail.transitionToNext ? `；衔接：${detail.transitionToNext}` : ''}${note}`;
 }
 
 function makeVoiceoverDraft(_video: TrendVideo, analysis: ScriptAnalysis, productInfo: string, languageLabel?: string, langCode = 'zh'): string {
@@ -1070,8 +1219,30 @@ function ThumbnailImage({
   return <img src={src} alt="" className={className} draggable={false} loading="lazy" onError={() => setFailed(true)} />;
 }
 
+function AuthenticatedVideo({ apiUrl, poster, className, controls = false, autoPlay = false, hoverPlay = false }: { apiUrl: string; poster?: string; className: string; controls?: boolean; autoPlay?: boolean; hoverPlay?: boolean }) {
+  const [playbackUrl, setPlaybackUrl] = useState('');
+  const [loading, setLoading] = useState(false);
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const load = async () => {
+    if (playbackUrl || loading) return playbackUrl;
+    setLoading(true);
+    try {
+      const response = await fetch(apiUrl, { headers: authHeader() });
+      if (!response.ok) throw new Error(String(response.status));
+      const next = String(((await response.json()) as { url?: string }).url || '');
+      setPlaybackUrl(next);
+      return next;
+    } catch { return ''; } finally { setLoading(false); }
+  };
+  useEffect(() => { setPlaybackUrl(''); if (autoPlay) void load(); }, [apiUrl, autoPlay]);
+  useEffect(() => { if (autoPlay && playbackUrl) void videoRef.current?.play().catch(() => {}); }, [autoPlay, playbackUrl]);
+  return <video ref={videoRef} src={playbackUrl || undefined} poster={poster} controls={controls} autoPlay={autoPlay} muted={!controls} playsInline loop={hoverPlay} preload="metadata" className={className}
+    onMouseEnter={async () => { if (!hoverPlay) return; await load(); setTimeout(() => void videoRef.current?.play().catch(() => {}), 0); }}
+    onMouseLeave={() => { if (!hoverPlay || !videoRef.current) return; videoRef.current.pause(); videoRef.current.currentTime = 0; }} />;
+}
+
 // ── Analysis Panel ────────────────────────────────────────────────────────────
-function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo; onGenerateScript: () => void; onRetry?: () => void }) {
+function AnalysisPanel({ video, onGenerateScript, onRetry, specialRecommendation }: { video: TrendVideo; onGenerateScript: (analysis?: ScriptAnalysis) => void; onRetry?: () => void; specialRecommendation?: AccountSpecialRecommendation | null }) {
   const [loaded, setLoaded] = useState(false);
   const [analysis, setAnalysis] = useState<ScriptAnalysis | null>(null);
   const [activeBookmark, setActiveBookmark] = useState<'reason' | 'frames' | 'script' | 'adapt'>('reason');
@@ -1080,7 +1251,21 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
   const [generatingFrame, setGeneratingFrame] = useState('');
   const [generatedFrameMaterials, setGeneratedFrameMaterials] = useState<Record<string, GeneratedVideo>>({});
   const [frameErrors, setFrameErrors] = useState<Record<string, string>>({});
+  const [editingAnalysis, setEditingAnalysis] = useState(false);
+  const [savingAnalysis, setSavingAnalysis] = useState(false);
+  const [analysisSaveNotice, setAnalysisSaveNotice] = useState('');
   const analysisKey = JSON.stringify(video.aiAnalysis || {});
+  const updateDetail = (index: number, patch: Partial<ScriptDetail15s>) => setAnalysis(current => current ? ({ ...current, scriptDetails15s: current.scriptDetails15s.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) }) : current);
+  const saveAnalysisCorrections = async () => {
+    if (!analysis) return;
+    setSavingAnalysis(true); setAnalysisSaveNotice('');
+    try {
+      const response = await fetch(`/api/overseas/videos/${video.id}/analysis-corrections`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', ...authHeader() }, body: JSON.stringify({ scriptSummary15s: analysis.scriptSummary15s, scriptDetails15s: analysis.scriptDetails15s, confirmed: true }) });
+      if (!response.ok) throw new Error(`保存失败（${response.status}）`);
+      setEditingAnalysis(false); setAnalysisSaveNotice('修正已保存，后续裂变将使用确认稿');
+    } catch (error) { setAnalysisSaveNotice(error instanceof Error ? error.message : '保存失败'); }
+    finally { setSavingAnalysis(false); }
+  };
 
   useEffect(() => {
     setLoaded(false);
@@ -1185,14 +1370,21 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
         scope: 'own' as const,
         createdAt: generated.createdAt,
       },
-      score: 9,
-      scores: { semantic: 10, duration: 10, shot: 9, quality: 8, risk: 0 },
+      score: 100,
+      scores: { function: 100, action: 100, subject: 100, composition: 90, camera: 90, duration: 100, quality: 80, enterpriseFit: 100 },
       trim: { start: 0, end: generated.duration || 5, label: `使用全段 ${formatClipTime(generated.duration || 5)}` },
       reason: 'Seedance 2.0 已按该分镜生成素材',
       risks: [],
+      status: 'high' as const,
     } : item;
   });
   const matchedCount = frameMatches.filter(item => item.material).length;
+
+  const confirmMatchedSegment = async (match: FrameMaterialMatch) => {
+    if (!match.material || !match.segment) return;
+    const result = await studioApi.updateMaterialSegment(match.material.id, match.segment.id, { manualConfirmed: true, needsReview: false });
+    if (result.ok && result.material) setMaterials(current => current.map(item => item.id === result.material!.id ? result.material! : item));
+  };
 
   const generateFrameMaterial = async (match: FrameMaterialMatch, index: number) => {
     const key = `${match.detail.time}-${index}`;
@@ -1276,6 +1468,12 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
           {activeBookmark === 'reason' && (
             <motion.div key="reason" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }}
               className="space-y-3">
+              {specialRecommendation && (
+                <div className="rounded-xl border border-red-200 bg-red-50 px-3 py-2.5 shadow-sm">
+                  <div className="flex items-center gap-1.5"><Flame size={13} className="text-red-600" /><p className="text-[11px] font-black text-red-700">特别推荐 · 借鉴价值{specialRecommendation.level}</p></div>
+                  <p className="mt-1 text-[10px] leading-relaxed text-red-700">{specialRecommendation.message}</p>
+                </div>
+              )}
               <div>
                 <div className="mb-2 flex items-center gap-1.5">
                   <Lightbulb size={11} className="text-accent" />
@@ -1307,9 +1505,11 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
                   <Film size={11} className="text-accent" />
                   <p className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">自动分镜素材匹配</p>
                 </div>
-                <span className="text-[10px] font-semibold text-text-muted">
-                  {materialLoading ? '读取本地素材中...' : `${matchedCount}/${frameMatches.length} 已匹配`}
-                </span>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-semibold text-text-muted">
+                    {materialLoading ? '读取本地素材中...' : `${matchedCount}/${frameMatches.length} 已匹配`}
+                  </span>
+                </div>
               </div>
               <div className="space-y-2">
                 {frameMatches.map((match, i) => {
@@ -1317,71 +1517,77 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
                   const hasMaterial = Boolean(match.material);
                   const error = frameErrors[key];
                   return (
-                    <div key={key} className={`rounded-xl border p-3 ${hasMaterial ? 'border-green-100 bg-green-50/70' : 'border-accent-100 bg-accent-50/60'}`}>
-                      <div className="flex gap-3">
-                        <div className="relative h-24 w-16 flex-shrink-0 overflow-hidden rounded-lg border border-border bg-white">
-                          {match.material?.url ? (
-                            <video src={`${match.material.url}#t=0.1`} poster={match.material.poster} muted playsInline preload="metadata" className="h-full w-full object-cover" />
-                          ) : match.material?.poster ? (
-                            <img src={match.material.poster} alt="" className="h-full w-full object-cover" />
-                          ) : (
-                            <div className="flex h-full w-full flex-col items-center justify-center gap-1 text-text-muted">
-                              <Film size={16} />
-                              <span className="text-[9px] font-bold">缺素材</span>
-                            </div>
-                          )}
-                          <span className="absolute left-1 top-1 rounded bg-black/60 px-1 py-0.5 text-[8px] font-bold text-white">{match.detail.time}</span>
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-start justify-between gap-2">
-                            <div className="min-w-0">
-                              <p className="truncate text-[11px] font-bold text-text-primary">{match.detail.shot} · {match.detail.camera}</p>
-                              <p className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-text-secondary">{match.detail.visual}</p>
-                            </div>
-                            <span className={`flex-shrink-0 rounded-full bg-white px-2 py-0.5 text-[9px] font-bold ${hasMaterial ? 'text-green-700' : 'text-accent-700'}`}>
-                              {hasMaterial ? '已匹配' : '待补拍'}
-                            </span>
+                    <div key={key} className={`rounded-xl border p-3 ${match.decision === 'copy_now' ? 'border-green-200 bg-green-50/60' : match.decision === 'drop' ? 'border-border bg-surface-2/60' : 'border-accent-100 bg-accent-50/40'}`}>
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="rounded bg-neutral-800 px-1.5 py-0.5 font-mono text-[9px] font-bold text-white">{match.detail.time}</span>
+                            <span className="text-[11px] font-black text-text-primary">{match.viralDna.purpose}</span>
                           </div>
-                          {hasMaterial && match.material ? (
-                            <div className="mt-2 space-y-1.5 rounded-lg bg-white/80 px-2 py-1.5">
-                              <div className="flex items-center gap-2">
-                                <p className="min-w-0 flex-1 truncate text-[11px] font-semibold text-text-primary">{match.material.name}</p>
-                                <span className="flex-shrink-0 rounded bg-green-100 px-1.5 py-0.5 text-[9px] font-bold text-green-700">匹配度 {match.score}</span>
-                              </div>
-                              <p className="text-[10px] text-text-muted">{match.reason}</p>
-                              {match.trim && (
-                                <p className="rounded-md bg-green-50 px-2 py-1 text-[10px] font-semibold text-green-700">{match.trim.label}</p>
-                              )}
-                              {match.scores && (
-                                <div className="grid grid-cols-5 gap-1 text-center text-[9px] font-semibold text-text-muted">
-                                  <span className="rounded bg-surface-2 px-1 py-0.5">语义 {match.scores.semantic}</span>
-                                  <span className="rounded bg-surface-2 px-1 py-0.5">时长 {match.scores.duration}</span>
-                                  <span className="rounded bg-surface-2 px-1 py-0.5">镜头 {match.scores.shot}</span>
-                                  <span className="rounded bg-surface-2 px-1 py-0.5">质量 {match.scores.quality}</span>
-                                  <span className="rounded bg-surface-2 px-1 py-0.5">风险 {match.scores.risk}</span>
-                                </div>
-                              )}
-                              {match.risks.length > 0 && (
-                                <p className="text-[10px] leading-relaxed text-amber-700">风险提示：{match.risks.join('；')}</p>
-                              )}
-                            </div>
-                          ) : (
-                            <div className="mt-2 space-y-2">
-                              <p className="rounded-lg bg-white/80 px-2 py-1.5 text-[10px] leading-relaxed text-accent-800">{match.suggestion}</p>
-                              <button
-                                type="button"
-                                onClick={() => void generateFrameMaterial(match, i)}
-                                disabled={generatingFrame === key}
-                                className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-2.5 py-1.5 text-[11px] font-bold text-white disabled:opacity-60"
-                              >
-                                {generatingFrame === key ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
-                                Seedance 2.0 生成素材
-                              </button>
-                              {error && <p className="text-[10px] leading-relaxed text-red-500">{error}</p>}
-                            </div>
-                          )}
+                          <p className="mt-1 text-[10px] text-text-muted">{match.detail.shot} · {match.detail.camera}</p>
+                        </div>
+                        <span className={`shrink-0 rounded-full px-2 py-1 text-[9px] font-black ${match.decision === 'copy_now' ? 'bg-green-100 text-green-700' : match.decision === 'drop' ? 'bg-surface-2 text-text-muted' : 'bg-amber-100 text-amber-700'}`}>
+                          {FRAME_DECISION_LABELS[match.decision]}
+                        </span>
+                      </div>
+
+                      <div className="mt-2 grid grid-cols-2 gap-2">
+                        <div className="rounded-lg border border-orange-100 bg-white px-2.5 py-2">
+                          <div className="flex items-center justify-between"><span className="text-[9px] font-bold text-orange-700">爆款潜力</span><span className="text-sm font-black text-orange-600">{frameScoreGrade(match.viralPotential.score)}</span></div>
+                          <div className="mt-1 h-1 overflow-hidden rounded-full bg-orange-100"><div className="h-full rounded-full bg-orange-500" style={{ width: `${match.viralPotential.score}%` }} /></div>
+                        </div>
+                        <div className="rounded-lg border border-green-100 bg-white px-2.5 py-2">
+                          <div className="flex items-center justify-between"><span className="text-[9px] font-bold text-green-700">可复制性</span><span className="text-sm font-black text-green-600">{frameScoreGrade(match.replicability.score)}</span></div>
+                          <div className="mt-1 h-1 overflow-hidden rounded-full bg-green-100"><div className="h-full rounded-full bg-green-500" style={{ width: `${match.replicability.score}%` }} /></div>
                         </div>
                       </div>
+
+                      <div className="mt-2 rounded-lg border border-border bg-white/90 px-2.5 py-2">
+                        <p className="text-[9px] font-black text-text-primary">为什么有效</p>
+                        <p className="mt-1 text-[10px] leading-relaxed text-text-secondary">{match.viralPotential.whyEffective}</p>
+                        <div className="mt-1.5 flex flex-wrap gap-1">{match.viralPotential.mechanisms.map(item => <span key={item} className="rounded bg-orange-50 px-1.5 py-0.5 text-[9px] font-bold text-orange-700">{item}</span>)}</div>
+                      </div>
+
+                      <div className="mt-2 rounded-lg border border-border bg-white/90 px-2.5 py-2">
+                        <p className="text-[9px] font-black text-text-primary">必须保留</p>
+                        <div className="mt-1 space-y-0.5">{match.viralDna.mustPreserve.slice(0, 4).map(item => <p key={item} className="text-[10px] leading-relaxed text-text-secondary">✓ {item}</p>)}</div>
+                      </div>
+
+                      <div className="mt-2 rounded-lg border border-green-100 bg-green-50/70 px-2.5 py-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-[9px] font-black text-green-800">企业替换与执行</p>
+                          <span className="rounded bg-white px-1.5 py-0.5 text-[9px] font-black text-green-700">{FRAME_EXECUTION_LABELS[match.replicability.recommendedExecution]}</span>
+                        </div>
+                        <p className="mt-1 text-[10px] leading-relaxed text-text-secondary">{match.viralDna.replaceable.join('；')}</p>
+                        <div className="mt-1.5 flex flex-wrap gap-1.5 text-[9px] font-bold">
+                          <span className="rounded bg-white px-1.5 py-0.5 text-text-secondary">真实素材覆盖 {match.replicability.localCoverage}%</span>
+                          <span className="rounded bg-white px-1.5 py-0.5 text-text-secondary">AI可行性 {AI_FEASIBILITY_LABELS[match.replicability.aiFeasibility]}</span>
+                          <span className={`rounded bg-white px-1.5 py-0.5 ${hasMaterial ? 'text-green-700' : 'text-amber-700'}`}>{hasMaterial ? '已有候选片段' : '缺少真实片段'}</span>
+                        </div>
+                        {match.replicability.blockers.length > 0 && <p className="mt-1.5 text-[10px] leading-relaxed text-amber-700">阻塞：{match.replicability.blockers.join('；')}</p>}
+                      </div>
+
+                      <details className="mt-2 rounded-lg border border-border bg-white/80 px-2.5 py-2">
+                        <summary className="cursor-pointer text-[10px] font-bold text-text-secondary">查看原分镜与素材匹配详情</summary>
+                        <div className="mt-2 space-y-2 border-t border-border pt-2">
+                          <p className="text-[10px] leading-relaxed text-text-secondary"><span className="font-bold">原画面：</span>{match.detail.visual}</p>
+                          {hasMaterial && match.material ? <>
+                            <div className="flex gap-2">
+                              <div className="relative h-20 w-14 shrink-0 overflow-hidden rounded-md border border-border bg-surface-2">
+                                {match.material.url ? <video src={`${match.material.url}#t=${match.segment?.start ?? 0.1}`} poster={match.segment?.poster || match.material.poster} muted playsInline preload="metadata" className="h-full w-full object-cover" /> : match.material.poster ? <img src={match.material.poster} alt="" className="h-full w-full object-cover" /> : <Film size={14} className="m-auto mt-7 text-text-muted" />}
+                              </div>
+                              <div className="min-w-0 flex-1"><p className="truncate text-[10px] font-bold text-text-primary">{match.material.name}</p><p className="mt-1 text-[9px] text-text-muted">{match.reason}</p>{match.trim && <p className="mt-1 text-[10px] font-bold text-green-700">{match.trim.label}</p>}</div>
+                            </div>
+                            {match.scores && <div className="grid grid-cols-4 gap-1 text-center text-[9px] font-semibold text-text-muted">
+                              <span className="rounded bg-surface-2 px-1 py-0.5">功能 {match.scores.function}</span><span className="rounded bg-surface-2 px-1 py-0.5">动作 {match.scores.action}</span><span className="rounded bg-surface-2 px-1 py-0.5">主体 {match.scores.subject}</span><span className="rounded bg-surface-2 px-1 py-0.5">构图 {match.scores.composition}</span><span className="rounded bg-surface-2 px-1 py-0.5">运镜 {match.scores.camera}</span><span className="rounded bg-surface-2 px-1 py-0.5">时长 {match.scores.duration}</span><span className="rounded bg-surface-2 px-1 py-0.5">质量 {match.scores.quality}</span><span className="rounded bg-surface-2 px-1 py-0.5">企业适配 {match.scores.enterpriseFit}</span>
+                            </div>}
+                            {match.segment && !match.segment.manualConfirmed && <button type="button" onClick={() => void confirmMatchedSegment(match)} className="inline-flex items-center gap-1 rounded-md border border-green-200 bg-green-50 px-2 py-1 text-[10px] font-bold text-green-700"><Check size={10} />人工确认片段</button>}
+                          </> : <p className="text-[10px] leading-relaxed text-accent-800">{match.suggestion}</p>}
+                        </div>
+                      </details>
+
+                      {!hasMaterial && match.replicability.recommendedExecution === 'reshoot' && <p className="mt-2 rounded-lg bg-white px-2.5 py-2 text-[10px] font-bold text-amber-700">待拍任务：{match.suggestion}</p>}
+                      {error && <p className="mt-2 text-[10px] leading-relaxed text-red-500">{error}</p>}
                     </div>
                   );
                 })}
@@ -1392,9 +1598,12 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
           {activeBookmark === 'script' && (
             <motion.div key="script" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }}
               className="space-y-3">
-              <div className="flex items-center gap-1.5">
-                <FileText size={11} className="text-accent" />
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">15 秒脚本详析</p>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5"><FileText size={11} className="text-accent" /><p className="text-[10px] font-semibold uppercase tracking-wider text-text-muted">导演分镜脚本详析</p></div>
+                <div className="flex items-center gap-2">
+                  {analysisSaveNotice && <span className="text-[10px] text-text-muted">{analysisSaveNotice}</span>}
+                  {editingAnalysis ? <><button onClick={() => setEditingAnalysis(false)} className="text-[10px] font-bold text-text-muted">取消</button><button onClick={() => void saveAnalysisCorrections()} disabled={savingAnalysis} className="rounded-lg bg-accent px-2.5 py-1 text-[10px] font-bold text-white disabled:opacity-50">{savingAnalysis ? '保存中…' : '保存修正'}</button></> : <button onClick={() => setEditingAnalysis(true)} className="rounded-lg border border-border bg-white px-2.5 py-1 text-[10px] font-bold text-text-secondary">编辑校对</button>}
+                </div>
               </div>
               <div className="overflow-hidden rounded-xl border border-border">
                 <div className="space-y-1 border-b border-border bg-surface-2 px-3 py-2.5">
@@ -1411,11 +1620,20 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
                 <div className="divide-y divide-border">
                   {analysis.scriptDetails15s.map((item, i) => (
                     <div key={`${item.time}-${i}`} className="px-3 py-2.5">
-                      <p className="text-[11px] leading-relaxed text-text-secondary">
+                      {editingAnalysis ? <div className="grid grid-cols-2 gap-2">
+                        <input value={item.time} onChange={event => updateDetail(i, { time: event.target.value })} className="rounded-lg border border-border px-2 py-1.5 text-[10px]" placeholder="时间区间" />
+                        <input value={item.purpose || ''} onChange={event => updateDetail(i, { purpose: event.target.value })} className="rounded-lg border border-border px-2 py-1.5 text-[10px]" placeholder="镜头功能" />
+                        <textarea value={item.visual} onChange={event => updateDetail(i, { visual: event.target.value })} className="col-span-2 rounded-lg border border-border px-2 py-1.5 text-[10px]" rows={2} placeholder="画面" />
+                        <textarea value={item.dialogue || ''} onChange={event => updateDetail(i, { dialogue: event.target.value })} className="rounded-lg border border-border px-2 py-1.5 text-[10px]" rows={2} placeholder="口播" />
+                        <textarea value={item.onScreenText || ''} onChange={event => updateDetail(i, { onScreenText: event.target.value })} className="rounded-lg border border-border px-2 py-1.5 text-[10px]" rows={2} placeholder="屏幕文字" />
+                        <input value={item.note || ''} onChange={event => updateDetail(i, { note: event.target.value, needsReview: Boolean(event.target.value) })} className="col-span-2 rounded-lg border border-border px-2 py-1.5 text-[10px]" placeholder="人工复核备注；清空表示已确认" />
+                      </div> : <p className="text-[11px] leading-relaxed text-text-secondary">
                         <span className="font-mono font-semibold text-accent">[{item.time}]</span>{' '}
-                        环境：{item.environment}；景别：{item.shot}；运镜：{item.camera}；配乐：{item.audio || '按原片节奏卡点'}；{item.subtitle ? `台词：“${item.subtitle}”；` : ''}画面：{item.visual}
+                        环境：{item.environment}；景别：{item.shot}；运镜：{item.camera}；{item.purpose ? `镜头功能：${item.purpose}；` : ''}画面：{item.visual}；{(item.dialogue || item.subtitle) ? `口播：“${item.dialogue || item.subtitle}”；` : ''}{item.onScreenText ? `屏幕文字：“${item.onScreenText}”；` : ''}配乐：{item.bgm || item.audio || '按原片节奏卡点'}
                         {item.note ? `（注：${item.note}）` : ''}
-                      </p>
+                      </p>}
+                      {item.beats?.length ? <div className="mt-1.5 space-y-1 border-l-2 border-accent/30 pl-2">{item.beats.map((beat, beatIndex) => <p key={beatIndex} className="text-[10px] text-text-muted">[{beat.time || '镜头内'}] {beat.action}{beat.dialogue ? `；口播：${beat.dialogue}` : ''}{beat.onScreenText ? `；字幕：${beat.onScreenText}` : ''}</p>)}</div> : null}
+                      {item.needsReview && <p className="mt-1 text-[10px] font-semibold text-amber-500">需人工复核 · 识别置信度 {Math.round((item.confidence ?? 0) * 100)}%</p>}
                     </div>
                   ))}
                 </div>
@@ -1447,7 +1665,7 @@ function AnalysisPanel({ video, onGenerateScript, onRetry }: { video: TrendVideo
       </div>
 
       <div className="flex-shrink-0 border-t border-border bg-surface p-4 shadow-[0_-10px_24px_rgba(15,23,42,0.04)]">
-        <button onClick={onGenerateScript}
+        <button onClick={() => onGenerateScript(analysis || undefined)}
           className="flex w-full items-center justify-center gap-2 rounded-2xl py-3 text-sm font-black text-white transition-all hover:scale-[1.01] active:scale-[0.99]"
           style={{ background: 'linear-gradient(135deg, #16a34a, #059669)', boxShadow: '0 10px 24px rgba(22,163,74,0.26)' }}>
           <Sparkles size={16} />
@@ -1467,6 +1685,7 @@ interface ScriptPanelProps {
   onRetry?: () => void;
   onFavorite?: () => void;
   favoriting?: boolean;
+  specialRecommendation?: AccountSpecialRecommendation | null;
   onNavigate?: (p: Page) => void;
   onEnterWorkflow?: (payload: {
     source?: string;
@@ -1497,7 +1716,7 @@ interface GeneratedVideo {
   error?: string;
 }
 
-function ScriptPanel({ video, activePanelTab, onClose, onRetry, onFavorite, favoriting, onNavigate, onEnterWorkflow }: ScriptPanelProps) {
+function ScriptPanel({ video, activePanelTab, onClose, onRetry, onFavorite, favoriting, specialRecommendation, onNavigate, onEnterWorkflow }: ScriptPanelProps) {
   const [activeTab, setActiveTab] = useState<'analysis' | 'generate'>(activePanelTab);
   const [scriptType, setScriptType] = useState<ScriptType>('voiceover');
   const [language, setLanguage] = useState('zh');
@@ -1666,8 +1885,8 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onFavorite, favo
     onEnterWorkflow?.({ source: 'seedance_video', script: result, video, scriptType, language, productInfo, generatedVideo: videoResult });
   };
 
-  const enterQuickCutFromAnalysis = () => {
-    const realAnalysis = getAnalysis(video);
+  const enterQuickCutFromAnalysis = (confirmedAnalysis?: ScriptAnalysis) => {
+    const realAnalysis = confirmedAnalysis || getAnalysis(video);
     onEnterWorkflow?.({
       source: video.contentFormat === 'image' ? 'inspiration_image_post' : 'inspiration_analysis',
       video,
@@ -1737,7 +1956,7 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onFavorite, favo
         {activeTab === 'analysis' ? (
           <motion.div key="analysis" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             className="flex flex-col flex-1 min-h-0 overflow-hidden">
-            <AnalysisPanel key={video.id} video={video} onGenerateScript={enterQuickCutFromAnalysis} onRetry={onRetry} />
+            <AnalysisPanel key={video.id} video={video} onGenerateScript={enterQuickCutFromAnalysis} onRetry={onRetry} specialRecommendation={specialRecommendation} />
           </motion.div>
         ) : (
           <motion.div key="generate" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -2001,12 +2220,10 @@ function VideoCard({ video, index, isSelected, onSelect, onWatch, onAnalyzeVideo
         }}
         className="relative overflow-hidden w-full aspect-[9/16] text-left block"
         style={{ background: 'var(--color-surface-2)' }}>
-        {video.thumbnail
+        {video.videoUrl
+          ? <AuthenticatedVideo apiUrl={video.videoUrl} poster={video.thumbnail} hoverPlay className="absolute inset-0 w-full h-full object-cover" />
+          : video.thumbnail
           ? <ThumbnailImage src={video.thumbnail} platform={video.platform} title={video.title} className="absolute inset-0 w-full h-full object-cover" />
-          : video.videoUrl
-          ? <video src={`${video.videoUrl}#t=0.1`} muted playsInline loop preload="metadata" className="absolute inset-0 w-full h-full object-cover"
-              onMouseEnter={e => { void e.currentTarget.play().catch(() => {}); }}
-              onMouseLeave={e => { e.currentTarget.pause(); e.currentTarget.currentTime = 0.1; }} />
           : <VideoThumbnail platform={video.platform} title={video.title} />}
         <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
           <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-white text-neutral-900">
@@ -2039,6 +2256,9 @@ function VideoCard({ video, index, isSelected, onSelect, onWatch, onAnalyzeVideo
         </div>
         <div className="absolute top-2 left-2">
           <span className="platform-badge text-[10px]" style={{ background: meta.bg, color: meta.color }}>{meta.label}</span>
+          {video.id.startsWith('material-') && (
+            <span className="mt-1 block rounded-md bg-green-600 px-1.5 py-0.5 text-[9px] font-black text-white shadow-sm">置顶 · 片段已分析</span>
+          )}
         </div>
         {crawledLabel && (
           <div className="absolute top-2 right-2 px-1.5 py-0.5 rounded-md text-[10px] font-mono font-bold text-white bg-black/50 backdrop-blur-sm"
@@ -2091,6 +2311,7 @@ function VideoListItem({ video, isSelected, onSelect, onWatch, onAnalyzeVideo, o
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-0.5">
           <span className="platform-badge text-[9px]" style={{ background: meta.bg, color: meta.color }}>{meta.label}</span>
+          {video.id.startsWith('material-') && <span className="rounded bg-green-100 px-1.5 py-0.5 text-[9px] font-bold text-green-700">置顶 · 片段已分析</span>}
           <span className={`text-[10px] font-semibold ${trendColor}`}>{trendLabel}</span>
         </div>
         <p className="text-sm text-text-primary font-medium truncate">{video.title}</p>
@@ -2181,7 +2402,8 @@ function recordsToVideos(records: CrawlerRecord[]): TrendVideo[] {
         tags,
         views,
         trend,
-        videoUrl: analysis.materialUrl || (record.videoFileId ? `/media/${record.videoFileId}` : undefined),
+        // videoFileId 本身就是 PocketBase 文件存在的权威凭据；不要再依赖可缺失的迁移标记。
+        videoUrl: record.videoFileId ? `/api/overseas/videos/${record.id}/media-url` : undefined,
         sourceUrl: record.sourceUrl,
         status: record.status,
         aiAnalysis: analysis,
@@ -2189,6 +2411,7 @@ function recordsToVideos(records: CrawlerRecord[]): TrendVideo[] {
         contentFormat: contentFormatOfAnalysis(analysis),
       };
     })
+    // 历史记录在后台回填 PocketBase 时仍展示封面，避免管理员视频池因存储迁移暂时变成空列表。
     // 同一 sourceUrl 只保留一条（demo 数据/多次采集可能带来 id 不同的重复视频）
     .filter((video, index, all) => !video.sourceUrl || all.findIndex(v => v.sourceUrl === video.sourceUrl) === index)
     .sort((a, b) => heatValue(b.views) - heatValue(a.views));
@@ -2244,6 +2467,43 @@ function heatValue(views: string): number {
   return n;
 }
 
+function median(values: number[]): number {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 ? sorted[middle]! : (sorted[middle - 1]! + sorted[middle]!) / 2;
+}
+
+function reliablePublicViews(value: string): number {
+  if (!/\d/.test(value) || /shares?|likes?|facebook|instagram|tiktok|youtube|本地素材/i.test(value)) return 0;
+  return heatValue(value);
+}
+
+function specialRecommendationForVideo(video: TrendVideo, accountVideos: TrendVideo[], accountMedians: number[]): AccountSpecialRecommendation | null {
+  const analysis = video.aiAnalysis;
+  if (!analysis?.sourceAccount) return null;
+  const currentViews = reliablePublicViews(video.views);
+  const history = accountVideos.map(item => reliablePublicViews(item.views)).filter(value => value > 0);
+  if (!currentViews || history.length < 8) return null;
+  const baselineValue = median(history);
+  if (!baselineValue) return null;
+  const multiple = currentViews / baselineValue;
+  let baselineLevel = analysis.accountBaselineLevel;
+  if (!baselineLevel && accountMedians.length >= 3) {
+    const sorted = [...accountMedians].sort((a, b) => a - b);
+    const percentile = sorted.filter(value => value <= baselineValue).length / sorted.length;
+    baselineLevel = percentile <= .3 ? 'low' : percentile <= .7 ? 'medium' : 'high';
+  }
+  if (!baselineLevel) return null;
+  const baseline = baselineLevel === 'low' ? '低基线账号' : baselineLevel === 'medium' ? '中基线账号' : '高基线账号';
+  const level = baselineLevel === 'low' && multiple >= 10 ? '极高'
+    : baselineLevel === 'low' && multiple >= 5 ? '高'
+    : baselineLevel === 'medium' && multiple >= 5 ? '高'
+    : baselineLevel === 'high' && multiple >= 3 ? '较高' : null;
+  if (!level) return null;
+  return { level, baseline, multiple, message: `${baseline}跑出日常 ${multiple.toFixed(1)} 倍播放，内容结构具有${level}借鉴价值，建议优先拆解复用。` };
+}
+
 function timeValue(value?: string): number {
   const t = value ? new Date(value).getTime() : 0;
   return Number.isFinite(t) ? t : 0;
@@ -2276,7 +2536,7 @@ function WatchModal({ video, onClose }: { video: TrendVideo; onClose: () => void
         </div>
         <div className="bg-black">
           {video.videoUrl ? (
-            <video src={video.videoUrl} controls autoPlay playsInline className="w-full max-h-[72vh] bg-black" />
+            <AuthenticatedVideo apiUrl={video.videoUrl} poster={video.thumbnail} controls autoPlay className="w-full max-h-[72vh] bg-black" />
           ) : (
             <div className="aspect-video flex flex-col items-center justify-center gap-3 text-white/70">
               <Play size={28} />
@@ -2330,6 +2590,12 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   const [favoritingMaterialIds, setFavoritingMaterialIds] = useState<string[]>([]);
   const [materialMessage, setMaterialMessage] = useState('');
   const [localMaterials, setLocalMaterials] = useState<Material[]>([]);
+  const [previewMaterial, setPreviewMaterial] = useState<Material | null>(null);
+  const [materialSearch, setMaterialSearch] = useState('');
+  const [materialIndustry, setMaterialIndustry] = useState<MaterialIndustryFilter>('all');
+  const [materialFunction, setMaterialFunction] = useState('all');
+  const [materialApplicability, setMaterialApplicability] = useState<MaterialApplicabilityFilter>('all');
+  const [materialOrientation, setMaterialOrientation] = useState<MaterialOrientationFilter>('all');
   const [materialsLoading, setMaterialsLoading] = useState(false);
   const [uploadingMaterial, setUploadingMaterial] = useState(false);
   const [generatingNeedId, setGeneratingNeedId] = useState('');
@@ -2421,7 +2687,79 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
     if (latest && latest !== selectedVideo) setSelectedVideo(latest);
   }, [crawledVideos, selectedVideo]);
 
-  const allVideos = crawledVideos;
+  const pinnedMaterialVideos = useMemo<TrendVideo[]>(() => localMaterials
+    .filter(material => material.pinned && material.type === 'video' && material.segmentAnalysisStatus === 'completed' && material.segments?.length)
+    .map(material => {
+      const platform: TrendVideo['platform'] = /facebook/i.test(material.name) ? 'facebook'
+        : /youtube/i.test(material.name) ? 'youtube' : /instagram/i.test(material.name) ? 'instagram' : 'tiktok';
+      const title = material.name.replace(/^爆款[·・][^·・]+[·・]/, '').replace(/\.[a-z0-9]+$/i, '');
+      return {
+        id: `material-${material.id}`,
+        platform,
+        title,
+        thumbnail: material.poster || material.segments?.[0]?.poster || '',
+        duration: material.duration,
+        tags: ['片段已分析', '置顶素材'],
+        views: '本地素材',
+        trend: 'hot',
+        videoUrl: material.url,
+        status: 'analyzed',
+        crawledAt: material.createdAt,
+        contentFormat: 'video',
+        aiAnalysis: {
+          source: 'material_segment_analysis',
+          materialUrl: material.url,
+          materialPoster: material.poster,
+          geminiStatus: 'completed',
+          analysisQuality: 'segment_grounded',
+          analyzedAt: material.createdAt,
+          gemini: {
+            theme: title,
+            structure: material.segments!.map(segment => segment.recommendedFunctions.join('、')).filter(Boolean).join(' → '),
+            hooks: material.segments!.slice(0, 2).flatMap(segment => segment.recommendedFunctions),
+            mood: '素材片段级分析',
+            scriptSummary15s: { visualStyle: '真实本地视频素材', coreEmotion: '待人工校验', competitors: [] },
+            scriptDetails15s: material.segments!.map(segment => ({
+              time: `${segment.start}-${segment.end}s`,
+              environment: segment.environment,
+              shot: segment.shot,
+              camera: segment.camera,
+              angle: segment.angle,
+              composition: segment.composition,
+              visual: segment.action,
+              subtitle: segment.ocrText,
+              onScreenText: segment.ocrText,
+              purpose: segment.recommendedFunctions.join('、'),
+              authenticity: segment.authenticity,
+              confidence: segment.confidence,
+              needsReview: segment.needsReview,
+            })),
+            recommendedScriptType: 'storyboard',
+          },
+        },
+      };
+    }), [localMaterials]);
+  const pinnedTitles = new Set(pinnedMaterialVideos.map(video => video.title.trim().toLowerCase()));
+  const allVideos = [...pinnedMaterialVideos, ...crawledVideos.filter(video => !pinnedTitles.has(video.title.trim().toLowerCase()))];
+  const accountRecommendationByVideoId = useMemo(() => {
+    const groups = new Map<string, TrendVideo[]>();
+    for (const item of crawledVideos) {
+      const accountKey = item.aiAnalysis?.sourceAccount;
+      if (!accountKey) continue;
+      groups.set(accountKey, [...(groups.get(accountKey) || []), item]);
+    }
+    const accountMedians = Array.from(groups.values())
+      .map(items => median(items.map(item => reliablePublicViews(item.views)).filter(value => value > 0)))
+      .filter(value => value > 0);
+    const recommendations = new Map<string, AccountSpecialRecommendation>();
+    for (const items of groups.values()) {
+      for (const item of items) {
+        const recommendation = specialRecommendationForVideo(item, items, accountMedians);
+        if (recommendation) recommendations.set(item.id, recommendation);
+      }
+    }
+    return recommendations;
+  }, [crawledVideos]);
   const visibleVideos = allVideos.filter(v =>
     ACTIVE_PLATFORMS.includes(v.platform)
     && isDisplayableForFormat(v, contentFormat)
@@ -2431,17 +2769,22 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
     const q = search.trim().toLowerCase();
     return visibleVideos
       .filter(v =>
-        (lastCrawlIds.size === 0 || lastCrawlIds.has(v.id)) &&
+        (v.id.startsWith('material-') || lastCrawlIds.size === 0 || lastCrawlIds.has(v.id)) &&
         (platform === 'all' || v.platform === platform) &&
         (!q || v.title.toLowerCase().includes(q) || v.tags.some(t => t.toLowerCase().includes(q)))
       )
       .sort((a, b) => {
+        const pinnedRank = Number(b.id.startsWith('material-')) - Number(a.id.startsWith('material-'));
+        if (pinnedRank) return pinnedRank;
+        if (a.id.startsWith('material-') && b.id.startsWith('material-')) {
+          return pinnedMaterialVideos.findIndex(item => item.id === a.id) - pinnedMaterialVideos.findIndex(item => item.id === b.id);
+        }
         if (sortMode === 'crawlTime') {
           return timeValue(b.crawledAt) - timeValue(a.crawledAt) || heatValue(b.views) - heatValue(a.views);
         }
         return heatValue(b.views) - heatValue(a.views) || timeValue(b.crawledAt) - timeValue(a.crawledAt);
       });
-  }, [visibleVideos, lastCrawlVideoIds, platform, search, sortMode]);
+  }, [visibleVideos, lastCrawlVideoIds, platform, search, sortMode, pinnedMaterialVideos]);
 
   const recentThreeDayUploads = visibleVideos.filter(v => {
     const t = v.crawledAt ? new Date(v.crawledAt).getTime() : 0;
@@ -2449,6 +2792,26 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   }).length;
 
   const shootingNeeds = useMemo(() => buildShootingNeeds(visibleVideos, localMaterials), [visibleVideos, localMaterials]);
+  const materialFunctionOptions = useMemo(() => {
+    const values = new Set<string>();
+    localMaterials.forEach(material => String(material.shotFunction || '').split(',').map(item => item.trim()).filter(Boolean).forEach(item => values.add(item)));
+    return [...values].sort((a, b) => (MATERIAL_FUNCTION_LABELS[a] || a).localeCompare(MATERIAL_FUNCTION_LABELS[b] || b, 'zh-CN'));
+  }, [localMaterials]);
+  const filteredMaterials = useMemo(() => {
+    const q = materialSearch.trim().toLowerCase();
+    return localMaterials.filter(material => {
+      const functions = String(material.shotFunction || '').split(',').map(item => item.trim());
+      const searchable = [material.name, material.folder, material.industry, material.shotFunction, material.applicability, material.tags].filter(Boolean).join(' ').toLowerCase();
+      const orientationMatches = materialOrientation === 'all'
+        || (materialOrientation === 'vertical' && /竖屏|vertical/i.test(String(material.tags || '')))
+        || (materialOrientation === 'horizontal' && /横屏|horizontal/i.test(String(material.tags || '')));
+      return (!q || searchable.includes(q))
+        && (materialIndustry === 'all' || material.industry === materialIndustry)
+        && (materialFunction === 'all' || functions.includes(materialFunction))
+        && (materialApplicability === 'all' || material.applicability === materialApplicability)
+        && orientationMatches;
+    });
+  }, [localMaterials, materialSearch, materialIndustry, materialFunction, materialApplicability, materialOrientation]);
 
   const handleUploadMaterials = async (files: FileList | null) => {
     if (!files?.length) return;
@@ -2799,6 +3162,16 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
                     <p className="text-sm font-semibold text-text-primary">暂无真实视频数据</p>
                     <p className="text-xs text-text-muted mt-1">请通过「定时任务」采集公开视频，或从对标账号导入真实内容。</p>
                   </div>
+                  {localMaterials.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setInnerView('library')}
+                      className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-bold text-white"
+                    >
+                      <Film size={15} />
+                      查看 {localMaterials.length} 条素材
+                    </button>
+                  )}
                 </div>
               ) : viewMode === 'grid' ? (
                 // grid 而非 columns 瀑布流：columns 是竖向灌列，横向阅读顺序会打乱排序
@@ -2862,7 +3235,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
               <div className="flex items-center justify-between gap-4 rounded-2xl border border-border bg-surface p-5">
                 <div>
                   <h3 className="text-base font-bold text-text-primary">社媒素材库</h3>
-                  <p className="mt-1 text-sm text-text-muted">本地拍摄、Seedance 2.0 生成、爆款收藏的素材统一保存在这里。</p>
+                  <p className="mt-1 text-sm text-text-muted">本地拍摄、Seedance 2.0 生成、Gemini 生成、官方爆款导入的素材统一保存在这里。</p>
                 </div>
                 <button
                   type="button"
@@ -2873,6 +3246,46 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
                   {uploadingMaterial ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
                   上传本地素材
                 </button>
+              </div>
+
+              <div className="space-y-3 rounded-2xl border border-border bg-surface p-4 shadow-sm">
+                <div className="flex items-center gap-2.5">
+                  <div className="relative min-w-0 flex-1">
+                    <Search size={14} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-text-muted" />
+                    <input
+                      type="text"
+                      value={materialSearch}
+                      onChange={e => setMaterialSearch(e.target.value)}
+                      placeholder="搜索素材名称、行业、场景或标签..."
+                      className="h-11 w-full rounded-xl border border-border bg-surface pl-10 pr-4 text-sm text-text-primary outline-none transition-colors placeholder:text-text-muted focus:border-accent"
+                    />
+                  </div>
+                  <span className="shrink-0 text-xs font-semibold text-text-muted">{filteredMaterials.length}/{localMaterials.length} 条素材</span>
+                  {(materialSearch || materialIndustry !== 'all' || materialFunction !== 'all' || materialApplicability !== 'all' || materialOrientation !== 'all') && (
+                    <button type="button" onClick={() => { setMaterialSearch(''); setMaterialIndustry('all'); setMaterialFunction('all'); setMaterialApplicability('all'); setMaterialOrientation('all'); }}
+                      className="h-11 shrink-0 rounded-xl border border-border px-3 text-xs font-bold text-text-secondary transition-colors hover:border-accent hover:text-accent">
+                      清空筛选
+                    </button>
+                  )}
+                </div>
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+                  {[
+                    { label: '所属行业', value: materialIndustry, onChange: (value: string) => setMaterialIndustry(value as MaterialIndustryFilter), options: Object.entries(MATERIAL_INDUSTRY_LABELS) },
+                    { label: '镜头功能', value: materialFunction, onChange: setMaterialFunction, options: [['all', MATERIAL_FUNCTION_LABELS.all], ...materialFunctionOptions.map(value => [value, MATERIAL_FUNCTION_LABELS[value] || value])] },
+                    { label: '适用范围', value: materialApplicability, onChange: (value: string) => setMaterialApplicability(value as MaterialApplicabilityFilter), options: Object.entries(MATERIAL_APPLICABILITY_LABELS) },
+                    { label: '画面方向', value: materialOrientation, onChange: (value: string) => setMaterialOrientation(value as MaterialOrientationFilter), options: [['all', '全部方向'], ['vertical', '竖屏 9:16'], ['horizontal', '横屏 16:9']] },
+                  ].map(filter => (
+                    <div key={filter.label} className="relative h-14 rounded-2xl border border-border bg-surface transition-colors hover:border-border-bright focus-within:border-accent">
+                      <Film size={15} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-text-muted" />
+                      <span className="pointer-events-none absolute left-11 top-2 text-[11px] font-semibold text-text-muted">{filter.label}</span>
+                      <select value={filter.value} onChange={e => filter.onChange(e.target.value)} aria-label={filter.label}
+                        className="h-full w-full cursor-pointer appearance-none rounded-2xl bg-transparent pl-11 pr-9 pt-4 text-sm font-black text-text-primary outline-none">
+                        {filter.options.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+                      </select>
+                      <ChevronDown size={15} className="pointer-events-none absolute right-3.5 top-1/2 -translate-y-1/2 text-text-muted" />
+                    </div>
+                  ))}
+                </div>
               </div>
 
               <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
@@ -2886,11 +3299,31 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
                     <p className="text-sm font-bold text-text-primary">还没有本地社媒素材</p>
                     <p className="mt-1 text-xs text-text-muted">拍摄完成后上传，或从待拍摄素材池用 Seedance 2.0 生成。</p>
                   </div>
-                ) : localMaterials.map(material => (
+                ) : filteredMaterials.length === 0 ? (
+                  <div className="col-span-full rounded-2xl border border-dashed border-border bg-surface px-6 py-16 text-center">
+                    <Search size={30} className="mx-auto mb-3 text-text-muted opacity-50" />
+                    <p className="text-sm font-bold text-text-primary">没有符合当前标签的素材</p>
+                    <button type="button" onClick={() => { setMaterialSearch(''); setMaterialIndustry('all'); setMaterialFunction('all'); setMaterialApplicability('all'); setMaterialOrientation('all'); }} className="mt-2 text-xs font-bold text-accent">清空筛选条件</button>
+                  </div>
+                ) : filteredMaterials.map(material => (
                   <article key={material.id} className="overflow-hidden rounded-2xl border border-border bg-surface">
                     <div className="relative aspect-[9/16] bg-surface-2">
                       {material.type === 'video' ? (
-                        <video src={`${material.url}#t=0.1`} poster={material.poster} muted playsInline preload="metadata" className="h-full w-full object-cover" />
+                        <>
+                          {material.poster
+                            ? <img src={material.poster} alt={material.name} className="h-full w-full object-cover" loading="lazy" />
+                            : <video src={`${material.url}#t=0.1`} muted playsInline preload="metadata" className="h-full w-full object-cover" />}
+                          <button
+                            type="button"
+                            aria-label={`播放 ${material.name}`}
+                            onClick={() => setPreviewMaterial(material)}
+                            className="absolute inset-0 flex items-center justify-center bg-black/0 transition hover:bg-black/20 focus:bg-black/20"
+                          >
+                            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/65 text-white shadow-lg">
+                              <Play size={19} fill="currentColor" />
+                            </span>
+                          </button>
+                        </>
                       ) : material.poster || material.url ? (
                         <img src={material.poster || material.url} alt={material.name} className="h-full w-full object-cover" />
                       ) : (
@@ -2901,9 +3334,50 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
                     <div className="p-3">
                       <p className="truncate text-sm font-bold text-text-primary">{material.name}</p>
                       <p className="mt-1 text-xs text-text-muted">{material.folder} · {material.size || `${material.duration}s`}</p>
+                      <div className="mt-2 flex flex-wrap gap-1">
+                        {[
+                          material.industry ? MATERIAL_INDUSTRY_LABELS[material.industry] || material.industry : '',
+                          material.applicability ? MATERIAL_APPLICABILITY_LABELS[material.applicability] || material.applicability : '',
+                          ...String(material.shotFunction || '').split(',').slice(0, 2).map(value => MATERIAL_FUNCTION_LABELS[value] || value),
+                        ].filter(Boolean).map(label => <span key={label} className="rounded-md bg-accent-glow px-1.5 py-0.5 text-[10px] font-semibold text-accent">{label}</span>)}
+                      </div>
                     </div>
                   </article>
                 ))}
+              </div>
+            </div>
+          )}
+
+          {previewMaterial?.type === 'video' && previewMaterial.url && (
+            <div
+              className="fixed inset-0 z-[90] flex items-center justify-center bg-black/75 p-6"
+              role="dialog"
+              aria-modal="true"
+              aria-label="素材视频预览"
+              onClick={() => setPreviewMaterial(null)}
+            >
+              <div className="w-full max-w-4xl overflow-hidden rounded-2xl bg-black shadow-2xl" onClick={event => event.stopPropagation()}>
+                <div className="flex items-center justify-between gap-4 bg-surface px-4 py-3">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-bold text-text-primary">{previewMaterial.name}</p>
+                    <p className="text-[11px] text-text-muted">{previewMaterial.folder} · {previewMaterial.size || `${previewMaterial.duration}s`}</p>
+                  </div>
+                  <button type="button" aria-label="关闭视频预览" onClick={() => setPreviewMaterial(null)} className="rounded-lg p-2 text-text-muted hover:bg-surface-2 hover:text-text-primary">
+                    <X size={18} />
+                  </button>
+                </div>
+                <video
+                  key={previewMaterial.id}
+                  src={previewMaterial.url}
+                  poster={previewMaterial.poster}
+                  controls
+                  autoPlay
+                  playsInline
+                  preload="metadata"
+                  className="max-h-[75vh] w-full bg-black object-contain"
+                >
+                  当前浏览器不支持视频播放。
+                </video>
               </div>
             </div>
           )}
@@ -2961,7 +3435,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
                             className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-xs font-bold text-white disabled:opacity-60"
                           >
                             {generatingNeedId === need.id ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                            Seedance 2.0 生成素材
+                            AI生成素材
                           </button>
                         </div>
                       </div>
@@ -2985,6 +3459,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
             onRetry={() => void retryVideoPipeline(selectedVideo)}
             onFavorite={() => void favoriteMaterial(selectedVideo)}
             favoriting={favoritingMaterialIds.includes(selectedVideo.id)}
+            specialRecommendation={accountRecommendationByVideoId.get(selectedVideo.id)}
             onNavigate={onNavigate}
             onEnterWorkflow={onEnterWorkflow}
           />

@@ -12,6 +12,24 @@
  */
 import { getPbAdminToken, getPbUrl } from './pb.js';
 
+/** Create a short-lived native media URL so browsers can use HTTP Range requests. */
+export async function createFilePlaybackUrl(
+  collection: string,
+  recordId: string,
+  filename: string,
+): Promise<string | null> {
+  const token = await getPbAdminToken();
+  if (!token) return null;
+  const response = await fetch(`${getPbUrl()}/api/files/token`, {
+    method: 'POST',
+    headers: { Authorization: token },
+  });
+  if (!response.ok) return null;
+  const fileToken = ((await response.json()) as { token?: string }).token ?? '';
+  if (!fileToken) return null;
+  return `${getPbUrl()}/api/files/${encodeURIComponent(collection)}/${encodeURIComponent(recordId)}/${encodeURIComponent(filename)}?token=${encodeURIComponent(fileToken)}`;
+}
+
 /** Upload a blob into `record[field]`; returns the stored filename (or null). */
 export async function attachFile(
   collection: string,

@@ -201,3 +201,33 @@ export async function ensureDeliveryCollections(): Promise<void> {
   await ensureCollection('tenant_orders', TENANT_ORDER_FIELDS);
   await ensureCollection('tenant_support_settings', TENANT_SUPPORT_SETTINGS_FIELDS);
 }
+
+export async function ensureTrendVideoAnalysisCapacity(): Promise<void> {
+  const res = await adminFetch('/api/collections/trend_videos');
+  if (!res.ok) throw new Error(`读取集合 trend_videos 失败 (${res.status})`);
+  const collection = await res.json() as {
+    fields?: Array<Record<string, unknown> & { name?: string; max?: number }>;
+    schema?: Array<Record<string, unknown> & { name?: string; options?: Record<string, unknown> }>;
+  };
+  const fields = collection.fields;
+  if (fields) {
+    const analysis = fields.find(field => field.name === 'aiAnalysis');
+    if (!analysis || Number(analysis.max || 0) === 0) return;
+    const patch = await adminFetch('/api/collections/trend_videos', {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ fields: fields.map(field => field.name === 'aiAnalysis' ? { ...field, max: 0 } : field) }),
+    });
+    if (!patch.ok) throw new Error(`扩容 trend_videos.aiAnalysis 失败 (${patch.status})`);
+    console.log('[pb-init] removed trend_videos.aiAnalysis length limit');
+    return;
+  }
+  const schema = collection.schema ?? [];
+  const analysis = schema.find(field => field.name === 'aiAnalysis');
+  if (!analysis || Number(analysis.options?.max || 0) === 0) return;
+  const patch = await adminFetch('/api/collections/trend_videos', {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ schema: schema.map(field => field.name === 'aiAnalysis' ? { ...field, options: { ...(field.options ?? {}), max: 0 } } : field) }),
+  });
+  if (!patch.ok) throw new Error(`扩容 trend_videos.aiAnalysis 失败 (${patch.status})`);
+  console.log('[pb-init] removed trend_videos.aiAnalysis length limit');
+}

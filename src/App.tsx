@@ -17,6 +17,7 @@ import ScheduledPage from './components/ScheduledPage';
 import AdminDashboard from './components/AdminDashboard';
 import AdminDeliveryPage from './components/AdminDeliveryPage';
 import AssistLinkPage from './components/AssistLinkPage';
+import LegalPages from './components/LegalPages';
 
 export type Page =
   | 'strategy'
@@ -60,6 +61,11 @@ export type AgentAction = (agent: AgentType, task: string) => void;
 const AGENT_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention'];
 const ALL_PAGES: Page[] = ['strategy', 'traffic', 'conversion', 'retention', 'orders', 'enterprise', 'plugins', 'scheduled', 'admin', 'adminDelivery', 'channels', 'youtube'];
 const BUSINESS_DIAGNOSIS_SEEN_KEY = 'ow_business_diagnosis_seen_scope_v3';
+const isAdminSession = (session: AuthSession | null) => Boolean(session && !session.supportAccess && (
+  session.user.email === 'lingshu-admin@local.test' ||
+  session.tenant?.subscriptionPlan === 'admin' ||
+  session.subscription?.plan === 'admin'
+));
 const firstUserText = (msgs?: Message[]) => (msgs?.find(m => m.role === 'user')?.content ?? '新会话').slice(0, 24);
 const customerUnifiedAgent = (agent: AgentType): AgentType => (agent === 'retention' ? 'conversion' : agent);
 const loadConvs = (): Conversation[] => {
@@ -69,7 +75,8 @@ const loadPage = (): Page => {
   try {
     if (window.location.pathname === '/admin/delivery') return 'adminDelivery';
     const saved = localStorage.getItem('ow_page') as Page | null;
-    if (saved && !ALL_PAGES.includes(saved)) localStorage.removeItem('ow_page');
+    if (saved && ALL_PAGES.includes(saved)) return saved;
+    if (saved) localStorage.removeItem('ow_page');
     return 'strategy';
   } catch { return 'strategy'; }
 };
@@ -150,7 +157,10 @@ class PageErrorBoundary extends Component<
 }
 
 export default function App() {
-  if (window.location.pathname.startsWith('/assist/')) return <AssistLinkPage />;
+  const publicPath = window.location.pathname.replace(/\/+$/, '') || '/';
+  if (publicPath.startsWith('/assist/')) return <AssistLinkPage />;
+  if (publicPath === '/privacy') return <LegalPages kind="privacy" />;
+  if (publicPath === '/data-deletion') return <LegalPages kind="data-deletion" />;
 
   const isRegistrationEntry = window.location.pathname === '/register' &&
     Boolean(new URLSearchParams(window.location.search).get('invite')?.trim());
@@ -229,6 +239,9 @@ export default function App() {
   useEffect(() => {
     try { localStorage.setItem('ow_page', page); } catch { /* ignore */ }
   }, [page]);
+  useEffect(() => {
+    if (session && (page === 'admin' || page === 'adminDelivery') && !isAdminSession(session)) setPage('strategy');
+  }, [page, session]);
 
   // 每次对话推进都记录/更新会话历史
   const enterConversation = (ctx: ConversationContext) => {

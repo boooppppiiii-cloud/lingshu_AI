@@ -9,12 +9,13 @@ import { spawn } from 'node:child_process';
 import ffmpegStatic from 'ffmpeg-static';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 import { store } from '../storage/index.js';
-import { attachFile, fetchFile } from '../storage/files.js';
+import { attachFile, createFilePlaybackUrl, fetchFile } from '../storage/files.js';
 import { analyzeVideo, analyzeYouTubeUrl } from '../agents/gemini.js';
-import { analyzeImagePostWithQwen, analyzeVideoFramesWithQwen } from '../agents/qwen.js';
+import { analyzeImagePostWithQwen, analyzeVideoFramesWithQwen, transcribeAudioWithQwen } from '../agents/qwen.js';
 import type { Platform, VideoAiAnalysis, VideoStatus } from '../types/index.js';
 import { isDemoMode } from '../lib/demo.js';
 import { recordVideoAdminAlert, updateVideoAdminAlertByRecordId } from '../lib/videoAdminAlerts.js';
+import { requireAdminUser } from '../lib/demoAccounts.js';
 
 export const videosRouter = Router();
 videosRouter.use(requireAuth);
@@ -33,6 +34,7 @@ let legacyFakePurgePromise: Promise<void> | null = null;
 let activeDownloadJobs = 0;
 const MAX_DOWNLOAD_JOBS = Number(process.env.VIDEO_DOWNLOAD_CONCURRENCY || 3);
 const pendingVisibleBackfillJobs = new Set<string>();
+const pocketBaseBackfillFailures = new Map<string, number>();
 
 interface CrawledVideo {
   platform: Platform;
@@ -564,6 +566,7 @@ export interface CrawlVideosInput {
   mode?: 'keyword' | 'account';
   accountUrl?: string;
   accountName?: string;
+  cloudFallback?: boolean;
 }
 
 export interface CrawlVideosResult {
@@ -814,7 +817,8 @@ export async function crawlVideosForTenant(input: CrawlVideosInput): Promise<Cra
   try {
     const safeLimit = Math.min(120, Math.max(target * 5, target));
     if (accountMode) {
-      items = await crawlAccountHomepage(platform, accountUrl, Math.max(target, Math.min(safeLimit, 30)), dateFrom, dateTo);
+      items = await crawlAccountHomepage(platform, accountUrl, Math.max(target, Math.min(safeLimit, 30)), dateFrom, dateTo, input.cloudFallback === true);
+      if (items.some(item => item.source === 'apify')) crawlerSource = `apify-${platform}-account`;
     } else if (platform === 'youtube') {
       items = await crawlYouTubeSearch(keyword, safeLimit, dateFrom, dateTo);
     } else if (platform === 'facebook') {
@@ -1225,21 +1229,22 @@ videosRouter.post('/ingest', async (req, res) => {
   if (videoBase64) {
     const buf = Buffer.from(videoBase64.replace(/^data:[^,]+,/, ''), 'base64');
     const ext = (mimeType ?? 'video/mp4').split('/')[1] ?? 'mp4';
+    const previewBuf = await compressVideoBufferForPocketBase(buf, ext);
     filename = (await attachFile(COL, record.id, 'videoFile', {
-      name: `video.${ext}`,
-      buf,
-      contentType: mimeType ?? 'video/mp4',
+      name: 'video-preview-480.mp4',
+      buf: previewBuf,
+      contentType: 'video/mp4',
     })) ?? '';
     if (!filename) {
       await store.update(COL, record.id, { status: 'failed' });
       res.status(500).json({ error: 'Video upload failed' });
       return;
     }
-    await store.update(COL, record.id, { videoFileId: filename });
+    await store.update(COL, record.id, { videoFileId: filename, aiAnalysis: JSON.stringify({ videoStorage: 'pocketbase' }) });
   }
 
   // Trigger analysis async (fire and forget)
-  void triggerVideoAnalysis(record.id, filename || undefined, mimeType, userId);
+  void triggerVideoAnalysis(record.id, filename || undefined, filename ? 'video/mp4' : mimeType, userId);
 
   res.status(201).json({ id: record.id, status: 'pending' });
 });
@@ -1409,6 +1414,58 @@ videosRouter.get('/:id', async (req, res) => {
   res.json(publicVideoRecord(record));
 });
 
+videosRouter.get('/:id/media', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const record = await store.getById(COL, req.params.id);
+  if (!record) { res.status(404).json({ error: 'Not found' }); return; }
+  if (record.tenantId !== tenantId && !await requireAdminUser(req)) { res.status(404).json({ error: 'Not found' }); return; }
+  const filename = String(record.videoFileId || '');
+  if (!filename) { res.status(404).json({ error: 'Video not stored' }); return; }
+  const file = await fetchFile(COL, req.params.id, filename);
+  if (!file) { res.status(404).json({ error: 'PocketBase video not found' }); return; }
+  const range = req.headers.range;
+  res.setHeader('Accept-Ranges', 'bytes'); res.setHeader('Content-Type', file.contentType || 'video/mp4'); res.setHeader('Cache-Control', 'private, max-age=3600');
+  if (range) {
+    const match = range.match(/bytes=(\d*)-(\d*)/); const start = Math.max(0, Number(match?.[1] || 0)); const end = Math.min(file.buf.length - 1, Number(match?.[2] || file.buf.length - 1));
+    if (start > end) { res.status(416).end(); return; }
+    res.status(206); res.setHeader('Content-Range', `bytes ${start}-${end}/${file.buf.length}`); res.setHeader('Content-Length', end - start + 1); res.end(file.buf.subarray(start, end + 1)); return;
+  }
+  res.setHeader('Content-Length', file.buf.length); res.end(file.buf);
+});
+
+videosRouter.get('/:id/media-url', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const record = await store.getById(COL, req.params.id);
+  if (!record) { res.status(404).json({ error: 'Not found' }); return; }
+  if (record.tenantId !== tenantId && !await requireAdminUser(req)) { res.status(404).json({ error: 'Not found' }); return; }
+  const filename = String(record.videoFileId || '');
+  if (!filename) { res.status(404).json({ error: 'Video not stored' }); return; }
+  const url = await createFilePlaybackUrl(COL, req.params.id, filename);
+  if (!url) { res.status(502).json({ error: 'Unable to create playback URL' }); return; }
+  res.setHeader('Cache-Control', 'private, no-store');
+  res.json({ url });
+});
+
+videosRouter.patch('/:id/analysis-corrections', async (req, res) => {
+  const { tenantId, userId } = res.locals as AuthLocals;
+  const record = await store.getById(COL, req.params.id);
+  if (!record || record.tenantId !== tenantId) { res.status(404).json({ error: 'Not found' }); return; }
+  const details = Array.isArray(req.body?.scriptDetails15s) ? req.body.scriptDetails15s.slice(0, 60) : null;
+  const summary = req.body?.scriptSummary15s && typeof req.body.scriptSummary15s === 'object' ? req.body.scriptSummary15s : null;
+  if (!details) { res.status(400).json({ error: 'scriptDetails15s required' }); return; }
+  const previous = parseJsonRecord<Record<string, any>>(record.aiAnalysis, {});
+  const gemini = previous.gemini && typeof previous.gemini === 'object' ? previous.gemini : {};
+  const correctedAt = new Date().toISOString();
+  const next = {
+    ...previous,
+    originalGemini: previous.originalGemini || gemini,
+    gemini: { ...gemini, ...(summary ? { scriptSummary15s: summary } : {}), scriptDetails15s: details },
+    correction: { correctedAt, correctedBy: userId, confirmed: Boolean(req.body?.confirmed), version: Number(previous.correction?.version || 0) + 1 },
+  };
+  await store.update(COL, req.params.id, { aiAnalysis: JSON.stringify(next) });
+  res.json({ ok: true, correctedAt, version: next.correction.version, analysis: next.gemini });
+});
+
 // ─── PATCH /videos/:id/reanalyze ─────────────────────────────────────────────
 videosRouter.patch('/:id/reanalyze', async (req, res) => {
   const { tenantId, userId } = res.locals as AuthLocals;
@@ -1575,10 +1632,11 @@ export async function attachManualVideoUploadAndQueue(input: {
   if (buf.length > MANUAL_UPLOAD_MAX_BYTES) throw new Error('视频压缩后仍超过 10MB，请换更短的视频或降低清晰度后再上传。');
 
   const ext = safeVideoExtension(input.filename, mimeType);
+  const previewBuf = await compressVideoBufferForPocketBase(buf, ext);
   const storedFilename = await attachFile(COL, input.recordId, 'videoFile', {
-    name: `manual-${Date.now()}-${randomUUID()}.${ext}`,
-    buf,
-    contentType: mimeType,
+    name: `manual-preview-${Date.now()}-${randomUUID()}.mp4`,
+    buf: previewBuf,
+    contentType: 'video/mp4',
   });
   if (!storedFilename) throw new Error('Video upload failed');
 
@@ -1588,6 +1646,7 @@ export async function attachManualVideoUploadAndQueue(input: {
     status: 'pending' as VideoStatus,
     aiAnalysis: JSON.stringify({
       ...previous,
+      videoStorage: 'pocketbase',
       manualVideoUploadedAt: new Date().toISOString(),
       manualVideoUploadedBy: input.uploadedBy,
       manualVideoUploadStatus: 'queued',
@@ -1736,6 +1795,11 @@ function isExpiredSignedThumbnail(url: string): boolean {
   return exp !== null && exp < Date.now() + 60_000;
 }
 
+function isMissingLocalThumbnail(url: string): boolean {
+  if (!url.startsWith('/media/')) return false;
+  return !fs.existsSync(path.join(MEDIA_DIR, path.basename(url)));
+}
+
 async function cacheThumbnailLocally(recordId: string, url: string): Promise<string | null> {
   try {
     fs.mkdirSync(MEDIA_DIR, { recursive: true });
@@ -1759,25 +1823,29 @@ async function persistThumbnailIfExpiring(recordId: string, url: string): Promis
   if (local) await store.update(COL, recordId, { thumbnailUrl: local });
 }
 
-async function backfillMissingCrawledMedia(records: unknown[]): Promise<void> {
-  const candidates = records
-    .map(raw => raw as Record<string, unknown>)
+export async function repairMissingCrawledThumbnails(records: unknown[], limit = 5): Promise<number> {
+  const normalizedRecords = records.map(raw => raw as Record<string, unknown>);
+  const candidates = normalizedRecords
     .filter(record => ['youtube', 'tiktok', 'facebook', 'instagram'].includes(String(record.platform || '')))
     .filter(record => /^https?:\/\//i.test(String(record.sourceUrl || '')))
     .filter(record => {
       const thumb = normalizeThumbnailUrl(String(record.thumbnailUrl || ''));
       return !thumb
+        || isMissingLocalThumbnail(thumb)
         || isSignedExpiringThumbnail(thumb)
         || canonicalSourceUrl(record.platform as Platform, String(record.sourceUrl || ''), '') !== String(record.sourceUrl || '');
     })
-    .slice(0, 5);
+    .slice(0, Math.max(1, limit));
 
+  let repaired = 0;
   for (const record of candidates) {
     try {
       const platform = record.platform as Platform;
       const existingSourceUrl = String(record.sourceUrl || '');
       const canonicalUrl = canonicalSourceUrl(platform, existingSourceUrl, '');
-      let thumbnailUrl = thumbnailForPlatform(platform, canonicalUrl, String(record.thumbnailUrl || ''));
+      const existingThumbnail = normalizeThumbnailUrl(String(record.thumbnailUrl || ''));
+      const usableExistingThumbnail = isMissingLocalThumbnail(existingThumbnail) ? '' : existingThumbnail;
+      let thumbnailUrl = thumbnailForPlatform(platform, canonicalUrl, usableExistingThumbnail);
       let sourceUrl = canonicalUrl;
       if (!thumbnailUrl || isExpiredSignedThumbnail(thumbnailUrl)) {
         const meta = await crawlYtDlpMetadata(platform, sourceUrl, String(record.title || platform));
@@ -1788,13 +1856,75 @@ async function backfillMissingCrawledMedia(records: unknown[]): Promise<void> {
         const local = await cacheThumbnailLocally(String(record.id), thumbnailUrl);
         if (local) thumbnailUrl = local;
       }
-      if (sourceUrl !== existingSourceUrl || thumbnailUrl !== String(record.thumbnailUrl || '')) {
+      if (thumbnailUrl && (sourceUrl !== existingSourceUrl || thumbnailUrl !== String(record.thumbnailUrl || ''))) {
         await store.update(COL, String(record.id), { sourceUrl, thumbnailUrl });
+        repaired += 1;
       }
     } catch (e) {
-      console.warn('[videos] media backfill skipped:', e instanceof Error ? e.message : e);
+      console.warn('[videos] thumbnail repair skipped:', e instanceof Error ? e.message : e);
     }
   }
+  return repaired;
+}
+
+export async function backfillMissingCrawledMedia(records: unknown[]): Promise<void> {
+  const normalizedRecords = records.map(raw => raw as Record<string, unknown>);
+  for (const record of normalizedRecords) {
+    const analysis = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
+    if (record.videoFileId && analysis.videoStorage !== 'pocketbase') {
+      await store.update(COL, String(record.id), {
+        aiAnalysis: JSON.stringify({ ...analysis, videoStorage: 'pocketbase' }),
+      });
+      record.aiAnalysis = JSON.stringify({ ...analysis, videoStorage: 'pocketbase' });
+    }
+  }
+  const storageCandidates = normalizedRecords.filter(record => {
+    const analysis = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
+    const recordId = String(record.id || '');
+    const retryAfter = pocketBaseBackfillFailures.get(recordId) || 0;
+    return !record.videoFileId
+      && analysis.videoStorage !== 'pocketbase'
+      && /^https?:\/\//i.test(String(record.sourceUrl || ''))
+      && Date.now() >= retryAfter
+      && !['downloading', 'queued', 'failed', 'download_failed', 'unavailable', 'metadata_only'].includes(String(analysis.downloadStatus || ''));
+  }).slice(0, 3);
+  for (const record of storageCandidates) {
+    const recordId = String(record.id || '');
+    void downloadMaterialJob({ record, sourceUrl: String(record.sourceUrl), title: String(record.title || '爬取视频'), platform: record.platform as Platform, duration: Number(record.duration || 0) })
+      .then(() => pocketBaseBackfillFailures.delete(recordId))
+      .catch(error => {
+        // Failed public downloads should not be hammered every minute. Manual retry remains available.
+        pocketBaseBackfillFailures.set(recordId, Date.now() + 6 * 60 * 60 * 1000);
+        console.warn('[videos] PocketBase video backfill failed:', error instanceof Error ? error.message : error);
+      });
+  }
+  await repairMissingCrawledThumbnails(normalizedRecords, 5);
+}
+
+let pocketBaseBackfillTimer: NodeJS.Timeout | null = null;
+let pocketBaseBackfillRunning = false;
+export function initPocketBaseVideoBackfill(): void {
+  if (pocketBaseBackfillTimer || process.env.PB_VIDEO_BACKFILL_ENABLED === 'false') return;
+  const run = async () => {
+    if (pocketBaseBackfillRunning) return;
+    pocketBaseBackfillRunning = true;
+    try {
+      const first = await store.list<Record<string, unknown>>(COL, { sort: '-crawledAt', page: 1, perPage: 100 });
+      const records = [...first.items];
+      for (let page = 2; page <= first.totalPages; page += 1) {
+        const next = await store.list<Record<string, unknown>>(COL, { sort: '-crawledAt', page, perPage: 100 });
+        records.push(...next.items);
+      }
+      await backfillMissingCrawledMedia(records);
+    } catch (error) {
+      console.warn('[videos] scheduled PocketBase backfill failed:', error instanceof Error ? error.message : error);
+    } finally {
+      pocketBaseBackfillRunning = false;
+    }
+  };
+  void run();
+  pocketBaseBackfillTimer = setInterval(() => void run(), Math.max(30_000, Number(process.env.PB_VIDEO_BACKFILL_INTERVAL_MS || 60_000)));
+  pocketBaseBackfillTimer.unref();
 }
 
 function shouldQueueVideoAnalysis(record: Record<string, unknown>): boolean {
@@ -1874,6 +2004,28 @@ async function downloadMaterialJob(input: {
   return withDownloadSlot(() => downloadMaterialJobInner(input));
 }
 
+async function compressPocketBasePreview(sourcePath: string): Promise<string> {
+  if (!ffmpegBin) throw new Error('ffmpeg is required for PocketBase preview compression');
+  fs.mkdirSync(ANALYSIS_DIR, { recursive: true });
+  const outputPath = path.join(ANALYSIS_DIR, `pb-preview-${Date.now()}-${randomUUID()}.mp4`);
+  await execFileAsync(ffmpegBin, [
+    '-hide_banner', '-loglevel', 'error', '-i', sourcePath,
+    '-vf', "scale='if(gt(iw,ih),480,-2)':'if(gt(iw,ih),-2,480)'",
+    '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '29', '-pix_fmt', 'yuv420p',
+    '-c:a', 'aac', '-b:a', '64k', '-ac', '1', '-movflags', '+faststart', '-y', outputPath,
+  ], { timeout: 180_000 });
+  return outputPath;
+}
+
+async function compressVideoBufferForPocketBase(buf: Buffer, extension: string): Promise<Buffer> {
+  fs.mkdirSync(ANALYSIS_DIR, { recursive: true });
+  const sourcePath = path.join(ANALYSIS_DIR, `pb-source-${Date.now()}-${randomUUID()}.${extension.replace(/[^a-z0-9]/gi, '') || 'mp4'}`);
+  fs.writeFileSync(sourcePath, buf);
+  let previewPath = '';
+  try { previewPath = await compressPocketBasePreview(sourcePath); return fs.readFileSync(previewPath); }
+  finally { try { fs.unlinkSync(sourcePath); } catch { /* best effort */ } try { if (previewPath) fs.unlinkSync(previewPath); } catch { /* best effort */ } }
+}
+
 async function downloadMaterialJobInner(input: {
   record: Record<string, unknown> | null;
   sourceUrl: string;
@@ -1893,14 +2045,21 @@ async function downloadMaterialJobInner(input: {
 
     const material = await downloadVideoToMaterial(input);
     if (recordId) {
+      const localVideoPath = path.join(MEDIA_DIR, material.file);
+      if (!fs.existsSync(localVideoPath)) throw new Error('Downloaded video file missing before PocketBase upload');
+      const previewPath = await compressPocketBasePreview(localVideoPath);
+      const pocketBaseFilename = await attachFile(COL, recordId, 'videoFile', { name: `crawl-preview-${Date.now()}.mp4`, buf: fs.readFileSync(previewPath), contentType: 'video/mp4' });
+      try { fs.unlinkSync(previewPath); } catch { /* best effort */ }
+      if (!pocketBaseFilename) throw new Error('PocketBase video persistence failed');
       const analysis = parseJsonRecord(input.record?.aiAnalysis, {});
       await store.update(COL, recordId, {
-        videoFileId: material.file,
+        videoFileId: pocketBaseFilename,
         thumbnailUrl: material.poster || String(input.record?.thumbnailUrl || ''),
         aiAnalysis: JSON.stringify({
           ...analysis,
           materialId: material.id,
-          materialUrl: material.url,
+          materialUrl: `/api/overseas/videos/${recordId}/media`,
+          videoStorage: 'pocketbase',
           materialPoster: material.poster,
           downloadedAt: material.createdAt,
           downloadStatus: 'downloaded',
@@ -2483,9 +2642,11 @@ async function crawlTikTokApify(keyword: string, limit: number, dateFrom = '', d
 }
 
 function buildApifyTikTokInput(keyword: string, limit: number, dateFrom = '', dateTo = ''): Record<string, unknown> {
-  const cleanKeyword = keyword.replace(/^#/, '').trim();
+  const raw = keyword.trim();
+  const account = tiktokUsername(raw);
+  const videoId = tiktokVideoId(raw);
+  const cleanKeyword = raw.replace(/^#/, '').trim();
   const input: Record<string, unknown> = {
-    hashtags: [cleanKeyword],
     resultsPerPage: Math.min(100, Math.max(1, limit)),
     shouldDownloadVideos: false,
     shouldDownloadCovers: false,
@@ -2495,6 +2656,13 @@ function buildApifyTikTokInput(keyword: string, limit: number, dateFrom = '', da
     shouldDownloadMusicCovers: false,
     shouldDownloadMusic: false,
   };
+  if (videoId) {
+    input.postURLs = [raw];
+  } else if (account) {
+    input.profiles = [account];
+  } else {
+    input.hashtags = [cleanKeyword];
+  }
   if (hasDateRange(dateFrom, dateTo)) {
     input.oldestPostDate = dateFrom || undefined;
     input.newestPostDate = dateTo || undefined;
@@ -3173,6 +3341,13 @@ async function downloadVideoToMaterial(input: {
     '-f', 'bv*[height<=720][ext=mp4]+ba[ext=m4a]/b[height<=720][ext=mp4]/bv*[height<=720]+ba/best[height<=720]/best',
     '-o', outTpl,
   ];
+  const cleanupIncompleteDownload = () => {
+    try {
+      for (const filename of fs.readdirSync(MEDIA_DIR)) {
+        if (filename.startsWith(`${id}.`) && filename.endsWith('.part')) fs.unlinkSync(path.join(MEDIA_DIR, filename));
+      }
+    } catch { /* best effort */ }
+  };
 
   let ytDlpError: unknown = null;
   try {
@@ -3201,10 +3376,14 @@ async function downloadVideoToMaterial(input: {
     }
   }
   if (ytDlpError) {
+    cleanupIncompleteDownload();
     throw ytDlpError instanceof Error ? ytDlpError : new Error('yt-dlp failed for material download');
   }
   const downloaded = pickDownloadedVideoFile(id);
-  if (!downloaded) throw new Error('yt-dlp did not produce a video file');
+  if (!downloaded) {
+    cleanupIncompleteDownload();
+    throw new Error('yt-dlp did not produce a video file');
+  }
 
   const fullPath = path.join(MEDIA_DIR, downloaded);
   const posterFile = `${id}.poster.jpg`;
@@ -3623,7 +3802,9 @@ function cleanupTempVideo(filePath: string): void {
 }
 
 function isQwenConfigured(): boolean {
-  const key = process.env.DASHSCOPE_API_KEY?.trim() || '';
+  let fileKey = '';
+  try { fileKey = fs.readFileSync(process.env.DASHSCOPE_API_KEY_FILE || path.join(process.env.HOME || '', '.config/lingshu/dashscope.key'), 'utf8').trim(); } catch { /* optional */ }
+  const key = process.env.DASHSCOPE_API_KEY?.trim() || fileKey;
   return /^[\x21-\x7E]{20,}$/.test(key);
 }
 
@@ -3645,32 +3826,76 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
   });
 }
 
-async function extractQwenAnalysisFrames(filePath: string, maxFrames = 6): Promise<Array<{ base64: string; mimeType: string; timeLabel: string }>> {
+function parseAnalysisTimeRange(value: string): { start: number; end: number } | null {
+  const numbers = String(value || '').match(/\d+(?:\.\d+)?/g)?.map(Number) || [];
+  if (!numbers.length) return null;
+  return { start: numbers[0], end: numbers[1] ?? numbers[0] + 3 };
+}
+
+function lockAsrTimeline(analysis: VideoAiAnalysis, transcript?: { text: string; segments: Array<{ start: number; end: number; text: string }> }): VideoAiAnalysis {
+  if (!transcript?.segments.length || !analysis.scriptDetails15s?.length) return analysis;
+  return {
+    ...analysis,
+    scriptDetails15s: analysis.scriptDetails15s.map(detail => {
+      const range = parseAnalysisTimeRange(String(detail.time || detail.timestamp || ''));
+      if (!range) return detail;
+      const dialogue = transcript.segments.filter(segment => segment.start < range.end && segment.end > range.start).map(segment => segment.text.trim()).filter(Boolean).join(' ');
+      const uncertain = /品牌|款名|名称|价格|左右|眼|色号|ASR|不一致|核实|确认/i.test(String(detail.note || ''));
+      return { ...detail, dialogue, subtitle: detail.onScreenText || detail.subtitle || '', confidence: uncertain ? 0.55 : 0.82, needsReview: Boolean(detail.needsReview || uncertain) };
+    }),
+  };
+}
+
+export async function extractQwenAnalysisFrames(filePath: string, maxFrames = 30): Promise<Array<{ base64: string; mimeType: string; timeLabel: string }>> {
   if (!ffmpegBin) throw new Error('ffmpeg is not available for Qwen frame analysis');
   if (!fs.existsSync(ANALYSIS_DIR)) fs.mkdirSync(ANALYSIS_DIR, { recursive: true });
 
   const frameDir = path.join(ANALYSIS_DIR, `qwen-frames-${Date.now()}-${randomUUID()}`);
   fs.mkdirSync(frameDir, { recursive: true });
   try {
-    const pattern = path.join(frameDir, 'frame-%02d.jpg');
+    // The opening hook often contains sub-second hand/object actions. Keep every
+    // frame from the first four seconds at 3 fps; similarity de-duplication here
+    // previously erased the exact motion boundary that the director needs.
+    const densePattern = path.join(frameDir, 'dense-%02d.jpg');
     await execFileAsync(ffmpegBin, [
       '-hide_banner',
       '-loglevel', 'error',
       '-i', filePath,
-      '-vf', 'fps=1/3,scale=720:-1',
-      '-frames:v', String(maxFrames),
+      '-vf', 'trim=duration=4,fps=3,scale=720:-1',
+      '-frames:v', '12',
       '-q:v', '4',
-      pattern,
+      densePattern,
     ], { timeout: 90_000 });
-    return fs.readdirSync(frameDir)
-      .filter(file => /^frame-\d+\.jpg$/i.test(file))
+    const uniformPattern = path.join(frameDir, 'uniform-%02d.jpg');
+    await execFileAsync(ffmpegBin, [
+      '-hide_banner',
+      '-loglevel', 'error',
+      '-i', filePath,
+      '-vf', 'fps=1/4,scale=720:-1',
+      '-frames:v', '10',
+      '-q:v', '4',
+      uniformPattern,
+    ], { timeout: 90_000 });
+    const scenePattern = path.join(frameDir, 'scene-%02d.jpg');
+    let sceneTimes: number[] = [];
+    try {
+      const sceneRun = await execFileAsync(ffmpegBin, ['-hide_banner', '-loglevel', 'info', '-i', filePath, '-vf', "select='gt(scene,0.16)',showinfo,scale=720:-1", '-fps_mode', 'vfr', '-frames:v', '12', '-q:v', '4', scenePattern], { timeout: 90_000, maxBuffer: 8 * 1024 * 1024 });
+      sceneTimes = Array.from(sceneRun.stderr.matchAll(/pts_time:([0-9.]+)/g)).map(match => Number(match[1])).filter(Number.isFinite).slice(0, 12);
+    } catch { /* retain uniform frames */ }
+    const denseRows = fs.readdirSync(frameDir)
+      .filter(file => /^dense-\d+\.jpg$/i.test(file))
       .sort()
-      .slice(0, maxFrames)
-      .map((file, index) => ({
-        base64: fs.readFileSync(path.join(frameDir, file)).toString('base64'),
-        mimeType: 'image/jpeg',
-        timeLabel: `${index * 3}s`,
-      }));
+      .map((file, index) => ({ file, time: index / 3, dense: true }));
+    const supplementalRows = [
+      ...fs.readdirSync(frameDir).filter(file => /^uniform-\d+\.jpg$/i.test(file)).sort().map((file, index) => ({ file, time: index * 4, dense: false })),
+      ...fs.readdirSync(frameDir).filter(file => /^scene-\d+\.jpg$/i.test(file)).sort().map((file, index) => ({ file, time: sceneTimes[index] ?? index * 3, dense: false })),
+    ].sort((a, b) => a.time - b.time)
+      .filter(row => !denseRows.some(dense => Math.abs(dense.time - row.time) < 0.45))
+      .filter((row, index, all) => index === 0 || Math.abs(row.time - all[index - 1].time) >= 0.45);
+    const rows = [...denseRows, ...supplementalRows.slice(0, Math.max(0, maxFrames - denseRows.length))]
+      .sort((a, b) => a.time - b.time)
+      .slice(0, maxFrames);
+    return rows.map(row => ({ base64: fs.readFileSync(path.join(frameDir, row.file)).toString('base64'), mimeType: 'image/jpeg', timeLabel: `${row.time.toFixed(2)}s` }));
   } finally {
     try {
       for (const file of fs.readdirSync(frameDir)) fs.unlinkSync(path.join(frameDir, file));
@@ -3681,7 +3906,7 @@ async function extractQwenAnalysisFrames(filePath: string, maxFrames = 6): Promi
   }
 }
 
-async function analyzeDownloadedVideoWithFallback(opts: {
+export async function analyzeDownloadedVideoWithFallback(opts: {
   filePath: string;
   mimeType: string;
   title?: string;
@@ -3693,14 +3918,33 @@ async function analyzeDownloadedVideoWithFallback(opts: {
 }): Promise<{ analysis: VideoAiAnalysis; source: string }> {
   const runQwen = async () => {
     const frames = await extractQwenAnalysisFrames(opts.filePath);
-    const analysis = await analyzeVideoFramesWithQwen({
+    let transcript: Awaited<ReturnType<typeof transcribeAudioWithQwen>> | undefined;
+    const asrDir = path.join(ANALYSIS_DIR, `qwen-asr-${Date.now()}-${randomUUID()}`);
+    try {
+      if (ffmpegBin) {
+        fs.mkdirSync(asrDir, { recursive: true });
+        const pattern = path.join(asrDir, 'chunk-%03d.mp3');
+        await execFileAsync(ffmpegBin, ['-hide_banner', '-loglevel', 'error', '-i', opts.filePath, '-vn', '-ac', '1', '-ar', '16000', '-b:a', '64k', '-f', 'segment', '-segment_time', '5', '-reset_timestamps', '1', '-y', pattern], { timeout: 90_000 });
+        const chunks = fs.readdirSync(asrDir).filter(file => /^chunk-\d+\.mp3$/.test(file)).sort();
+        const segments = [];
+        for (let index = 0; index < chunks.length; index += 1) {
+          const result = await transcribeAudioWithQwen({ audio: fs.readFileSync(path.join(asrDir, chunks[index])), fileName: chunks[index] });
+          if (result.text) segments.push({ start: index * 5, end: Math.min(Number(opts.duration) || (index + 1) * 5, (index + 1) * 5), text: result.text });
+        }
+        transcript = { text: segments.map(item => item.text).join(''), segments };
+      }
+    } catch (error) { console.warn('[videos] Qwen ASR unavailable, continuing with frames:', error instanceof Error ? error.message : error); }
+    finally { try { for (const file of fs.readdirSync(asrDir)) fs.unlinkSync(path.join(asrDir, file)); fs.rmdirSync(asrDir); } catch { /* best effort */ } }
+    const qwenAnalysis = await analyzeVideoFramesWithQwen({
       frames,
       title: opts.title,
       platform: opts.platform,
       duration: opts.duration,
       views: opts.views,
       tags: opts.tags,
+      transcript,
     });
+    const analysis = lockAsrTimeline(qwenAnalysis, transcript);
     return { analysis, source: 'qwen-frame-video' };
   };
 
@@ -4396,7 +4640,7 @@ function accountListUrlCandidates(platform: Platform, url: string): string[] {
 }
 
 // 采集某个对标账号主页的最新视频列表（flat-playlist 枚举，最多 limit 条）。
-async function crawlAccountHomepage(platform: Platform, accountUrl: string, limit: number, dateFrom = '', dateTo = ''): Promise<CrawledVideo[]> {
+async function crawlAccountHomepage(platform: Platform, accountUrl: string, limit: number, dateFrom = '', dateTo = '', cloudFallback = false): Promise<CrawledVideo[]> {
   if (platform === 'instagram') {
     let instagramItems: CrawledVideo[] = [];
     if (canUseApifyInstagramCrawlFallback()) {
@@ -4417,6 +4661,14 @@ async function crawlAccountHomepage(platform: Platform, accountUrl: string, limi
   const listUrl = normalizeAccountListUrl(platform, accountUrl);
   const safeLimit = Math.max(1, limit);
   let items: CrawledVideo[];
+  if (platform === 'tiktok' && cloudFallback && canUseApifyTikTokCrawlFallback()) {
+    try {
+      const apifyItems = await crawlTikTokApify(accountUrl, safeLimit, dateFrom, dateTo);
+      if (apifyItems.length > 0) return apifyItems.slice(0, limit);
+    } catch (apifyError) {
+      console.warn('[videos] TikTok account cloud Apify crawl failed:', apifyError instanceof Error ? apifyError.message : apifyError);
+    }
+  }
   if (platform === 'facebook') {
     items = [];
     if (canUseApifyFacebookCrawlFallback()) {

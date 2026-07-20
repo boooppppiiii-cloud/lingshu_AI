@@ -62,7 +62,50 @@ async function postSeedanceVideo(body: unknown): Promise<SeedanceVideoResult> {
 export interface SelectInput { materials: { id: string; name: string; type: string; duration: number }[]; duration: number }
 
 // 字幕 cue：start/end 为相对成片起点的秒数；zh 为可选中文译文（双语字幕）
-export interface SubCue { start: number; end: number; text: string; zh?: string }
+export interface SubCue { start: number; end: number; text: string; zh?: string; words?: Array<{ text: string; start: number; end: number }> }
+export interface TtsStyleOptions {
+  preset: 'tiktok_excited' | 'authentic_review' | 'professional_b2b' | 'warm_story' | 'urgent_cta';
+  emotion: string;
+  emotionIntensity: number;
+  speed: number;
+  targetDuration: number;
+  pauseStyle: 'few' | 'natural' | 'dramatic';
+  pronunciations: Array<{ word: string; pronunciation: string }>;
+}
+export interface TtsAudioResult {
+  ok: boolean;
+  source?: string;
+  url?: string;
+  duration?: number;
+  error?: string;
+  text?: string;
+  adjusted?: boolean;
+  targetDuration?: number;
+  cues?: SubCue[];
+  alignmentSource?: 'audio_ai' | 'proportional' | 'minimax_native';
+  customVoiceStatus?: 'activated';
+}
+export interface StudioAudioCapabilities {
+  ok: boolean;
+  customVoice: {
+    upload: boolean;
+    synthesis: boolean;
+    engines: { minimax: boolean; xtts: boolean };
+    message: string;
+  };
+  minimax?: {
+    configured: boolean;
+    baseUrl: string;
+    model: string;
+    diagnosticAvailable: boolean;
+  };
+  subtitles: {
+    automatic: boolean;
+    audioTranscription: boolean;
+    wordAlignment: boolean;
+    fallback: 'proportional';
+  };
+}
 export interface SubtitleSpec {
   mode: 'off' | 'target' | 'bilingual';
   cues: SubCue[];
@@ -166,9 +209,24 @@ function localManifest(spec: RenderSpec): RenderManifest {
 export interface StudioProject {
   id: string;
   title: string;
-  status: 'draft' | 'published';
+  status: 'draft' | 'published' | 'template';
   spec: Record<string, unknown>;
   thumbSeed?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+export interface VariationBatch {
+  id: string;
+  title: string;
+  status: 'queued' | 'running' | 'review' | 'completed' | 'paused';
+  estimatedCostCny: number;
+  plan?: {
+    platform?: string; ratio?: string; contentMode?: string; mode?: string; strategy?: string;
+    duration?: number; maxItems?: number; dimensions?: Record<string, string[]>;
+    productInfo?: string; productSelectMode?: string; selectedProductIds?: string[];
+    audience?: string; sellingPoints?: string; tone?: string; language?: string; provider?: string;
+  };
+  items: { id: string; variables: Record<string, string>; status: string; qualityScore?: number; note?: string }[];
   createdAt: string;
   updatedAt: string;
 }
@@ -186,6 +244,16 @@ export interface SeedanceVideoResult {
   material?: Material;
   error?: string;
   createdAt?: string;
+}
+
+export interface StoryboardQualityResult {
+  score: number;
+  passed: boolean;
+  issues: string[];
+  strengths: string[];
+  recommendation: string;
+  checks: Record<string, number>;
+  checkedAt: string;
 }
 
 export interface FbPosterBrief {
@@ -307,7 +375,7 @@ export const studioApi = {
     duration: number;
     scriptType?: 'voiceover' | 'storyboard';
     generationMode?: 'material' | 'product' | 'clone';
-    materialInfos?: Array<{ name: string; type: string; folder: string; duration: number; role?: string; targetStart?: number; targetEnd?: number }>;
+    materialInfos?: Array<{ name: string; type: string; folder: string; duration: number; effectiveDuration?: number; role?: string; targetStart?: number; targetEnd?: number; industry?: string; shotFunction?: string; tags?: string; observations?: string[] }>;
     provider?: 'gemini' | 'qwen';
     audience?: string;
     sellingPoints?: string;
@@ -316,7 +384,7 @@ export const studioApi = {
     referenceAnalysis?: string;
     referenceHighlights?: string[];
   }, fb: string) =>
-    post<{ script: string; source?: 'ai' | 'fallback' | 'local' }>('script', b, { script: fb }),
+    post<{ script: string; source?: 'ai' | 'fallback' | 'local'; fallbackReason?: string; validationIssues?: string[] }>('script', b, { script: fb }),
 
   covers: (b: { script?: string; productInfo?: string; language: string; provider?: 'gemini' | 'qwen'; tone?: string }, fb: string[]) =>
     post<{ covers: string[] }>('covers', b, { covers: fb }),
@@ -359,12 +427,33 @@ export const studioApi = {
     post<{ selectedIds: string[]; reason: string }>('select', b, { selectedIds: fb, reason: '本地按视频优先选取' }),
 
   // 配音 TTS
-  tts: (b: { script?: string; text?: string; voice: string; language: string }) =>
-    post<{ ok: boolean; url?: string; duration?: number; error?: string }>('tts', b, { ok: false }),
-  ttsBatch: (b: { voice: string; items: { code: string; text: string; language?: string }[] }) =>
-    post<{ ok: boolean; audios: Record<string, { ok: boolean; source?: string; url?: string; duration?: number; error?: string }>; error?: string }>('tts/batch', b, { ok: false, audios: {} }),
-  uploadVoiceSample: (b: { name: string; dataBase64: string; mimeType?: string; duration?: number }) =>
-    post<{ ok: boolean; id?: string; voiceId?: string; name?: string; url?: string; duration?: number; error?: string }>('voice-samples', b, { ok: false }),
+  tts: (b: { script?: string; text?: string; voice: string; language: string; style?: Partial<TtsStyleOptions> }) =>
+    post<TtsAudioResult>('tts', b, { ok: false }),
+  ttsBatch: (b: { voice: string; items: { code: string; text: string; language?: string }[]; style?: Partial<TtsStyleOptions> }) =>
+    post<{ ok: boolean; audios: Record<string, TtsAudioResult>; error?: string }>('tts/batch', b, { ok: false, audios: {} }),
+  alignTts: (b: { text: string; url: string; duration: number }) =>
+    post<{ ok: boolean; cues: SubCue[]; source?: 'audio_ai' | 'proportional'; error?: string }>('tts/align', b, { ok: false, cues: [] }),
+  transcribeVoiceover: (b: { url: string; duration: number; language?: string; transcriptHint?: string }) =>
+    post<{ ok: boolean; text: string; cues: SubCue[]; source?: 'audio_ai' | 'proportional'; error?: string }>('tts/transcribe', b, { ok: false, text: '', cues: [] }),
+  audioCapabilities: async () => {
+    try {
+      const r = await fetch('/api/overseas/studio/tts/capabilities', { headers: authHeader() });
+      if (!r.ok) throw new Error(String(r.status));
+      return await r.json() as StudioAudioCapabilities;
+    } catch {
+      return {
+        ok: false,
+        customVoice: { upload: true, synthesis: false, engines: { minimax: false, xtts: false }, message: '暂时无法读取真人音色引擎状态。' },
+        subtitles: { automatic: true, audioTranscription: false, wordAlignment: false, fallback: 'proportional' },
+      } as StudioAudioCapabilities;
+    }
+  },
+  diagnoseMinimax: () =>
+    post<{ ok: boolean; configured: boolean; latencyMs?: number; model?: string; clonedVoices?: number; message?: string; error?: string }>(
+      'tts/minimax/diagnose', {}, { ok: false, configured: false, error: 'MiniMax 诊断请求失败' },
+    ),
+  uploadVoiceSample: (b: { name: string; dataBase64: string; mimeType?: string; duration?: number; replacesVoiceId?: string }) =>
+    post<{ ok: boolean; id?: string; voiceId?: string; name?: string; url?: string; duration?: number; synthesisReady?: boolean; engine?: 'minimax' | 'xtts'; warning?: string; error?: string }>('voice-samples', b, { ok: false }),
   uploadVoiceover: (b: { name: string; dataBase64: string; mimeType?: string; duration?: number }) =>
     post<{ ok: boolean; url?: string; duration?: number; error?: string }>('voiceover', b, { ok: false }),
 
@@ -387,8 +476,12 @@ export const studioApi = {
     duration?: number;
     resolution?: string;
     title?: string;
+    referenceImageUrl?: string;
   }) =>
     postSeedanceVideo(b),
+
+  storyboardQualityCheck: (b: { materialId: string; storyboard: string; productInfo?: string; critical?: boolean }) =>
+    post<{ ok: boolean; quality?: StoryboardQualityResult; error?: string }>('storyboard-quality-check', b, { ok: false }),
 
   // 数据看板 AI 结论
   insight: (b: { scope: string; metrics: Record<string, unknown> }) =>
@@ -458,9 +551,20 @@ export const studioApi = {
       return [];
     }
   },
-  saveProject: (b: { id?: string; title: string; status: 'draft' | 'published'; spec: Record<string, unknown>; thumbSeed?: string }) =>
+  saveProject: (b: { id?: string; title: string; status: 'draft' | 'published' | 'template'; spec: Record<string, unknown>; thumbSeed?: string }) =>
     post<{ ok: boolean; project: StudioProject }>('projects', b, { ok: false, project: null as unknown as StudioProject }),
   deleteProject: (id: string) => del(`projects/${id}`),
+  createVariationBatch: (b: { title: string; templateProjectId?: string; duration: number; maxItems: number; dimensions: Record<string, string[]>; plan?: VariationBatch['plan'] }) =>
+    post<{ ok: boolean; batch: VariationBatch }>('variation-batches', b, { ok: false, batch: null as unknown as VariationBatch }),
+  listVariationBatches: async (): Promise<VariationBatch[]> => {
+    try { const r = await fetch('/api/overseas/studio/variation-batches', { headers: authHeader() }); return r.ok ? await r.json() as VariationBatch[] : []; } catch { return []; }
+  },
+  updateVariationItem: async (batchId: string, itemId: string, body: { status: string; note?: string }) => {
+    try {
+      const r = await fetch(`/api/overseas/studio/variation-batches/${batchId}/items/${itemId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', ...authHeader() }, body: JSON.stringify(body) });
+      return await r.json() as { ok: boolean; batch?: VariationBatch };
+    } catch { return { ok: false }; }
+  },
 
   // 素材库
   listMaterials: async (): Promise<Material[]> => {
@@ -475,6 +579,16 @@ export const studioApi = {
   },
   uploadMaterial: (b: { name: string; folder?: string; type: 'video' | 'image' | 'audio'; duration?: number; dataBase64: string; mimeType?: string }) =>
     post<{ ok: boolean; material: Material }>('materials', b, { ok: false, material: null as unknown as Material }),
+  analyzeMaterialSegments: (id: string) =>
+    post<{ ok: boolean; material?: Material; segments?: MaterialSegment[]; error?: string }>(`materials/${id}/analyze-segments`, {}, { ok: false, error: '片段分析失败' }),
+  updateMaterialSegment: async (materialId: string, segmentId: string, patch: Partial<MaterialSegment>) => {
+    try {
+      const response = await fetch(`/api/overseas/studio/materials/${materialId}/segments/${segmentId}`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json', ...authHeader() }, body: JSON.stringify(patch),
+      });
+      return await response.json() as { ok: boolean; material?: Material; segment?: MaterialSegment; error?: string };
+    } catch { return { ok: false, error: '片段更新失败' }; }
+  },
   deleteMaterial: (id: string) => del(`materials/${id}`),
 
   // BGM 曲库
@@ -501,6 +615,8 @@ export interface BgmTrack {
   url: string;
   recommended?: boolean;
   builtin?: boolean;
+  scope?: 'shared' | 'tenant';
+  uploadedBy?: string;
 }
 
 // 封面标题样式（同时驱动网页预览与服务端 SVG 生成）
@@ -513,6 +629,7 @@ export interface CoverStyle {
   font: CoverFont;                      // 字体（系统字体栈，预览与 SVG 一致）
   weight?: 'regular' | 'bold' | 'heavy';// 粗细档位（缺省 bold）
   fontFamily?: string;                  // 自定义导入字体的 family（覆盖 font 字体栈）
+  artPreset?: 'clean' | 'outline' | 'highlight' | 'magazine' | 'neon' | 'sticker'; // 艺术字效果
 }
 
 export interface Material {
@@ -526,5 +643,43 @@ export interface Material {
   url: string;
   poster?: string;
   scope?: 'shared' | 'own';
+  usage?: 'editable' | 'reference_only';
+  sourceType?: string;
+  sourceUrl?: string;
+  pinned?: boolean;
+  industry?: string;
+  shotFunction?: string;
+  applicability?: string;
+  tags?: string;
+  segmentAnalysisStatus?: 'pending' | 'analyzing' | 'completed' | 'failed';
+  segmentAnalysisError?: string;
+  segments?: MaterialSegment[];
   createdAt: string;
+}
+
+export interface MaterialSegment {
+  id: string;
+  start: number;
+  end: number;
+  duration: number;
+  poster?: string;
+  subject: string[];
+  action: string;
+  productVisible: boolean;
+  productClarity: 'none' | 'low' | 'medium' | 'high';
+  shot: string;
+  angle: string;
+  composition: string;
+  camera: string;
+  environment: string;
+  quality: number;
+  ocrText: string;
+  hasPerson: boolean;
+  hasLogo: boolean;
+  logoText: string[];
+  recommendedFunctions: string[];
+  authenticity: string;
+  confidence: number;
+  needsReview: boolean;
+  manualConfirmed?: boolean;
 }

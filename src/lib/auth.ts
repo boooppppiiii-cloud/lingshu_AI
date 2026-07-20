@@ -125,6 +125,7 @@ export const authApi = {
     await fetch('/api/overseas/auth/guide-seen', { method: 'POST', headers: authHeader() }).catch(() => {});
   },
   logout: () => {
+    void fetch('/api/overseas/auth/logout', { method: 'POST', headers: authHeader() }).catch(() => {});
     clearToken();
     localStorage.removeItem(SUPPORT_ORIGINAL_TOKEN_KEY);
   },

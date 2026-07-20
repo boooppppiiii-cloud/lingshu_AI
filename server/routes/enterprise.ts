@@ -738,7 +738,11 @@ async function readTenantProfile(tenantId: string): Promise<EnterpriseProfile> {
   });
   const profile = storedProfile(result.items[0]?.profile);
   if (profile) return profile;
-  return process.env.NODE_ENV === 'production' ? normalizeProfile({} as EnterpriseProfile) : readProfile();
+  return process.env.DEMO_MODE === 'true' ? readProfile() : normalizeProfile({} as EnterpriseProfile);
+}
+
+export async function readTenantEnterpriseProfile(tenantId: string): Promise<EnterpriseProfile> {
+  return readTenantProfile(tenantId);
 }
 
 async function writeTenantProfile(tenantId: string, profile: EnterpriseProfile, userId: string): Promise<void> {
@@ -1016,10 +1020,10 @@ export function buildEnterpriseContext(profile: EnterpriseProfile): string {
   if (profile.handoffRules) {
     parts.push(`Handoff rules: keywords=${profile.handoffRules.keywords.join('/')}; missStreakToDraft=${profile.handoffRules.missStreakToDraft}; negativeSentiment=${profile.handoffRules.negativeSentiment}`);
   }
-  if (profile.brand.usp) parts.push(`核心卖点：${profile.brand.usp}`);
-  if (profile.brand.tone) parts.push(`品牌调性：${profile.brand.tone}`);
-  if (profile.brand.preferredLanguages) parts.push(`首选输出语言：${profile.brand.preferredLanguages}`);
-  if (profile.brand.taboos) parts.push(`禁忌话题：${profile.brand.taboos}`);
+  if (profile.brand?.usp) parts.push(`核心卖点：${profile.brand.usp}`);
+  if (profile.brand?.tone) parts.push(`品牌调性：${profile.brand.tone}`);
+  if (profile.brand?.preferredLanguages) parts.push(`首选输出语言：${profile.brand.preferredLanguages}`);
+  if (profile.brand?.taboos) parts.push(`禁忌话题：${profile.brand.taboos}`);
   if (profile.strategy?.currentGoal) parts.push(`当前经营目标：${profile.strategy.currentGoal}`);
   if (profile.strategy?.focusProducts) parts.push(`重点产品：${profile.strategy.focusProducts}`);
   if (profile.strategy?.focusMarkets) parts.push(`重点市场：${profile.strategy.focusMarkets}`);

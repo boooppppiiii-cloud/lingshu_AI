@@ -3,12 +3,15 @@ import { randomUUID } from 'node:crypto';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 import { store } from '../storage/index.js';
 import type { Platform } from '../types/index.js';
+import { crawlVideosForTenant } from './videos.js';
 
 export const crawlWorkerRouter = Router();
 
 const COL = 'crawl_jobs';
 const WORKER_TOKEN_HEADER = 'x-crawl-worker-token';
 const WORKER_LEASE_MS = 10 * 60 * 1000;
+let cloudFallbackTimer: NodeJS.Timeout | null = null;
+let cloudFallbackActive = false;
 
 type CrawlJobStatus = 'queued' | 'running' | 'done' | 'failed';
 type CrawlJobMode = 'keyword' | 'account';
@@ -100,6 +103,116 @@ function isLeaseExpired(job: CrawlJob): boolean {
 
 function supportedWorkerPlatform(platform: string): platform is Platform {
   return platform === 'youtube' || platform === 'tiktok';
+}
+
+function cloudFallbackEnabled(): boolean {
+  return process.env.CRAWL_WORKER_CLOUD_FALLBACK_ENABLED !== '0';
+}
+
+function cloudFallbackAfterMs(): number {
+  return Math.max(15_000, Number(process.env.CRAWL_WORKER_CLOUD_FALLBACK_AFTER_MS || 120_000));
+}
+
+function cloudFallbackPollMs(): number {
+  return Math.max(10_000, Number(process.env.CRAWL_WORKER_CLOUD_FALLBACK_POLL_MS || 30_000));
+}
+
+function shouldCloudFallback(job: CrawlJob): boolean {
+  if (!supportedWorkerPlatform(job.platform)) return false;
+  if (job.status === 'failed') return job.workerId !== 'cloud-fallback';
+  if (job.status === 'queued') {
+    const createdAt = Date.parse(job.createdAt || '');
+    return Number.isFinite(createdAt) && Date.now() - createdAt >= cloudFallbackAfterMs();
+  }
+  return job.status === 'running' && isLeaseExpired(job);
+}
+
+async function runCloudFallbackJob(job: CrawlJob): Promise<void> {
+  const started = Date.now();
+  const workerId = 'cloud-fallback';
+  const startedAt = nowIso();
+  await store.update(COL, job.id, {
+    status: 'running',
+    workerId,
+    attempts: Number(job.attempts || 0) + 1,
+    updatedAt: startedAt,
+    leasedUntil: new Date(Date.now() + WORKER_LEASE_MS).toISOString(),
+    error: '',
+  });
+
+  try {
+    const result = await crawlVideosForTenant({
+      tenantId: job.tenantId,
+      platform: job.platform,
+      mode: job.mode,
+      keyword: job.keyword || '',
+      accountUrl: job.accountUrl || '',
+      accountName: job.accountName || '',
+      limit: job.limit || 10,
+      cloudFallback: true,
+    });
+    const finishedAt = nowIso();
+    await store.update(COL, job.id, {
+      status: 'done',
+      workerId,
+      resultJson: JSON.stringify({
+        platform: result.platform,
+        requested: result.requested,
+        imported: result.imported,
+        refreshed: result.refreshed,
+        skipped: result.skipped,
+        skippedExisting: result.skippedExisting,
+        returnedExisting: result.returnedExisting,
+        total: result.total,
+        source: `cloud-fallback:${result.source}`,
+        message: `云端兜底完成：${result.message}`,
+        elapsedMs: Date.now() - started,
+      }),
+      error: '',
+      updatedAt: finishedAt,
+      finishedAt,
+      leasedUntil: '',
+    });
+  } catch (error) {
+    const finishedAt = nowIso();
+    await store.update(COL, job.id, {
+      status: 'failed',
+      workerId,
+      resultJson: '',
+      error: (error instanceof Error ? error.message : String(error)).slice(0, 1000),
+      updatedAt: finishedAt,
+      finishedAt,
+      leasedUntil: '',
+    });
+  }
+}
+
+async function runCloudFallbackOnce(): Promise<void> {
+  if (!cloudFallbackEnabled() || cloudFallbackActive) return;
+  cloudFallbackActive = true;
+  try {
+    const result = await store.list<CrawlJob>(COL, {
+      sort: 'createdAt',
+      page: 1,
+      perPage: 100,
+    });
+    const job = result.items.find(shouldCloudFallback);
+    if (!job) return;
+    console.warn(`[crawl-worker] cloud fallback taking over ${job.id} ${job.platform} ${job.mode}`);
+    await runCloudFallbackJob(job);
+  } catch (error) {
+    console.warn('[crawl-worker] cloud fallback failed:', error instanceof Error ? error.message : error);
+  } finally {
+    cloudFallbackActive = false;
+  }
+}
+
+export function initCrawlWorkerCloudFallback(): void {
+  if (cloudFallbackTimer || !cloudFallbackEnabled()) return;
+  cloudFallbackTimer = setInterval(() => {
+    void runCloudFallbackOnce();
+  }, cloudFallbackPollMs());
+  cloudFallbackTimer.unref?.();
 }
 
 export async function createCrawlWorkerJob(input: CreateCrawlWorkerJobInput): Promise<CrawlJob | null> {
