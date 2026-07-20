@@ -1,22 +1,27 @@
 import { MessageCircle, Music2 } from 'lucide-react';
 import type { CustomerSource } from '../../types/customer';
 
-const SOURCE_LABEL: Record<CustomerSource, string> = {
+const SOURCE_LABEL: Record<string, string> = {
   whatsapp: 'WhatsApp',
   facebook: 'Facebook',
   instagram: 'Instagram',
   tiktok: 'TikTok',
+  whatsapp_from_youtube: 'WhatsApp · YouTube',
+  whatsapp_from_tiktok: 'WhatsApp · TikTok',
+  whatsapp_from_instagram: 'WhatsApp · Instagram',
+  whatsapp_from_facebook: 'WhatsApp · Facebook',
 };
 
 export function sourceLabel(source: CustomerSource) {
-  return SOURCE_LABEL[source];
+  return SOURCE_LABEL[source] || 'WhatsApp';
 }
 
 export function SourceIcon({ source, size = 16 }: { source: CustomerSource; size?: number }) {
-  const label = SOURCE_LABEL[source];
+  const label = sourceLabel(source);
+  const normalized = String(source || '');
   const boxSize = Math.max(size + 4, 20);
 
-  if (source === 'whatsapp') {
+  if (normalized === 'whatsapp' || normalized.startsWith('whatsapp_from_')) {
     return (
       <span
         title={label}

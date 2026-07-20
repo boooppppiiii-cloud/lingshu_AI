@@ -10,6 +10,16 @@ import { distillSalesStyleProfile, markStyleMemoryWonForCustomer } from '../know
 import { r2Upload } from '../storage/r2.js';
 import { store } from '../storage/index.js';
 import { sendTenantWhatsAppText } from './send.js';
+import {
+  attributionSystemText,
+  extractTrackCode,
+  findPostById,
+  findPostByTrackCode,
+  incrementPostMetric,
+  recentPostCandidates,
+  sourceFromPost,
+  type PostRecord,
+} from '../publishing/waLink.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = path.join(__dirname, '../../data');
@@ -55,6 +65,12 @@ interface StoredCustomer {
   pendingDraft?: string;
   needCall?: boolean;
   knowledgeMissStreak?: number;
+  source?: string;
+  sourcePostId?: string;
+  sourceTrackCode?: string;
+  sourcePostTitle?: string;
+  sourcePostPlatform?: string;
+  softAttribution?: { candidates: Array<{ id: string; title: string; platform: string; trackCode: string }> };
 }
 
 interface NightModeEvent {
@@ -507,6 +523,9 @@ function upsertCustomer(input: { tenantId: string; waNumber: string; name?: stri
   writeCustomers(list);
   if (next.stage === 'won' && base.stage !== 'won') {
     void markStyleMemoryWonForCustomer(next.tenantId, next.id).catch(error => console.error('[style-memory:won]', error));
+    if (next.sourcePostId) {
+      void incrementPostMetric(next.sourcePostId, 'deals').catch(error => console.error('[post-attribution:deal]', error));
+    }
   }
   void mirrorCustomerToPocketBase(next).catch(error => console.error('[whatsapp-pb-customer]', error));
   return next;
@@ -523,6 +542,41 @@ function addInteraction(item: StoredInteraction): boolean {
   writeInteractions(list);
   void mirrorInteractionToPocketBase(item).catch(error => console.error('[whatsapp-pb-interaction]', error));
   return true;
+}
+
+export async function confirmCustomerSourceAttribution(input: { tenantId: string; customerId: string; postId: string }): Promise<StoredCustomer | null> {
+  const post = await findPostById(input.postId);
+  if (!post || post.tenant_id !== input.tenantId) return null;
+  const list = customers();
+  const index = list.findIndex(item => item.tenantId === input.tenantId && item.id === input.customerId);
+  if (index < 0) return null;
+  const existing = list[index];
+  const next: StoredCustomer = {
+    ...existing,
+    source: sourceFromPost(post),
+    sourcePostId: post.id,
+    sourceTrackCode: post.track_code,
+    sourcePostTitle: post.title,
+    sourcePostPlatform: post.platform,
+    softAttribution: undefined,
+    updatedAt: new Date().toISOString(),
+  };
+  list[index] = next;
+  writeCustomers(list);
+  await mirrorCustomerToPocketBase(next).catch(error => console.error('[whatsapp-pb-customer]', error));
+  await incrementPostMetric(post.id, 'inquiries').catch(error => console.error('[post-attribution:confirm]', error));
+  addInteraction({
+    id: `attr_${input.customerId}_${post.id}_${Date.now()}`,
+    tenantId: input.tenantId,
+    customerId: input.customerId,
+    waNumber: next.waNumber,
+    type: 'system',
+    body: attributionSystemText(post),
+    timestamp: Date.now(),
+    audit: { sourcePostId: post.id, trackCode: post.track_code, platform: post.platform, confirmed: true },
+    meta: { sourcePostId: post.id, trackCode: post.track_code, platform: post.platform, confirmed: true },
+  });
+  return next;
 }
 
 function collectChanges(payload: any): any[] {
@@ -628,12 +682,42 @@ function draftForMessage(message: IncomingMessage, context?: RetrievedContext): 
 }
 
 async function handleInboundMessage(tenantId: string, message: IncomingMessage, options: { skipAutonomy?: boolean } = {}): Promise<void> {
+  const existingCustomer = customers().find(item => item.tenantId === tenantId && item.id === customerId(tenantId, message.waNumber));
+  let attributedPost: PostRecord | null = null;
+  const attributionPatch: Partial<StoredCustomer> = {};
+  if (!message.fromBusiness && !existingCustomer && !options.skipAutonomy) {
+    const trackCode = extractTrackCode(message.body);
+    if (trackCode) {
+      attributedPost = await findPostByTrackCode(tenantId, trackCode);
+      if (attributedPost) {
+        attributionPatch.source = sourceFromPost(attributedPost);
+        attributionPatch.sourcePostId = attributedPost.id;
+        attributionPatch.sourceTrackCode = attributedPost.track_code;
+        attributionPatch.sourcePostTitle = attributedPost.title || attributedPost.track_code;
+        attributionPatch.sourcePostPlatform = attributedPost.platform;
+        attributionPatch.handlingReason = `客户来自${attributedPost.platform}内容《${attributedPost.title || attributedPost.track_code}》`;
+      }
+    } else {
+      const candidates = await recentPostCandidates(tenantId, 72);
+      if (candidates.length) {
+        attributionPatch.softAttribution = {
+          candidates: candidates.slice(0, 5).map(post => ({
+            id: post.id,
+            title: post.title || post.track_code,
+            platform: post.platform,
+            trackCode: post.track_code,
+          })),
+        };
+      }
+    }
+  }
   const customer = upsertCustomer({
     tenantId,
     waNumber: message.waNumber,
     name: message.name,
     body: message.body,
     lastActiveAt: message.timestamp,
+    patch: attributionPatch,
   });
   addInteraction({
     id: `${customer.id}-${message.id}`,
@@ -646,6 +730,20 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
     timestamp: message.timestamp,
     audit: {},
   });
+  if (attributedPost) {
+    await incrementPostMetric(attributedPost.id, 'inquiries');
+    addInteraction({
+      id: `${customer.id}-source-${attributedPost.track_code}-${Date.now()}`,
+      tenantId,
+      customerId: customer.id,
+      waNumber: message.waNumber,
+      type: 'system',
+      body: attributionSystemText(attributedPost),
+      timestamp: Date.now(),
+      audit: { sourcePostId: attributedPost.id, trackCode: attributedPost.track_code, platform: attributedPost.platform },
+      meta: { sourcePostId: attributedPost.id, trackCode: attributedPost.track_code, platform: attributedPost.platform },
+    });
+  }
   if (message.fromBusiness) {
     upsertCustomer({ tenantId, waNumber: message.waNumber, patch: { knowledgeMissStreak: 0, blockedAutoReplyReason: undefined } });
     return;
@@ -1013,7 +1111,12 @@ export function getWhatsAppCustomers(tenantId?: string): any[] {
       email: undefined,
       language: customer.language,
       languageLocked: false,
-      source: 'whatsapp',
+      source: customer.source || 'whatsapp',
+      sourcePostId: customer.sourcePostId,
+      sourceTrackCode: customer.sourceTrackCode,
+      sourcePostTitle: customer.sourcePostTitle,
+      sourcePostPlatform: customer.sourcePostPlatform,
+      softAttribution: customer.softAttribution,
       product: 'WhatsApp 询盘',
       outboundProduct: 'current WhatsApp inquiry',
       estimatedValue: '$0',

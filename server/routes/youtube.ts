@@ -24,6 +24,7 @@ import {
   getTenantAwareGoogleOAuthClient,
 } from '../lib/oauthConfig.js';
 import { parseOAuthState, signOAuthState } from '../lib/tenantPlatformApps.js';
+import { appendTrackedWaLink, createTrackedPostDraft, finalizeTrackedPost } from '../publishing/waLink.js';
 
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || '';
 const GOOGLE_OAUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -677,6 +678,9 @@ youtubeRouter.post('/accounts/:id/upload', async (req, res) => {
     tags,
     privacyStatus = 'unlisted',
     madeForKids = false,
+    contentId,
+    language,
+    trackWaLink = true,
   } = req.body as {
     videoPath?: string;
     title?: string;
@@ -684,6 +688,9 @@ youtubeRouter.post('/accounts/:id/upload', async (req, res) => {
     tags?: unknown;
     privacyStatus?: 'private' | 'unlisted' | 'public';
     madeForKids?: boolean;
+    contentId?: string;
+    language?: string;
+    trackWaLink?: boolean;
   };
 
   if (!videoPath || !title) {
@@ -718,13 +725,26 @@ youtubeRouter.post('/accounts/:id/upload', async (req, res) => {
   }
 
   try {
+    const trackedPost = await createTrackedPostDraft(tenantId, {
+      contentId,
+      platform: 'youtube',
+      title,
+      language,
+      enabled: trackWaLink !== false,
+    });
+    const finalDescription = appendTrackedWaLink('youtube', description, trackedPost.wa_link || '');
     const result = await uploadVideoToYouTube(youtubeConfig(record), {
       filePath: resolvedPath,
       title,
-      description,
-      tags: parseTags(tags, description),
+      description: finalDescription,
+      tags: parseTags(tags, finalDescription),
       privacyStatus,
       madeForKids,
+    });
+    await finalizeTrackedPost(trackedPost.id, {
+      platformPostId: result.id,
+      title: result.title || title,
+      stats: {},
     });
 
     await store.update(COL, req.params.id, {
@@ -732,7 +752,7 @@ youtubeRouter.post('/accounts/:id/upload', async (req, res) => {
       status: 'connected',
     });
 
-    res.status(201).json({ ok: true, video: result });
+    res.status(201).json({ ok: true, video: result, tracking: trackedPost });
   } catch (error: any) {
     console.error('YouTube upload error:', error?.response?.data ?? error);
     const status = error?.response?.status === 401 ? 401 : error?.response?.status === 403 ? 403 : 500;

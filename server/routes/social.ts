@@ -31,6 +31,7 @@ import {
   getTenantAwareMetaOAuthClient,
 } from '../lib/oauthConfig.js';
 import { parseOAuthState, signOAuthState } from '../lib/tenantPlatformApps.js';
+import { appendTrackedWaLink, createTrackedPostDraft, finalizeTrackedPost } from '../publishing/waLink.js';
 
 const COL = 'social_accounts';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -834,7 +835,7 @@ socialRouter.post('/accounts/:id/upload', async (req, res) => {
     res.status(400).json({ error: 'Account is not connected' });
     return;
   }
-  const body = req.body as SocialUploadInput & { videoPath?: string };
+  const body = req.body as SocialUploadInput & { videoPath?: string; contentId?: string; language?: string; trackWaLink?: boolean };
   if (!body.title || (!body.videoPath && !body.videoUrl)) {
     res.status(400).json({ error: 'title and videoPath/videoUrl are required' });
     return;
@@ -847,6 +848,14 @@ socialRouter.post('/accounts/:id/upload', async (req, res) => {
     privacyStatus: body.privacyStatus,
   };
   try {
+    const trackedPost = await createTrackedPostDraft(account.tenantId, {
+      contentId: body.contentId,
+      platform: account.platform,
+      title: input.title,
+      language: body.language,
+      enabled: body.trackWaLink !== false,
+    });
+    input.description = appendTrackedWaLink(account.platform, input.description || '', trackedPost.wa_link || '');
     validateSocialUploadInput(account, input);
     let video;
     if (account.platform === 'tiktok') video = await uploadTikTokVideo(account.accessToken, input);
@@ -858,8 +867,13 @@ socialRouter.post('/accounts/:id/upload', async (req, res) => {
       });
     }
     if (!video) throw new Error('不支持的平台');
+    await finalizeTrackedPost(trackedPost.id, {
+      platformPostId: String((video as any)?.id || ''),
+      title: input.title,
+      stats: {},
+    });
     await store.update(COL, account.id, { lastSyncAt: new Date().toISOString(), status: 'connected' });
-    res.status(201).json({ ok: true, video });
+    res.status(201).json({ ok: true, video, tracking: trackedPost });
   } catch (error: any) {
     console.error(`${account.platform} upload error:`, error?.response?.data ?? error?.message ?? error);
     const status = error?.statusCode || error?.response?.status || 500;

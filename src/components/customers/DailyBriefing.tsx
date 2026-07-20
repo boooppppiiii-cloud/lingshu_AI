@@ -3,6 +3,7 @@ import { BookOpen, X } from 'lucide-react';
 import type { CustomerProfile } from '../../types/customer';
 import { buildPrioritySuggestion, completedTodoCustomers, pendingCustomers } from '../../lib/customerPriority';
 import { SourceIcon } from './SourceIcon';
+import { authHeader } from '../../lib/auth';
 
 interface Props {
   customers: CustomerProfile[];
@@ -24,6 +25,13 @@ interface NightModeBriefing {
   autoCustomerIds: string[];
   draftCustomerIds: string[];
   callCustomerIds: string[];
+}
+
+interface PublishingBriefing {
+  title: string;
+  platform: string;
+  inquiries: number;
+  postId: string;
 }
 
 function greeting() {
@@ -50,6 +58,7 @@ function priorityDot(customer: CustomerProfile) {
 export function DailyBriefing({ customers, onSelectCustomer, onClose }: Props) {
   const [missClusters, setMissClusters] = useState<KnowledgeMissCluster[]>([]);
   const [nightBriefing, setNightBriefing] = useState<NightModeBriefing | null>(null);
+  const [publishingBriefing, setPublishingBriefing] = useState<PublishingBriefing | null>(null);
   const pending = pendingCustomers(customers);
   const completed = completedTodoCustomers(customers);
   const grouped = [
@@ -72,6 +81,10 @@ export function DailyBriefing({ customers, onSelectCustomer, onClose }: Props) {
       .then(resp => resp.ok ? resp.json() : null)
       .then(data => setNightBriefing(data?.item ?? null))
       .catch(() => setNightBriefing(null));
+    fetch('/api/overseas/publishing/briefing', { headers: authHeader() })
+      .then(resp => resp.ok ? resp.json() : null)
+      .then(data => setPublishingBriefing(data?.item ?? null))
+      .catch(() => setPublishingBriefing(null));
   }, []);
 
   const addKnowledge = (cluster: KnowledgeMissCluster) => {
@@ -81,6 +94,14 @@ export function DailyBriefing({ customers, onSelectCustomer, onClose }: Props) {
       source: 'learned',
     }));
     window.dispatchEvent(new CustomEvent('lingshu:navigate', { detail: { page: 'enterprise' } }));
+    onClose();
+  };
+
+  const openPublishingBriefing = () => {
+    if (publishingBriefing?.postId) {
+      localStorage.setItem('lingshu:traffic:source-post-id', publishingBriefing.postId);
+    }
+    window.dispatchEvent(new CustomEvent('lingshu:navigate', { detail: { page: 'traffic', view: 'effects' } }));
     onClose();
   };
 
@@ -101,6 +122,21 @@ export function DailyBriefing({ customers, onSelectCustomer, onClose }: Props) {
 
         <div className="max-h-[52vh] overflow-y-auto px-5 py-4">
           <div className="space-y-4">
+            {publishingBriefing && (
+              <button
+                type="button"
+                onClick={openPublishingBriefing}
+                className="flex w-full items-start gap-3 rounded-xl border border-sky-100 bg-sky-50/80 p-3 text-left transition-colors hover:border-sky-200 hover:bg-sky-50"
+              >
+                <SourceIcon source={`whatsapp_from_${publishingBriefing.platform}`} size={16} />
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-black text-sky-950">
+                    你的视频《{publishingBriefing.title}》昨天带来了 {publishingBriefing.inquiries} 条询盘
+                  </p>
+                  <p className="mt-1 text-[11px] font-semibold text-sky-800">点击查看内容归因效果</p>
+                </div>
+              </button>
+            )}
             {nightBriefing && (
               <section className="rounded-xl border border-emerald-100 bg-emerald-50/80 p-3">
                 <p className="text-xs font-black text-emerald-950">
