@@ -1,18 +1,12 @@
 import { Router } from 'express';
 import { callLLMChatStream, type ChatMessage } from '../agents/llm.js';
-import { buildEnterpriseContext } from './enterprise.js';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { buildEnterpriseContext, readTenantEnterpriseProfile } from './enterprise.js';
 import { consumeDemoQuota } from '../lib/demo.js';
+import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ENTERPRISE_FILE = path.join(__dirname, '../../data/enterprise.json');
-
-function getEnterpriseContext(): string {
-  try {
-    return buildEnterpriseContext(JSON.parse(fs.readFileSync(ENTERPRISE_FILE, 'utf8')));
-  } catch { return ''; }
+async function getEnterpriseContext(tenantId: string): Promise<string> {
+  try { return buildEnterpriseContext(await readTenantEnterpriseProfile(tenantId)); }
+  catch { return ''; }
 }
 
 const FORMAT_RULE = `
@@ -117,6 +111,7 @@ const SYSTEM_PROMPTS: Record<string, string> = {
 };
 
 export const agentChatRouter = Router();
+agentChatRouter.use(requireAuth);
 
 function extractJsonObject(raw: string): Record<string, unknown> | null {
   const cleaned = raw.replace(/```json|```/g, '').trim();
@@ -156,12 +151,13 @@ function shouldRequireSources(messages: ChatMessage[]): boolean {
 }
 
 agentChatRouter.post('/assistant/proactive', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   const { pageLabel = '当前页面', pageSummary = '', enterpriseSummary = '' } = req.body as {
     pageLabel?: string;
     pageSummary?: string;
     enterpriseSummary?: string;
   };
-  const enterpriseCtx = enterpriseSummary || getEnterpriseContext();
+  const enterpriseCtx = enterpriseSummary || await getEnterpriseContext(tenantId);
   const prompt = `请为灵枢AI右下角小助手生成1条主动气泡提示。
 
 【当前页面】${pageLabel}
@@ -204,6 +200,7 @@ agentChatRouter.post('/assistant/proactive', async (req, res) => {
 });
 
 agentChatRouter.post('/:agentType/chat', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   const { agentType } = req.params;
   const { messages, deepThinking = false } = req.body as { messages: ChatMessage[]; deepThinking?: boolean };
 
@@ -213,7 +210,7 @@ agentChatRouter.post('/:agentType/chat', async (req, res) => {
   if (!basePrompt) { res.status(404).json({ error: `Unknown agent: ${agentType}` }); return; }
   if (!await consumeDemoQuota(req, res, 'aiChat')) return;
 
-  const enterpriseCtx = getEnterpriseContext();
+  const enterpriseCtx = await getEnterpriseContext(tenantId);
   const requireSources = shouldRequireSources(messages);
   const systemPrompt = enterpriseCtx
     ? `${basePrompt}${requireSources ? '\n\n【联网来源硬规则】本轮涉及联网搜索/公开信息核验，必须使用联网检索结果，并通过 sources 事件返回可点击来源；如果无法取得来源，不要给出联网结论，改为说明需要重新检索。' : ''}\n\n【当前企业知识库】\n${enterpriseCtx}`

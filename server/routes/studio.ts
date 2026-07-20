@@ -5,10 +5,12 @@ import { fileURLToPath } from 'url';
 import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { execFile, spawn } from 'node:child_process';
+import { Readable } from 'node:stream';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import ffmpegStatic from 'ffmpeg-static';
 import { GoogleGenAI } from '@google/genai';
 import { callLLM } from '../agents/llm.js';
-import { buildEnterpriseContext } from './enterprise.js';
+import { buildEnterpriseContext, readTenantEnterpriseProfile } from './enterprise.js';
 import { auth } from '../storage/index.js';
 import {
   entitlementGate,
@@ -19,6 +21,14 @@ import {
 import { signRenderToken } from '../lib/renderToken.js';
 import { consumeDemoQuota, isDemoMode } from '../lib/demo.js';
 import { generatePosterImage, imageExt, type ReferenceImage } from '../lib/imageGen.js';
+import { getPublicOrigin } from '../lib/oauthConfig.js';
+import { releaseSeedanceBudget, reserveSeedanceBudget, type SeedanceBudgetReservation } from '../lib/seedanceBudget.js';
+import { canAppearInSharedLibrary, isReferenceOnlyMaterial, materialUsage, type MaterialUsage } from '../lib/materialPolicy.js';
+import { fetchCloudMaterial, listCloudMaterials } from '../lib/cloudMaterials.js';
+import { analyzeVideo } from '../agents/gemini.js';
+import { requireAuth, type AuthLocals } from '../middleware/auth.js';
+import { signAssetUrl, sharedAssetRelativePath, tenantAssetDir, tenantAssetRelativePath } from '../lib/assetAccess.js';
+import { requireAdminUser } from '../lib/demoAccounts.js';
 
 /* ──────────────────────────────────────────────────────────────────────────
    Studio 路由 —— 服务于「社媒 / AI 生成内容」混剪工作台
@@ -27,8 +37,18 @@ import { generatePosterImage, imageExt, type ReferenceImage } from '../lib/image
 ─────────────────────────────────────────────────────────────────────────── */
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const studioTenantContext = new AsyncLocalStorage<string>();
+function scopedStudioAssetDir(root: string): string {
+  const tenantId = studioTenantContext.getStore();
+  if (!tenantId) throw new Error('studio tenant context unavailable');
+  return tenantAssetDir(root, tenantId);
+}
+function scopedStudioAssetUrl(prefix: string, file: string): string {
+  const tenantId = studioTenantContext.getStore();
+  if (!tenantId) throw new Error('studio tenant context unavailable');
+  return `/${prefix}/${tenantAssetRelativePath(tenantId, file)}`;
+}
 const require = createRequire(import.meta.url);
-const ENTERPRISE_FILE = path.join(__dirname, '../../data/enterprise.json');
 const { composite, exportCapcutPackage } = require('../../desktop/render.cjs') as {
   composite: (manifest: unknown, onProgress?: (pct: number) => void, outDir?: string) => Promise<{ ok: boolean; outputPath?: string; error?: string }>;
   exportCapcutPackage: (payload: unknown) => Promise<{ ok: boolean; dir?: string; appOpened?: boolean; draftCreated?: boolean; createDraftError?: string; error?: string }>;
@@ -79,12 +99,11 @@ async function openMacCapcutApp(): Promise<boolean> {
   return false;
 }
 
-function enterpriseCtx(): string {
-  try {
-    return buildEnterpriseContext(JSON.parse(fs.readFileSync(ENTERPRISE_FILE, 'utf8')));
-  } catch {
-    return '';
-  }
+async function enterpriseCtx(): Promise<string> {
+  const tenantId = studioTenantContext.getStore();
+  if (!tenantId) return '';
+  try { return buildEnterpriseContext(await readTenantEnterpriseProfile(tenantId)); }
+  catch { return ''; }
 }
 
 const LANG_NAME: Record<string, string> = {
@@ -142,16 +161,17 @@ function normalizeSeedanceVideoDuration(raw: unknown): number {
   return Math.max(4, Math.min(15, Math.round(n)));
 }
 
-function generatedMediaUrl(file: string): string {
-  return `/media/generated/${file}`;
+function generatedMediaUrl(tenantId: string, file: string): string {
+  return `/media/${tenantAssetRelativePath(tenantId, file)}`;
 }
 
 async function createGeneratedVideoMaterial(input: {
   title: string;
   filename: string;
   duration: number;
+  tenantId: string;
 }): Promise<Material | null> {
-  const filePath = path.join(GENERATED_MEDIA_DIR, input.filename);
+  const filePath = path.join(tenantAssetDir(MEDIA_DIR, input.tenantId), input.filename);
   if (!fs.existsSync(filePath)) return null;
   const id = randomUUID();
   const posterFile = `${id}.poster.jpg`;
@@ -163,13 +183,14 @@ async function createGeneratedVideoMaterial(input: {
     type: 'video',
     duration: Number(input.duration) || 0,
     size: humanSize(fs.statSync(filePath).size),
-    file: `generated/${input.filename}`,
-    url: generatedMediaUrl(input.filename),
+    file: tenantAssetRelativePath(input.tenantId, input.filename),
+    url: generatedMediaUrl(input.tenantId, input.filename),
     scope: 'own',
+    tenantId: input.tenantId,
     createdAt: new Date().toISOString(),
   };
   const posterOk = await extractPoster(filePath, posterPath, material.duration > 1 ? 1 : 0);
-  if (posterOk) material.poster = generatedMediaUrl(posterFile);
+  if (posterOk) material.poster = generatedMediaUrl(input.tenantId, posterFile);
   const list = loadMaterials().filter(item => item.url !== material.url);
   list.push(material);
   persistMaterials(list);
@@ -181,12 +202,14 @@ async function createGeneratedImageMaterial(input: {
   bytes: Buffer;
   mimeType: string;
   source?: string;
+  tenantId: string;
 }): Promise<Material> {
-  fs.mkdirSync(GENERATED_MEDIA_DIR, { recursive: true });
+  const outputDir = tenantAssetDir(MEDIA_DIR, input.tenantId);
+  fs.mkdirSync(outputDir, { recursive: true });
   const id = randomUUID();
   const ext = imageExt(input.mimeType);
   const filename = `${id}.${ext}`;
-  const filePath = path.join(GENERATED_MEDIA_DIR, filename);
+  const filePath = path.join(outputDir, filename);
   fs.writeFileSync(filePath, input.bytes);
   const material: Material = {
     id,
@@ -195,10 +218,11 @@ async function createGeneratedImageMaterial(input: {
     type: 'image',
     duration: 0,
     size: humanSize(input.bytes.length),
-    file: `generated/${filename}`,
-    url: generatedMediaUrl(filename),
-    poster: generatedMediaUrl(filename),
+    file: tenantAssetRelativePath(input.tenantId, filename),
+    url: generatedMediaUrl(input.tenantId, filename),
+    poster: generatedMediaUrl(input.tenantId, filename),
     scope: 'own',
+    tenantId: input.tenantId,
     createdAt: new Date().toISOString(),
   };
   const list = loadMaterials().filter(item => item.url !== material.url);
@@ -286,13 +310,14 @@ async function waitForSeedanceTask(config: ReturnType<typeof seedanceVideoConfig
   throw new Error(`Seedance 任务超时${lastTask ? `，最后状态：${seedanceTaskStatus(lastTask) || 'unknown'}` : ''}`);
 }
 
-async function downloadGeneratedVideo(url: string, filename: string): Promise<string> {
-  fs.mkdirSync(GENERATED_MEDIA_DIR, { recursive: true });
+async function downloadGeneratedVideo(url: string, filename: string, tenantId: string): Promise<string> {
+  const outputDir = tenantAssetDir(MEDIA_DIR, tenantId);
+  fs.mkdirSync(outputDir, { recursive: true });
   const response = await fetch(url);
   if (!response.ok || !response.body) throw new Error(`视频下载失败：${response.status}`);
   const arrayBuffer = await response.arrayBuffer();
-  fs.writeFileSync(path.join(GENERATED_MEDIA_DIR, filename), Buffer.from(arrayBuffer));
-  return generatedMediaUrl(filename);
+  fs.writeFileSync(path.join(outputDir, filename), Buffer.from(arrayBuffer));
+  return generatedMediaUrl(tenantId, filename);
 }
 
 function proxyEnvDefaults() {
@@ -413,6 +438,23 @@ function referenceIndustryLeakTerms(referenceText: string, productInfo: string):
   return Array.from(leaked);
 }
 
+function productSupportsNumericClaim(claim: string, productInfo: string): boolean {
+  if (String(productInfo).toLowerCase().includes(String(claim).toLowerCase())) return true;
+  const parsed = String(claim).match(/(\d+(?:\.\d+)?)\s*(瓶|ml|毫升|kg|g|克|斤|cm|厘米|mm|毫米|天|day|days|秒|%|个|pcs|件|箱|元|美元)/i);
+  if (!parsed) return false;
+  const value = parsed[1];
+  const unit = parsed[2].toLowerCase();
+  const equivalents: Record<string, string[]> = {
+    ml: ['ml', '毫升'], 毫升: ['ml', '毫升'],
+    kg: ['kg', '千克', '公斤'], g: ['g', '克'], 克: ['g', '克'],
+    cm: ['cm', '厘米'], 厘米: ['cm', '厘米'], mm: ['mm', '毫米'], 毫米: ['mm', '毫米'],
+    day: ['day', 'days', '天'], days: ['day', 'days', '天'], 天: ['day', 'days', '天'],
+    pcs: ['pcs', '个', '件'], 个: ['pcs', '个', '件'], 件: ['pcs', '个', '件'],
+  };
+  const candidates = equivalents[unit] || [unit];
+  return candidates.some(candidate => new RegExp(`${value.replace('.', '\\.')}\\s*${candidate}`, 'i').test(productInfo));
+}
+
 function stripScriptAnalysisSummary(text: string): string {
   const value = String(text || '').trim();
   const forbiddenBlockRe = /^\s*(?:【?\s*)?(?:基础要求|分析摘要|竞品识别|产品替换|参考爆款|成片目标|指定画风|核心情绪|参考品牌|口播语言|爆点拆解|产品承接|Purpose|Creative style|Core emotion|Product replacement|Voiceover language|Goal|Storyboard)(?:\s*】)?\s*[：:].*$/i;
@@ -428,6 +470,19 @@ function stripScriptAnalysisSummary(text: string): string {
     .filter(line => !forbiddenBlockRe.test(line))
     .join('\n')
     .trim();
+}
+
+function normalizeScriptTimestamps(value: string): string {
+  const clean = (raw: string) => {
+    const number = Number(raw);
+    return Number.isFinite(number)
+      ? number.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1')
+      : raw;
+  };
+  return String(value || '').replace(
+    /\[\s*(\d+(?:\.\d+)?)\s*(?:s|秒)?\s*[-–—]\s*(\d+(?:\.\d+)?)\s*(?:s|秒)?\s*\]/gi,
+    (_match, start, end) => `[${clean(start)}-${clean(end)}s]`,
+  );
 }
 
 function enforceProductNameInScript(script: string, productInfo: string): string {
@@ -511,14 +566,62 @@ function hasUnnaturalVoiceover(script: string): boolean {
     });
 }
 
+function storyboardSpeechIssues(script: string): string[] {
+  const issues: string[] = [];
+  const blocks = String(script || '').split(/(?=\[\s*\d+(?:\.\d+)?\s*(?:s|秒)?\s*[-–]\s*\d+(?:\.\d+)?\s*(?:s|秒)?\s*\])/i);
+  for (const block of blocks) {
+    const range = block.match(/\[\s*(\d+(?:\.\d+)?)\s*(?:s|秒)?\s*[-–]\s*(\d+(?:\.\d+)?)\s*(?:s|秒)?\s*\]/i);
+    const voice = block.match(/(?:人物说|台词|Voiceover|VO|口播)\s*[：:]\s*[“"]?([^\n”"]+)/i)?.[1]?.trim();
+    if (!range || !voice) continue;
+    const duration = Math.max(0, Number(range[2]) - Number(range[1]));
+    if (!duration) {
+      issues.push(`${range[0]} 时间段无效`);
+      continue;
+    }
+    const cjkChars = Array.from(voice.replace(/[\s，。！？、；：,.!?;:“”"'（）()]/g, '')).length;
+    const wordCount = voice.split(/\s+/).filter(Boolean).length;
+    const estimated = /[\u3400-\u9fff]/.test(voice)
+      ? cjkChars / 4.5 + 0.6
+      : wordCount / 2.5 + 0.5;
+    if (estimated > duration + 0.35) {
+      issues.push(`${range[0]} 口播预计${estimated.toFixed(1)}秒，超过镜头${duration.toFixed(1)}秒`);
+    }
+  }
+  return issues;
+}
+
+function materialGroundingIssues(script: string, productInfo: string, materialsText: string): string[] {
+  const evidence = `${productInfo}\n${materialsText}`.toLowerCase();
+  const claimGroups = [
+    ['迅速吸收', '快速吸收', '瞬时渗透', '即时渗透', '一触即融', '吸收', '渗透'],
+    ['淡纹', '去皱', '紧致', '抗衰', '抗老'],
+    ['美白', '提亮', '祛斑'],
+    ['祛痘', '抗炎', '修复屏障', '无刺激', '敏感肌可用'],
+    ['防水', '耐摔', '不易破损', '承重'],
+  ];
+  const issues: string[] = [];
+  for (const group of claimGroups) {
+    const used = group.filter(term => script.toLowerCase().includes(term.toLowerCase()));
+    if (used.length && !group.some(term => evidence.includes(term.toLowerCase()))) {
+      issues.push(`素材/产品资料未支持的效果描述：${used.join('、')}`);
+    }
+  }
+  return issues;
+}
+
 type ScriptMaterialInfo = {
   name?: string;
   type?: string;
   folder?: string;
   duration?: number;
+  effectiveDuration?: number;
   role?: string;
   targetStart?: number;
   targetEnd?: number;
+  industry?: string;
+  shotFunction?: string;
+  tags?: string;
+  observations?: string[];
 };
 
 function normalizeMaterialInfos(value: unknown, fallbackNames: unknown, totalDuration: number): ScriptMaterialInfo[] {
@@ -533,9 +636,14 @@ function normalizeMaterialInfos(value: unknown, fallbackNames: unknown, totalDur
       type: String(obj.type || 'video'),
       folder: String(obj.folder || 'upload'),
       duration: Number(obj.duration) || slot,
+      effectiveDuration: Number(obj.effectiveDuration) || Number(obj.duration) || slot,
       role: String(obj.role || ''),
       targetStart: Number.isFinite(Number(obj.targetStart)) ? Number(obj.targetStart) : +(index * slot).toFixed(1),
       targetEnd: Number.isFinite(Number(obj.targetEnd)) ? Number(obj.targetEnd) : +(index === raw.length - 1 ? totalDuration : (index + 1) * slot).toFixed(1),
+      industry: String(obj.industry || ''),
+      shotFunction: String(obj.shotFunction || ''),
+      tags: String(obj.tags || ''),
+      observations: Array.isArray(obj.observations) ? obj.observations.map(String).filter(Boolean).slice(0, 6) : [],
     });
     return acc;
   }, []);
@@ -548,6 +656,7 @@ function normalizeMaterialInfos(value: unknown, fallbackNames: unknown, totalDur
     type: 'video',
     folder: 'upload',
     duration: slot,
+    effectiveDuration: slot,
     role: '素材片段',
     targetStart: +(index * slot).toFixed(1),
     targetEnd: +(index === names.length - 1 ? totalDuration : (index + 1) * slot).toFixed(1),
@@ -571,11 +680,20 @@ function materialInfoLines(infos: ScriptMaterialInfo[]): string {
     `类型：${info.type || 'video'}`,
     `角色：${materialRoleFromFolder(info)}`,
     `原始时长：${Number(info.duration || 0).toFixed(1)}s`,
+    `建议有效时长：${Number(info.effectiveDuration || Math.max(0, Number(info.targetEnd || 0) - Number(info.targetStart || 0))).toFixed(1)}s`,
     `建议时间段：${Number(info.targetStart || 0).toFixed(1)}-${Number(info.targetEnd || 0).toFixed(1)}s`,
-  ].join('；')).join('\n');
+    info.industry ? `行业：${info.industry}` : '',
+    info.shotFunction ? `镜头功能标签：${info.shotFunction}` : '',
+    info.tags ? `人工/运营标签：${info.tags}` : '',
+    info.observations?.length ? `已确认或待复核的分段观察：${info.observations.join(' | ')}` : '没有视频级分段观察，只能依据素材名和标签做保守剪辑',
+  ].filter(Boolean).join('；')).join('\n');
 }
 
 export const studioRouter = Router();
+studioRouter.use(requireAuth);
+studioRouter.use((_req, res, next) => {
+  studioTenantContext.run((res.locals as AuthLocals).tenantId, next);
+});
 
 // POST /studio/map-product-columns Body: { headers, sampleRows }
 studioRouter.post('/map-product-columns', async (req, res) => {
@@ -652,6 +770,7 @@ studioRouter.use(entitlementGate());
 /* ── Seedance 视频生成 ─────────────────────────────────────────────────── */
 // POST /studio/seedance-video  Body: { script, productInfo, language, ratio, duration, resolution, title? }
 studioRouter.post('/seedance-video', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   if (!isSeedanceVideoEnabled()) {
     res.status(423).json({
       ok: false,
@@ -669,6 +788,7 @@ studioRouter.post('/seedance-video', async (req, res) => {
     duration: rawDuration = 8,
     resolution = '720p',
     title = 'Seedance 生成视频',
+    referenceImageUrl = '',
   } = req.body ?? {};
   const duration = normalizeSeedanceVideoDuration(rawDuration);
   const config = seedanceVideoConfig();
@@ -677,6 +797,25 @@ studioRouter.post('/seedance-video', async (req, res) => {
     return;
   }
   if (!await consumeDemoQuota(req, res, 'videoGeneration')) return;
+
+  const identity = await auth.verifyToken(req.headers.authorization);
+  const subscription = identity?.tenantId ? await getTenantSubscription(identity.tenantId) : null;
+  const plan = String(subscription?.plan || '').toLowerCase();
+  const isFormalTenant = subscription?.status === 'active' && !['admin', 'local', 'trial'].includes(plan);
+  let budget: SeedanceBudgetReservation | null = null;
+  if (isFormalTenant && identity?.tenantId) {
+    budget = reserveSeedanceBudget({ tenantId: identity.tenantId, duration, resolution: String(resolution) });
+    if (!budget.ok) {
+      res.status(429).json({
+        ok: false,
+        code: 'seedance_monthly_budget_exceeded',
+        error: `本月 Seedance 成本额度已不足：剩余 ¥${budget.remainingCny.toFixed(2)}，本次预计需要 ¥${budget.reservedCny.toFixed(2)}。`,
+        message: `本月 Seedance 预算剩余 ¥${budget.remainingCny.toFixed(2)}，本次预计需要 ¥${budget.reservedCny.toFixed(2)}。`,
+        budget,
+      });
+      return;
+    }
+  }
 
   const prompt = [
     `Create a ${duration}-second vertical commercial social video in ${langName(language)}.`,
@@ -690,12 +829,24 @@ studioRouter.post('/seedance-video', async (req, res) => {
     'Keep visual actions aligned with the spoken lines.',
   ].filter(Boolean).join('\n\n');
 
+  let taskAccepted = false;
   try {
+    const content: any[] = [{ type: 'text', text: prompt }];
+    const rawReferenceImageUrl = String(referenceImageUrl).trim();
+    const resolvedReferenceImageUrl = rawReferenceImageUrl.startsWith('/')
+      ? `${getPublicOrigin(req)}${signAssetUrl(rawReferenceImageUrl, tenantId)}`
+      : rawReferenceImageUrl;
+    if (resolvedReferenceImageUrl) {
+      content.push({
+        type: 'image_url',
+        image_url: { url: resolvedReferenceImageUrl },
+      });
+    }
     const created = await seedanceFetchJson(`${config.baseUrl}/contents/generations/tasks`, config.apiKey, {
       method: 'POST',
       body: JSON.stringify({
         model: config.model,
-        content: [{ type: 'text', text: prompt }],
+        content,
         ratio,
         duration,
         resolution,
@@ -705,6 +856,7 @@ studioRouter.post('/seedance-video', async (req, res) => {
     });
     const taskId = seedanceTaskId(created);
     if (!taskId) throw new Error('Seedance 未返回任务 ID');
+    taskAccepted = true;
     const task = await waitForSeedanceTask(config, taskId);
     const remoteUrl = findUrlDeep(task);
     if (!remoteUrl) throw new Error('Seedance 未返回可下载的视频地址');
@@ -712,8 +864,8 @@ studioRouter.post('/seedance-video', async (req, res) => {
     let url = remoteUrl;
     let material: Material | null = null;
     try {
-      url = await downloadGeneratedVideo(remoteUrl, filename);
-      material = await createGeneratedVideoMaterial({ title, filename, duration });
+      url = await downloadGeneratedVideo(remoteUrl, filename, tenantId);
+      material = await createGeneratedVideoMaterial({ title, filename, duration, tenantId });
     } catch (downloadError) {
       console.warn('[studio] Seedance video download failed, returning remote url:', downloadError);
     }
@@ -727,13 +879,89 @@ studioRouter.post('/seedance-video', async (req, res) => {
       poster: material?.poster,
       duration,
       model: config.model,
+      budget,
       material,
       createdAt: new Date().toISOString(),
     });
   } catch (e: any) {
+    if (!taskAccepted && budget?.reservationId && identity?.tenantId) {
+      releaseSeedanceBudget(identity.tenantId, budget.reservationId);
+    }
     const reason = summarizeSeedanceError(e);
     console.error('[studio] Seedance video generation failed:', e);
     res.json({ ok: false, source: 'seedance', error: `Seedance 视频生成失败：${reason}` });
+  }
+});
+
+// POST /studio/storyboard-quality-check
+// 对单个已生成分镜抽帧质检，返回结构化评分和需要人工关注的问题。
+studioRouter.post('/storyboard-quality-check', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const { materialId = '', storyboard = '', productInfo = '', critical = false } = req.body ?? {};
+  const material = loadMaterials().find(item => item.id === String(materialId) && (item.scope === 'shared' || item.tenantId === tenantId));
+  if (!material || material.type !== 'video' || !material.file) {
+    res.status(404).json({ ok: false, error: '找不到可质检的本地视频素材' });
+    return;
+  }
+  const filePath = path.join(MEDIA_DIR, material.file);
+  if (!fs.existsSync(filePath)) {
+    res.status(404).json({ ok: false, error: '质检视频文件不存在' });
+    return;
+  }
+  const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
+  if (!apiKey) {
+    res.status(423).json({ ok: false, error: 'GEMINI_API_KEY 未配置，无法执行视觉质检' });
+    return;
+  }
+  fs.mkdirSync(GENERATED_MEDIA_DIR, { recursive: true });
+  const tempDir = fs.mkdtempSync(path.join(GENERATED_MEDIA_DIR, 'quality-'));
+  try {
+    const framePattern = path.join(tempDir, 'frame-%02d.jpg');
+    await execFileAsync(String(ffmpegStatic), [
+      '-hide_banner', '-loglevel', 'error', '-i', filePath,
+      '-vf', 'fps=1/2,scale=640:-2', '-frames:v', '5', '-q:v', '4', framePattern,
+    ], 90_000);
+    const frames = fs.readdirSync(tempDir)
+      .filter(name => /^frame-\d+\.jpg$/i.test(name))
+      .sort()
+      .slice(0, 5)
+      .map(name => ({ inlineData: { mimeType: 'image/jpeg', data: fs.readFileSync(path.join(tempDir, name)).toString('base64') } }));
+    if (!frames.length) throw new Error('没有提取到可分析画面');
+    const prompt = `你是电商短视频质检员。根据连续抽帧检查这个分镜是否可用于发布。
+分镜要求：${String(storyboard).slice(0, 1800)}
+产品真实资料：${String(productInfo).slice(0, 1600)}
+是否关键真实性镜头：${critical ? '是' : '否'}
+
+重点检查：商品外观/颜色/包装一致性、错误文字或Logo、人物脸手异常、黑帧闪烁迹象、画面连续性、是否符合分镜动作、是否出现未经资料支持的证书参数或工厂声明。
+只返回JSON：{"score":0-100,"passed":boolean,"issues":["问题"],"strengths":["优点"],"recommendation":"通过/人工复核/重新生成","checks":{"productConsistency":0-100,"visualIntegrity":0-100,"storyboardMatch":0-100,"textSafety":0-100,"authenticity":0-100}}。关键镜头有真实性疑点时 passed 必须为 false。`;
+    const ai = new GoogleGenAI({ apiKey });
+    const response = await ai.models.generateContent({
+      model: process.env.GEMINI_QUALITY_MODEL || 'gemini-2.5-flash',
+      contents: [{ role: 'user', parts: [{ text: prompt }, ...frames] }],
+      config: { responseMimeType: 'application/json', temperature: 0.1 },
+    } as any);
+    const raw = String((response as any).text || '').trim();
+    const parsed = JSON.parse(raw.replace(/^```json\s*/i, '').replace(/```$/i, '').trim());
+    const score = Math.max(0, Math.min(100, Number(parsed.score) || 0));
+    res.json({
+      ok: true,
+      quality: {
+        score,
+        passed: Boolean(parsed.passed) && score >= (critical ? 85 : 75),
+        issues: Array.isArray(parsed.issues) ? parsed.issues.slice(0, 8).map(String) : [],
+        strengths: Array.isArray(parsed.strengths) ? parsed.strengths.slice(0, 6).map(String) : [],
+        recommendation: String(parsed.recommendation || ''),
+        checks: parsed.checks && typeof parsed.checks === 'object' ? parsed.checks : {},
+        checkedAt: new Date().toISOString(),
+      },
+    });
+  } catch (error) {
+    res.status(500).json({ ok: false, error: error instanceof Error ? error.message : '分镜质检失败' });
+  } finally {
+    try {
+      for (const name of fs.readdirSync(tempDir)) fs.unlinkSync(path.join(tempDir, name));
+      fs.rmdirSync(tempDir);
+    } catch { /* best effort */ }
   }
 });
 
@@ -767,11 +995,14 @@ studioRouter.post('/gemini-video', async (req, res) => {
   }
 
   const prompt = [
-    `Create a short commercial social video in ${langName(language)}.`,
-    `Use this script/storyboard as the primary direction:\n${String(script).slice(0, 4000)}`,
-    productInfo ? `Product and brand context:\n${String(productInfo).slice(0, 1800)}` : '',
-    'Style: realistic UGC product video, clear product focus, clean lighting, smooth camera movement, high conversion pacing.',
-    'Avoid unreadable text overlays. Keep visual actions aligned with the spoken lines.',
+    `Generate one ${duration}-second vertical commercial social video in ${langName(language)}, aspect ratio ${ratio}.`,
+    'Treat the storyboard timecodes and the fields named Omni prompt / Omni negative prompt as the highest-priority visual instructions.',
+    `Storyboard:\n${String(script).slice(0, 7000)}`,
+    productInfo ? `Identity and product context (preserve appearance exactly; do not invent claims):\n${String(productInfo).slice(0, 1800)}` : '',
+    'Reproduce only explicitly observed actions. An inferred intent explains why an image works, but it is not permission to invent a missing action. Never turn a causal gap into an on-screen event.',
+    'For every beat, preserve the exact object state before and after the action, hand visibility, physical contact, gaze direction, head pose, framing, and whether the camera is static. Fast actions must start and end at the written sub-second boundary.',
+    'Use realistic UGC optics, skin texture, eye reflections, tissue deformation and moisture. Preserve temporal continuity and subject identity. Do not beautify, recolor eyes, add tears, wiping, extra fingers, extra hand motion, camera moves, captions, platform UI, logos, or transitions unless explicitly requested.',
+    'Do not render interface overlays or unreadable text into the video; overlays and verified captions are added in post-production.',
   ].filter(Boolean).join('\n\n');
 
   try {
@@ -787,6 +1018,7 @@ studioRouter.post('/gemini-video', async (req, res) => {
       timeoutMs,
     }, timeoutMs);
     res.json(output);
+    console.log(`[studio] TTS response sent headers=${res.headersSent} ended=${res.writableEnded}`);
   } catch (e: any) {
     const reason = String(e?.message ?? e).slice(0, 500);
     console.error('[studio] Gemini video generation failed:', e);
@@ -820,7 +1052,7 @@ studioRouter.post('/script', async (req, res) => {
   const normalizedMaterialInfos = normalizeMaterialInfos(materialInfos, materials, Number(duration) || 20);
   const structuredMaterials = materialInfoLines(normalizedMaterialInfos);
   const product = productInfo || '';
-  const reference = String(referenceAnalysis || '').slice(0, 2500) || '(no detailed reference analysis provided)';
+  const reference = String(referenceAnalysis || '').slice(0, 8000) || '(no detailed reference analysis provided)';
   const highlights = Array.isArray(referenceHighlights) && referenceHighlights.length
     ? referenceHighlights.slice(0, 8).map((item: unknown) => `- ${String(item).slice(0, 180)}`).join('\n')
     : '- No reliable highlights. Infer a simple product-first structure from title, platform, and product info.';
@@ -832,39 +1064,37 @@ studioRouter.post('/script', async (req, res) => {
   const providerOpt = provider === 'qwen' || provider === 'gemini' ? provider : undefined;
   const selectedProductBrief = productBrief(productInfo);
   const selectedProductCategory = selectedProductBrief.category || compactBriefCategory(selectedProductBrief);
-  const cloneFusionRules = `爆款结构和产品卖点融合流程（必须内化执行，不要把这段流程输出给用户）：
-1. 先抽取对标视频的可迁移骨架：开头钩子/人物关系/日常场景/产品出场/使用证明/反差或问题/CTA。
-2. 再把产品信息分层映射到骨架：
-   - 前 5 秒只放 1 个最强痛点、反差或结果证明。
-   - 5-12 秒只放 2-3 个可视化卖点，用动作或测试证明，不复述长资料。
-   - MOQ、认证、交期、BSCI、REACH、RoHS、报价等采购信息只能放在最后 CTA 或短字幕里。
-3. 生成脚本前，先完成内部映射表：每个分镜只承载一个产品信息点。
-4. 生成脚本后，内部自检：是否保留爆款钩子/情绪/人物关系/反转机制；是否产品信息过载；是否像真人口播；是否每段可拍。
-5. 如果自检不合格，直接重写最终脚本。最终输出只给成稿，不输出映射表、自检过程或解释。
-6. 禁止整段复述产品资料；禁止把“主推品：”“适合展示……”这类原始资料句式直接放进口播。
-7. 每个分镜必须承担不同任务：开场钩子、细节证明、对比/测试、定制/包装、采购信息、CTA 不得重复。
-8. 相邻分镜不得使用相同环境、相同画面动作、相同台词句式；不能只替换一个卖点词。
-9. 最终脚本必须是纯净新脚本：不要输出“基础要求、分析摘要、竞品识别、产品替换、参考爆款、成片目标、指定画风、核心情绪”等分析说明。
-10. 行业锁定：模式1选定产品所属类目是「${selectedProductCategory || '未提供'}」。当爬取视频所属行业与该类目不一致时，仍然必须逐段依据“对标视频脚本详析”生成：时间段、环境、景别、运镜、配乐音效、画面动作、色彩质感、卡点节奏优先保持原详析。
-11. 行业冲突时，只替换画面里的产品对象、行业对象、产品功效和字幕/台词中的产品词；不要把原详析改写成完全不同的场地、镜头或剧情。
-12. 替换示例：原详析“多个粉色饺子造型的护肤美妆纸艺品（眼膜、唇膏、面霜、安瓶）以卡点方式快速弹出画面”，如果我方产品是灯具，应改成“多个粉色饺子造型的灯具产品纸艺品以卡点方式快速弹出画面”，而不是改成展厅、样板间或安装测试。`;
+  const cloneFusionRules = `爆款素材迭代规则（只在内部执行，不要输出规则或解释）：
+1. REFERENCE_ANALYSIS 是灵感大屏已经完成的原视频分析，是原片结构、音画和爆点的唯一事实来源；禁止重新分析、重新定义或套用固定营销模板。
+2. 原分析有多少段就输出多少段；逐段保留时间、顺序、时长比例、环境、景别、运镜、构图、动作、转场、配乐和节拍。不得合并、补段、重排或改成固定 5 段。
+3. 爆点可能是视觉揭晓、动作、反差、细节、音效、卡点、人物反应、字幕或 CTA，不得把“采购痛点”默认当作爆点。
+4. 只做最小必要替换：把原产品对象替换为产品信息中的选定产品；没有冲突的场景、动作、镜头关系和节奏全部保留。
+5. 原片没有口播就输出“台词：无”；原片没有屏幕文字就输出“字幕：无”；原片没有 CTA 就不得新增 CTA。
+6. 禁止新增采购顾虑、询盘、报价、打样、MOQ、认证、交期、包装、测试、对比、人物或剧情，除非原分析同一镜头明确存在，且产品资料支持相关事实。
+7. 不得把分析中的表达意图、改编建议、未展示因果写进实际画面；只允许使用原分析记录的可见、可听内容。
+8. 缺失信息用“无”或“沿用原片”表达，禁止用想象补齐。分析缺少逐镜详情时应拒绝生成，不得降级为自由创作。
+9. 输出必须干净：只输出时间戳分镜成稿，不输出标题、前言、总结、映射表、自检、Markdown、代码围栏或分析说明。`;
 
-  const productScriptRules = `你是在为我方产品重新创作一条外贸社媒口播视频脚本。
+  const productScriptRules = `你是在为我方产品重新创作一条能让观众停留、相信并采取行动的社媒带货/外贸留资视频，不是在朗读产品资料。
 
 输出必须满足：
 1. 每段包含：时间 / 画面 / 人物说 / 字幕。
 2. 人物说必须是镜头里真人能直接说出口的话，不得包含“镜头、画面、字幕、参考节奏、展示卖点”等制作指令。
 3. 每段画面必须是具体可拍动作，必须包含手部动作、产品动作、对比测试、包装/定制展示或使用场景之一。
 4. 第一段必须是痛点、对比、测试或结果 hook，不能用“这款产品适合……”平铺开场。
-5. 至少包含两个 B2B 采购信息：MOQ、尺寸、克重、承重、logo 定制、打样、包装、交期、报价。未提供具体值时写“可按需求确认”，不要编具体数字。
-6. 结尾 CTA 必须要求买家提供具体采购信息，例如尺寸、数量、logo 文件、目标克重、包装方式或交期。
-7. 参考视频只允许借用节奏、镜头顺序和信息密度；不得输出参考视频标题、原 caption、原品牌、原 hashtag、原品类、原场景词或原产品功效。
-8. 不得编造未提供的数据；缺失时写“可按需求确认”。禁止新增任何未提供的数字、单位或周期，例如瓶数、重量、容量、天数、秒数、百分比、价格、MOQ 数量。
-9. 不得输出制作说明，不得解释规则，只输出成稿。
-10. 原始卖点如果包含夸张绝对化表达，必须降级成可验证表述，例如“不易撕裂”“抗拉表现可打样测试”“承重可按需求确认”，不得写“不破、不裂、纹丝不动、吹不烂”等绝对承诺。
-11. 只能使用下方“产品信息”里列出的选定产品。不得改成企业中心其它产品，不得写“企业产品组合/主推产品/this product”，不得使用对标视频原产品。
-12. 多选产品时，脚本必须围绕这些选定产品组合呈现，至少在画面或字幕中覆盖每个选定产品的名称或明确细节，不得擅自新增未选择产品。
-13. ${forbiddenLine}
+5. 先判断转化目标：面向消费者时使用“场景痛点 → 使用动作 → 可见结果 → 购买理由”；面向采购商时使用“采购顾虑 → 实物证据 → 定制/交付能力 → 低门槛询盘”。不要混写两套话术。
+6. 至少包含两个已核实的商业信息，但优先放在短字幕和画面资料卡里；口播只说买家最关心的好处，不朗读 MOQ、认证和参数清单。
+7. 结尾 CTA 只要求一个低门槛动作，例如“发我数量和目标市场”“留言拿报价”“发包装需求看样”，不要一次索要五六项资料。
+8. 参考视频只允许借用节奏、镜头顺序和信息密度；不得输出参考视频标题、原 caption、原品牌、原 hashtag、原品类、原场景词或原产品功效。
+9. 不得编造未提供的数据；缺失时只在画面说明或字幕写“可按需求确认”，不要让主播把这句系统式措辞反复说出口。
+10. 不得输出制作说明，不得解释规则，只输出成稿。
+11. 原始卖点如果包含夸张绝对化表达，必须降级成可验证表述，例如“不易撕裂”“抗拉表现可打样测试”“承重可按需求确认”，不得写“不破、不裂、纹丝不动、吹不烂”等绝对承诺。
+12. 只能使用下方“产品信息”里列出的选定产品。不得改成企业中心其它产品，不得写“企业产品组合/主推产品/this product”，不得使用对标视频原产品。
+13. 多选产品时，脚本必须围绕这些选定产品组合呈现，至少在画面或字幕中覆盖每个选定产品的名称或明确细节，不得擅自新增未选择产品。
+14. ${forbiddenLine}
+15. 中文口播按每秒约4-5字并预留0.5秒停顿；每段台词必须能在对应时间段自然说完。优先短句、反问、口语停顿，避免“先看、再确认、逐项确认、可按需求确认”连续出现。
+16. 优先使用产品资料中已经提供的容量、材质、充电方式、规格和定制项；把参数翻译成使用利益或采购价值，但不得用跨品类的点亮、色温、安装、护肤功效等动作替代真实产品细节。
+17. 五段情绪应有推进：意外/顾虑 → 看见亮点 → 证据加深 → 品牌想象 → 立即行动。相邻两段不能用相同句式开头。
 
 固定格式：
 [0-2s]
@@ -874,17 +1104,20 @@ studioRouter.post('/script', async (req, res) => {
 
 请生成 5 段左右，总时长约 ${duration} 秒，语言为${lang}。`;
 
-  const materialScriptRules = `你是在为“已选素材库片段”编排一条时间戳快剪脚本，不是凭空写产品销售稿。
+  const materialScriptRules = `你是在把“已选素材库片段”剪成一条有销售情绪的社媒带货/外贸留资视频。素材约束留在画面说明中，人物口播必须始终面向潜在买家，不能说后台审核语言。
 
 核心原则：
 1. 每个时间戳段必须绑定一个具体素材名，不能只写泛泛产品话术。
 2. 只能根据素材元信息做保守推断：素材名、类型、角色、原始时长、建议时间段。没有真实画面识别时，不得编造画面里出现的人、场景、动作或效果。
-3. 画面字段必须写“使用素材《素材名》...”并说明剪辑重点，例如截取开头、细节处、动作最清楚处、包装/样品处。
-4. 每段承担不同剪辑任务：开场、细节、使用/对比、供应能力、定制/包装、CTA。
-5. 口播必须承接该素材的角色，不能每段复用同一句式。
-6. 如果素材信息不足，只能写“按该素材可见内容剪辑”，不能伪装已经识别出画面。
-7. 必须严格按素材顺序生成 ${Math.max(1, normalizedMaterialInfos.length)} 段左右，时间段优先使用“建议时间段”。
-8. 输出只给成稿，不解释规则。
+3. “原始时长”只是文件长度，“建议有效时长”才是当前脚本可使用的动作长度。禁止为了填满目标时长而慢放、循环或重复同一个动作，除非分段观察明确支持。
+4. 画面字段必须写“使用素材《素材名》...”并说明剪辑重点，例如截取开头、细节处、动作最清楚处、包装/样品处。
+5. 每段承担不同剪辑任务：开场、细节、使用/对比、供应能力、定制/包装、CTA。
+6. 口播必须承接该素材的角色并形成连续销售逻辑：第一段让人停留，中段把可见细节变成购买理由，最后一段只给一个低门槛行动。不能每段复用同一句式。
+7. 如果素材信息不足，只能写“按该素材可见内容剪辑”，不能伪装已经识别出画面。尤其禁止从液体滴落推断吸收、渗透、淡纹、美白、祛痘或其它功效。
+8. “按可见内容剪辑、不得推断、资料可确认”只能写进画面字段，禁止出现在人物说中。禁止口播“先看素材、这段只按可见内容、逐项确认”等制作/审核腔。
+9. 中文口播按每秒约4-5字并预留0.5秒停顿；优先使用短反问、短判断和自然停顿，让相邻台词有因果承接。
+10. 必须严格按素材顺序生成 ${Math.max(1, normalizedMaterialInfos.length)} 段左右，时间段必须使用“建议时间段”，不得把单一动作擅自扩写到整个目标时长。
+11. 输出只给成稿，不解释规则。
 
 固定格式：
 [start-end s]
@@ -922,8 +1155,8 @@ ${product || '未选择产品。只能围绕素材做保守剪辑建议，不得
 
 请直接输出脚本。`
     : scriptType === 'storyboard'
-    ? `你是中国跨境电商卖家的资深短视频导演，尤其擅长把“爆款视频脚本详析”和“我方产品对象”融合成可拍脚本。
-请生成一条约 ${duration} 秒的 ${platform} 分镜脚本，语言为 ${lang}，分镜数量和时间段必须优先跟随对标视频脚本详析。
+    ? `你是爆款参考视频的受约束迭代导演。你不负责重新设计营销结构，只负责在保留原片结构和爆点的前提下完成最小必要的产品替换。
+请生成 ${platform} 分镜脚本，语言为 ${lang}。总时长、分镜数量和时间段必须跟随对标视频脚本详析，不得套用 ${duration} 秒或固定段数模板。
 
 已选素材：${clips}
 产品信息：
@@ -946,30 +1179,26 @@ ${cloneFusionRules}
 环境：<照抄或贴近原详析环境>
 景别：<照抄原详析景别>
 运镜：<照抄原详析运镜>
+镜头功能：<钩子/效果证明/价格反差/产品介绍/信任证明/CTA等单一主要功能>
 画面：<保留原详析动作、色彩、材质、卡点节奏和构图，只把原产品/行业对象替换成我方产品对象>
 配乐：<照抄或贴近原详析配乐音效>
-台词：<真人口播，只说给买家听的话；必须是一个具体采购痛点、需求洞察、证明点或 CTA>
-字幕：<短字幕>
+台词：<仅当原分析同一镜头存在口播/对白时保留或做必要产品替换，否则写“无”>
+字幕：<仅当原分析同一镜头存在屏幕文字时保留或做必要产品替换，否则写“无”>
 
 硬性规则：
 - 逐段复刻对标视频脚本详析：时间段、环境、景别、运镜、配乐、画面动作、色彩质感和卡点节奏必须尽量与原详析一致。
+- “可见事实”优先级高于标题、口播和表达意图。必须依据相邻密集帧定位动作边界；首帧已经存在的湿润、遮挡、手势或物体状态必须写成初始状态，不能倒推出未拍到的形成过程。
+- “表达意图”和“未展示因果”只能帮助理解创意，不得进入实际画面；禁止把推断写成已发生的动作。
 - 如果爬取视频行业和模式1产品所属行业不一致，只替换原产品/原行业对象为模式1选定产品；不要改变原详析的场地、构图、镜头节奏和创意动作。
 - 不得出现对标视频原行业、原品类、原产品功效；但可以保留无行业冲突的环境、色彩、造型、动作、音效和节奏描述。
-- 前 5 秒必须像真实社媒爆款 hook：指出具体买家踩坑/采购风险/场景反差，例如“订购一大批吸顶灯，结果灯光实际效果和图文严重不符？我们拒绝照骗，所见即所得！”。不能平铺“这款产品适合...”或“采购这类产品先看效果”。
-- 前 12 秒禁止出现 MOQ、认证、BSCI、REACH、RoHS、交期、报价等采购参数；这些只能放最后 CTA 或短字幕。
-- 每段只表达一个信息点；口播每句尽量短，像真人现场说话。
-- 台词必须像人话，不能把专业名词、认证名、型号、参数连成清单朗读。CE/RoHS/UKCA/ETL/IES/LDT/IP65/MOQ/OEM/ODM 这类词最多一条台词出现 1 个；超过 1 个时改写成“资料能不能一次给齐”“现场效果能不能对得上”“样品和大货会不会一致”。
-- 专业名词清单只能放在“字幕”或最后 CTA 的画面资料里，不要放进“台词”。
-- 台词句与句之间要有因果承接：先说买家担心什么，再说镜头正在证明什么，最后说下一步怎么确认。
-- 每段的环境、景别、运镜、画面、配乐、台词必须明显不同：不得连续复用同一个骨架，不得只替换数字或卖点词。
-- 按顺序分配不同剧情功能：1 钩子，2 细节证明，3 使用或测试，4 定制/包装，5 采购信任或 CTA。
+- 原片开头依靠什么形成 hook，就保留什么；禁止默认改成采购顾虑或销售口播。
+- 原片相邻镜头允许使用相同环境和机位；不得为了“丰富”而擅自改场景、加动作或增加剧情功能。
+- 原片镜头数量、切点和内容功能优先级高于目标时长参数；目标时长仅在原分析明确缺失时作为兜底。
 - 画面不能写“真实使用场景”“痛点特写”这种空泛词，必须写清楚人物在什么环境里做什么动作，镜头拍到什么具体物件或结果。
-- 台词必须来自客户需求洞察：效果不符、参数不透明、样品和大货不一致、认证资料缺失、安装/包装/市场适配不确定、低价供应商翻车等。结合产品信息选择最相关痛点。
 - 不要写 generic phrases like "premium quality", "high conversion", "boost sales", "worth buying"，除非绑定具体产品细节。
 - 不得复制或提及对标视频标题、原 caption、hashtag、品牌名、原品类、原产品功效。
 - 不得输出分析摘要、基础要求、竞品识别、产品替换说明、成片目标或任何“对标视频”说明，只输出新的可拍分镜。
-- 每个场景必须小商家用手机也能拍出来。
-- 缺少数据时，写保守的样品/报价/按需求确认 CTA，不要编造。
+- 缺少数据时写“无”或“沿用原片”，不得新增样品、报价或 CTA。
 - 最终只输出 storyboard 成稿。`
     : `You are a senior short-video copywriter for a Chinese cross-border e-commerce seller.
 Write a practical ${duration}-second ${platform} voiceover script in ${lang}.
@@ -998,15 +1227,19 @@ Requirements:
 - Output ONLY the script text.`;
 
   try {
-    const text = await callLLM(prompt, { backend: providerOpt, systemPrompt: enterpriseCtx() || undefined });
-    const script = enforceProductNameInScript(stripScriptAnalysisSummary(text), productInfo);
+    const text = await callLLM(prompt, { backend: providerOpt, systemPrompt: await enterpriseCtx() || undefined });
+    const script = normalizeScriptTimestamps(enforceProductNameInScript(stripScriptAnalysisSummary(text), productInfo));
     const selectedNames = selectedProductNames(productInfo);
     const unsupportedNumberClaims = Array.from(script.matchAll(/\d+(?:\.\d+)?\s*(?:瓶|ml|ML|毫升|kg|KG|g|克|斤|cm|厘米|mm|毫米|天|day|days|Days|秒|%|个|pcs|件|箱|元|美元)/g))
       .map(match => match[0])
-      .filter(claim => !String(productInfo).includes(claim));
+      .filter(claim => !productSupportsNumericClaim(claim, productInfo));
     const missingProduct = !String(productInfo || '').trim();
     const missingSelectedProduct = selectedNames.length > 0
       && selectedNames.some(name => !script.toLowerCase().includes(name.toLowerCase()));
+    const speechIssues = storyboardSpeechIssues(script);
+    const groundingIssues = generationMode === 'material'
+      ? materialGroundingIssues(script, productInfo, structuredMaterials)
+      : [];
     const incompleteCloneStoryboard = generationMode === 'clone'
       && (!/环境[：:]/.test(script)
         || !/景别[：:]/.test(script)
@@ -1023,29 +1256,52 @@ Requirements:
       || incompleteCloneStoryboard
       || genericCloneStoryboard
       || hasRepetitiveStoryboard(script)
-      || hasUnnaturalVoiceover(script);
+      || hasUnnaturalVoiceover(script)
+      || speechIssues.length > 0
+      || groundingIssues.length > 0;
     const invalidProductScript = generationMode === 'product'
       && (/人物说[：:][^\n]*(镜头|画面|字幕|参考节奏|展示卖点|制作)/.test(script)
         || /Scene N/.test(script));
     const leakedReference = forbiddenTerms.some(term => new RegExp(`(^|[^A-Za-z0-9])${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^A-Za-z0-9])`, 'i').test(script))
       || forbiddenIndustryTerms.some(term => new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(script))
       || /#[A-Za-z][A-Za-z0-9_-]{2,}/.test(script);
-    const shouldFallback = invalidProductScript || unsafeScript || leakedReference;
+    const validationIssues = [
+      missingProduct ? '缺少产品信息' : '',
+      missingSelectedProduct ? `脚本未完整覆盖选定产品名称：${selectedNames.join('、')}` : '',
+      unsupportedNumberClaims.length ? `出现产品资料未提供的数字：${unsupportedNumberClaims.join('、')}` : '',
+      incompleteCloneStoryboard ? '爆款分镜缺少环境、景别、运镜、配乐或台词字段' : '',
+      genericCloneStoryboard ? '爆款分镜包含不可执行的泛化镜头描述' : '',
+      hasRepetitiveStoryboard(script) ? '分镜或口播内容重复度过高' : '',
+      hasUnnaturalVoiceover(script) ? '口播过长或堆叠过多技术名词' : '',
+      invalidProductScript ? '产品模式把制作指令写进了人物口播' : '',
+      leakedReference ? '脚本包含对标来源、品牌、行业或Hashtag泄漏' : '',
+      ...speechIssues,
+      ...groundingIssues,
+      /参考节奏|Reference video|对标视频|基础要求|分析摘要|竞品识别|产品替换|参考爆款|成片目标|指定画风|核心情绪|行业锁定|结构迁移|不迁移行业|不继承原视频|企业产品组合|主推产品|<具体|不得|必须满足/.test(script) ? '脚本泄漏了生成规则或占位说明' : '',
+      /不破|不裂|纹丝不动|吹不烂|保证|最快|最低价|全网|no tear|won'?t tear|never breaks?|unbreakable/i.test(script) ? '脚本包含绝对化或不可验证承诺' : '',
+    ].filter(Boolean);
+    const shouldFallback = validationIssues.length > 0 || unsafeScript;
     const fallback = generationMode === 'material'
       ? fallbackMaterialStoryboard(normalizedMaterialInfos, Number(duration) || 20, productInfo)
       : fallbackStoryboard(duration, productInfo);
     res.json({
       ok: true,
       source: shouldFallback ? 'fallback' : 'ai',
-      script: shouldFallback ? fallback : script,
+      script: shouldFallback ? (generationMode === 'clone' ? '' : fallback) : script,
+      fallbackReason: shouldFallback ? validationIssues[0] || '脚本未通过安全与可执行性检查' : undefined,
+      validationIssues: shouldFallback ? validationIssues : [],
     });
-  } catch {
+  } catch (error) {
     res.json({
       ok: true,
       source: 'fallback',
-      script: generationMode === 'material'
+      script: generationMode === 'clone'
+        ? ''
+        : generationMode === 'material'
         ? fallbackMaterialStoryboard(normalizedMaterialInfos, Number(duration) || 20, productInfo)
         : scriptType === 'storyboard' ? fallbackStoryboard(duration, productInfo) : fallbackScript(productInfo, duration),
+      fallbackReason: '模型调用失败，已使用本地安全兜底脚本',
+      validationIssues: [String(error instanceof Error ? error.message : error).slice(0, 240)],
     });
   }
 });
@@ -1063,7 +1319,7 @@ Context — product: ${productInfo || '(see enterprise profile)'} ; tone: ${tone
 Return ONLY a JSON array of 3 strings. No other text.`;
 
   try {
-    const text = await callLLM(prompt, { backend: providerOpt, systemPrompt: enterpriseCtx() || undefined });
+    const text = await callLLM(prompt, { backend: providerOpt, systemPrompt: await enterpriseCtx() || undefined });
     const arr = extractJSON<string[]>(text);
     if (arr && arr.length) {
       res.json({ ok: true, source: 'ai', covers: arr.slice(0, 3) });
@@ -1164,7 +1420,7 @@ Schema:
   const failures: string[] = [];
   for (const backend of backends) {
     try {
-      const text = await callLLM(prompt, { backend, systemPrompt: enterpriseCtx() || undefined });
+      const text = await callLLM(prompt, { backend, systemPrompt: await enterpriseCtx() || undefined });
       const obj = extractJSON<any>(text);
       if (obj?.poster?.headline && obj?.caption) {
         res.json({
@@ -1193,6 +1449,7 @@ Schema:
 
 // POST /studio/fb-poster/render  Body: { poster, caption, imagePrompt, ratio, materialIds? }
 studioRouter.post('/fb-poster/render', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   if (!await consumeDemoQuota(req, res, 'generation')) return;
   const {
     poster = null,
@@ -1202,7 +1459,7 @@ studioRouter.post('/fb-poster/render', async (req, res) => {
   } = req.body ?? {};
   const normalizedPoster = normalizePosterBrief(poster || {});
   const headline = normalizedPoster.headline || 'AI 图文海报';
-  const references = resolveReferenceImages(materialIds);
+  const references = resolveReferenceImages(materialIds, tenantId);
   const prompt = [
     String(imagePrompt || '').trim(),
     'Generate one finished high-end B2B OEM/ODM social media poster image.',
@@ -1220,6 +1477,7 @@ studioRouter.post('/fb-poster/render', async (req, res) => {
       bytes: generated.bytes,
       mimeType: generated.mimeType,
       source: generated.source,
+      tenantId,
     });
     res.json({
       ok: true,
@@ -1246,7 +1504,7 @@ Product: ${productInfo || '(see enterprise profile)'} ; audience: ${audience || 
 Return ONLY JSON: { "caption": string (1-2 sentences, may include 1-2 emojis), "hashtags": string[] (5-8 trending tags, no # prefix) }`;
 
   try {
-    const text = await callLLM(prompt, { backend: providerOpt, systemPrompt: enterpriseCtx() || undefined });
+    const text = await callLLM(prompt, { backend: providerOpt, systemPrompt: await enterpriseCtx() || undefined });
     const obj = extractJSON<{ caption: string; hashtags: string[] }>(text);
     if (obj?.caption) {
       res.json({ ok: true, source: 'ai', caption: obj.caption, hashtags: obj.hashtags ?? [] });
@@ -1289,10 +1547,11 @@ Text: ${src}`;
 
 // POST /studio/translate/batch Body: { text, targets: ['en', 'es'] }
 studioRouter.post('/translate/batch', async (req, res) => {
-  const { text = '', targets = [] } = req.body ?? {};
+  const { text = '', targets = [], source = 'zh' } = req.body ?? {};
+  const sourceCode = String(source || 'zh').trim();
   const src = String(text).trim();
   const targetCodes = Array.isArray(targets)
-    ? targets.map(item => String(item || '').trim()).filter(Boolean).filter(code => code !== 'zh').slice(0, 8)
+    ? targets.map(item => String(item || '').trim()).filter(Boolean).filter(code => code !== sourceCode).slice(0, 8)
     : [];
   if (!src) { res.json({ ok: true, source: 'noop', translations: {} }); return; }
   if (targetCodes.length === 0) { res.json({ ok: true, source: 'noop', translations: {} }); return; }
@@ -1300,7 +1559,7 @@ studioRouter.post('/translate/batch', async (req, res) => {
   const prompt = `You are a native short-video voiceover localization editor for cross-border B2B commerce.
 
 Task:
-Translate and lightly localize these timestamped Chinese spoken lines into natural, human-sounding target-language voiceover. This is NOT literal translation. Make it sound like a real person speaking in a short product video.
+Translate and lightly localize these timestamped ${langName(sourceCode)} spoken lines into natural, human-sounding target-language voiceover. This is NOT literal translation. Make it sound like a real person speaking in a short product video.
 
 Target languages:
 ${targetCodes.map(code => `- ${code}: ${langName(code)}`).join('\n')}
@@ -1312,7 +1571,7 @@ Rules:
 - Translate only the spoken text after each timestamp.
 - Keep one output line per input line for every language.
 - Omit short sound-effect lines or onomatopoeia such as “噗噗/砰砰/咚咚/咯吱”; they are audio SFX, not voiceover subtitles.
-- Do not leave Chinese text in non-Chinese outputs.
+- Do not leave source-language text in translated outputs unless it is a product name or proper noun.
 - Use natural conversational wording, not stiff word-for-word translation.
 - Repair Chinese short-video slang into idiomatic buyer-facing wording based on product context. For example, for non-cosmetic products, “上脸质感” should become “feels good in hand” or “looks premium on camera”, not “on the skin”.
 - Keep product names, numbers, ranges, units, MOQ, material terms, and certification names accurate.
@@ -1344,9 +1603,9 @@ ${src}`;
   const runSingle = async (backend: 'qwen' | 'gemini', code: string) => {
     const singlePrompt = `You are a native short-video voiceover localization editor for cross-border B2B commerce.
 
-Translate and lightly localize the timestamped Chinese spoken lines into ${langName(code)}.
+Translate and lightly localize the timestamped ${langName(sourceCode)} spoken lines into ${langName(code)}.
 Preserve every timestamp label exactly. Translate only spoken text after each timestamp.
-Keep one output line per input line. Do not leave Chinese text. Use natural conversational wording.
+Keep one output line per input line. Do not leave source-language text except product names or proper nouns. Use natural conversational wording.
 Omit short sound-effect lines or onomatopoeia such as “噗噗/砰砰/咚咚/咯吱”; they are audio SFX, not voiceover subtitles.
 Repair Chinese short-video slang into idiomatic buyer-facing wording based on product context. For non-cosmetic products, avoid literal phrases like “on the skin”.
 Return ONLY the translated timestamped lines, no markdown and no explanations.
@@ -1403,7 +1662,7 @@ studioRouter.post('/insight', async (req, res) => {
 数据：${JSON.stringify(metrics)}
 只返回 JSON：{ "summary": string（一句话核心结论，≤40 字）, "actions": string[]（2-3 条，每条≤18 字，动词开头，具体到内容方向/平台/语言/投流） }`;
   try {
-    const text = await callLLM(prompt, { systemPrompt: enterpriseCtx() || undefined });
+    const text = await callLLM(prompt, { systemPrompt: await enterpriseCtx() || undefined });
     const obj = extractJSON<{ summary: string; actions: string[] }>(text);
     if (obj?.summary) {
       res.json({ ok: true, source: 'ai', summary: obj.summary, actions: (obj.actions ?? []).slice(0, 3) });
@@ -1428,7 +1687,7 @@ Clips: ${JSON.stringify(list)}
 Return ONLY JSON: { "selectedIds": string[] (ordered), "reason": string (one short sentence) }`;
 
   try {
-    const text = await callLLM(prompt, { systemPrompt: enterpriseCtx() || undefined });
+    const text = await callLLM(prompt, { systemPrompt: await enterpriseCtx() || undefined });
     const obj = extractJSON<{ selectedIds: string[]; reason: string }>(text);
     const valid = obj?.selectedIds?.filter(id => list.some(c => c.id === id));
     if (valid && valid.length) {
@@ -1509,7 +1768,10 @@ function absoluteAssetUrl(base: string, value?: string | null): string | null {
 
 function buildManifest(jobId: string, spec: RenderSpec, base: string): RenderManifest {
   // 选中素材按名称映射到素材库的真实 URL（已上传的给绝对地址，ffmpeg 可直接拉取）
-  const urlByName = new Map(loadMaterials().map(m => [m.name, m.url]));
+  const tenantId = studioTenantContext.getStore();
+  const urlByName = new Map(loadMaterials()
+    .filter(m => m.scope === 'shared' || (tenantId && m.tenantId === tenantId))
+    .map(m => [m.name, m.url]));
   return {
     jobId,
     spec: {
@@ -1528,7 +1790,7 @@ function buildManifest(jobId: string, spec: RenderSpec, base: string): RenderMan
     voiceover: { voice: spec.voice ?? null, url: absoluteAssetUrl(base, spec.voiceoverUrl) },
     cover: { id: spec.coverId ?? null, title: spec.coverTitle ?? '', url: absoluteAssetUrl(base, spec.coverUrl) },
     bgm: (() => {
-      const track = spec.bgm ? withRecommendedBgmNames(userBgms()).find(t => t.id === spec.bgm) : null;
+      const track = spec.bgm && tenantId ? withRecommendedBgmNames(userBgms(tenantId)).find(t => t.id === spec.bgm) : null;
       return { id: spec.bgm ?? null, url: track ? `${base}${track.url}` : null };
     })(),
     subtitles: spec.subtitles && spec.subtitles.mode !== 'off' ? spec.subtitles : undefined,
@@ -1614,7 +1876,42 @@ interface Material {
   url: string;      // /media/<file>
   poster?: string;  // 封面用的帧画面：视频抽首帧，图片即自身
   scope: 'shared' | 'own'; // shared=公共库（运营预置），own=用户自己上传
+  tenantId?: string;
+  usage?: MaterialUsage;   // editable=可剪辑；reference_only=仅供对标分析，禁止进入公共下载库
+  sourceType?: string;
+  sourceUrl?: string;
+  pinned?: boolean;
+  segmentAnalysisStatus?: 'pending' | 'analyzing' | 'completed' | 'failed';
+  segmentAnalysisError?: string;
+  segments?: MaterialSegment[];
   createdAt: string;
+}
+
+interface MaterialSegment {
+  id: string;
+  start: number;
+  end: number;
+  duration: number;
+  poster?: string;
+  subject: string[];
+  action: string;
+  productVisible: boolean;
+  productClarity: 'none' | 'low' | 'medium' | 'high';
+  shot: string;
+  angle: string;
+  composition: string;
+  camera: string;
+  environment: string;
+  quality: number;
+  ocrText: string;
+  hasPerson: boolean;
+  hasLogo: boolean;
+  logoText: string[];
+  recommendedFunctions: string[];
+  authenticity: string;
+  confidence: number;
+  needsReview: boolean;
+  manualConfirmed?: boolean;
 }
 
 const ffmpegBin = ffmpegStatic as unknown as string | null;
@@ -1651,12 +1948,86 @@ function humanSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-// GET /studio/materials?scope=shared|own → Material[]（按上传时间倒序）
+function parseAnalysisRange(value: string, fallbackStart: number, totalDuration: number): { start: number; end: number } {
+  const values = Array.from(String(value || '').matchAll(/(\d+(?:\.\d+)?)/g)).map(match => Number(match[1]));
+  const start = Math.max(0, Math.min(totalDuration || Number.MAX_SAFE_INTEGER, values[0] ?? fallbackStart));
+  const fallbackEnd = start + 3;
+  const end = Math.max(start + 0.3, Math.min(totalDuration || fallbackEnd, values[1] ?? fallbackEnd));
+  return { start: +start.toFixed(2), end: +end.toFixed(2) };
+}
+
+function includesAny(text: string, pattern: RegExp): boolean {
+  return pattern.test(String(text || '').toLowerCase());
+}
+
+function analysisDetailToSegment(material: Material, detail: NonNullable<Awaited<ReturnType<typeof analyzeVideo>>['scriptDetails15s']>[number], index: number, fallbackStart: number): MaterialSegment {
+  const range = parseAnalysisRange(String(detail.time || ''), fallbackStart, material.duration);
+  const visual = `${detail.visual || ''} ${detail.observedFacts || ''}`;
+  const productVisible = includesAny(visual, /产品|包装|瓶|罐|盒|膏|液|product|package|bottle|jar|tube/);
+  const hasPerson = includesAny(visual, /人物|真人|男性|女性|手|脸|眼|皮肤|person|man|woman|hand|face|eye|skin/);
+  const ocrText = String(detail.onScreenText || detail.subtitle || '').trim();
+  const logoText = Array.from(new Set((ocrText.match(/[A-Za-z][A-Za-z0-9_-]{2,}/g) || []).slice(0, 6)));
+  const purpose = String(detail.purpose || '').trim();
+  const clarity: MaterialSegment['productClarity'] = !productVisible ? 'none'
+    : includesAny(`${detail.shot} ${visual}`, /大特写|特写|close-up|清晰|完整/) ? 'high'
+    : includesAny(`${detail.shot} ${visual}`, /近景|中近景|medium/) ? 'medium' : 'low';
+  return {
+    id: `${material.id}-segment-${index + 1}`,
+    start: range.start,
+    end: range.end,
+    duration: +(range.end - range.start).toFixed(2),
+    subject: [productVisible ? '产品' : '', hasPerson ? '人物' : ''].filter(Boolean),
+    action: String(detail.beats?.map(beat => beat.action).filter(Boolean).join(' → ') || detail.visual || ''),
+    productVisible,
+    productClarity: clarity,
+    shot: String(detail.shot || ''),
+    angle: String(detail.angle || ''),
+    composition: String(detail.composition || ''),
+    camera: String(detail.camera || ''),
+    environment: String(detail.environment || ''),
+    quality: Math.max(0, Math.min(100, Math.round(Number(detail.confidence ?? 0.7) * 100))),
+    ocrText,
+    hasPerson,
+    hasLogo: logoText.length > 0,
+    logoText,
+    recommendedFunctions: purpose ? [purpose] : [],
+    authenticity: String(detail.authenticity || ''),
+    confidence: Math.max(0, Math.min(1, Number(detail.confidence ?? 0.7))),
+    needsReview: Boolean(detail.needsReview || !purpose || clarity === 'low'),
+  };
+}
+
+// GET /studio/materials?scope=shared|own&purpose=library|reference|all
+// 默认只返回可剪辑素材；reference 专供对标分析。reference_only 永不进入 shared 公共库。
 studioRouter.get('/materials', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   const scope = req.query.scope as string | undefined;
-  let list = loadMaterials().filter(m => !isMockMaterial(m));
-  if (scope === 'shared' || scope === 'own') list = list.filter(m => (m.scope ?? 'own') === scope);
-  res.json(list.sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
+  const purpose = String(req.query.purpose || 'library');
+  let list = [
+    ...await listCloudMaterials(),
+    ...loadMaterials().filter(m => !isMockMaterial(m) && (m.scope === 'shared' || m.tenantId === tenantId)),
+  ] as Material[];
+  if (scope === 'shared') list = list.filter(canAppearInSharedLibrary);
+  else if (scope === 'own') list = list.filter(m => (m.scope ?? 'own') === 'own');
+  if (purpose === 'reference') list = list.filter(isReferenceOnlyMaterial);
+  else if (purpose !== 'all') list = list.filter(m => !isReferenceOnlyMaterial(m));
+  res.json(list
+    .map(m => ({ ...m, usage: materialUsage(m) }))
+    .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.createdAt.localeCompare(a.createdAt)));
+});
+
+studioRouter.get('/materials/pb/:id/:kind', async (req, res) => {
+  const field = req.params.kind === 'poster' ? 'posterFile' : req.params.kind === 'media' ? 'videoFile' : null;
+  if (!field) { res.status(404).end(); return; }
+  const upstream = await fetchCloudMaterial(req.params.id, field, req.headers.range);
+  if (!upstream || !upstream.body) { res.status(404).end(); return; }
+  for (const header of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']) {
+    const value = upstream.headers.get(header);
+    if (value) res.setHeader(header, value);
+  }
+  res.setHeader('Cache-Control', field === 'posterFile' ? 'public, max-age=86400' : 'private, max-age=3600');
+  res.status(upstream.status);
+  Readable.fromWeb(upstream.body as any).pipe(res);
 });
 
 function isMockMaterial(m: Material): boolean {
@@ -1668,30 +2039,37 @@ function isMockMaterial(m: Material): boolean {
 
 // POST /studio/materials  Body: { name, folder?, type, duration?, dataBase64, mimeType?, scope? } → 上传单个文件
 studioRouter.post('/materials', async (req, res) => {
-  const { name, folder = 'upload', type, duration = 0, dataBase64, mimeType, scope = 'own' } = req.body ?? {};
+  const { tenantId } = res.locals as AuthLocals;
+  const { name, folder = 'upload', type, duration = 0, dataBase64, mimeType, scope = 'own', usage, sourceType, sourceUrl } = req.body ?? {};
   if (!dataBase64 || !type) { res.status(400).json({ ok: false, error: 'dataBase64 and type required' }); return; }
   if (!['video', 'image', 'audio'].includes(type)) { res.status(400).json({ ok: false, error: 'invalid type' }); return; }
 
-  try { fs.mkdirSync(MEDIA_DIR, { recursive: true }); } catch { /* ignore */ }
+  const uploadDir = tenantAssetDir(MEDIA_DIR, tenantId);
+  try { fs.mkdirSync(uploadDir, { recursive: true }); } catch { /* ignore */ }
 
   const id = randomUUID();
   const extFromMime = (mimeType as string | undefined)?.split('/')[1]?.replace('quicktime', 'mov');
   const ext = extFromMime || (type === 'image' ? 'jpg' : type === 'audio' ? 'mp3' : 'mp4');
   const file = `${id}.${ext}`;
   const buf = Buffer.from(String(dataBase64).replace(/^data:[^,]+,/, ''), 'base64');
-  fs.writeFileSync(path.join(MEDIA_DIR, file), buf);
+  const relativeFile = tenantAssetRelativePath(tenantId, file);
+  fs.writeFileSync(path.join(MEDIA_DIR, relativeFile), buf);
 
   // 封面用帧画面：视频抽首帧（≈1s 处，太短则取 0），图片用自身，音频无
   let poster: string | undefined;
   if (type === 'image') {
-    poster = `/media/${file}`;
+    poster = `/media/${relativeFile}`;
   } else if (type === 'video') {
     const posterFile = `${id}.poster.jpg`;
+    const relativePoster = tenantAssetRelativePath(tenantId, posterFile);
     const at = (Number(duration) || 0) > 1 ? 1 : 0;
-    const ok = await extractPoster(path.join(MEDIA_DIR, file), path.join(MEDIA_DIR, posterFile), at);
-    if (ok) poster = `/media/${posterFile}`;
+    const ok = await extractPoster(path.join(MEDIA_DIR, relativeFile), path.join(MEDIA_DIR, relativePoster), at);
+    if (ok) poster = `/media/${relativePoster}`;
   }
 
+  const requestedUsage: MaterialUsage = usage === 'reference_only' || sourceType === 'youtube' || /youtube\.com|youtu\.be/i.test(String(sourceUrl || ''))
+    ? 'reference_only'
+    : 'editable';
   const material: Material = {
     id,
     name: name || file,
@@ -1699,10 +2077,15 @@ studioRouter.post('/materials', async (req, res) => {
     type,
     duration: Number(duration) || 0,
     size: humanSize(buf.length),
-    file,
-    url: `/media/${file}`,
+    file: relativeFile,
+    url: `/media/${relativeFile}`,
     poster,
-    scope: scope === 'shared' ? 'shared' : 'own',
+    // Reference material must never be promoted into the shared download library.
+    scope: 'own',
+    tenantId,
+    usage: requestedUsage,
+    sourceType: sourceType ? String(sourceType) : undefined,
+    sourceUrl: sourceUrl ? String(sourceUrl) : undefined,
     createdAt: new Date().toISOString(),
   };
   const list = loadMaterials();
@@ -1711,13 +2094,86 @@ studioRouter.post('/materials', async (req, res) => {
   res.status(201).json({ ok: true, material });
 });
 
+// POST /studio/materials/:id/analyze-segments
+// Gemini 按动作/主体/镜头功能切片；截取区间来自实际视频时间轴，不再用比例猜测。
+studioRouter.post('/materials/:id/analyze-segments', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const list = loadMaterials();
+  const material = list.find(item => item.id === req.params.id && item.tenantId === tenantId);
+  if (!material) { res.status(404).json({ ok: false, error: 'Material not found' }); return; }
+  if (material.type !== 'video') { res.status(400).json({ ok: false, error: '仅视频素材支持片段分析' }); return; }
+  const mediaPath = path.join(MEDIA_DIR, material.file);
+  if (!fs.existsSync(mediaPath)) { res.status(404).json({ ok: false, error: '素材文件不存在' }); return; }
+
+  material.segmentAnalysisStatus = 'analyzing';
+  material.segmentAnalysisError = undefined;
+  persistMaterials(list);
+  try {
+    const extension = path.extname(material.file).slice(1).toLowerCase();
+    const mimeType = extension === 'mov' ? 'video/quicktime' : extension === 'webm' ? 'video/webm' : 'video/mp4';
+    const analysis = await analyzeVideo({ videoBase64: fs.readFileSync(mediaPath).toString('base64'), mimeType });
+    const details = analysis.scriptDetails15s || [];
+    if (!details.length) throw new Error('模型未返回可用的片段时间轴');
+    const segments: MaterialSegment[] = [];
+    let fallbackStart = 0;
+    for (let index = 0; index < details.length; index++) {
+      const segment = analysisDetailToSegment(material, details[index]!, index, fallbackStart);
+      const posterFile = tenantAssetRelativePath(tenantId, `${material.id}.segment-${index + 1}.jpg`);
+      if (await extractPoster(mediaPath, path.join(MEDIA_DIR, posterFile), Math.min(segment.end, segment.start + 0.2))) {
+        segment.poster = `/media/${posterFile}`;
+      }
+      segments.push(segment);
+      fallbackStart = segment.end;
+    }
+    material.segments = segments;
+    material.segmentAnalysisStatus = 'completed';
+    material.segmentAnalysisError = undefined;
+    persistMaterials(list);
+    res.json({ ok: true, material, segments });
+  } catch (error: any) {
+    material.segmentAnalysisStatus = 'failed';
+    material.segmentAnalysisError = String(error?.message || error || '片段分析失败').slice(0, 500);
+    persistMaterials(list);
+    res.status(500).json({ ok: false, error: material.segmentAnalysisError });
+  }
+});
+
+// PATCH /studio/materials/:id/segments/:segmentId — 人工修正并确认 AI 片段标签。
+studioRouter.patch('/materials/:id/segments/:segmentId', (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const list = loadMaterials();
+  const material = list.find(item => item.id === req.params.id && item.tenantId === tenantId);
+  const segment = material?.segments?.find(item => item.id === req.params.segmentId);
+  if (!material || !segment) { res.status(404).json({ ok: false, error: 'Material segment not found' }); return; }
+  const editable = ['start', 'end', 'subject', 'action', 'productVisible', 'productClarity', 'shot', 'angle', 'composition', 'camera', 'environment', 'quality', 'ocrText', 'hasPerson', 'hasLogo', 'logoText', 'recommendedFunctions', 'authenticity', 'needsReview', 'manualConfirmed'] as const;
+  for (const key of editable) if (key in (req.body || {})) (segment as any)[key] = req.body[key];
+  segment.start = Math.max(0, Number(segment.start) || 0);
+  segment.end = Math.max(segment.start + 0.3, Number(segment.end) || segment.start + 0.3);
+  segment.duration = +(segment.end - segment.start).toFixed(2);
+  if (segment.manualConfirmed) segment.needsReview = false;
+  persistMaterials(list);
+  res.json({ ok: true, material, segment });
+});
+
+studioRouter.patch('/materials/:id/pin', (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const list = loadMaterials();
+  const material = list.find(item => item.id === req.params.id && item.tenantId === tenantId);
+  if (!material) { res.status(404).json({ ok: false, error: 'Material not found' }); return; }
+  material.pinned = req.body?.pinned !== false;
+  persistMaterials(list);
+  res.json({ ok: true, material });
+});
+
 // DELETE /studio/materials/:id
 studioRouter.delete('/materials/:id', (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   const list = loadMaterials();
-  const m = list.find(x => x.id === req.params.id);
+  const m = list.find(x => x.id === req.params.id && x.tenantId === tenantId);
   if (!m) { res.status(404).json({ ok: false, error: 'Material not found' }); return; }
   try { fs.unlinkSync(path.join(MEDIA_DIR, m.file)); } catch { /* file may be gone */ }
-  if (m.poster && m.poster !== m.url) { try { fs.unlinkSync(path.join(MEDIA_DIR, path.basename(m.poster))); } catch { /* ignore */ } }
+  if (m.poster && m.poster !== m.url) { try { fs.unlinkSync(path.join(MEDIA_DIR, m.poster.replace(/^\/media\//, ''))); } catch { /* ignore */ } }
+  for (const segment of m.segments || []) if (segment.poster) { try { fs.unlinkSync(path.join(MEDIA_DIR, segment.poster.replace(/^\/media\//, ''))); } catch { /* ignore */ } }
   persistMaterials(list.filter(x => x.id !== req.params.id));
   res.json({ ok: true });
 });
@@ -1727,7 +2183,7 @@ studioRouter.delete('/materials/:id', (req, res) => {
    浏览器原生渲染、CJK/emoji 可显。作为发布缩略图，ffmpeg 不参与，零栅格化依赖。
 ─────────────────────────────────────────────────────────────────────────── */
 
-const COVERS_DIR = path.join(__dirname, '../../data/covers');
+const COVERS_ROOT = path.join(__dirname, '../../data/covers');
 
 function coverResolution(ratio: string): [number, number] {
   if (ratio === '1:1') return [1080, 1080];
@@ -1752,7 +2208,15 @@ function wrapTitle(title: string, perLine: number): string[] {
 }
 
 type CoverFont = 'sans' | 'impact' | 'serif' | 'rounded' | 'mono';
-interface CoverStyle { color: string; size: 'S' | 'M' | 'L'; position: 'top' | 'center' | 'bottom'; align: 'left' | 'center'; font: CoverFont }
+interface CoverStyle {
+  color: string;
+  size: 'S' | 'M' | 'L';
+  position: 'top' | 'center' | 'bottom';
+  align: 'left' | 'center';
+  font: CoverFont;
+  weight?: 'regular' | 'bold' | 'heavy';
+  artPreset?: 'clean' | 'outline' | 'highlight' | 'magazine' | 'neon' | 'sticker';
+}
 
 // 字体栈用系统字体（SVG 经 <img> 加载无法用网页字体），均带 CJK 回退
 const COVER_FONT_STACK: Record<CoverFont, string> = {
@@ -1770,13 +2234,15 @@ function buildCoverSvg(opts: { title: string; ratio: string; accent: string; bgI
   const position = opts.position || 'bottom';
   const align = opts.align || 'left';
   const fontStack = COVER_FONT_STACK[opts.font || 'sans'] || COVER_FONT_STACK.sans;
-  const weight = opts.font === 'serif' ? 700 : 800;
+  const weight = opts.weight === 'regular' ? 600 : opts.weight === 'heavy' ? 900 : opts.font === 'serif' ? 700 : 800;
+  const artPreset = opts.artPreset || 'clean';
 
   const scale = size === 'S' ? 0.062 : size === 'L' ? 0.098 : 0.078;
   const fontSize = Math.round(w * scale);
   const lineH = Math.round(fontSize * 1.18);
   const pad = Math.round(w * 0.045);
-  const lines = wrapTitle(opts.title || '', Math.floor(w / (fontSize * 0.6)));
+  const displayTitle = artPreset === 'magazine' ? String(opts.title || '').toUpperCase() : opts.title || '';
+  const lines = wrapTitle(displayTitle, Math.floor(w / (fontSize * 0.6)));
   const totalH = (lines.length - 1) * lineH;
 
   const firstBaseline =
@@ -1797,14 +2263,29 @@ function buildCoverSvg(opts: { title: string; ratio: string; accent: string; bgI
     : position === 'center' ? `<rect width="${w}" height="${h}" fill="#000" fill-opacity="0.3"/>`
     : `<rect x="0" y="${half}" width="${w}" height="${half}" fill="url(#scrimB)"/>`;
 
-  const texts = lines.map((ln, i) =>
-    `<text x="${tx}" y="${firstBaseline + i * lineH}" text-anchor="${anchor}" font-family="${fontStack}" font-size="${fontSize}" font-weight="${weight}" fill="${color}" paint-order="stroke" stroke="#000" stroke-opacity="0.25" stroke-width="${Math.round(fontSize * 0.04)}">${xmlEscape(ln)}</text>`
-  ).join('');
+	  const texts = lines.map((ln, i) => {
+    const y = firstBaseline + i * lineH;
+    const escaped = xmlEscape(ln);
+    const estimatedWidth = Math.min(w - pad * 2, Math.max(fontSize * 1.4, ln.length * fontSize * 0.58));
+    const rectX = align === 'center' ? Math.round((w - estimatedWidth) / 2) : pad;
+    if (artPreset === 'highlight') {
+      return `<rect x="${rectX - Math.round(fontSize * 0.12)}" y="${y - Math.round(fontSize * 0.9)}" width="${Math.round(estimatedWidth + fontSize * 0.24)}" height="${Math.round(fontSize * 1.08)}" rx="${Math.round(fontSize * 0.1)}" fill="#facc15"/><text x="${tx}" y="${y}" text-anchor="${anchor}" font-family="${fontStack}" font-size="${fontSize}" font-weight="${weight}" fill="#111827">${escaped}</text>`;
+    }
+    if (artPreset === 'sticker') {
+      return `<text x="${tx + Math.round(fontSize * 0.1)}" y="${y + Math.round(fontSize * 0.1)}" text-anchor="${anchor}" font-family="${fontStack}" font-size="${fontSize}" font-weight="${weight}" fill="#16a34a" stroke="#16a34a" stroke-width="${Math.round(fontSize * 0.15)}" paint-order="stroke fill">${escaped}</text><text x="${tx}" y="${y}" text-anchor="${anchor}" font-family="${fontStack}" font-size="${fontSize}" font-weight="${weight}" fill="#111827" stroke="#fff" stroke-width="${Math.round(fontSize * 0.16)}" paint-order="stroke fill">${escaped}</text>`;
+    }
+    const strokeWidth = artPreset === 'outline' ? Math.round(fontSize * 0.12) : Math.round(fontSize * 0.04);
+    const strokeOpacity = artPreset === 'outline' ? 0.95 : 0.25;
+    const filter = artPreset === 'neon' ? ' filter="url(#neonGlow)"' : '';
+    const italic = artPreset === 'magazine' ? ' font-style="italic"' : '';
+    return `<text x="${tx}" y="${y}" text-anchor="${anchor}" font-family="${fontStack}" font-size="${fontSize}" font-weight="${weight}" fill="${color}" paint-order="stroke" stroke="#000" stroke-opacity="${strokeOpacity}" stroke-width="${strokeWidth}"${filter}${italic}>${escaped}</text>`;
+  }).join('');
 
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}">
 <defs>
 	<linearGradient id="scrimB" x1="0" y1="0" x2="0" y2="1"><stop offset="0.45" stop-color="#000" stop-opacity="0"/><stop offset="1" stop-color="#000" stop-opacity="0.7"/></linearGradient>
 <linearGradient id="scrimT" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#000" stop-opacity="0.7"/><stop offset="0.55" stop-color="#000" stop-opacity="0"/></linearGradient>
+<filter id="neonGlow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="10" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
 </defs>
 ${bg}
 ${scrim}
@@ -1816,7 +2297,11 @@ ${texts}
 function inlineFrame(bgImageUrl?: string): string | undefined {
   if (!bgImageUrl) return undefined;
   try {
-    const local = path.join(MEDIA_DIR, path.basename(bgImageUrl.split('?')[0]));
+    const tenantId = studioTenantContext.getStore();
+    if (!tenantId) return undefined;
+    const relative = bgImageUrl.split('?')[0].replace(/^.*\/media\//, '');
+    if (!relative.startsWith(`tenants/${tenantId}/`) && !relative.startsWith('shared/')) return undefined;
+    const local = path.join(MEDIA_DIR, relative);
     if (!fs.existsSync(local)) return undefined;
     const ext = path.extname(local).slice(1).toLowerCase();
     const mime = ext === 'png' ? 'image/png' : ext === 'webp' ? 'image/webp' : 'image/jpeg';
@@ -1827,17 +2312,17 @@ function inlineFrame(bgImageUrl?: string): string | undefined {
 // POST /studio/cover  Body: { title, ratio?, accent?, bgImageUrl?, color?, size?, position?, align? } → { ok, url }
 studioRouter.post('/cover', async (req, res) => {
   if (!await consumeDemoQuota(req, res, 'generation')) return;
-  const { title = '', ratio = '9:16', accent = '#d97706', bgImageUrl, color, size, position, align, font } = req.body ?? {};
+  const { title = '', ratio = '9:16', accent = '#d97706', bgImageUrl, color, size, position, align, font, weight, artPreset } = req.body ?? {};
   try {
-    fs.mkdirSync(COVERS_DIR, { recursive: true });
+    fs.mkdirSync(scopedStudioAssetDir(COVERS_ROOT), { recursive: true });
     const file = `${randomUUID()}.svg`;
 	    const dataUri = inlineFrame(bgImageUrl);
       if (!dataUri) {
         res.status(400).json({ ok: false, error: 'cover_frame_required' });
         return;
       }
-	    fs.writeFileSync(path.join(COVERS_DIR, file), buildCoverSvg({ title, ratio, accent, bgImageUrl: dataUri, color, size, position, align, font }), 'utf8');
-    res.json({ ok: true, url: `/covers/${file}`, hasFrame: !!dataUri });
+	    fs.writeFileSync(path.join(scopedStudioAssetDir(COVERS_ROOT), file), buildCoverSvg({ title, ratio, accent, bgImageUrl: dataUri, color, size, position, align, font, weight, artPreset }), 'utf8');
+    res.json({ ok: true, url: scopedStudioAssetUrl('covers', file), hasFrame: !!dataUri });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: String(e?.message ?? e) });
   }
@@ -1848,9 +2333,55 @@ studioRouter.post('/cover', async (req, res) => {
    渲染时由 buildManifest 映射成 voiceover.url，桌面端 ffmpeg 把它压过 BGM 混进成片。
 ─────────────────────────────────────────────────────────────────────────── */
 
-const TTS_DIR = path.join(__dirname, '../../data/tts');
-const VOICE_SAMPLES_DIR = path.join(__dirname, '../../data/voice-samples');
-const MINIMAX_VOICE_CACHE_FILE = path.join(VOICE_SAMPLES_DIR, 'minimax-voice-cache.json');
+const TTS_ROOT = path.join(__dirname, '../../data/tts');
+const VOICE_SAMPLES_ROOT = path.join(__dirname, '../../data/voice-samples');
+function minimaxVoiceCacheFile(): string {
+  return path.join(scopedStudioAssetDir(VOICE_SAMPLES_ROOT), 'minimax-voice-cache.json');
+}
+
+type TtsPreset = 'tiktok_excited' | 'authentic_review' | 'professional_b2b' | 'warm_story' | 'urgent_cta';
+interface TtsStyleOptions {
+  preset?: TtsPreset;
+  emotion?: string;
+  emotionIntensity?: number;
+  speed?: number;
+  targetDuration?: number;
+  pauseStyle?: 'few' | 'natural' | 'dramatic';
+  pronunciations?: Array<{ word: string; pronunciation: string }>;
+}
+interface AlignedWord { text: string; start: number; end: number }
+interface AlignedCue { text: string; start: number; end: number; words?: AlignedWord[] }
+
+const TTS_PRESET_GUIDE: Record<TtsPreset, string> = {
+  tiktok_excited: 'High-energy TikTok product recommendation. Start with excited surprise, use crisp emphasis and quick but intelligible pacing, then land the CTA strongly.',
+  authentic_review: 'Authentic personal product review. Sound conversational, specific and pleasantly surprised, never like a hard-sell announcer.',
+  professional_b2b: 'Professional cross-border B2B presenter. Sound confident, credible and restrained, with clear pronunciation of specifications and sourcing terms.',
+  warm_story: 'Warm lifestyle storytelling. Use a gentle smile, natural breathing and slightly slower emotional pacing.',
+  urgent_cta: 'Conversion-focused call to action. Build urgency without shouting, emphasize the offer and finish decisively.',
+};
+
+function normalizeTtsStyle(input: unknown): TtsStyleOptions {
+  const raw = input && typeof input === 'object' ? input as Record<string, unknown> : {};
+  const preset = String(raw.preset || '') as TtsPreset;
+  return {
+    preset: preset in TTS_PRESET_GUIDE ? preset : 'authentic_review',
+    emotion: String(raw.emotion || '自然可信').slice(0, 40),
+    emotionIntensity: Math.max(0, Math.min(100, Number(raw.emotionIntensity ?? 65) || 65)),
+    speed: Math.max(0.75, Math.min(1.35, Number(raw.speed ?? 1) || 1)),
+    targetDuration: Math.max(0, Math.min(180, Number(raw.targetDuration ?? 0) || 0)),
+    pauseStyle: raw.pauseStyle === 'few' || raw.pauseStyle === 'dramatic' ? raw.pauseStyle : 'natural',
+    pronunciations: Array.isArray(raw.pronunciations) ? raw.pronunciations.slice(0, 20).map(item => {
+      const row = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+      return { word: String(row.word || '').trim().slice(0, 60), pronunciation: String(row.pronunciation || '').trim().slice(0, 120) };
+    }).filter(item => item.word && item.pronunciation) : [],
+  };
+}
+
+function ttsPerformancePrompt(text: string, style: TtsStyleOptions): string {
+  const guide = TTS_PRESET_GUIDE[style.preset || 'authentic_review'];
+  const durationGuide = style.targetDuration ? ` Aim for about ${style.targetDuration} seconds by adjusting natural pauses only; never add words.` : '';
+  return `${guide}\nEmotion: ${style.emotion || 'natural and credible'}; intensity ${Math.round(style.emotionIntensity || 65)}/100; speaking rate ${Number(style.speed || 1).toFixed(2)}x.${durationGuide} Use meaningful pauses at punctuation and emphasize concrete product benefits. Speak only the script below; never read these directions aloud.\n\nSCRIPT:\n${text}`;
+}
 
 // 工作台 4 个音色 → Gemini 预置嗓音
 const TTS_VOICE_MAP: Record<string, string> = {
@@ -2015,21 +2546,54 @@ function minimaxVoiceFor(voice: string, language: string): string {
     || 'English_FriendlyPerson';
 }
 
-function readMinimaxVoiceCache(): Record<string, string> {
+interface MinimaxVoiceCacheEntry {
+  voiceId: string;
+  clonedAt: string;
+  activatedAt?: string;
+  lastSynthesizedAt?: string;
+  lastActivationAttemptAt?: string;
+  activationState: 'pending' | 'activated';
+  lastError?: string;
+}
+
+function readMinimaxVoiceCache(): Record<string, MinimaxVoiceCacheEntry> {
   try {
-    return JSON.parse(fs.readFileSync(MINIMAX_VOICE_CACHE_FILE, 'utf8')) as Record<string, string>;
+    const raw = JSON.parse(fs.readFileSync(minimaxVoiceCacheFile(), 'utf8')) as Record<string, string | MinimaxVoiceCacheEntry>;
+    return Object.fromEntries(Object.entries(raw).map(([key, value]) => [key, typeof value === 'string'
+      ? { voiceId: value, clonedAt: '', activationState: 'pending' as const }
+      : value]));
   } catch {
     return {};
   }
 }
 
-function writeMinimaxVoiceCache(cache: Record<string, string>) {
+function writeMinimaxVoiceCache(cache: Record<string, MinimaxVoiceCacheEntry>) {
   try {
-    fs.mkdirSync(VOICE_SAMPLES_DIR, { recursive: true });
-    fs.writeFileSync(MINIMAX_VOICE_CACHE_FILE, JSON.stringify(cache, null, 2), 'utf8');
+    fs.mkdirSync(scopedStudioAssetDir(VOICE_SAMPLES_ROOT), { recursive: true });
+    fs.writeFileSync(minimaxVoiceCacheFile(), JSON.stringify(cache, null, 2), 'utf8');
   } catch {
     // Cache is only an optimization. If it cannot be written, synthesis can still proceed.
   }
+}
+
+function minimaxVoiceCacheKey(voice: string, samplePath: string): string {
+  const stat = fs.statSync(samplePath);
+  return `${voice}:${stat.mtimeMs}:${stat.size}`;
+}
+
+function updateMinimaxVoiceCache(cacheKey: string, patch: Partial<MinimaxVoiceCacheEntry>) {
+  const cache = readMinimaxVoiceCache();
+  const current = cache[cacheKey];
+  if (!current) return;
+  cache[cacheKey] = { ...current, ...patch };
+  writeMinimaxVoiceCache(cache);
+}
+
+function clearMinimaxVoiceCache(cacheKey: string) {
+  const cache = readMinimaxVoiceCache();
+  if (!cache[cacheKey]) return;
+  delete cache[cacheKey];
+  writeMinimaxVoiceCache(cache);
 }
 
 function minimaxCustomVoiceId(voice: string): string {
@@ -2054,9 +2618,9 @@ function voiceSamplePathFromId(voice: string): string | null {
   const id = String(voice || '').replace(/^custom:/, '').replace(/[^a-zA-Z0-9_-]/g, '');
   if (!id) return null;
   try {
-    const files = fs.readdirSync(VOICE_SAMPLES_DIR);
+    const files = fs.readdirSync(scopedStudioAssetDir(VOICE_SAMPLES_ROOT));
     const found = files.find(file => file.startsWith(`${id}.`));
-    return found ? path.join(VOICE_SAMPLES_DIR, found) : null;
+    return found ? path.join(scopedStudioAssetDir(VOICE_SAMPLES_ROOT), found) : null;
   } catch {
     return null;
   }
@@ -2126,7 +2690,7 @@ function durationFromText(text: string): number {
 }
 
 function fallbackToneWav(text: string): { file: string; duration: number } {
-  try { fs.mkdirSync(TTS_DIR, { recursive: true }); } catch { /* ignore */ }
+  try { fs.mkdirSync(scopedStudioAssetDir(TTS_ROOT), { recursive: true }); } catch { /* ignore */ }
   const sampleRate = 24000;
   const duration = durationFromText(text);
   const samples = sampleRate * duration;
@@ -2139,7 +2703,7 @@ function fallbackToneWav(text: string): { file: string; duration: number } {
     pcm.writeInt16LE(Math.max(-1, Math.min(1, value)) * 32767, i * 2);
   }
   const file = `${randomUUID()}.wav`;
-  fs.writeFileSync(path.join(TTS_DIR, file), wavFromPcm(pcm, sampleRate));
+  fs.writeFileSync(path.join(scopedStudioAssetDir(TTS_ROOT), file), wavFromPcm(pcm, sampleRate));
   return { file, duration };
 }
 
@@ -2164,22 +2728,59 @@ async function minimaxFetchJson(pathname: string, body: Record<string, unknown>,
   return json;
 }
 
-async function generateMinimaxTts(text: string, voiceId: string, language: string): Promise<{ url: string; duration: number; source: string } | null> {
+function minimaxSpeechText(text: string, style: TtsStyleOptions): string {
+  const clean = String(text || '').replace(/<#\d+(?:\.\d+)?#>/g, '').trim();
+  if (style.pauseStyle === 'few') return clean;
+  const sentencePause = style.pauseStyle === 'dramatic' ? '0.42' : '0.24';
+  const clausePause = style.pauseStyle === 'dramatic' ? '0.22' : '0.12';
+  return clean
+    .replace(/([。！？!?；;])(?=\S)/g, `$1<#${sentencePause}#>`)
+    .replace(/([，,：:])(?=\S)/g, `$1<#${clausePause}#>`);
+}
+
+function minimaxPronunciationDict(style: TtsStyleOptions): { tone: string[] } | undefined {
+  const tone = (style.pronunciations || [])
+    .map(item => `${item.word}/${item.pronunciation}`)
+    .filter(item => !/[\r\n]/.test(item));
+  return tone.length ? { tone } : undefined;
+}
+
+async function minimaxSubtitleCues(url: unknown, duration: number): Promise<AlignedCue[]> {
+  if (!/^https?:\/\//i.test(String(url || ''))) return [];
+  try {
+    const response = await fetch(String(url), { signal: AbortSignal.timeout(15_000) });
+    if (!response.ok) return [];
+    const json = await response.json().catch(() => null) as any;
+    const rows = Array.isArray(json) ? json
+      : [json?.subtitles, json?.subtitle, json?.sentences, json?.words, json?.data].find(Array.isArray) || [];
+    const normalized = rows.map((row: any) => {
+      const text = String(row?.text ?? row?.word ?? row?.content ?? '').trim();
+      const startMs = Number(row?.start_time ?? row?.begin_time ?? row?.start ?? row?.startTime ?? 0);
+      const endMs = Number(row?.end_time ?? row?.end ?? row?.endTime ?? startMs);
+      return { text, start: Math.max(0, startMs / 1000), end: Math.min(duration, Math.max(startMs + 80, endMs) / 1000) };
+    }).filter((row: AlignedCue) => row.text && row.end > row.start);
+    return normalized;
+  } catch {
+    return [];
+  }
+}
+
+async function generateMinimaxTts(text: string, voiceId: string, language: string, style: TtsStyleOptions = {}): Promise<{ url: string; duration: number; source: string; cues?: AlignedCue[]; alignmentSource?: 'minimax_native' } | null> {
   const apiKey = process.env.MINIMAX_API_KEY || process.env.MINIMAX_API_TOKEN || '';
   if (!apiKey) return null;
-  try { fs.mkdirSync(TTS_DIR, { recursive: true }); } catch { /* ignore */ }
+  try { fs.mkdirSync(scopedStudioAssetDir(TTS_ROOT), { recursive: true }); } catch { /* ignore */ }
   const format = (process.env.MINIMAX_TTS_FORMAT || 'mp3').replace(/[^a-z0-9]/gi, '').toLowerCase() || 'mp3';
   const outputFormat = (process.env.MINIMAX_TTS_OUTPUT_FORMAT || 'hex').toLowerCase();
   const sampleRate = Math.min(44100, Math.max(16000, Number(process.env.MINIMAX_TTS_SAMPLE_RATE || 32000) || 32000));
   const bitrate = Math.min(256000, Math.max(32000, Number(process.env.MINIMAX_TTS_BITRATE || 128000) || 128000));
-  const speed = Math.min(2, Math.max(0.5, Number(process.env.MINIMAX_TTS_SPEED || 1) || 1));
+  const speed = Math.min(2, Math.max(0.5, Number(style.speed ?? process.env.MINIMAX_TTS_SPEED ?? 1) || 1));
   const volume = Math.min(10, Math.max(0.1, Number(process.env.MINIMAX_TTS_VOLUME || 1) || 1));
   const pitch = Math.min(12, Math.max(-12, Number(process.env.MINIMAX_TTS_PITCH || 0) || 0));
-  const emotion = String(process.env.MINIMAX_TTS_EMOTION || 'happy').trim();
   const model = process.env.MINIMAX_TTS_MODEL || 'speech-2.8-hd';
+  const spokenText = minimaxSpeechText(text, style);
   const payload: Record<string, unknown> = {
     model,
-    text: text.slice(0, 5000),
+    text: spokenText.slice(0, 5000),
     stream: false,
     language_boost: minimaxLanguageBoost(language),
     output_format: outputFormat,
@@ -2188,7 +2789,6 @@ async function generateMinimaxTts(text: string, voiceId: string, language: strin
       speed,
       vol: volume,
       pitch,
-      ...(emotion ? { emotion } : {}),
     },
     audio_setting: {
       sample_rate: sampleRate,
@@ -2196,18 +2796,22 @@ async function generateMinimaxTts(text: string, voiceId: string, language: strin
       format,
       channel: 1,
     },
+    ...(minimaxPronunciationDict(style) ? { pronunciation_dict: minimaxPronunciationDict(style) } : {}),
+    subtitle_enable: true,
+    subtitle_type: 'word',
   };
   const json = await minimaxFetchJson('/v1/t2a_v2', payload, Number(process.env.MINIMAX_TTS_TIMEOUT_MS || 90_000));
   const audio = String(json?.data?.audio || '');
   const remoteUrl = outputFormat === 'url' && /^https?:\/\//i.test(audio) ? audio : '';
   const duration = Math.max(1, Math.round(Number(json?.extra_info?.audio_length || 0) / 1000) || durationFromText(text));
-  if (remoteUrl) return { url: remoteUrl, duration, source: 'minimax' };
+  const cues = await minimaxSubtitleCues(json?.data?.subtitle_file, duration);
+  if (remoteUrl) return { url: remoteUrl, duration, source: 'minimax', ...(cues.length ? { cues, alignmentSource: 'minimax_native' as const } : {}) };
 
   const buf = bufferFromMinimaxAudio(audio, outputFormat);
   if (!buf?.length) throw new Error('MiniMax did not return audio data');
   const file = `${randomUUID()}.${format}`;
-  fs.writeFileSync(path.join(TTS_DIR, file), buf);
-  return { url: `/tts/${file}`, duration, source: 'minimax' };
+  fs.writeFileSync(path.join(scopedStudioAssetDir(TTS_ROOT), file), buf);
+  return { url: scopedStudioAssetUrl('tts', file), duration, source: 'minimax', ...(cues.length ? { cues, alignmentSource: 'minimax_native' as const } : {}) };
 }
 
 async function uploadMinimaxVoiceSample(samplePath: string): Promise<string> {
@@ -2237,14 +2841,37 @@ async function uploadMinimaxVoiceSample(samplePath: string): Promise<string> {
   return fileId;
 }
 
-async function ensureMinimaxClonedVoice(voice: string, language: string): Promise<string | null> {
+async function ensureMinimaxClonedVoice(voice: string, language: string): Promise<{ voiceId: string; cacheKey: string } | null> {
   const apiKey = process.env.MINIMAX_API_KEY || process.env.MINIMAX_API_TOKEN || '';
   if (!apiKey) return null;
   const samplePath = voiceSamplePathFromId(voice);
   if (!samplePath) return null;
-  const cacheKey = `${voice}:${fs.statSync(samplePath).mtimeMs}:${fs.statSync(samplePath).size}`;
+  const cacheKey = minimaxVoiceCacheKey(voice, samplePath);
   const cache = readMinimaxVoiceCache();
-  if (cache[cacheKey]) return cache[cacheKey];
+  if (cache[cacheKey]?.voiceId) {
+    const existing = cache[cacheKey];
+    if (existing.activationState !== 'activated') {
+      const attemptedAt = Date.parse(existing.lastActivationAttemptAt || '');
+      if (!Number.isFinite(attemptedAt) || Date.now() - attemptedAt > 60 * 60 * 1000) {
+        updateMinimaxVoiceCache(cacheKey, { lastActivationAttemptAt: new Date().toISOString() });
+        try {
+          const activation = await generateMinimaxTts(
+            process.env.MINIMAX_ACTIVATION_TEXT || '你好，这是我的品牌授权音色。',
+            existing.voiceId,
+            language,
+            { preset: 'authentic_review', emotion: '自然可信', emotionIntensity: 55, speed: 1 },
+          );
+          if (activation) {
+            const now = new Date().toISOString();
+            updateMinimaxVoiceCache(cacheKey, { activationState: 'activated', activatedAt: now, lastSynthesizedAt: now, lastError: undefined });
+          }
+        } catch (error) {
+          updateMinimaxVoiceCache(cacheKey, { lastError: String(error instanceof Error ? error.message : error).slice(0, 240) });
+        }
+      }
+    }
+    return { voiceId: existing.voiceId, cacheKey };
+  }
 
   const voiceId = minimaxCustomVoiceId(voice);
   const fileId = await uploadMinimaxVoiceSample(samplePath);
@@ -2260,18 +2887,41 @@ async function ensureMinimaxClonedVoice(voice: string, language: string): Promis
     const message = String(error?.message || error);
     if (!/duplicate|already exists|exist|重复/i.test(message)) throw error;
   }
-  cache[cacheKey] = voiceId;
+  cache[cacheKey] = {
+    voiceId,
+    clonedAt: new Date().toISOString(),
+    activationState: 'pending',
+  };
   writeMinimaxVoiceCache(cache);
-  return voiceId;
+  updateMinimaxVoiceCache(cacheKey, { lastActivationAttemptAt: new Date().toISOString() });
+  try {
+    const activation = await generateMinimaxTts(
+      process.env.MINIMAX_ACTIVATION_TEXT || '你好，这是我的品牌授权音色。',
+      voiceId,
+      language,
+      { preset: 'authentic_review', emotion: '自然可信', emotionIntensity: 55, speed: 1 },
+    );
+    if (activation) {
+      const now = new Date().toISOString();
+      updateMinimaxVoiceCache(cacheKey, { activationState: 'activated', activatedAt: now, lastSynthesizedAt: now, lastError: undefined });
+    }
+  } catch (error) {
+    updateMinimaxVoiceCache(cacheKey, { lastError: String(error instanceof Error ? error.message : error).slice(0, 240) });
+  }
+  return { voiceId, cacheKey };
+}
+
+function minimaxVoiceNeedsReclone(error: unknown): boolean {
+  return /voice[^\n]*(?:not found|does not exist|invalid|expired|deleted)|(?:not found|不存在|已删除|过期)[^\n]*voice|voice_id[^\n]*(?:invalid|不存在)/i.test(String(error instanceof Error ? error.message : error));
 }
 
 async function generatePiperTts(text: string, language: string): Promise<{ url: string; duration: number; source: string } | null> {
   const piperBin = process.env.PIPER_BIN || process.env.PIPER_PATH || '';
   const modelPath = piperModelForLanguage(language);
   if (!piperBin || !modelPath) return null;
-  try { fs.mkdirSync(TTS_DIR, { recursive: true }); } catch { /* ignore */ }
+  try { fs.mkdirSync(scopedStudioAssetDir(TTS_ROOT), { recursive: true }); } catch { /* ignore */ }
   const file = `${randomUUID()}.wav`;
-  const outPath = path.join(TTS_DIR, file);
+  const outPath = path.join(scopedStudioAssetDir(TTS_ROOT), file);
   const args = ['--model', modelPath, '--output_file', outPath];
   const configPath = piperConfigForLanguage(language, modelPath);
   if (configPath && fs.existsSync(configPath)) args.splice(2, 0, '--config', configPath);
@@ -2292,16 +2942,16 @@ async function generatePiperTts(text: string, language: string): Promise<{ url: 
     });
     child.stdin.end(spoken);
   });
-  return ok ? { url: `/tts/${file}`, duration: durationFromText(text), source: 'piper' } : null;
+  return ok ? { url: scopedStudioAssetUrl('tts', file), duration: durationFromText(text), source: 'piper' } : null;
 }
 
 async function generateXttsCloneTts(text: string, voice: string, language: string): Promise<{ url: string; duration: number; source: string } | null> {
   const samplePath = voiceSamplePathFromId(voice);
   const xttsBin = process.env.XTTS_BIN || process.env.COQUI_TTS_BIN || '';
   if (!samplePath || !xttsBin) return null;
-  try { fs.mkdirSync(TTS_DIR, { recursive: true }); } catch { /* ignore */ }
+  try { fs.mkdirSync(scopedStudioAssetDir(TTS_ROOT), { recursive: true }); } catch { /* ignore */ }
   const file = `${randomUUID()}.wav`;
-  const outPath = path.join(TTS_DIR, file);
+  const outPath = path.join(scopedStudioAssetDir(TTS_ROOT), file);
   const modelName = process.env.XTTS_MODEL_NAME || 'tts_models/multilingual/multi-dataset/xtts_v2';
   const args = [
     '--model_name', modelName,
@@ -2325,17 +2975,17 @@ async function generateXttsCloneTts(text: string, voice: string, language: strin
       resolve(code === 0 && fs.existsSync(outPath));
     });
   });
-  return ok ? { url: `/tts/${file}`, duration: durationFromText(text), source: 'xtts_clone' } : null;
+  return ok ? { url: scopedStudioAssetUrl('tts', file), duration: durationFromText(text), source: 'xtts_clone' } : null;
 }
 
 async function generateLocalSayTts(text: string, voice: string, language: string): Promise<{ url: string; duration: number; source: string } | null> {
   if (process.platform !== 'darwin') return null;
-  try { fs.mkdirSync(TTS_DIR, { recursive: true }); } catch { /* ignore */ }
+  try { fs.mkdirSync(scopedStudioAssetDir(TTS_ROOT), { recursive: true }); } catch { /* ignore */ }
   const base = randomUUID();
   const aiffFile = `${base}.aiff`;
   const wavFile = `${base}.wav`;
-  const aiffPath = path.join(TTS_DIR, aiffFile);
-  const wavPath = path.join(TTS_DIR, wavFile);
+  const aiffPath = path.join(scopedStudioAssetDir(TTS_ROOT), aiffFile);
+  const wavPath = path.join(scopedStudioAssetDir(TTS_ROOT), wavFile);
   const lang = normalizeTtsLanguage(language);
   const candidates = SAY_LANGUAGE_VOICE_MAP[lang]?.[voice] ?? SAY_VOICE_MAP[voice] ?? [];
   const spoken = text.slice(0, 1500);
@@ -2351,19 +3001,37 @@ async function generateLocalSayTts(text: string, voice: string, language: string
   const converted = await runFfmpeg(['-i', aiffPath, '-ar', '24000', '-ac', '1', '-y', wavPath]);
   try { fs.unlinkSync(aiffPath); } catch { /* ignore */ }
   if (converted && fs.existsSync(wavPath)) {
-    return { url: `/tts/${wavFile}`, duration: durationFromText(text), source: 'local_say' };
+    return { url: scopedStudioAssetUrl('tts', wavFile), duration: durationFromText(text), source: 'local_say' };
   }
-  return { url: `/tts/${aiffFile}`, duration: durationFromText(text), source: 'local_say' };
+  return { url: scopedStudioAssetUrl('tts', aiffFile), duration: durationFromText(text), source: 'local_say' };
 }
 
-async function generateTtsAudio(spoken: string, voice: string, language = 'zh'): Promise<{ ok: boolean; source: string; url?: string; duration?: number; error?: string }> {
+async function generateTtsAudio(spoken: string, voice: string, language = 'zh', style: TtsStyleOptions = {}): Promise<{ ok: boolean; source: string; url?: string; duration?: number; error?: string; customVoiceStatus?: 'activated'; cues?: AlignedCue[]; alignmentSource?: 'minimax_native' }> {
   if (String(voice || '').startsWith('custom:')) {
     let minimaxError = '';
     try {
-      const minimaxVoiceId = await ensureMinimaxClonedVoice(voice, language);
-      if (minimaxVoiceId) {
-        const minimax = await generateMinimaxTts(spoken, minimaxVoiceId, language);
-        if (minimax) return { ok: true, ...minimax };
+      let clonedVoice = await ensureMinimaxClonedVoice(voice, language);
+      if (clonedVoice) {
+        let minimax: Awaited<ReturnType<typeof generateMinimaxTts>> = null;
+        try {
+          minimax = await generateMinimaxTts(spoken, clonedVoice.voiceId, language, style);
+        } catch (error) {
+          if (!minimaxVoiceNeedsReclone(error)) throw error;
+          clearMinimaxVoiceCache(clonedVoice.cacheKey);
+          clonedVoice = await ensureMinimaxClonedVoice(voice, language);
+          if (!clonedVoice) throw error;
+          minimax = await generateMinimaxTts(spoken, clonedVoice.voiceId, language, style);
+        }
+        if (minimax) {
+          const now = new Date().toISOString();
+          updateMinimaxVoiceCache(clonedVoice.cacheKey, {
+            activationState: 'activated',
+            activatedAt: now,
+            lastSynthesizedAt: now,
+            lastError: undefined,
+          });
+          return { ok: true, ...minimax, customVoiceStatus: 'activated' };
+        }
       }
     } catch (e: any) {
       minimaxError = String(e?.message ?? e).slice(0, 240);
@@ -2384,7 +3052,7 @@ async function generateTtsAudio(spoken: string, voice: string, language = 'zh'):
 
   try {
     const minimaxVoiceId = minimaxVoiceFor(voice, language);
-    const minimax = await generateMinimaxTts(spoken, minimaxVoiceId, language);
+    const minimax = await generateMinimaxTts(spoken, minimaxVoiceId, language, style);
     if (minimax) return { ok: true, ...minimax };
   } catch (e: any) {
     aiError = `MiniMax: ${String(e?.message ?? e).slice(0, 200)}`;
@@ -2395,7 +3063,7 @@ async function generateTtsAudio(spoken: string, voice: string, language = 'zh'):
       const ai = new GoogleGenAI({ apiKey });
       const r = await ai.models.generateContent({
         model: process.env.GEMINI_TTS_MODEL ?? 'gemini-2.5-flash-preview-tts',
-        contents: spoken,
+        contents: ttsPerformancePrompt(spoken, style),
         config: { responseModalities: ['AUDIO'], speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } } },
       } as any);
       const b64 = (r as any).candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
@@ -2403,10 +3071,10 @@ async function generateTtsAudio(spoken: string, voice: string, language = 'zh'):
 
       const pcm = Buffer.from(b64, 'base64');
       const sampleRate = 24000;
-      try { fs.mkdirSync(TTS_DIR, { recursive: true }); } catch { /* ignore */ }
+      try { fs.mkdirSync(scopedStudioAssetDir(TTS_ROOT), { recursive: true }); } catch { /* ignore */ }
       const file = `${randomUUID()}.wav`;
-      fs.writeFileSync(path.join(TTS_DIR, file), wavFromPcm(pcm, sampleRate));
-      return { ok: true, source: 'ai', url: `/tts/${file}`, duration: Math.round(pcm.length / (sampleRate * 2)) };
+      fs.writeFileSync(path.join(scopedStudioAssetDir(TTS_ROOT), file), wavFromPcm(pcm, sampleRate));
+      return { ok: true, source: 'ai', url: scopedStudioAssetUrl('tts', file), duration: Math.round(pcm.length / (sampleRate * 2)) };
     } catch (e: any) {
       aiError = [aiError, `Gemini: ${String(e?.message ?? e).slice(0, 200)}`].filter(Boolean).join('；');
     }
@@ -2421,27 +3089,277 @@ async function generateTtsAudio(spoken: string, voice: string, language = 'zh'):
   if (local) return { ok: true, ...local, error: aiError };
 
   const tone = fallbackToneWav(spoken);
-  return { ok: true, source: 'local_tone', url: `/tts/${tone.file}`, duration: tone.duration, error: aiError || 'local speech unavailable' };
+  return { ok: true, source: 'local_tone', url: scopedStudioAssetUrl('tts', tone.file), duration: tone.duration, error: aiError || 'local speech unavailable' };
+}
+
+function splitSubtitleText(text: string): string[] {
+  const normalized = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!normalized) return [];
+  const sentences = normalized.match(/[^。！？!?；;,.，]+[。！？!?；;,.，]?/g)?.map(item => item.trim()).filter(Boolean) || [normalized];
+  const result: string[] = [];
+  for (const sentence of sentences) {
+    const max = /[\u3400-\u9fff]/.test(sentence) ? 16 : 42;
+    if (sentence.length <= max) { result.push(sentence); continue; }
+    for (let cursor = 0; cursor < sentence.length; cursor += max) result.push(sentence.slice(cursor, cursor + max));
+  }
+  return result;
+}
+
+function proportionalCues(text: string, duration: number): AlignedCue[] {
+  const parts = splitSubtitleText(text);
+  const totalWeight = parts.reduce((sum, item) => sum + Math.max(1, item.replace(/\s/g, '').length), 0) || 1;
+  let cursor = 0;
+  return parts.map((item, index) => {
+    const start = cursor;
+    const end = index === parts.length - 1
+      ? duration
+      : Math.min(duration, start + duration * Math.max(1, item.replace(/\s/g, '').length) / totalWeight);
+    cursor = end;
+    return { text: item, start: +start.toFixed(2), end: +Math.max(start + 0.2, end).toFixed(2) };
+  });
+}
+
+function localTtsFile(url?: string): { bytes: Buffer; mimeType: string } | null {
+  if (!url?.startsWith('/tts/')) return null;
+  const filePath = path.join(scopedStudioAssetDir(TTS_ROOT), path.basename(url));
+  if (!fs.existsSync(filePath)) return null;
+  const ext = path.extname(filePath).toLowerCase();
+  const mimeType = ext === '.mp3' ? 'audio/mpeg'
+    : ext === '.m4a' || ext === '.mp4' ? 'audio/mp4'
+      : ext === '.ogg' ? 'audio/ogg'
+        : ext === '.webm' ? 'audio/webm'
+          : ext === '.aac' ? 'audio/aac'
+            : 'audio/wav';
+  return { bytes: fs.readFileSync(filePath), mimeType };
+}
+
+function studioAudioCapabilities() {
+  const minimax = Boolean((process.env.MINIMAX_API_KEY || process.env.MINIMAX_API_TOKEN || '').trim());
+  const xtts = Boolean((process.env.XTTS_BIN || process.env.COQUI_TTS_BIN || '').trim());
+  const gemini = Boolean(process.env.GEMINI_API_KEY?.trim());
+  return {
+    customVoice: {
+      upload: true,
+      synthesis: minimax || xtts,
+      engines: { minimax, xtts },
+      message: minimax || xtts
+        ? `真人音色合成可用（${minimax ? 'MiniMax' : 'XTTS/Coqui'}）`
+        : '可以保存声音样本，但服务器尚未配置 MiniMax 或 XTTS/Coqui，暂不能用该音色生成配音。',
+    },
+    minimax: {
+      configured: minimax,
+      baseUrl: process.env.MINIMAX_BASE_URL || 'https://api.minimax.io',
+      model: process.env.MINIMAX_TTS_MODEL || 'speech-2.8-hd',
+      diagnosticAvailable: minimax,
+    },
+    subtitles: {
+      automatic: true,
+      audioTranscription: gemini,
+      wordAlignment: gemini,
+      fallback: 'proportional',
+    },
+  };
+}
+
+studioRouter.get('/tts/capabilities', (_req, res) => {
+  res.json({ ok: true, ...studioAudioCapabilities() });
+});
+
+// POST /studio/tts/minimax/diagnose → validates key/network without synthesizing billable audio.
+studioRouter.post('/tts/minimax/diagnose', async (_req, res) => {
+  const configured = Boolean((process.env.MINIMAX_API_KEY || process.env.MINIMAX_API_TOKEN || '').trim());
+  if (!configured) {
+    res.status(503).json({ ok: false, configured: false, error: 'MINIMAX_API_KEY 未配置。' });
+    return;
+  }
+  const startedAt = Date.now();
+  try {
+    const result = await minimaxFetchJson('/v1/get_voice', { voice_type: 'all' }, 20_000);
+    const clonedVoices = Array.isArray(result?.voice_cloning) ? result.voice_cloning.length : 0;
+    res.json({
+      ok: true,
+      configured: true,
+      latencyMs: Date.now() - startedAt,
+      model: process.env.MINIMAX_TTS_MODEL || 'speech-2.8-hd',
+      clonedVoices,
+      message: `MiniMax Key 与网络正常，当前账号可查询到 ${clonedVoices} 个已激活克隆音色。`,
+    });
+  } catch (error) {
+    res.status(502).json({
+      ok: false,
+      configured: true,
+      latencyMs: Date.now() - startedAt,
+      error: String(error instanceof Error ? error.message : error).slice(0, 300),
+    });
+  }
+});
+
+function normalizeAlignedCues(raw: unknown, transcript: string, duration: number): AlignedCue[] {
+  const source = Array.isArray(raw) ? raw : [];
+  let previousEnd = 0;
+  const cues = source.map(item => {
+    const row = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+    const text = String(row.text || '').trim();
+    const start = Math.max(previousEnd, Math.min(duration, Number(row.start) || 0));
+    const end = Math.max(start + 0.12, Math.min(duration, Number(row.end) || start + 0.5));
+    previousEnd = end;
+    const words = Array.isArray(row.words) ? row.words.map(word => {
+      const value = word && typeof word === 'object' ? word as Record<string, unknown> : {};
+      return {
+        text: String(value.text || '').trim(),
+        start: Math.max(start, Math.min(end, Number(value.start) || start)),
+        end: Math.max(start, Math.min(end, Number(value.end) || end)),
+      };
+    }).filter(word => word.text) : undefined;
+    return text ? { text, start: +start.toFixed(2), end: +end.toFixed(2), ...(words?.length ? { words } : {}) } : null;
+  }).filter((item): item is AlignedCue => Boolean(item));
+  return cues.length ? cues : proportionalCues(transcript, duration);
+}
+
+async function alignTtsAudio(transcript: string, url: string | undefined, duration: number): Promise<{ cues: AlignedCue[]; source: 'audio_ai' | 'proportional' }> {
+  const media = localTtsFile(url);
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
+  if (!media || !apiKey) return { cues: proportionalCues(transcript, duration), source: 'proportional' };
+  try {
+    const ai = new GoogleGenAI({ apiKey });
+    const prompt = `Align this exact transcript to the supplied speech audio. Return sentence-level subtitle cues and word-level timestamps. Do not paraphrase, translate, add or remove words. Times are seconds from audio start and must be monotonic within 0-${duration.toFixed(2)}. Split Chinese subtitles to about 8-16 characters and other languages to about 4-9 words. Return JSON only: {"cues":[{"text":"...","start":0.0,"end":1.2,"words":[{"text":"...","start":0.0,"end":0.3}]}]}.\n\nExact transcript:\n${transcript.slice(0, 6000)}`;
+    const response = await ai.models.generateContent({
+      model: process.env.GEMINI_ALIGNMENT_MODEL || 'gemini-2.5-flash',
+      contents: [{ role: 'user', parts: [{ text: prompt }, { inlineData: { mimeType: media.mimeType, data: media.bytes.toString('base64') } }] }],
+      config: { responseMimeType: 'application/json', temperature: 0 },
+    } as any);
+    const parsed = extractJSON<{ cues?: unknown[] } | unknown[]>(String((response as any).text || ''));
+    const rawCues = Array.isArray(parsed) ? parsed : parsed?.cues;
+    const cues = normalizeAlignedCues(rawCues, transcript, duration);
+    return { cues, source: rawCues?.length ? 'audio_ai' : 'proportional' };
+  } catch (error) {
+    console.warn('[studio] TTS alignment fallback:', error instanceof Error ? error.message : error);
+    return { cues: proportionalCues(transcript, duration), source: 'proportional' };
+  }
+}
+
+async function rewriteVoiceoverToDuration(text: string, language: string, currentDuration: number, targetDuration: number): Promise<string> {
+  const targetChars = Math.max(8, Math.round(text.replace(/\s/g, '').length * targetDuration / Math.max(1, currentDuration)));
+  const prompt = `Rewrite this spoken short-video voiceover to fit about ${targetDuration} seconds and approximately ${targetChars} non-space characters at normal speech speed. Language: ${langName(language)}. Preserve every verified product fact, brand name, number and CTA. Do not invent claims. Keep the same emotional arc. Output only the revised spoken copy, without labels, timestamps, quotation marks or explanation.\n\n${text}`;
+  try {
+    const rewritten = (await callLLM(prompt, { backend: 'gemini' })).trim();
+    return rewritten || text;
+  } catch {
+    return text;
+  }
+}
+
+async function generateFittedTts(spoken: string, voice: string, language: string, styleInput: unknown) {
+  const style = normalizeTtsStyle(styleInput);
+  let finalText = spoken;
+  console.log(`[studio] TTS start language=${language} target=${style.targetDuration || 0}s preset=${style.preset}`);
+  let result = await generateTtsAudio(finalText, voice, language, style);
+  console.log(`[studio] TTS audio source=${result.source} duration=${result.duration || 0}s`);
+  let adjusted = false;
+  const target = style.targetDuration || 0;
+  if (result.ok && result.url && result.duration && target > 0 && Math.abs(result.duration - target) > Math.max(0.8, target * 0.08)) {
+    // Short audio must not be expanded with invented selling points. Slow it
+    // down and let the TTS model add pauses. Only overlong copy is rewritten.
+    if (result.duration > target) finalText = await rewriteVoiceoverToDuration(finalText, language, result.duration, target);
+    const adjustedSpeed = Math.max(0.75, Math.min(1.35, (style.speed || 1) * (result.duration / target) * (finalText.length / Math.max(1, spoken.length))));
+    result = await generateTtsAudio(finalText, voice, language, { ...style, speed: adjustedSpeed });
+    console.log(`[studio] TTS fitted source=${result.source} duration=${result.duration || 0}s adjusted=${adjustedSpeed.toFixed(2)}x`);
+    adjusted = finalText !== spoken || Math.abs(adjustedSpeed - (style.speed || 1)) > 0.02;
+  }
+  const cues = result.ok && result.duration ? (result.cues?.length ? result.cues : proportionalCues(finalText, result.duration)) : [];
+  return { ...result, text: finalText, adjusted, targetDuration: target || undefined, cues, alignmentSource: result.alignmentSource || 'proportional' as const };
 }
 
 // POST /studio/tts  Body: { script?, text?, voice?, language? } → { ok, url, duration }
 studioRouter.post('/tts', async (req, res) => {
   if (!await consumeDemoQuota(req, res, 'generation')) return;
-  const { script = '', text = '', voice = 'v1', language = 'zh' } = req.body ?? {};
+  const { script = '', text = '', voice = 'v1', language = 'zh', style = {} } = req.body ?? {};
   const spoken = (text || spokenText(script)).trim();
   if (!spoken) { res.status(400).json({ ok: false, error: 'no spoken text' }); return; }
 
   try {
-    res.json(await generateTtsAudio(spoken, voice, language));
+    const output = await generateFittedTts(spoken, voice, language, style);
+    const payload = JSON.stringify(output);
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Length', Buffer.byteLength(payload));
+    res.end(payload);
   } catch (e: any) {
+    console.error('[studio] TTS request failed:', e);
     res.json({ ok: false, source: 'fallback', error: String(e?.message ?? e).slice(0, 200) });
+  }
+});
+
+// POST /studio/tts/align Body: { text, url, duration }
+// Kept separate from synthesis so slow alignment never discards a valid audio result.
+studioRouter.post('/tts/align', async (req, res) => {
+  const text = String(req.body?.text || '').trim();
+  const url = String(req.body?.url || '').trim();
+  const duration = Math.max(0.2, Math.min(180, Number(req.body?.duration) || 0));
+  if (!text || !url.startsWith('/tts/') || !duration) {
+    res.status(400).json({ ok: false, error: 'text, local tts url and duration required', cues: [] });
+    return;
+  }
+  const fallback = { cues: proportionalCues(text, duration), source: 'proportional' as const };
+  try {
+    const aligned = await Promise.race([
+      alignTtsAudio(text, url, duration),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('alignment timeout')), 45_000)),
+    ]);
+    res.json({ ok: true, ...aligned });
+  } catch (error) {
+    console.warn('[studio] TTS alignment request fallback:', error instanceof Error ? error.message : error);
+    res.json({ ok: true, ...fallback });
+  }
+});
+
+// POST /studio/tts/transcribe Body: { url, duration, language?, transcriptHint? }
+// Used for user-uploaded voiceovers: recognize the real audio and create editable subtitle cues.
+studioRouter.post('/tts/transcribe', async (req, res) => {
+  const url = String(req.body?.url || '').trim();
+  const duration = Math.max(0.2, Math.min(180, Number(req.body?.duration) || 0));
+  const language = String(req.body?.language || 'auto').trim();
+  const transcriptHint = String(req.body?.transcriptHint || '').trim().slice(0, 6000);
+  const media = localTtsFile(url);
+  if (!media || !duration) {
+    res.status(400).json({ ok: false, error: 'local audio url and duration required', text: '', cues: [] });
+    return;
+  }
+  const apiKey = process.env.GEMINI_API_KEY?.trim();
+  if (!apiKey) {
+    if (transcriptHint) {
+      res.json({ ok: true, text: transcriptHint, cues: proportionalCues(transcriptHint, duration), source: 'proportional' });
+    } else {
+      res.status(503).json({ ok: false, error: 'GEMINI_API_KEY not set; uploaded audio cannot be transcribed', text: '', cues: [] });
+    }
+    return;
+  }
+  try {
+    const ai = new GoogleGenAI({ apiKey });
+    const prompt = `Transcribe the supplied spoken audio and create subtitle timestamps. Language hint: ${language}. Return only JSON: {"text":"exact transcript","cues":[{"text":"subtitle","start":0.0,"end":1.2,"words":[{"text":"word","start":0.0,"end":0.3}]}]}. Do not translate, paraphrase, add sales claims, infer inaudible words, or include music and sound effects. Times must be monotonic within 0-${duration.toFixed(2)} seconds. Split Chinese subtitles to about 8-16 characters and other languages to about 4-9 words.${transcriptHint ? `\nThe current editor script is only a spelling/context hint; follow the actual audio when they differ:\n${transcriptHint}` : ''}`;
+    const response = await ai.models.generateContent({
+      model: process.env.GEMINI_ALIGNMENT_MODEL || 'gemini-2.5-flash',
+      contents: [{ role: 'user', parts: [{ text: prompt }, { inlineData: { mimeType: media.mimeType, data: media.bytes.toString('base64') } }] }],
+      config: { responseMimeType: 'application/json', temperature: 0 },
+    } as any);
+    const parsed = extractJSON<{ text?: string; cues?: unknown[] }>(String((response as any).text || ''));
+    const text = String(parsed?.text || transcriptHint || '').trim();
+    if (!text) throw new Error('audio transcription returned no text');
+    const cues = normalizeAlignedCues(parsed?.cues, text, duration);
+    res.json({ ok: true, text, cues, source: parsed?.cues?.length ? 'audio_ai' : 'proportional' });
+  } catch (error) {
+    if (transcriptHint) {
+      res.json({ ok: true, text: transcriptHint, cues: proportionalCues(transcriptHint, duration), source: 'proportional', error: String(error instanceof Error ? error.message : error).slice(0, 240) });
+    } else {
+      res.status(502).json({ ok: false, error: String(error instanceof Error ? error.message : error).slice(0, 240), text: '', cues: [] });
+    }
   }
 });
 
 // POST /studio/tts/batch  Body: { voice?, items: [{ code, text }] } → 批量生成，多语种只扣一次生成额度
 studioRouter.post('/tts/batch', async (req, res) => {
   if (!await consumeDemoQuota(req, res, 'generation')) return;
-  const { voice = 'v1', items = [] } = req.body ?? {};
+  const { voice = 'v1', items = [], style = {} } = req.body ?? {};
   const input = Array.isArray(items) ? items.slice(0, 8) : [];
   if (input.length === 0) { res.status(400).json({ ok: false, error: 'items required', audios: {} }); return; }
 
@@ -2454,7 +3372,7 @@ studioRouter.post('/tts/batch', async (req, res) => {
       audios[code] = { ok: false, source: 'empty', error: 'no spoken text' };
       continue;
     }
-    audios[code] = await generateTtsAudio(spoken.slice(0, 1500), voice, language);
+    audios[code] = await generateFittedTts(spoken.slice(0, 1500), voice, language, style);
   }
   res.json({ ok: Object.values(audios).some(item => item.ok && item.url), audios });
 });
@@ -2462,28 +3380,60 @@ studioRouter.post('/tts/batch', async (req, res) => {
 // POST /studio/voice-samples Body: { name, dataBase64, mimeType?, duration? } → 录入真人音色样本
 studioRouter.post('/voice-samples', async (req, res) => {
   if (!await consumeDemoQuota(req, res, 'generation')) return;
-  const { name = 'voice-sample.wav', dataBase64, mimeType, duration = 0 } = req.body ?? {};
+  const { name = 'voice-sample.wav', dataBase64, mimeType, duration = 0, replacesVoiceId = '' } = req.body ?? {};
   if (!dataBase64) { res.status(400).json({ ok: false, error: 'dataBase64 required' }); return; }
   try {
-    fs.mkdirSync(VOICE_SAMPLES_DIR, { recursive: true });
+    fs.mkdirSync(scopedStudioAssetDir(VOICE_SAMPLES_ROOT), { recursive: true });
     const match = String(dataBase64).match(/^data:([^;]+);base64,(.+)$/);
     const b64 = match ? match[2] : String(dataBase64);
     const type = String(mimeType || match?.[1] || '').toLowerCase();
     const ext = type.includes('mpeg') || type.includes('mp3') ? 'mp3'
       : type.includes('m4a') || type.includes('mp4') ? 'm4a'
-      : type.includes('ogg') ? 'ogg'
-      : type.includes('webm') ? 'webm'
       : 'wav';
+    if (!['mp3', 'm4a', 'wav'].includes(ext) || /ogg|webm/i.test(type)) {
+      res.status(400).json({ ok: false, error: '真人音色样本仅支持 mp3、m4a、wav。' });
+      return;
+    }
+    const seconds = Number(duration) || 0;
+    if (seconds > 0 && seconds < 10) {
+      res.status(400).json({ ok: false, error: '真人音色样本需要至少 10 秒清晰人声。' });
+      return;
+    }
+    const bytes = Buffer.from(b64, 'base64');
+    if (bytes.length < 1024 || bytes.length > 20 * 1024 * 1024) {
+      res.status(400).json({ ok: false, error: '真人音色样本文件需在 1KB 到 20MB 之间。' });
+      return;
+    }
     const id = randomUUID();
     const file = `${id}.${ext}`;
-    fs.writeFileSync(path.join(VOICE_SAMPLES_DIR, file), Buffer.from(b64, 'base64'));
+    fs.writeFileSync(path.join(scopedStudioAssetDir(VOICE_SAMPLES_ROOT), file), bytes);
+    const replacedId = String(replacesVoiceId || '');
+    if (replacedId.startsWith('custom:')) {
+      const previousPath = voiceSamplePathFromId(replacedId);
+      const cache = readMinimaxVoiceCache();
+      const replacedEntries = Object.entries(cache).filter(([key]) => key.startsWith(`${replacedId}:`));
+      for (const [key, entry] of replacedEntries) {
+        if ((process.env.MINIMAX_API_KEY || process.env.MINIMAX_API_TOKEN) && entry.voiceId) {
+          await minimaxFetchJson('/v1/delete_voice', { voice_type: 'voice_cloning', voice_id: entry.voiceId }, 30_000).catch(() => null);
+        }
+        delete cache[key];
+      }
+      writeMinimaxVoiceCache(cache);
+      if (previousPath && previousPath !== path.join(scopedStudioAssetDir(VOICE_SAMPLES_ROOT), file)) {
+        try { fs.unlinkSync(previousPath); } catch { /* replacement already succeeded; stale sample cleanup is best effort */ }
+      }
+    }
+    const capabilities = studioAudioCapabilities();
     res.json({
       ok: true,
       id,
       voiceId: `custom:${id}`,
       name: String(name || '真人音色').replace(/\.[^.]+$/, ''),
-      url: `/voice-samples/${file}`,
-      duration: Number(duration) || 0,
+      url: scopedStudioAssetUrl('voice-samples', file),
+      duration: seconds,
+      synthesisReady: capabilities.customVoice.synthesis,
+      engine: capabilities.customVoice.engines.minimax ? 'minimax' : capabilities.customVoice.engines.xtts ? 'xtts' : undefined,
+      warning: capabilities.customVoice.synthesis ? undefined : capabilities.customVoice.message,
     });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: String(e?.message ?? e).slice(0, 300) });
@@ -2494,15 +3444,15 @@ studioRouter.post('/voice-samples', async (req, res) => {
 studioRouter.post('/voiceover', async (req, res) => {
   const { name = 'voiceover.wav', dataBase64, mimeType, duration = 0 } = req.body ?? {};
   if (!dataBase64) { res.status(400).json({ ok: false, error: 'dataBase64 required' }); return; }
-  try { fs.mkdirSync(TTS_DIR, { recursive: true }); } catch { /* ignore */ }
+  try { fs.mkdirSync(scopedStudioAssetDir(TTS_ROOT), { recursive: true }); } catch { /* ignore */ }
   try {
     const extFromMime = (mimeType as string | undefined)?.split('/')[1]?.replace('mpeg', 'mp3').replace('x-wav', 'wav');
     const extFromName = String(name).split('.').pop();
     const ext = (extFromMime || extFromName || 'wav').replace(/[^\w]+/g, '').slice(0, 8) || 'wav';
     const file = `${randomUUID()}.${ext}`;
     const buf = Buffer.from(String(dataBase64).replace(/^data:[^,]+,/, ''), 'base64');
-    fs.writeFileSync(path.join(TTS_DIR, file), buf);
-    res.json({ ok: true, url: `/tts/${file}`, duration: Number(duration) || 0 });
+    fs.writeFileSync(path.join(scopedStudioAssetDir(TTS_ROOT), file), buf);
+    res.json({ ok: true, url: scopedStudioAssetUrl('tts', file), duration: Number(duration) || 0 });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: String(e?.message || e).slice(0, 200) });
   }
@@ -2512,7 +3462,7 @@ studioRouter.post('/voiceover', async (req, res) => {
    渲染时 buildManifest 把选中 BGM 映射成真实 URL。
 ─────────────────────────────────────────────────────────────────────────── */
 
-const BGM_DIR = path.join(__dirname, '../../data/bgm');
+const BGM_ROOT = path.join(__dirname, '../../data/bgm');
 const BGM_FILE = path.join(__dirname, '../../data/bgm.json');
 
 interface BgmTrack {
@@ -2524,6 +3474,9 @@ interface BgmTrack {
   url: string;
   recommended?: boolean;
   builtin?: boolean;
+  tenantId?: string;
+  scope?: 'shared' | 'tenant';
+  uploadedBy?: string;
   createdAt: string;
 }
 
@@ -2535,8 +3488,11 @@ function persistBgm(list: BgmTrack[]): void {
   fs.writeFileSync(BGM_FILE, JSON.stringify(list, null, 2), 'utf8');
 }
 
-function userBgms(): BgmTrack[] {
-  return loadBgm().filter(track => !track.builtin);
+function userBgms(tenantId: string): BgmTrack[] {
+  // Pre-isolation uploads have no tenantId and live at data/bgm/<file>.
+  // Keep those legacy tracks visible as the authenticated shared library;
+  // new uploads remain strictly scoped to their owning tenant.
+  return loadBgm().filter(track => !track.builtin && (track.scope === 'shared' || !track.tenantId || track.tenantId === tenantId));
 }
 
 function sortBgmTracks(list: BgmTrack[]): BgmTrack[] {
@@ -2551,32 +3507,41 @@ function withRecommendedBgmNames(list: BgmTrack[]): BgmTrack[] {
   return sortBgmTracks(list).map((track, index) => ({
     ...track,
     name: `灵枢推荐配乐${String(index + 1).padStart(2, '0')}`,
+    scope: track.scope || (!track.tenantId ? 'shared' : 'tenant'),
+    uploadedBy: track.uploadedBy || (!track.tenantId ? '灵枢管理员上传' : '客户上传'),
   }));
 }
 
 // GET /studio/bgm → BgmTrack[]（仅用户上传音乐）
 studioRouter.get('/bgm', (_req, res) => {
-  res.json(withRecommendedBgmNames(userBgms()));
+  res.json(withRecommendedBgmNames(userBgms((res.locals as AuthLocals).tenantId)));
 });
 
 // POST /studio/bgm  Body: { name, mood?, duration?, dataBase64, mimeType? } → 上传真实音乐
-studioRouter.post('/bgm', (req, res) => {
+studioRouter.post('/bgm', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const admin = await requireAdminUser(req);
   const { name, mood = '自定义', duration = 0, dataBase64, mimeType } = req.body ?? {};
   if (!dataBase64) { res.status(400).json({ ok: false, error: 'dataBase64 required' }); return; }
-  try { fs.mkdirSync(BGM_DIR, { recursive: true }); } catch { /* ignore */ }
+  const assetDir = admin ? path.join(BGM_ROOT, 'shared') : scopedStudioAssetDir(BGM_ROOT);
+  try { fs.mkdirSync(assetDir, { recursive: true }); } catch { /* ignore */ }
   const id = randomUUID();
   const ext = (mimeType as string | undefined)?.split('/')[1]?.replace('mpeg', 'mp3') || 'mp3';
   const file = `${id}.${ext}`;
   const buf = Buffer.from(String(dataBase64).replace(/^data:[^,]+,/, ''), 'base64');
-  fs.writeFileSync(path.join(BGM_DIR, file), buf);
-  const list = userBgms();
+  fs.writeFileSync(path.join(assetDir, file), buf);
+  const list = loadBgm();
+  const tenantTracks = userBgms(tenantId);
   const track: BgmTrack = {
     id,
-    name: `灵枢推荐配乐${String(list.length + 1).padStart(2, '0')}`,
+    name: `灵枢推荐配乐${String(tenantTracks.length + 1).padStart(2, '0')}`,
     mood,
     duration: Number(duration) || 0,
     file,
-    url: `/bgm/${file}`,
+    url: admin ? `/bgm/${sharedAssetRelativePath(file)}` : scopedStudioAssetUrl('bgm', file),
+    tenantId: admin ? undefined : tenantId,
+    scope: admin ? 'shared' : 'tenant',
+    uploadedBy: admin ? '灵枢管理员上传' : '客户上传',
     createdAt: new Date().toISOString(),
   };
   list.push(track);
@@ -2585,11 +3550,20 @@ studioRouter.post('/bgm', (req, res) => {
 });
 
 // DELETE /studio/bgm/:id
-studioRouter.delete('/bgm/:id', (req, res) => {
-  const list = userBgms();
-  const t = list.find(x => x.id === req.params.id);
+studioRouter.delete('/bgm/:id', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const list = loadBgm();
+  const candidate = list.find(x => x.id === req.params.id);
+  const shared = Boolean(candidate && (candidate.scope === 'shared' || !candidate.tenantId));
+  const admin = shared ? await requireAdminUser(req) : null;
+  const t = candidate && (candidate.tenantId === tenantId || (shared && admin)) ? candidate : undefined;
   if (!t) { res.status(404).json({ ok: false, error: 'BGM not found' }); return; }
-  try { fs.unlinkSync(path.join(BGM_DIR, t.file)); } catch { /* ignore */ }
+  const assetPath = t.scope === 'shared'
+    ? path.join(BGM_ROOT, 'shared', t.file)
+    : !t.tenantId
+      ? path.join(BGM_ROOT, t.file)
+      : path.join(scopedStudioAssetDir(BGM_ROOT), t.file);
+  try { fs.unlinkSync(assetPath); } catch { /* ignore */ }
   persistBgm(list.filter(x => x.id !== req.params.id));
   res.json({ ok: true });
 });
@@ -2603,7 +3577,7 @@ const PROJECTS_FILE = path.join(__dirname, '../../data/studio-projects.json');
 interface StudioProject {
   id: string;
   title: string;
-  status: 'draft' | 'published';
+  status: 'draft' | 'published' | 'template';
   spec: Record<string, unknown>;
   thumbSeed?: string;
   createdAt: string;
@@ -2672,6 +3646,85 @@ studioRouter.delete('/projects/:id', (req, res) => {
   res.json({ ok: true });
 });
 
+/* ── 爆款裂变批量队列：持久化组合、执行状态与人工审核结果 ─────────────── */
+const BATCHES_FILE = path.join(__dirname, '../../data/studio-variation-batches.json');
+type BatchItemStatus = 'pending' | 'running' | 'quality_check' | 'review' | 'approved' | 'rejected' | 'failed';
+interface VariationBatchItem { id: string; variables: Record<string, string>; status: BatchItemStatus; outputProjectId?: string; qualityScore?: number; note?: string; updatedAt: string }
+interface VariationBatch { id: string; title: string; templateProjectId?: string; status: 'queued' | 'running' | 'review' | 'completed' | 'paused'; estimatedCostCny: number; plan?: Record<string, unknown>; createdAt: string; updatedAt: string; items: VariationBatchItem[] }
+function loadVariationBatches(): VariationBatch[] { try { return JSON.parse(fs.readFileSync(BATCHES_FILE, 'utf8')) as VariationBatch[]; } catch { return []; } }
+function persistVariationBatches(list: VariationBatch[]): void { fs.mkdirSync(path.dirname(BATCHES_FILE), { recursive: true }); fs.writeFileSync(BATCHES_FILE, JSON.stringify(list, null, 2), 'utf8'); }
+
+studioRouter.get('/variation-batches', (_req, res) => res.json(loadVariationBatches().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))));
+studioRouter.post('/variation-batches', (req, res) => {
+  const body = req.body ?? {};
+  const dimensions = body.dimensions && typeof body.dimensions === 'object' ? body.dimensions as Record<string, unknown> : {};
+  const values = (key: string) => Array.isArray(dimensions[key]) && (dimensions[key] as unknown[]).length ? (dimensions[key] as unknown[]).map(String) : ['默认'];
+  const products = values('product'); const people = values('person'); const scenes = values('scene'); const languages = values('language'); const hooks = values('hook');
+  const limit = Math.max(1, Math.min(200, Number(body.maxItems) || 20));
+  const now = new Date().toISOString(); const items: VariationBatchItem[] = [];
+  outer: for (const product of products) for (const person of people) for (const scene of scenes) for (const language of languages) for (const hook of hooks) {
+    items.push({ id: randomUUID(), variables: { product, person, scene, language, hook }, status: 'pending', updatedAt: now });
+    if (items.length >= limit) break outer;
+  }
+  const duration = Math.max(1, Number(body.duration) || 20);
+  const batch: VariationBatch = { id: randomUUID(), title: String(body.title || '未命名裂变批次'), templateProjectId: body.templateProjectId ? String(body.templateProjectId) : undefined, status: 'queued', estimatedCostCny: Math.ceil(items.length * duration * 1.5 * 100) / 100, plan: body.plan && typeof body.plan === 'object' ? body.plan as Record<string, unknown> : { duration, maxItems: limit, dimensions }, createdAt: now, updatedAt: now, items };
+  const list = loadVariationBatches(); list.push(batch); persistVariationBatches(list); res.status(201).json({ ok: true, batch });
+});
+studioRouter.patch('/variation-batches/:batchId', (req, res) => {
+  const list = loadVariationBatches(); const batch = list.find(item => item.id === req.params.batchId);
+  if (!batch) { res.status(404).json({ ok: false, error: 'Batch not found' }); return; }
+  if (['queued', 'running', 'review', 'completed', 'paused'].includes(String(req.body?.status))) batch.status = req.body.status;
+  batch.updatedAt = new Date().toISOString(); persistVariationBatches(list); res.json({ ok: true, batch });
+});
+studioRouter.patch('/variation-batches/:batchId/items/:itemId', (req, res) => {
+  const list = loadVariationBatches(); const batch = list.find(entry => entry.id === req.params.batchId); const item = batch?.items.find(entry => entry.id === req.params.itemId);
+  if (!batch || !item) { res.status(404).json({ ok: false, error: 'Batch item not found' }); return; }
+  const allowed: BatchItemStatus[] = ['pending', 'running', 'quality_check', 'review', 'approved', 'rejected', 'failed'];
+  if (allowed.includes(req.body?.status)) item.status = req.body.status;
+  if (req.body?.outputProjectId) item.outputProjectId = String(req.body.outputProjectId);
+  if (Number.isFinite(Number(req.body?.qualityScore))) item.qualityScore = Number(req.body.qualityScore);
+  if (typeof req.body?.note === 'string') item.note = req.body.note;
+  item.updatedAt = new Date().toISOString(); batch.updatedAt = item.updatedAt;
+  if (batch.items.every(entry => entry.status === 'approved' || entry.status === 'rejected')) batch.status = 'completed'; else if (batch.items.some(entry => entry.status === 'review')) batch.status = 'review';
+  persistVariationBatches(list); res.json({ ok: true, batch, item });
+});
+studioRouter.post('/variation-batches/:batchId/claim-next', (req, res) => {
+  const list = loadVariationBatches(); const batch = list.find(entry => entry.id === req.params.batchId);
+  if (!batch) { res.status(404).json({ ok: false, error: 'Batch not found' }); return; }
+  if (batch.status === 'paused' || batch.status === 'completed') { res.json({ ok: true, item: null, batch }); return; }
+  const staleBefore = Date.now() - 30 * 60 * 1000;
+  const item = batch.items.find(entry => entry.status === 'pending' || (entry.status === 'running' && new Date(entry.updatedAt).getTime() < staleBefore));
+  if (!item) { batch.status = batch.items.some(entry => entry.status === 'review') ? 'review' : batch.status; persistVariationBatches(list); res.json({ ok: true, item: null, batch }); return; }
+  item.status = 'running'; item.updatedAt = new Date().toISOString(); batch.status = 'running'; batch.updatedAt = item.updatedAt; persistVariationBatches(list); res.json({ ok: true, item, batch });
+});
+studioRouter.post('/variation-batches/:batchId/retry-failed', (req, res) => {
+  const list = loadVariationBatches(); const batch = list.find(entry => entry.id === req.params.batchId);
+  if (!batch) { res.status(404).json({ ok: false, error: 'Batch not found' }); return; }
+  let count = 0; const now = new Date().toISOString(); batch.items.forEach(item => { if (item.status === 'failed' || item.status === 'rejected') { item.status = 'pending'; item.updatedAt = now; count += 1; } });
+  if (count) batch.status = 'queued'; batch.updatedAt = now; persistVariationBatches(list); res.json({ ok: true, retried: count, batch });
+});
+
+const PUBLISH_LINKS_FILE = path.join(__dirname, '../../data/studio-publish-links.json');
+studioRouter.get('/publish-links', (_req, res) => { try { res.json(JSON.parse(fs.readFileSync(PUBLISH_LINKS_FILE, 'utf8'))); } catch { res.json([]); } });
+studioRouter.post('/publish-links', (req, res) => {
+  let list: Record<string, unknown>[] = []; try { list = JSON.parse(fs.readFileSync(PUBLISH_LINKS_FILE, 'utf8')) as Record<string, unknown>[]; } catch { /* empty */ }
+  const link = { id: randomUUID(), projectId: String(req.body?.projectId || ''), batchId: req.body?.batchId ? String(req.body.batchId) : undefined, variantId: req.body?.variantId ? String(req.body.variantId) : undefined, accountId: String(req.body?.accountId || ''), platform: String(req.body?.platform || ''), title: String(req.body?.title || ''), publishResult: req.body?.publishResult || null, publishedAt: new Date().toISOString() };
+  if (!link.projectId) { res.status(400).json({ ok: false, error: 'projectId required' }); return; }
+  list.push(link); fs.mkdirSync(path.dirname(PUBLISH_LINKS_FILE), { recursive: true }); fs.writeFileSync(PUBLISH_LINKS_FILE, JSON.stringify(list, null, 2), 'utf8'); res.status(201).json({ ok: true, link });
+});
+studioRouter.patch('/publish-links/:id/metrics', (req, res) => {
+  let list: Record<string, any>[] = []; try { list = JSON.parse(fs.readFileSync(PUBLISH_LINKS_FILE, 'utf8')) as Record<string, any>[]; } catch { /* empty */ }
+  const link = list.find(item => item.id === req.params.id); if (!link) { res.status(404).json({ ok: false, error: 'Publish link not found' }); return; }
+  link.metrics = { views: Number(req.body?.views) || 0, likes: Number(req.body?.likes) || 0, comments: Number(req.body?.comments) || 0, shares: Number(req.body?.shares) || 0, leads: Number(req.body?.leads) || 0, updatedAt: new Date().toISOString() };
+  fs.writeFileSync(PUBLISH_LINKS_FILE, JSON.stringify(list, null, 2), 'utf8'); res.json({ ok: true, link });
+});
+studioRouter.get('/publish-performance', (_req, res) => {
+  let list: Record<string, any>[] = []; try { list = JSON.parse(fs.readFileSync(PUBLISH_LINKS_FILE, 'utf8')) as Record<string, any>[]; } catch { /* empty */ }
+  const grouped: Record<string, any> = {};
+  for (const link of list) { const key = String(link.projectId || 'unknown'); const row = grouped[key] ||= { projectId: key, posts: 0, views: 0, likes: 0, comments: 0, shares: 0, leads: 0 }; row.posts += 1; for (const metric of ['views', 'likes', 'comments', 'shares', 'leads']) row[metric] += Number(link.metrics?.[metric]) || 0; }
+  res.json(Object.values(grouped).map((row: any) => ({ ...row, engagementRate: row.views ? Math.round(((row.likes + row.comments + row.shares) / row.views) * 10000) / 100 : 0 })).sort((a: any, b: any) => b.views - a.views));
+});
+
 // POST /studio/capcut/open → 网页端兜底：导出剪映手动精修包，并打开文件夹
 studioRouter.post('/capcut/open', async (req, res) => {
   try {
@@ -2738,8 +3791,19 @@ function productBrief(productInfo: string) {
   const moq = firstProductField(productInfo, ['起订量', 'MOQ']) || '可按需求确认';
   const cert = firstProductField(productInfo, ['认证资质', '认证']) || '可按需求确认';
   const price = firstProductField(productInfo, ['价格区间', '价格']);
+  const detailPoints = [
+    ['容量', firstProductField(productInfo, ['容量'])],
+    ['杯体材质', firstProductField(productInfo, ['杯体材质'])],
+    ['刀片材质', firstProductField(productInfo, ['刀片材质'])],
+    ['材质', firstProductField(productInfo, ['材质', '产品材质'])],
+    ['充电方式', firstProductField(productInfo, ['充电方式'])],
+    ['尺寸', firstProductField(productInfo, ['尺寸', '产品尺寸'])],
+    ['规格', firstProductField(productInfo, ['规格'])],
+  ].filter((item): item is string[] => Boolean(item[1])).map(([label, value]) => `${label} ${value}`);
+  const highlightPoints = highlights.split(/[、,，;；\n]/).map(item => item.trim()).filter(Boolean);
   const pointList = [
-    ...highlights.split(/[、,，;；\n]/).map(item => item.trim()).filter(Boolean),
+    ...detailPoints,
+    ...highlightPoints,
     cert && cert !== '可按需求确认' ? `认证 ${cert}` : '',
     moq && moq !== '可按需求确认' ? `起订量 ${moq}` : '',
     price ? `报价 ${price}` : '',
@@ -2753,6 +3817,9 @@ function productBrief(productInfo: string) {
     price,
     firstPoint: pointList[0] || highlights || category,
     secondPoint: pointList[1] || cert || '样品和资料可确认',
+    thirdPoint: pointList[2] || highlightPoints[0] || '实际操作可打样确认',
+    detailPoints,
+    highlightPoints,
     naturalTrustPoint: cert && cert !== '可按需求确认' ? '认证和检测资料能不能一次给齐' : '样品和资料能不能按需求确认',
   };
 }
@@ -2764,7 +3831,7 @@ function compactBriefCategory(p: ReturnType<typeof productBrief>): string {
 }
 
 function buyerPainForBrief(p: ReturnType<typeof productBrief>): string {
-  const text = `${p.name} ${p.category} ${p.highlights}`.toLowerCase();
+  const text = `${p.name} ${p.category}`.toLowerCase();
   if (/灯|照明|light|lighting|轨道|筒灯|线性|庭院|调光/.test(text)) {
     return '订购一大批灯具，结果现场亮度、色温和图文效果严重不符';
   }
@@ -2773,6 +3840,9 @@ function buyerPainForBrief(p: ReturnType<typeof productBrief>): string {
   }
   if (/美妆|护肤|cream|serum|cosmetic|skincare/.test(text)) {
     return '选品时只看图片，结果质地、包装和市场卖点都对不上';
+  }
+  if (/榨汁|果汁|搅拌|小家电|blender|juicer|appliance/.test(text)) {
+    return '样品看着可以，大货的结构和操作细节会不会不一致';
   }
   return `批量采购${compactBriefCategory(p)}，最怕样品看着可以，大货效果和描述不一致`;
 }
@@ -2786,6 +3856,15 @@ function sceneEnvironmentForBrief(p: ReturnType<typeof productBrief>, index: num
       '安装台面旁，样品、驱动、电源线和参数卡整齐摆放',
       '工程客户选型桌面，色温样品、外壳色卡和包装标签并排',
       '工厂老化测试架或样品打包台，背景能看到成排灯具点亮',
+    ][index] || '真实产品演示场景';
+  }
+  if (/榨汁|果汁|搅拌|小家电|blender|juicer|appliance/.test(text)) {
+    return [
+      '干净桌面演示区，榨汁杯、产品资料和一杯清水放在同一画面',
+      '产品细节台，杯体、杯盖和参数卡整齐摆放',
+      '俯拍操作台，杯体与刀头结构保持清晰可见',
+      '定制样品桌，LOGO位置和彩盒样并排展示',
+      '样品打包台或询盘电脑旁，画面收束到资料确认动作',
     ][index] || '真实产品演示场景';
   }
   return [
@@ -2819,57 +3898,79 @@ Send your quantity, size or packaging request, and we will prepare the quote and
 
 function fallbackStoryboard(duration: number, productInfo = ''): string {
   const p = productBrief(productInfo);
-  const category = compactBriefCategory(p);
   const pain = buyerPainForBrief(p);
-  const lastStart = Math.max(17, Number(duration) - 3);
-  return `[0-5s]
+  const total = Math.max(10, Number(duration) || 20);
+  const boundaries = [0, 0.18, 0.4, 0.62, 0.82, 1].map(value => +(value * total).toFixed(1));
+  const time = (index: number) => `${boundaries[index]}-${boundaries[index + 1]}s`;
+  const categoryText = `${p.name} ${p.category}`.toLowerCase();
+  const appliance = /榨汁|果汁|搅拌|小家电|blender|juicer|appliance/.test(categoryText);
+  const detailAction = appliance
+    ? `手部依次拿起「${p.name}」的杯体和杯盖，镜头停留在参数卡与可拆结构；只呈现资料已确认的${p.firstPoint}和${p.secondPoint}。`
+    : `手部把「${p.name}」移到镜头前，展示${p.firstPoint}和${p.secondPoint}对应的实物或资料卡。`;
+  const proofAction = appliance
+    ? `俯拍拆开杯体与刀头组件，再按原方向装回；如果没有真实操作素材，只展示实物与${p.thirdPoint}资料卡，不模拟性能结果。`
+    : `用一个完整、可复现的开合、按压、装配或样品对照动作确认${p.thirdPoint}；没有真实素材时只展示资料卡。`;
+  const customization = p.highlightPoints.slice(0, 2).join('、') || '定制项可按需求确认';
+  const shortPoint = (value: string, max = 14) => Array.from(String(value || '')).slice(0, max).join('');
+  const openingVoice = appliance ? '榨汁杯好看，不好洗也白搭。' : `${shortPoint(compactBriefCategory(p), 6)}只看图片，真不够。`;
+  const firstVoice = appliance && /容量\s*420/i.test(p.firstPoint)
+    ? '420毫升，通勤一杯刚刚好。'
+    : `${shortPoint(p.firstPoint, 12)}，细节拍给你看。`;
+  const proofVoice = appliance && /可拆洗|拆洗/.test(`${p.highlights} ${p.thirdPoint}`)
+    ? '杯体能拆，清洗不用绕弯。'
+    : /304/.test(p.thirdPoint) ? '刀头用料，拆开给你看。' : `${shortPoint(p.thirdPoint, 10)}，实物更有说服力。`;
+  const customizationVoice = /logo|包装|彩盒/i.test(customization)
+    ? 'LOGO和彩盒，都能做成你的品牌。'
+    : '想做自己的版本？样品可以先聊。';
+  return `[${time(0)}]
 环境：${sceneEnvironmentForBrief(p, 0)}；
 景别：中景；
 运镜：固定镜头直拍；
-画面：人物站在样板间或展示台旁，先指向实际点亮/使用效果，再转头对镜头自然发问。
+画面：人物把「${p.name}」和采购资料放到桌面，先指向实物，再转向镜头发问，最后把杯体拆开放在镜头前。
 配乐：口播 + 舒缓递进，开头保留半秒停顿制造问题感；
-台词：${pain}？我们拒绝照骗，所见即所得！
-字幕：拒绝照骗，所见即所得
+台词：${openingVoice}
+字幕：${appliance ? '好看 ≠ 好清洗' : pain}
 
-[5-9s]
+[${time(1)}]
 环境：${sceneEnvironmentForBrief(p, 1)}；
 景别：近景；
 运镜：缓慢推进到产品细节；
-画面：手部把「${p.name}」移到镜头前，切到${p.firstPoint}对应的可见细节或实际效果。
+画面：${detailAction.replace('；只呈现资料已确认的', '；参数卡同步标出')}
 配乐：口播 + 轻节奏鼓点，细节出现时轻微加强；
-台词：客户真正要确认的不是宣传图，是${p.firstPoint}能不能在现场看得出来。
-字幕：${p.firstPoint}
+台词：${firstVoice}
+字幕：${appliance ? '420mL · 通勤随行' : `${p.firstPoint} / ${p.secondPoint}`}
 
-[9-13s]
+[${time(2)}]
 环境：${sceneEnvironmentForBrief(p, 2)}；
 景别：特写；
-运镜：俯拍固定，动作完成后停留 1 秒；
-画面：把普通款/图片参数和「${p.name}」实物放在一起，做一次开合、点亮、安装、按压或效果对比。
-配乐：口播 + 短促转场音，对比瞬间降低背景音；
-台词：不确定大货会不会翻车？先用这个动作打样测试，再谈批量订单。
-字幕：先打样，再批量
+运镜：俯拍固定，动作完成后短暂停留；
+画面：${proofAction}
+配乐：口播 + 短促转场音，操作瞬间降低背景音；
+台词：${proofVoice}
+字幕：${appliance ? '可拆杯体 · 清洗省事' : '实物确认 / 支持打样'}
 
-[13-${lastStart}s]
+[${time(3)}]
 环境：${sceneEnvironmentForBrief(p, 3)}；
 景别：中近景；
 运镜：横向平移扫过选项；
-画面：把不同规格、色温/颜色、外壳、包装标签或 logo 位置排开，手指逐一指出可定制项。
+画面：把已有的包装样和LOGO位置并排放好，手指从产品移到彩盒，镜头跟随横移。
 配乐：口播 + 稳定节奏，配合手指移动做轻快切点；
-台词：你的市场需要什么规格、包装和标签，不用照搬库存款，可以按项目需求确认。
-字幕：规格 / 包装 / LOGO
+台词：${customizationVoice}
+字幕：${/logo|包装|彩盒/i.test(customization) ? 'LOGO / 彩盒定制' : '先看定制样'}
 
-[${lastStart}-${duration}s]
+[${time(4)}]
 环境：${sceneEnvironmentForBrief(p, 4)}；
 景别：中景；
 运镜：固定镜头，最后轻推到资料页或询盘窗口；
 画面：展示样品、资料页或包装箱，屏幕短字幕放 MOQ、认证、报价和打样信息，最后停在询盘动作。
 配乐：口播 + 收束感配乐，结尾留出 CTA 停顿；
-台词：最后确认一下${p.naturalTrustPoint}。把数量、目标市场和包装要求发我，我给你整理报价和打样方案。
-字幕：${p.moq !== '可按需求确认' ? `MOQ ${p.moq}` : category} / ${p.cert !== '可按需求确认' ? '认证资料可确认' : '参数可确认'}`;
+台词：想测样？发我数量和市场。
+字幕：${p.moq !== '可按需求确认' ? `发数量 · MOQ ${p.moq}` : '发数量 · 拿样品报价'}`;
 }
 
 function fallbackMaterialStoryboard(infos: ScriptMaterialInfo[], duration: number, productInfo = ''): string {
   const p = compactProductLabel(productInfo);
+  const brief = productBrief(productInfo);
   const usable = infos.length ? infos.slice(0, 8) : [{
     name: '待上传素材',
     type: 'video',
@@ -2879,22 +3980,50 @@ function fallbackMaterialStoryboard(infos: ScriptMaterialInfo[], duration: numbe
     targetStart: 0,
     targetEnd: duration,
   }];
-  const tasks = ['开场钩子', '细节证明', '使用/对比', '供应能力', '定制/包装', '询盘 CTA'];
+  const tasks = ['开场钩子', '细节证明', '使用场景', '供应能力', '定制/包装', '询盘 CTA'];
   return usable.map((info, index) => {
     const start = Number.isFinite(Number(info.targetStart)) ? Number(info.targetStart) : +(index * duration / usable.length).toFixed(1);
     const end = Number.isFinite(Number(info.targetEnd)) ? Number(info.targetEnd) : +(index === usable.length - 1 ? duration : (index + 1) * duration / usable.length).toFixed(1);
     const role = materialRoleFromFolder(info);
-    const task = tasks[Math.min(index, tasks.length - 1)] || '素材承接';
+    const roleTask = info.folder === 'detail' ? (index === 0 ? '开场细节' : '细节证明')
+      : info.folder === 'product' ? '产品展示'
+        : info.folder === 'model' || info.folder === 'scene' ? '使用场景'
+          : info.folder === 'factory' ? '供应能力'
+            : info.folder === 'packaging' ? '定制/包装'
+              : info.folder === 'certificate' ? '资质证明'
+                : '';
+    const task = roleTask || tasks[Math.min(index, tasks.length - 1)] || '素材承接';
+    const materialText = `${info.name} ${info.tags || ''} ${info.shotFunction || ''}`;
+    const isBeauty = /精华|护肤|美容|serum|skincare|cosmetic/i.test(`${p} ${brief.category} ${materialText}`);
     const voice = index === 0
-      ? `先看这段素材里最适合做开场的真实内容。`
+      ? (/滴|液体|质地/i.test(materialText)
+        ? '这一滴的质感，开场就很抓眼。'
+        : `${Array.from(p).slice(0, 7).join('')}，第一眼就得抓人。`)
       : index === usable.length - 1
-        ? `把你的数量、规格和包装要求发我，我给你整理方案。`
-        : `这一段用来承接${p}的${role}，按可见细节来剪。`;
+        ? (isBeauty ? '想做自有品牌？发数量，给你配方案。' : '想测样？发我数量和市场。')
+        : info.folder === 'product'
+          ? (isBeauty ? '瓶身和滴管一入镜，品牌感就来了。' : '外观和结构，镜头里一次看清。')
+          : info.folder === 'factory'
+            ? '样品能打，大货也要接得住。'
+            : info.folder === 'packaging'
+              ? '换上你的LOGO，才是你的产品。'
+              : info.folder === 'scene' || info.folder === 'model'
+                ? '放进真实场景，客户更容易代入。'
+                : '细节拍到位，卖点自然站得住。';
+    const salesSubtitle = index === 0
+      ? (/滴|液体|质地/i.test(materialText) ? '一滴抓住注意力' : '第一眼就要抓人')
+      : index === usable.length - 1
+        ? '发数量 · 拿方案'
+        : info.folder === 'product' ? '质感就是品牌感'
+          : info.folder === 'factory' ? '样品到大货都能接'
+            : info.folder === 'packaging' ? '做成你的品牌'
+              : info.folder === 'scene' || info.folder === 'model' ? '让客户看见使用场景'
+                : task;
     return `[${start}-${Math.max(start + 0.5, end)}s]
 素材：${info.name}
-画面：使用素材《${info.name}》作为${task}，按该素材可见内容剪辑，优先截取信息最清楚、动作最完整或产品最明显的位置。
+画面：使用素材《${info.name}》作为「${p}」的${task}，原速截取主体最清楚、动作最完整的位置，并在动作结束点切入下一镜。
 人物说：“${voice}”
-字幕：${task}`;
+字幕：${salesSubtitle}`;
   }).join('\n\n');
 }
 
@@ -2931,7 +4060,7 @@ function mimeFromFile(filePath: string): string {
 function materialLocalFile(material: Material): string | null {
   const raw = material.type === 'image'
     ? material.file
-    : material.poster ? path.basename(material.poster) : '';
+    : material.poster ? material.poster.replace(/^\/media\//, '').split('?')[0] : '';
   if (!raw) return null;
   if (raw.includes('/')) return path.join(MEDIA_DIR, raw);
   const generatedCandidate = path.join(GENERATED_MEDIA_DIR, raw);
@@ -2939,12 +4068,13 @@ function materialLocalFile(material: Material): string | null {
   return path.join(MEDIA_DIR, raw);
 }
 
-function resolveReferenceImages(materialIds: unknown): ReferenceImage[] {
+function resolveReferenceImages(materialIds: unknown, tenantId: string): ReferenceImage[] {
   const ids = new Set(Array.isArray(materialIds) ? materialIds.map(String) : []);
   if (!ids.size) return [];
   const refs: ReferenceImage[] = [];
   for (const material of loadMaterials()) {
     if (!ids.has(material.id)) continue;
+    if (material.scope !== 'shared' && material.tenantId !== tenantId) continue;
     const filePath = materialLocalFile(material);
     if (!filePath || !fs.existsSync(filePath)) continue;
     try {

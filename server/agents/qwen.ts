@@ -1,4 +1,7 @@
 import OpenAI from 'openai';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import type { VideoAiAnalysis } from '../types/index.js';
 import { normalizeVideoAnalysis } from './gemini.js';
 
@@ -6,9 +9,24 @@ const QWEN_VL_MODEL = () => (process.env.QWEN_VL_MODEL ?? 'qwen-vl-max').trim();
 const BASE_URL = () => (process.env.DASHSCOPE_BASE_URL ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1').trim();
 
 function client(): OpenAI {
-  const apiKey = process.env.DASHSCOPE_API_KEY?.trim();
+  const keyFile = (process.env.DASHSCOPE_API_KEY_FILE || path.join(os.homedir(), '.config/lingshu/dashscope.key')).trim();
+  let fileKey = '';
+  try { fileKey = fs.readFileSync(keyFile, 'utf8').trim(); } catch { /* optional local secret file */ }
+  const apiKey = process.env.DASHSCOPE_API_KEY?.trim() || fileKey;
   if (!apiKey) throw new Error('DASHSCOPE_API_KEY is not set');
   return new OpenAI({ apiKey, baseURL: BASE_URL() });
+}
+
+export interface QwenAsrSegment { start: number; end: number; text: string; confidence?: number }
+export async function transcribeAudioWithQwen(opts: { audio: Buffer; fileName?: string }): Promise<{ text: string; segments: QwenAsrSegment[] }> {
+  const completion = await client().chat.completions.create({
+    model: process.env.QWEN_ASR_MODEL || 'qwen3-asr-flash',
+    messages: [{ role: 'user', content: [{ type: 'input_audio', input_audio: { data: `data:audio/mpeg;base64,${opts.audio.toString('base64')}` } }] as any }],
+    stream: false,
+    asr_options: { enable_itn: true },
+  } as any);
+  const text = String(completion.choices[0]?.message?.content || '').trim();
+  return { text, segments: text ? [{ start: 0, end: 0, text }] : [] };
 }
 
 function parseJson<T>(raw: string, fallback: T): T {
@@ -33,12 +51,15 @@ export async function analyzeVideoFramesWithQwen(opts: {
   duration?: number;
   views?: string;
   tags?: string[];
+  transcript?: { text: string; segments: QwenAsrSegment[] };
 }): Promise<VideoAiAnalysis> {
   if (opts.frames.length === 0) throw new Error('Qwen frame analysis requires at least one frame');
 
   const systemPrompt = `你是一个面向出海电商营销的短视频内容分析专家。
-你会收到从公开视频中抽取的关键帧，以及标题、平台、热度、标签等资料。
+你会收到按时间顺序排列的关键帧，以及标题、平台、热度、标签等资料。视频首 4 秒按每秒 3 帧密集抽取，其余为均匀帧和转场帧；必须逐张比较相邻帧，时间精度以帧间隔为上限。
 请基于画面、字幕、标题和元数据推断短视频结构。无法从关键帧确认的字幕、音频或口播必须留空，不要写“按画面/字幕推断”，不要编造品牌、@账号、字幕或台词。
+必须严格区分“可见事实”和“表达意图”：可见事实只写帧中实际出现的物体状态、接触关系、动作和变化；表达意图允许根据上下文推断营销含义，但不得把推断的前因补写成画面动作。例如首帧纸巾已经湿润、随后直接落下，只能写“湿纸巾已位于眼下并落下”，不得编造“流泪后反复擦眼睛”。
+动作分析必须记录：动作开始/结束时间、手是否入镜、手与物体/面部是否接触、物体初始和结束状态、眼神方向、表情、头部姿态、镜头是否真的移动。界面贴纸、平台 UI 和字幕层必须与真人实拍内容分开。
 除 recommendedScriptType 字段外，所有字符串内容必须使用简体中文输出。
 只输出合法 JSON，不要 markdown，不要代码块，不要前后解释。
 
@@ -50,9 +71,9 @@ export async function analyzeVideoFramesWithQwen(opts: {
 - structure: string，中文叙事结构，例如“痛点 -> 展示 -> 证明 -> CTA”
 - baseRequirements: string，作为第一段“基础要求”输出，必须包含情绪氛围、光影、全片主要场景、质感、基础创作要求；基础创作要求需明确强反转、真人口播、卡点、特效拉满、产品质感等可执行方向
 - firstTenSeconds: object，详细分析视频前 10 秒，包含中文字段 atmosphere、audioVisual、camera、visuals、voiceMusic
-- coarseStructure: array，粗略脚本结构，按约 3 秒一帧拆解 0-30 秒；每项包含 time、label、description
+- coarseStructure: array，覆盖原视频完整时长，按内容结构变化拆解；每项包含 time、label、description
 - scriptSummary15s: object，15 秒脚本详析摘要，包含 visualStyle、coreEmotion、competitors
-- scriptDetails15s: array，逐时间戳详析 0-15 秒，每项包含 time、environment、shot、camera、visual、subtitle、audio、note；subtitle/audio 只能写可确认内容，无法确认填空字符串；每个分镜要能按“时间戳 + 段落”展示，段落信息覆盖环境、景别、运镜、配乐、台词、画面，字段之间语义上可用分号连接
+  - scriptDetails15s: array（字段名仅为历史兼容），必须覆盖原视频完整时长，不得在15秒处截断；按导演镜头详析；每项包含 time（start-end区间，最多两位小数）、environment、shot、camera、purpose、visual、dialogue、onScreenText、ambientSound、bgm、soundEffects、beats、persistentState、authenticity、observedFacts、inferredIntent、causalGap、omniPrompt、omniNegativePrompt、confidence、needsReview、subtitle、audio、note。observedFacts 只写可见事实；inferredIntent 明确标注推断的表达意图；causalGap 写意图中存在但视频未展示的因果动作；omniPrompt 用英文写可直接交给视频模型的逐时段动作提示，必须复现可见动作，不得擅自补 causalGap；omniNegativePrompt 用英文列出最容易生成错的动作、物理关系和 UI。主体动作/对象/运镜/营销功能改变才切镜；长镜头用 beats 记录镜头内 time/action/dialogue/onScreenText。口播、画面字幕、环境声、BGM和音效必须分开；无法确认留空，专名/价格/左右方向/ASR不确定需 needsReview=true
 - recommendedScriptType: "voiceover" | "storyboard"`;
 
   const meta = [
@@ -62,6 +83,7 @@ export async function analyzeVideoFramesWithQwen(opts: {
     opts.views ? `热度/播放：${opts.views}` : '',
     opts.tags?.length ? `标签：${opts.tags.join(', ')}` : '',
     `关键帧时间：${opts.frames.map(frame => frame.timeLabel).join(', ')}`,
+    opts.transcript?.segments.length ? `独立ASR逐段转写（优先用于dialogue，专名/价格仍需结合画面校验）：\n${opts.transcript.segments.map(item => `[${item.start.toFixed(1)}-${item.end.toFixed(1)}s] ${item.text}`).join('\n')}` : '',
   ].filter(Boolean).join('\n');
 
   const content: Array<Record<string, unknown>> = [
@@ -79,11 +101,26 @@ export async function analyzeVideoFramesWithQwen(opts: {
       { role: 'user', content: content as any },
     ],
     response_format: { type: 'json_object' },
+    max_tokens: 8000,
   });
 
   const raw = completion.choices[0]?.message?.content ?? '';
   const parsed = parseJson<Partial<VideoAiAnalysis>>(raw, {});
-  return normalizeVideoAnalysis(parsed);
+  let normalized = normalizeVideoAnalysis(parsed);
+  if (!normalized.scriptDetails15s?.length) {
+    const repair = await client().chat.completions.create({
+      model: QWEN_VL_MODEL(),
+      messages: [
+        { role: 'system', content: `你是视频导演分镜修复器。只输出合法JSON对象，且只能包含scriptDetails15s。首4秒是每秒3帧，必须逐相邻帧比较，不得跳过亚秒动作。每项包含time、environment、shot、camera、purpose、visual、dialogue、onScreenText、ambientSound、bgm、soundEffects、beats、persistentState、authenticity、observedFacts、inferredIntent、causalGap、omniPrompt、omniNegativePrompt、confidence、needsReview、subtitle、audio、note。observedFacts只能写实际可见内容，inferredIntent写推断含义，causalGap写未展示的因果动作；绝不能把causalGap补进visual、beats或omniPrompt。omniPrompt和omniNegativePrompt使用英文。time必须为start-end s区间；口播与屏幕字幕分离；品牌、款名、价格、左右眼不确定时needsReview=true。` },
+        { role: 'user', content: content as any },
+      ],
+      response_format: { type: 'json_object' },
+      max_tokens: 8000,
+    });
+    const repaired = parseJson<Partial<VideoAiAnalysis>>(repair.choices[0]?.message?.content ?? '', {});
+    normalized = normalizeVideoAnalysis({ ...parsed, scriptDetails15s: repaired.scriptDetails15s });
+  }
+  return normalized;
 }
 
 export async function analyzeImagePostWithQwen(opts: {

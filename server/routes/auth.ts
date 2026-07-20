@@ -25,6 +25,7 @@ import {
   type LocalTenantRecord,
 } from '../lib/localTenants.js';
 import { encryptRegistrationPassword } from '../lib/registrationCredentials.js';
+import { clearAssetSessionCookie } from '../lib/assetAccess.js';
 
 /* ──────────────────────────────────────────────────────────────────────────
    账号 / 登录（基于 PocketBase）
@@ -596,5 +597,10 @@ authRouter.post('/guide-seen', async (req, res) => {
   const user = await pbGet('users', id.userId);
   const email = String(user?.email ?? '').trim().toLowerCase();
   if (email) consumeDemoGuide(email);
+  res.json({ ok: true });
+});
+
+authRouter.post('/logout', (_req, res) => {
+  clearAssetSessionCookie(res);
   res.json({ ok: true });
 });

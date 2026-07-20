@@ -6,7 +6,7 @@ import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
 import cron, { type ScheduledTask as CronJob } from 'node-cron';
 import { callLLMChatStream } from '../agents/llm.js';
-import { buildEnterpriseContext } from './enterprise.js';
+import { buildEnterpriseContext, readTenantEnterpriseProfile } from './enterprise.js';
 import { isDemoMode } from '../lib/demo.js';
 import { store } from '../storage/index.js';
 import { crawlVideosForTenant, getVideoPipelineStats } from './videos.js';
@@ -15,7 +15,6 @@ import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA = path.join(__dirname, '../../data/tasks.json');
-const ENTERPRISE_FILE = path.join(__dirname, '../../data/enterprise.json');
 const PDF_SCRIPT = path.join(__dirname, '../../scripts/render-task-report-pdf.py');
 
 export interface ScheduledTask {
@@ -150,12 +149,18 @@ function tenantTasks(tenantId: string): ScheduledTask[] {
 function findTenantTask(id: string, tenantId: string): ScheduledTask | undefined {
   return load().find(task => task.id === id && task.tenantId === tenantId);
 }
-function getEnterpriseCtx(): string {
-  try { return buildEnterpriseContext(JSON.parse(fs.readFileSync(ENTERPRISE_FILE, 'utf8'))); } catch { return ''; }
+async function tenantEnterpriseProfile(task: ScheduledTask): Promise<Awaited<ReturnType<typeof readTenantEnterpriseProfile>> | null> {
+  if (!task.tenantId) return null;
+  try { return await readTenantEnterpriseProfile(task.tenantId); }
+  catch { return null; }
 }
 
-function readEnterpriseProfile(): Record<string, any> {
-  try { return JSON.parse(fs.readFileSync(ENTERPRISE_FILE, 'utf8')) as Record<string, any>; } catch { return {}; }
+async function getEnterpriseCtx(task: ScheduledTask): Promise<string> {
+  try {
+    const profile = await tenantEnterpriseProfile(task);
+    return profile ? buildEnterpriseContext(profile) : '';
+  }
+  catch { return ''; }
 }
 
 function taskReportActions(taskType: string): TaskReportAction[] {
@@ -241,19 +246,21 @@ function renderTaskReportPdf(payload: Record<string, unknown>): Promise<Buffer> 
 // Active cron jobs registry
 const activeJobs = new Map<string, CronJob>();
 
-async function executeTrendReport(_task: ScheduledTask): Promise<string> {
+async function executeTrendReport(task: ScheduledTask): Promise<string> {
+  const enterpriseCtx = await getEnterpriseCtx(task);
   const messages = [{ role: 'user' as const, content: '生成今日TikTok跨境电商爆款趋势简报，包括：热门品类、热门话题标签、建议借势策略，控制在300字以内' }];
   let result = '';
-  for await (const chunk of callLLMChatStream(messages, { systemPrompt: `你是跨境电商趋势分析师。${getEnterpriseCtx() ? '\n\n企业信息：' + getEnterpriseCtx() : ''}` })) {
+  for await (const chunk of callLLMChatStream(messages, { systemPrompt: `你是跨境电商趋势分析师。${enterpriseCtx ? '\n\n企业信息：' + enterpriseCtx : ''}` })) {
     if ('text' in chunk) result += chunk.text;
   }
   return result;
 }
 
-async function executeWeeklyReview(_task: ScheduledTask): Promise<string> {
+async function executeWeeklyReview(task: ScheduledTask): Promise<string> {
+  const enterpriseCtx = await getEnterpriseCtx(task);
   const messages = [{ role: 'user' as const, content: '生成本周跨境电商经营复盘报告：流量表现、询盘转化、老客复购情况，并给出下周行动建议，控制在500字' }];
   let result = '';
-  for await (const chunk of callLLMChatStream(messages, { systemPrompt: `你是跨境电商经营顾问。${getEnterpriseCtx() ? '\n\n企业信息：' + getEnterpriseCtx() : ''}` })) {
+  for await (const chunk of callLLMChatStream(messages, { systemPrompt: `你是跨境电商经营顾问。${enterpriseCtx ? '\n\n企业信息：' + enterpriseCtx : ''}` })) {
     if ('text' in chunk) result += chunk.text;
   }
   return result;
@@ -367,8 +374,8 @@ function holidayCatalog(): Record<string, MarketHolidayPlan> {
   };
 }
 
-async function executeHolidayPush(_task: ScheduledTask): Promise<string> {
-  const enterprise = readEnterpriseProfile();
+async function executeHolidayPush(task: ScheduledTask): Promise<string> {
+  const enterprise: Record<string, any> = await tenantEnterpriseProfile(task) || {};
   const rawMarkets = splitTextList(enterprise.company?.mainMarkets || enterprise.strategy?.focusMarkets);
   const keys = Array.from(new Set(rawMarkets.map(marketKey))).filter(Boolean);
   const catalog = holidayCatalog();
@@ -407,10 +414,11 @@ async function executeHolidayPush(_task: ScheduledTask): Promise<string> {
   return lines.join('\n').trim();
 }
 
-async function executeCrmWakeup(_task: ScheduledTask): Promise<string> {
+async function executeCrmWakeup(task: ScheduledTask): Promise<string> {
+  const enterpriseCtx = await getEnterpriseCtx(task);
   const messages = [{ role: 'user' as const, content: '请生成一段针对60天未复购老客的唤醒消息，要有温度感，适合通过WhatsApp发送，不超过100字' }];
   let result = '';
-  for await (const chunk of callLLMChatStream(messages, { systemPrompt: `你是跨境电商CRM专员。${getEnterpriseCtx() ? '\n\n企业信息：' + getEnterpriseCtx() : ''}` })) {
+  for await (const chunk of callLLMChatStream(messages, { systemPrompt: `你是跨境电商CRM专员。${enterpriseCtx ? '\n\n企业信息：' + enterpriseCtx : ''}` })) {
     if ('text' in chunk) result += chunk.text;
   }
   return result;

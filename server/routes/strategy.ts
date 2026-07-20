@@ -1,22 +1,13 @@
 import { Router } from 'express';
 import { callLLM, callLLMChatStream, type ChatMessage } from '../agents/llm.js';
 import { buildStrategyPrompt, type StrategyParams } from '../prompts/strategyPrompts.js';
-import { enterpriseRouter as _er, buildEnterpriseContext } from './enterprise.js';
-import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import { enterpriseRouter as _er, buildEnterpriseContext, readTenantEnterpriseProfile } from './enterprise.js';
 import { consumeDemoQuota } from '../lib/demo.js';
+import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const ENTERPRISE_FILE = path.join(__dirname, '../../data/enterprise.json');
-
-function getEnterpriseContext(): string {
-  try {
-    const profile = JSON.parse(fs.readFileSync(ENTERPRISE_FILE, 'utf8'));
-    return buildEnterpriseContext(profile);
-  } catch {
-    return '';
-  }
+async function getEnterpriseContext(tenantId: string): Promise<string> {
+  try { return buildEnterpriseContext(await readTenantEnterpriseProfile(tenantId)); }
+  catch { return ''; }
 }
 
 const ADVISOR_SYSTEM_PROMPT = `你是灵枢AI的顾问Agent（策略编排层），服务于跨境电商、外贸工厂、品牌商、贸易商和海外卖家。
@@ -88,6 +79,7 @@ const ADVISOR_SYSTEM_PROMPT = `你是灵枢AI的顾问Agent（策略编排层）
 
 
 export const strategyRouter = Router();
+strategyRouter.use(requireAuth);
 
 function formatStreamError(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
@@ -116,6 +108,7 @@ function shouldRequireSources(messages: ChatMessage[]): boolean {
 }
 
 strategyRouter.post('/chat', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   const { messages, deepThinking = false } = req.body as { messages: ChatMessage[]; deepThinking?: boolean };
   if (!Array.isArray(messages) || messages.length === 0) {
     res.status(400).json({ error: 'messages required' });
@@ -128,7 +121,7 @@ strategyRouter.post('/chat', async (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders();
 
-  const enterpriseCtx = getEnterpriseContext();
+  const enterpriseCtx = await getEnterpriseContext(tenantId);
   const requireSources = shouldRequireSources(messages);
   const systemPrompt = enterpriseCtx
     ? `${ADVISOR_SYSTEM_PROMPT}${requireSources ? '\n\n【联网来源硬规则】本轮涉及联网搜索/公开信息核验，必须使用联网检索结果，并通过 sources 事件返回可点击来源；如果无法取得来源，不要给出联网结论，改为说明需要重新检索。' : ''}\n\n【当前企业知识库】\n${enterpriseCtx}`

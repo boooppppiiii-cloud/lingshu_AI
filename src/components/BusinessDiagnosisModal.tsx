@@ -216,7 +216,7 @@ export default function BusinessDiagnosisModal({ open, session, onClose, onDismi
     try {
       const response = await fetch('/api/overseas/studio/map-product-columns', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeader() },
         body: JSON.stringify({ headers, sampleRows }),
       });
       const result = await response.json();

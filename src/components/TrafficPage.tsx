@@ -25,6 +25,7 @@ type PublishDraft = {
   title: string;
   description: string;
   ratio?: string;
+  sourceProjectId?: string;
 };
 
 interface Props {
@@ -270,7 +271,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
         const url = account.platform === 'youtube'
           ? `/api/overseas/youtube/accounts/${account.id}/upload`
           : `/api/overseas/social/accounts/${account.id}/upload`;
-        await fetchJson<{ ok: boolean; video?: unknown }>(url, {
+        const publishResult = await fetchJson<{ ok: boolean; video?: unknown }>(url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -281,6 +282,12 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
             madeForKids: false,
           }),
         });
+        if (draft?.sourceProjectId) {
+          await fetch('/api/overseas/studio/publish-links', {
+            method: 'POST', headers: { 'Content-Type': 'application/json', ...authHeader() },
+            body: JSON.stringify({ projectId: draft.sourceProjectId, accountId: account.id, platform: account.platform, title: title.trim(), publishResult }),
+          });
+        }
       } catch (e) {
         failures.push(`${meta.label}：${e instanceof Error ? e.message : '发布失败'}`);
       }

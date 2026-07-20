@@ -1,0 +1,17 @@
+{
+  "13065486_1080_1920_30fps.mp4": { "industry": "beauty_skincare", "shotFunction": "application,treatment_experience", "applicability": "industry_specific", "tags": "美容,护肤,美容院,面部护理,真人,竖屏" },
+  "8131887-uhd_2160_4096_25fps.mp4": { "industry": "beauty_skincare", "shotFunction": "texture_demo,ingredient_visual", "applicability": "industry_specific", "tags": "精华液,液体质地,滴落,肌肤,微距,竖屏" },
+  "13242473_2160_3840_30fps.mp4": { "industry": "beauty_skincare", "shotFunction": "device_demo,application", "applicability": "industry_specific", "tags": "美容仪,科技护肤,院线护理,真人,竖屏" },
+  "10215320-uhd_4096_2160_25fps.mp4": { "industry": "beauty_skincare", "shotFunction": "application,texture_demo", "applicability": "industry_specific", "tags": "面霜,涂抹,肤感,手部,细节特写,横屏" },
+  "9698783-uhd_3840_2160_25fps.mp4": { "industry": "beauty_skincare", "shotFunction": "product_demo,usage_setup", "applicability": "industry_specific", "tags": "护肤品,瓶身,手持,产品展示,横屏" },
+  "6445977-hd_1920_1080_25fps.mp4": { "industry": "beauty_skincare", "shotFunction": "product_demo,ingredient_visual", "applicability": "industry_specific", "tags": "滴管瓶,精华,成分感,产品展示,横屏" },
+  "12984266_1920_1080_25fps.mp4": { "industry": "universal_manufacturing", "shotFunction": "production,factory_proof", "applicability": "universal", "tags": "自动化,生产线,工人,制造,规模生产,横屏" },
+  "13032237_2160_3840_25fps.mp4": { "industry": "metalworking", "shotFunction": "manufacturing_process,equipment_demo", "applicability": "industry_specific", "tags": "激光切割,金属加工,机械设备,制造,竖屏" },
+  "12899884_1920_1080_25fps.mp4": { "industry": "universal_manufacturing", "shotFunction": "equipment_demo,production", "applicability": "universal", "tags": "气动设备,工厂设备,生产线,制造,横屏" },
+  "14117632_1080_1920_30fps.mp4": { "industry": "universal_manufacturing", "shotFunction": "factory_exterior,factory_proof", "applicability": "universal", "tags": "厂房,工厂外景,生产基地,实体工厂,竖屏" },
+  "14804690_1080_1920_24fps.mp4": { "industry": "universal_manufacturing", "shotFunction": "production,worker_operation", "applicability": "universal", "tags": "工人,装配,生产线,标准作业,竖屏" },
+  "13382178_3840_2160_50fps.mp4": { "industry": "apparel_textile", "shotFunction": "production,worker_operation", "applicability": "industry_specific", "tags": "服装厂,纺织,缝纫,车间,工人,横屏" },
+  "13420549_3840_2160_30fps.mp4": { "industry": "universal_manufacturing", "shotFunction": "quality_control,equipment_inspection", "applicability": "cross_industry", "tags": "技术员,设备检修,质量管理,工厂,横屏" },
+  "13439067_3840_2160_50fps.mp4": { "industry": "universal_manufacturing", "shotFunction": "packaging,production", "applicability": "universal", "tags": "包装,流水线,大货生产,工人,横屏" },
+  "13814683_3840_2160_100fps.mp4": { "industry": "universal_manufacturing", "shotFunction": "warehouse,logistics_fulfillment", "applicability": "universal", "tags": "仓储,包装,物流,履约,传送带,横屏" }
+}

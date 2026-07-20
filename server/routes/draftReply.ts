@@ -3,9 +3,11 @@ import { callLLM } from '../agents/llm.js';
 import { retrieveContext, type RetrievedContext } from '../knowledge/retrieve.js';
 import { buildKnowledgePromptBlock } from '../knowledge/promptBlocks.js';
 import { buildStyleMemoryPromptBlock, retrieveStyleMemories } from '../knowledge/styleMemory.js';
-import { readEnterpriseProfile, type BizRules, type SalesStyleProfile } from './enterprise.js';
+import { readTenantEnterpriseProfile, type BizRules, type SalesStyleProfile } from './enterprise.js';
+import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 
 export const draftReplyRouter = Router();
+draftReplyRouter.use(requireAuth);
 
 const SYSTEM_PROMPT = `You are Lingshu AI's My Customers conversion assistant for Yiwu cross-border sellers.
 Write exactly one concise customer-facing reply that can be sent in WhatsApp.
@@ -31,10 +33,10 @@ function cleanDraft(raw: string): string {
 }
 
 draftReplyRouter.post('/conversion/draft', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   const body = req.body ?? {};
   const timeline = Array.isArray(body.timeline) ? body.timeline.slice(-8) : [];
   const intent = normalizeIntent(body.intent || body.mode);
-  const tenantId = String(body.tenantId || 'local_tenant_default');
   const language = String(body.language ?? '').trim() || 'English';
   const latestMessage = latestBuyerMessage(timeline) || String(body.message || body.instruction || body.product || '');
   const context = await retrieveContext(tenantId, {
@@ -45,7 +47,7 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
     product: String(body.product ?? ''),
   }, latestMessage);
   const styleMemories = await retrieveStyleMemories(tenantId, categoryForIntent(intent), latestMessage);
-  const salesStyleProfile = readEnterpriseProfile().salesStyleProfile;
+  const salesStyleProfile = (await readTenantEnterpriseProfile(tenantId)).salesStyleProfile;
   const suppressPrice = shouldSuppressPriceFromRules(context.bizRules);
   const hardNoPriceDigits = context.bizRules?.quoteMode === 'human_only';
   const prompt = [

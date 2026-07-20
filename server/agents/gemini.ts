@@ -1,5 +1,6 @@
 import { GoogleGenAI, type Content } from '@google/genai';
 import type { VideoAiAnalysis, VoiceoverContent, StoryboardContent, ScriptType, Language } from '../types/index.js';
+import { GEMINI_ANALYSIS_DIRECTOR_CONTRACT, GEMINI_STORYBOARD_DIRECTOR_CONTRACT } from '../prompts/geminiVideoScriptDirector.js';
 
 const MODEL = () => (process.env.GEMINI_MODEL ?? 'gemini-2.5-flash').trim();
 
@@ -145,6 +146,48 @@ function parseScriptSummary15s(value: unknown): VideoAiAnalysis['scriptSummary15
   return result.visualStyle || result.coreEmotion || result.competitors.length ? result : undefined;
 }
 
+function parseGlobalSettings(value: unknown): VideoAiAnalysis['globalSettings'] | undefined {
+  if (!isRecord(value)) return undefined;
+  return {
+    visualStyle: String(value.visualStyle ?? '').trim(),
+    aspectRatio: String(value.aspectRatio ?? '').trim(),
+    lighting: String(value.lighting ?? '').trim(),
+    subtitlePolicy: String(value.subtitlePolicy ?? '').trim(),
+    audioPolicy: String(value.audioPolicy ?? '').trim(),
+    identityConsistency: String(value.identityConsistency ?? '').trim(),
+    productConsistency: String(value.productConsistency ?? '').trim(),
+    negativeConstraints: Array.isArray(value.negativeConstraints) ? value.negativeConstraints.map(String).filter(Boolean) : [],
+  };
+}
+
+function parseSpatialContinuity(value: unknown): VideoAiAnalysis['spatialContinuity'] | undefined {
+  if (!isRecord(value)) return undefined;
+  const priority = String(value.backgroundPriority ?? '');
+  const depth = String(value.depthOfField ?? '');
+  return {
+    scene: String(value.scene ?? '').trim(),
+    subjectAnchors: Array.isArray(value.subjectAnchors) ? value.subjectAnchors.filter(isRecord).map(anchor => ({
+      subject: String(anchor.subject ?? '').trim(),
+      position: String(anchor.position ?? '').trim(),
+      facing: String(anchor.facing ?? '').trim(),
+      gazeTarget: String(anchor.gazeTarget ?? '').trim(),
+      orientation: String(anchor.orientation ?? '').trim(),
+    })) : [],
+    background: String(value.background ?? '').trim(),
+    backgroundPriority: priority === 'low' || priority === 'high' ? priority : 'medium',
+    depthOfField: depth === 'shallow' || depth === 'deep' ? depth : 'moderate',
+  };
+}
+
+function normalizeAnalysisTime(value: unknown): string {
+  const raw = String(value ?? '').trim();
+  const numbers = Array.from(raw.matchAll(/(\d+(?:\.\d+)?)/g)).map(match => Number(match[1]));
+  const clean = (number: number) => number.toFixed(2).replace(/\.00$/, '').replace(/(\.\d)0$/, '$1');
+  if (numbers.length >= 2) return `${clean(numbers[0]!)}-${clean(numbers[1]!)}s`;
+  if (numbers.length === 1) return `${clean(numbers[0]!)}s`;
+  return raw;
+}
+
 function parseScriptDetails15s(value: unknown): VideoAiAnalysis['scriptDetails15s'] | undefined {
   if (!Array.isArray(value)) return undefined;
   const rows = value.map((item) => {
@@ -153,17 +196,42 @@ function parseScriptDetails15s(value: unknown): VideoAiAnalysis['scriptDetails15
     const subtitle = String(item.subtitle ?? '').trim();
     if (!visual && !subtitle) return null;
     return {
-      time: String(item.time ?? item.timestamp ?? '').trim(),
+      time: normalizeAnalysisTime(item.time ?? item.timestamp),
       environment: String(item.environment ?? '').trim(),
       shot: String(item.shot ?? '').trim(),
       camera: String(item.camera ?? '').trim(),
+      angle: String(item.angle ?? '').trim(),
+      composition: String(item.composition ?? '').trim(),
       visual,
       subtitle,
       audio: String(item.audio ?? '').trim(),
       note: String(item.note ?? '').trim(),
+      purpose: String(item.purpose ?? '').trim(),
+      dialogue: String(item.dialogue ?? '').trim(),
+      onScreenText: String(item.onScreenText ?? '').trim(),
+      ambientSound: String(item.ambientSound ?? '').trim(),
+      bgm: String(item.bgm ?? '').trim(),
+      soundEffects: Array.isArray(item.soundEffects) ? item.soundEffects.map(String).filter(Boolean) : [],
+      beats: Array.isArray(item.beats) ? item.beats.filter(isRecord).map(beat => ({ time: normalizeAnalysisTime(beat.time), action: String(beat.action ?? '').trim(), dialogue: String(beat.dialogue ?? '').trim(), onScreenText: String(beat.onScreenText ?? '').trim() })).filter(beat => beat.action || beat.dialogue || beat.onScreenText) : [],
+      persistentState: String(item.persistentState ?? '').trim(),
+      startState: String(item.startState ?? '').trim(),
+      endState: String(item.endState ?? '').trim(),
+      transitionToNext: String(item.transitionToNext ?? '').trim(),
+      backgroundPriority: ['low', 'medium', 'high'].includes(String(item.backgroundPriority)) ? String(item.backgroundPriority) as 'low' | 'medium' | 'high' : 'medium',
+      depthOfField: ['shallow', 'moderate', 'deep'].includes(String(item.depthOfField)) ? String(item.depthOfField) as 'shallow' | 'moderate' | 'deep' : 'moderate',
+      authenticity: String(item.authenticity ?? '').trim(),
+      observedFacts: String(item.observedFacts ?? '').trim(),
+      inferredIntent: String(item.inferredIntent ?? '').trim(),
+      causalGap: String(item.causalGap ?? '').trim(),
+      omniPrompt: String(item.omniPrompt ?? '').trim(),
+      omniNegativePrompt: String(item.omniNegativePrompt ?? '').trim(),
+      confidence: Math.max(0, Math.min(1, Number(item.confidence ?? 1) || 0)),
+      needsReview: Boolean(item.needsReview),
+      estimatedSpeechDuration: Math.max(0, Number(item.estimatedSpeechDuration ?? 0) || 0),
+      dialogueFits: item.dialogueFits !== false,
     };
   }).filter((item): item is NonNullable<typeof item> => Boolean(item));
-  return rows.length ? rows.slice(0, 12) : undefined;
+  return rows.length ? rows : undefined;
 }
 
 export function normalizeVideoAnalysis(parsed: Partial<VideoAiAnalysis>): VideoAiAnalysis {
@@ -174,6 +242,8 @@ export function normalizeVideoAnalysis(parsed: Partial<VideoAiAnalysis>): VideoA
     mood: String(parsed.mood ?? ''),
     structure: String(parsed.structure ?? ''),
     baseRequirements: String(parsed.baseRequirements ?? ''),
+    globalSettings: parseGlobalSettings(parsed.globalSettings),
+    spatialContinuity: parseSpatialContinuity(parsed.spatialContinuity),
     firstTenSeconds: parseFirstTenSeconds(parsed.firstTenSeconds),
     coarseStructure: parseCoarseStructure(parsed.coarseStructure),
     scriptSummary15s: parseScriptSummary15s(parsed.scriptSummary15s),
@@ -192,6 +262,7 @@ export async function analyzeVideo(opts: {
   const systemInstruction = `你是一个面向出海电商营销的短视频内容分析专家。
 请分析提供的视频，并提取结构化信息。除 recommendedScriptType 字段外，所有字符串内容必须使用简体中文输出。
 只输出合法 JSON，不要 markdown，不要代码块，不要前后解释。
+${GEMINI_ANALYSIS_DIRECTOR_CONTRACT}
 
 必需 JSON 字段：
 - theme: string，用一句中文概括视频核心主题/产品/场景
@@ -206,18 +277,25 @@ export async function analyzeVideo(opts: {
   - camera: 运镜
   - visuals: 画面
   - voiceMusic: 配音配乐
-- coarseStructure: array，粗略脚本结构即可，按约 3 秒一帧拆解 0–30 秒；每项包含 time、label、description
+- coarseStructure: array，覆盖原视频完整时长，按约 3–8 秒或内容结构变化拆解；每项包含 time、label、description
 - scriptSummary15s: object，15 秒脚本详析摘要，包含 visualStyle（指定画风）、coreEmotion（核心情绪）、competitors（竞品/品牌/视觉参照物数组；如无明确识别则空数组）
-- scriptDetails15s: array，逐时间戳详析 0–15 秒，每项必须包含：
-  - time: string，使用类似 "0.2s" 或 "5.2s–7.2s" 的时间戳
+- scriptDetails15s: array（字段名仅为历史兼容），必须逐时间戳详析原视频完整时长，从 0 秒连续覆盖到视频结束，不得在 15 秒处截断；每项必须包含：
+  - time: string，必须使用 "start-end s" 时间区间，例如 "0.2-1.0s"；按导演镜头切分，主体动作、展示对象、运镜或营销功能改变时新建镜头
   - environment: string，环境/场景，例如“白色浴室台面”“居家卧室”“户外街景”
   - shot: string，景别，例如“特写”“中景”“近景”
   - camera: string，运镜，例如“固定镜头”“微推近”“手持晃动”“旋转运镜”
   - visual: string，具体画面人物/产品/动作/场景
-  - subtitle: string，只填写画面中清晰可见的字幕或可确认的口播原句；看不清/听不清则填空字符串，禁止写“待补全”或猜测台词
-  - audio: string，只填写可确认的配音、BGM、音效；无法确认则填空字符串，禁止写“可能有……”或猜测台词
+  - purpose: string，镜头营销功能，如“反常识钩子”“效果证明”“价格反差”“CTA”
+  - dialogue: string，只填写可确认的人物口播/旁白原文，听不清留空
+  - onScreenText: string，只填写画面真实可见字幕，不得与口播混写
+  - ambientSound: string，环境声；bgm: string，配乐；soundEffects: string[]，明确音效
+  - beats: array，镜头内节拍；长镜头中动作、台词重点或字幕变化时记录 time、action、dialogue、onScreenText
+  - persistentState: string，仅记录贯穿本镜头的构图、人物状态或持续声音，避免每个节拍重复
+  - authenticity: string，注明必须使用真实素材或允许AI生成的真实性要求
+  - confidence: number，0到1；needsReview: boolean，品牌、价格、型号、专名、左右方向或ASR不确定时必须为true
+  - subtitle/audio: string，兼容字段，分别汇总 onScreenText 与音频信息
   - note: string，可选，只记录确定可见的信息；禁止编造品牌、@账号、原台词或无法确认的提示
-每一个分镜的内容要能被前端按“时间戳 + 段落”展示；段落信息必须覆盖环境、景别、运镜、配乐、台词、画面，字段之间语义上可用分号连接。
+导演镜头数量随原片时长和真实镜头变化决定，不设 15 秒或固定段数上限；不要每句话都切镜，也不要把包含多个动作或功能的长段落塞进一镜。每个分镜必须覆盖环境、景别、运镜、镜头功能、画面、口播、屏幕文字和声音，并用 beats 保留镜头内节奏。
 - recommendedScriptType: "voiceover" | "storyboard"`;
 
   const raw = await withRetry(() =>
@@ -246,6 +324,7 @@ export async function analyzeYouTubeUrl(opts: {
   const systemInstruction = `你是一个面向出海电商营销的短视频内容分析专家。
 请分析提供的 YouTube 视频，并提取结构化信息。除 recommendedScriptType 字段外，所有字符串内容必须使用简体中文输出。
 只输出合法 JSON，不要 markdown，不要代码块，不要前后解释。
+${GEMINI_ANALYSIS_DIRECTOR_CONTRACT}
 
 必需 JSON 字段：
 - theme: string，用一句中文概括视频核心主题/产品/场景
@@ -260,10 +339,10 @@ export async function analyzeYouTubeUrl(opts: {
   - camera: 运镜
   - visuals: 画面
   - voiceMusic: 配音配乐
-- coarseStructure: array，粗略脚本结构即可，按约 3 秒一帧拆解 0–30 秒；每项包含 time、label、description
+- coarseStructure: array，覆盖原视频完整时长，按内容结构变化拆解；每项包含 time、label、description
 - scriptSummary15s: object，15 秒脚本详析摘要，包含 visualStyle（指定画风）、coreEmotion（核心情绪）、competitors（竞品/品牌/视觉参照物数组；如无明确识别则空数组）
-- scriptDetails15s: array，逐时间戳详析 0–15 秒，每项必须包含：
-  - time: string，使用类似 "0.2s" 或 "5.2s–7.2s" 的时间戳
+- scriptDetails15s: array（字段名仅为历史兼容），逐时间戳详析原视频完整时长，从 0 秒连续覆盖到视频结束，不得在 15 秒处截断；每项必须包含：
+  - time: string，统一使用 "start-end s"，数字最多保留两位小数，例如 "0-0.2s" 或 "5.2-7.25s"
   - environment: string，环境/场景，例如“白色浴室台面”“居家卧室”“户外街景”
   - shot: string，景别，例如“特写”“中景”“近景”
   - camera: string，运镜，例如“固定镜头”“微推近”“手持晃动”“旋转运镜”
@@ -314,7 +393,11 @@ JSON structure:
 }
 
 Write everything in ${language === 'zh' ? 'Chinese (Simplified)' : `language code: ${language}`}.
-The script must be natural for voiceover delivery — conversational, energetic, persuasive.`;
+The script must be natural for voiceover delivery — conversational, energetic, persuasive.
+Reuse only the reference video's hook type, reveal order, information density, proof placement, emotional progression, and CTA position. Never copy competitor identity, exact dialogue, distinctive expression, or unsupported claims.
+Prioritize verified product information over reference-video claims. If product evidence is missing, omit the claim instead of guessing.
+Make the duration physically speakable. For Chinese estimate 4–5 characters per second plus natural pauses; for other languages use a natural advertising delivery rate. Shorten the copy when it does not fit the declared duration.
+Keep the hook, body, CTA, and hashtags semantically distinct; do not put filming instructions inside voiceover text.`;
 
   const userPrompt = `Video analysis:
 - Theme: ${analysis.theme}
@@ -322,6 +405,8 @@ The script must be natural for voiceover delivery — conversational, energetic,
 - Selling points: ${analysis.sellingPoints.join(', ')}
 - Mood: ${analysis.mood}
 - Structure: ${analysis.structure}
+- Reference coarse structure: ${JSON.stringify(analysis.coarseStructure ?? [])}
+- Reference detailed shot purposes and dialogue rhythm: ${JSON.stringify((analysis.scriptDetails15s ?? []).map(item => ({ time: item.time, purpose: item.purpose, dialogue: item.dialogue, onScreenText: item.onScreenText })))}
 ${productInfo ? `\nProduct information (prioritize this):\n${productInfo}` : ''}
 
 Generate a voiceover script that captures this video's energy while promoting the product effectively.`;
@@ -350,20 +435,47 @@ export async function generateStoryboardScript(opts: {
 
   const systemInstruction = `You are a professional short-video storyboard director for overseas e-commerce ads.
 Output ONLY valid JSON — no markdown, no preamble.
+${GEMINI_STORYBOARD_DIRECTOR_CONTRACT}
 
 JSON structure:
 {
+  "globalSettings": {
+    "visualStyle": "string", "aspectRatio": "9:16", "lighting": "string",
+    "subtitlePolicy": "string", "audioPolicy": "string",
+    "identityConsistency": "string", "productConsistency": "string",
+    "negativeConstraints": ["string"]
+  },
+  "spatialContinuity": {
+    "scene": "string",
+    "subjectAnchors": [{"subject":"string","position":"string","facing":"string","gazeTarget":"string","orientation":"string"}],
+    "background": "string", "backgroundPriority": "low | medium | high", "depthOfField": "shallow | moderate | deep"
+  },
   "scenes": [
     {
       "index": 1,
+      "startTime": 0,
+      "endTime": 3,
       "duration": 3,
       "shot": "close-up | medium | wide | extreme close-up",
-      "camera": "static | push-in | pull-out | pan | tilt | handheld",
-      "action": "What happens on screen (describe visuals)",
+      "camera": "static | push-in | pull-out | pan | tilt | handheld | tracking",
+      "angle": "eye-level | overhead | low-angle | profile | over-shoulder | POV",
+      "composition": "subject and product placement",
+      "purpose": "hook | demonstration | proof | objection handling | CTA",
+      "action": "Executable visible action with initial state, contact/path, gaze, pose, and end state",
+      "startState": "string", "endState": "string", "transitionToNext": "string",
+      "lighting": "string", "backgroundPriority": "low | medium | high", "depthOfField": "shallow | moderate | deep",
       "voiceover": "Voiceover text for this scene",
-      "caption": "On-screen text caption"
+      "estimatedSpeechDuration": 2.2,
+      "dialogueFits": true,
+      "caption": "On-screen text caption",
+      "ambientSound": "string", "bgm": "string", "soundEffects": ["string"],
+      "generationPrompt": "English generation prompt",
+      "negativePrompt": "English negative prompt"
     }
-  ]
+  ],
+  "totalDuration": 15,
+  "continuitySummary": "string",
+  "emotionArc": ["string"]
 }
 
 Write voiceover and captions in ${language === 'zh' ? 'Chinese (Simplified)' : `language code: ${language}`}.
@@ -375,6 +487,10 @@ Target: 6–10 scenes, total 15–45 seconds.`;
 - Selling points: ${analysis.sellingPoints.join(', ')}
 - Mood: ${analysis.mood}
 - Structure: ${analysis.structure}
+- Global settings: ${JSON.stringify(analysis.globalSettings ?? {})}
+- Spatial continuity: ${JSON.stringify(analysis.spatialContinuity ?? {})}
+- Reference coarse structure: ${JSON.stringify(analysis.coarseStructure ?? [])}
+- Reference detailed shots: ${JSON.stringify(analysis.scriptDetails15s ?? [])}
 ${productInfo ? `\nProduct information (prioritize this):\n${productInfo}` : ''}
 
 Create a storyboard that replicates the video's winning structure while promoting the product.`;
@@ -384,21 +500,55 @@ Create a storyboard that replicates the video's winning structure while promotin
   );
 
   const parsed = parseJson<Partial<StoryboardContent>>(raw, {});
+  let cursor = 0;
   const scenes = Array.isArray(parsed.scenes)
     ? parsed.scenes.map((s, i) => {
         const scene = s as unknown as Record<string, unknown>;
+        const requestedDuration = Math.max(0.5, Number(scene.duration ?? 3) || 3);
+        const startTime = i === 0 ? 0 : cursor;
+        const modelEnd = Number(scene.endTime);
+        const endTime = Number.isFinite(modelEnd) && modelEnd > startTime ? modelEnd : startTime + requestedDuration;
+        const duration = Math.max(0.5, endTime - startTime);
+        cursor = endTime;
+        const voiceover = String(scene.voiceover ?? '');
+        const estimatedSpeechDuration = Math.max(0, Number(scene.estimatedSpeechDuration ?? ([...voiceover.replace(/\s/g, '')].length / 4.5 + (voiceover ? 0.75 : 0))) || 0);
         return {
           index: Number(scene.index ?? i + 1),
-          duration: Number(scene.duration ?? 3),
+          startTime,
+          endTime,
+          duration,
           shot: String(scene.shot ?? 'medium'),
           camera: String(scene.camera ?? 'static'),
+          angle: String(scene.angle ?? 'eye-level'),
+          composition: String(scene.composition ?? ''),
+          purpose: String(scene.purpose ?? ''),
           action: String(scene.action ?? ''),
-          voiceover: String(scene.voiceover ?? ''),
+          startState: String(scene.startState ?? ''),
+          endState: String(scene.endState ?? ''),
+          transitionToNext: String(scene.transitionToNext ?? ''),
+          lighting: String(scene.lighting ?? ''),
+          backgroundPriority: ['low', 'medium', 'high'].includes(String(scene.backgroundPriority)) ? String(scene.backgroundPriority) as 'low' | 'medium' | 'high' : 'medium',
+          depthOfField: ['shallow', 'moderate', 'deep'].includes(String(scene.depthOfField)) ? String(scene.depthOfField) as 'shallow' | 'moderate' | 'deep' : 'moderate',
+          voiceover,
+          estimatedSpeechDuration,
+          dialogueFits: estimatedSpeechDuration <= duration,
           caption: String(scene.caption ?? ''),
+          ambientSound: String(scene.ambientSound ?? ''),
+          bgm: String(scene.bgm ?? ''),
+          soundEffects: Array.isArray(scene.soundEffects) ? scene.soundEffects.map(String).filter(Boolean) : [],
+          generationPrompt: String(scene.generationPrompt ?? ''),
+          negativePrompt: String(scene.negativePrompt ?? ''),
         };
       })
     : [];
-  return { scenes };
+  return {
+    scenes,
+    globalSettings: parseGlobalSettings(parsed.globalSettings),
+    spatialContinuity: parseSpatialContinuity(parsed.spatialContinuity),
+    totalDuration: scenes.length ? scenes[scenes.length - 1]!.endTime : 0,
+    continuitySummary: String(parsed.continuitySummary ?? '').trim(),
+    emotionArc: Array.isArray(parsed.emotionArc) ? parsed.emotionArc.map(String).filter(Boolean) : [],
+  };
 }
 
 /** Generate a new script from an existing script's structure + new product info */

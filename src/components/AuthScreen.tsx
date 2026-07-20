@@ -239,13 +239,9 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (s: AuthSession) =>
             </form>
           )}
 
-          <button
-            type="button"
-            onClick={() => switchMode(mode === 'login' ? 'register' : 'login')}
-            className="mt-4 w-full text-center text-xs text-text-muted transition-colors hover:text-text-secondary"
-          >
-            {mode === 'register' ? '已有账号？切换到账号登录' : '没有账号？注册账号'}
-          </button>
+          <div className="mt-4 flex items-center justify-center border-t border-border pt-4 text-[11px] font-semibold text-text-muted">
+            <a href="/privacy" className="transition-colors hover:text-accent">隐私政策</a>
+          </div>
         </div>
       </motion.div>
     </div>
