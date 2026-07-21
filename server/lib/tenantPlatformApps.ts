@@ -31,6 +31,7 @@ export interface TenantPlatformAppRecord {
   business_id?: string;
   waba_id?: string;
   phone_number_id?: string;
+  wa_public_number?: string;
   page_id?: string;
   ig_user_id?: string;
   youtube_channel_id?: string;
@@ -54,6 +55,7 @@ export interface PublicTenantPlatformApp {
   businessId: string;
   wabaId: string;
   phoneNumberId: string;
+  waPublicNumber: string;
   pageId: string;
   igUserId: string;
   youtubeChannelId: string;
@@ -166,6 +168,7 @@ export function publicTenantPlatformApp(req: Request, app: TenantPlatformAppReco
     businessId: text(app.business_id),
     wabaId: text(app.waba_id),
     phoneNumberId: text(app.phone_number_id),
+    waPublicNumber: text(app.wa_public_number),
     pageId: text(app.page_id),
     igUserId: text(app.ig_user_id),
     youtubeChannelId: text(app.youtube_channel_id),
@@ -190,6 +193,7 @@ export async function upsertTenantPlatformApp(input: {
   businessId?: string;
   wabaId?: string;
   phoneNumberId?: string;
+  waPublicNumber?: string;
   pageId?: string;
   igUserId?: string;
   youtubeChannelId?: string;
@@ -215,6 +219,7 @@ export async function upsertTenantPlatformApp(input: {
   if (input.businessId !== undefined) patch.business_id = input.businessId;
   if (input.wabaId !== undefined) patch.waba_id = input.wabaId;
   if (input.phoneNumberId !== undefined) patch.phone_number_id = input.phoneNumberId;
+  if (input.waPublicNumber !== undefined) patch.wa_public_number = input.waPublicNumber;
   if (input.pageId !== undefined) patch.page_id = input.pageId;
   if (input.igUserId !== undefined) patch.ig_user_id = input.igUserId;
   if (input.youtubeChannelId !== undefined) patch.youtube_channel_id = input.youtubeChannelId;

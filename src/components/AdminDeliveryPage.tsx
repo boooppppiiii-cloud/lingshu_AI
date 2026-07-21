@@ -16,6 +16,7 @@ interface DeliveryApp {
   businessId: string;
   wabaId: string;
   phoneNumberId: string;
+  waPublicNumber: string;
   pageId: string;
   igUserId: string;
   youtubeChannelId: string;
@@ -489,6 +490,7 @@ function PlatformWizard({
               <Field label="Embedded Signup Config ID" hint="WhatsApp > Embedded Signup" value={appValue(drafts, app, 'waConfigId')} onChange={value => update({ waConfigId: value })} />
               <Field label="WABA ID" hint="WhatsApp Business Account" value={appValue(drafts, app, 'wabaId')} onChange={value => update({ wabaId: value })} />
               <Field label="Phone Number ID" hint="号码详情页" value={appValue(drafts, app, 'phoneNumberId')} onChange={value => update({ phoneNumberId: value })} />
+              <Field label="WhatsApp 真实手机号" hint="用于 wa.me 询盘追踪，如 971501234567" value={appValue(drafts, app, 'waPublicNumber')} onChange={value => update({ waPublicNumber: value })} />
               <Field label="Access Token" hint={app.accessTokenSet ? '已保存，留空不改' : '60天或永久 token'} secret placeholder={app.accessTokenSet ? '已加密保存，留空则不修改' : 'EAAB...'} onChange={value => update({ accessToken: value })} />
               <div className="grid grid-cols-2 gap-2">
                 <label className="grid gap-1 text-xs font-bold text-text-secondary">
@@ -700,6 +702,7 @@ export default function AdminDeliveryPage() {
         businessId: draft.businessId ?? app.businessId,
         wabaId: draft.wabaId ?? app.wabaId,
         phoneNumberId: draft.phoneNumberId ?? app.phoneNumberId,
+        waPublicNumber: draft.waPublicNumber ?? app.waPublicNumber,
         pageId: draft.pageId ?? app.pageId,
         igUserId: draft.igUserId ?? app.igUserId,
         youtubeChannelId: draft.youtubeChannelId ?? app.youtubeChannelId,
@@ -826,6 +829,7 @@ export default function AdminDeliveryPage() {
         businessId: app.businessId,
         wabaId: app.wabaId,
         phoneNumberId: app.phoneNumberId,
+        waPublicNumber: app.waPublicNumber,
         pageId: app.pageId,
         igUserId: app.igUserId,
         youtubeChannelId: app.youtubeChannelId,

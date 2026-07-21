@@ -34,6 +34,7 @@ import { initTenantPlatformTokenMonitor } from './routes/tenantPlatformTokenMoni
 import { assistLinksRouter } from './routes/assistLinks.js';
 import { initWhatsAppCustomerMaintenance } from './whatsapp/historyImport.js';
 import { whatsappOAuthRouter } from './routes/whatsappOAuth.js';
+import { publishingRouter } from './routes/publishing.js';
 import { ensureDeliveryCollections, ensureTrendVideoAnalysisCapacity } from './storage/ensureDeliveryCollections.js';
 import { supportAccessRouter } from './routes/supportAccess.js';
 import { crawlWorkerRouter, initCrawlWorkerCloudFallback } from './routes/crawlWorker.js';
@@ -85,8 +86,8 @@ function configureNetworkProxy(): void {
   process.env.http_proxy ||= proxy;
   process.env.CRAWLER_PROXY ||= proxy;
   process.env.NODE_USE_ENV_PROXY ||= '1';
-  // ProxyAgent 不认 NO_PROXY，会把发往 localhost（PocketBase 等）的请求也塞进代理导致静默失败；
-  // EnvHttpProxyAgent 按 NO_PROXY 绕行本地和 PB 主机。
+  // ProxyAgent 涓嶈 NO_PROXY锛屼細鎶婂彂寰€ localhost锛圥ocketBase 绛夛級鐨勮姹備篃濉炶繘浠ｇ悊瀵艰嚧闈欓粯澶辫触锛?
+  // EnvHttpProxyAgent 鎸?NO_PROXY 缁曡鏈湴鍜?PB 涓绘満銆?
   const pbHost = (() => { try { return new URL(process.env.PB_URL || 'http://localhost:8090').hostname; } catch { return ''; } })();
   const noProxy = ['localhost', '127.0.0.1', '::1', pbHost].filter(Boolean).join(',');
   process.env.NO_PROXY = process.env.NO_PROXY ? `${process.env.NO_PROXY},${noProxy}` : noProxy;
@@ -140,7 +141,7 @@ function detectLocalProxy(): string {
   return '';
 }
 
-// 跳过 SSE 流式响应（text/event-stream），否则 gzip 缓冲会拖慢首字
+// 璺宠繃 SSE 娴佸紡鍝嶅簲锛坱ext/event-stream锛夛紝鍚﹀垯 gzip 缂撳啿浼氭嫋鎱㈤瀛?
 app.use(compression({
   filter: (req, res) => {
     if (res.getHeader('Content-Type') === 'text/event-stream') return false;
@@ -151,7 +152,7 @@ app.use(compression({
     return compression.filter(req, res);
   },
 }));
-// Supports base64-encoded admin/manual video uploads (≈90MB raw video).
+// Supports base64-encoded admin/manual video uploads (鈮?0MB raw video).
 app.use(express.json({
   limit: '120mb',
   verify: (req, _res, buf) => {
@@ -174,7 +175,7 @@ app.get('/api/overseas/health', (_req, res) => {
   });
 });
 
-// Legacy routes (stub → to be implemented separately)
+// Legacy routes (stub 鈫?to be implemented separately)
 app.use('/api/overseas/copywriting', copywritingRouter);
 app.use('/api/overseas/translation', translationRouter);
 app.use('/api/overseas/competitor', competitorRouter);
@@ -193,6 +194,7 @@ app.use('/api/overseas/customers', customerSuggestionsRouter);
 app.use('/api/overseas/channels', channelsRouter);
 app.use('/api/channels', channelsRouter);
 app.use('/api/oauth/whatsapp', whatsappOAuthRouter);
+app.use('/api/overseas/publishing', publishingRouter);
 app.use('/api', assistLinksRouter);
 app.use('/api/overseas/youtube', youtubeRouter);
 app.use('/api/overseas/social', socialRouter);
@@ -215,7 +217,7 @@ initCrawlWorkerCloudFallback();
 initTenantPlatformTokenMonitor();
 await initWhatsAppCustomerMaintenance();
 
-// 素材库本地文件托管（POST /studio/materials 上传到 data/media/）
+// 绱犳潗搴撴湰鍦版枃浠舵墭绠★紙POST /studio/materials 涓婁紶鍒?data/media/锛?
 const mediaDir = path.join(__dirname, '..', 'data', 'media');
 const privateAssetHeaders = (res: express.Response) => {
   res.setHeader('Cache-Control', 'private, no-store');
@@ -225,19 +227,19 @@ app.use('/media', requireScopedAsset, express.static(mediaDir, {
   setHeaders: privateAssetHeaders,
 }));
 
-// BGM 曲库本地文件托管（POST /studio/bgm 上传）
+// BGM 鏇插簱鏈湴鏂囦欢鎵樼锛圥OST /studio/bgm 涓婁紶锛?
 const bgmDir = path.join(__dirname, '..', 'data', 'bgm');
 app.use('/bgm', requireScopedAsset, express.static(bgmDir, { setHeaders: privateAssetHeaders }));
 
-// TTS 配音音频托管（POST /studio/tts 生成到 data/tts/）
+// TTS 閰嶉煶闊抽鎵樼锛圥OST /studio/tts 鐢熸垚鍒?data/tts/锛?
 const ttsDir = path.join(__dirname, '..', 'data', 'tts');
 app.use('/tts', requireScopedAsset, express.static(ttsDir, { setHeaders: privateAssetHeaders }));
 
-// 真人音色样本托管（POST /studio/voice-samples 上传）
+// 鐪熶汉闊宠壊鏍锋湰鎵樼锛圥OST /studio/voice-samples 涓婁紶锛?
 const voiceSamplesDir = path.join(__dirname, '..', 'data', 'voice-samples');
 app.use('/voice-samples', requireScopedAsset, express.static(voiceSamplesDir, { setHeaders: privateAssetHeaders }));
 
-// 封面 SVG 托管（POST /studio/cover 生成到 data/covers/）
+// 灏侀潰 SVG 鎵樼锛圥OST /studio/cover 鐢熸垚鍒?data/covers/锛?
 const coversDir = path.join(__dirname, '..', 'data', 'covers');
 app.use('/covers', requireScopedAsset, express.static(coversDir, { setHeaders: privateAssetHeaders }));
 

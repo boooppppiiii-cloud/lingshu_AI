@@ -7,6 +7,7 @@ import {
   publicTenantPlatformApp,
   upsertTenantPlatformApp,
 } from '../lib/tenantPlatformApps.js';
+import { getPhoneNumberInfo } from '../integrations/whatsapp.js';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 
 export const whatsappOAuthRouter = Router();
@@ -159,6 +160,17 @@ whatsappOAuthRouter.post('/exchange', requireAuth, async (req, res) => {
 
   try {
     const token = await exchangeCodeForLongLivedToken({ appId, appSecret, code });
+    let waPublicNumber = '';
+    try {
+      const info = await getPhoneNumberInfo({
+        phoneNumberId,
+        accessToken: token.accessToken,
+        verifyToken: text(app?.webhook_verify_token),
+      });
+      waPublicNumber = text(info?.display_phone_number || info?.phone_number || info?.verified_name).replace(/[^\d]/g, '');
+    } catch (infoError) {
+      console.warn('[whatsapp-oauth:phone-info]', infoError instanceof Error ? infoError.message : infoError);
+    }
     const checklist = (() => {
       try {
         return JSON.parse(text(app?.last_checklist) || '{}');
@@ -171,6 +183,7 @@ whatsappOAuthRouter.post('/exchange', requireAuth, async (req, res) => {
       platform: 'meta',
       wabaId,
       phoneNumberId,
+      waPublicNumber: waPublicNumber || undefined,
       accessToken: token.accessToken,
       tokenExpiresAt: token.expiresAt,
       tokenType: 'user_60d',
