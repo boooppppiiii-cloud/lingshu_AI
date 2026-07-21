@@ -170,7 +170,6 @@ export interface RenderAuthorization {
 export interface DesktopRenderBridge {
   available: boolean;
   render: (manifest: RenderManifest) => Promise<{ ok: boolean; outputPath?: string; error?: string }>;
-  openInCapcut?: (payload: Record<string, unknown>) => Promise<{ ok: boolean; dir?: string; appOpened?: boolean; draftCreated?: boolean; createDraftError?: string; error?: string }>;
   showItemInFolder?: (filePath: string) => Promise<{ ok: boolean; error?: string }>;
   onProgress: (cb: (pct: number) => void) => () => void; // 返回取消订阅函数
 }
@@ -242,6 +241,7 @@ export interface SeedanceVideoResult {
   duration?: number;
   model?: string;
   material?: Material;
+  version?: VideoGenerationVersion;
   error?: string;
   createdAt?: string;
 }
@@ -454,6 +454,12 @@ export const studioApi = {
     ),
   uploadVoiceSample: (b: { name: string; dataBase64: string; mimeType?: string; duration?: number; replacesVoiceId?: string }) =>
     post<{ ok: boolean; id?: string; voiceId?: string; name?: string; url?: string; duration?: number; synthesisReady?: boolean; engine?: 'minimax' | 'xtts'; warning?: string; error?: string }>('voice-samples', b, { ok: false }),
+  listVoiceSamples: async (): Promise<Array<{ voiceId: string; name: string; url: string; duration: number; createdAt: string }>> => {
+    try {
+      const r = await fetch('/api/overseas/studio/voice-samples', { headers: authHeader() });
+      return r.ok ? await r.json() : [];
+    } catch { return []; }
+  },
   uploadVoiceover: (b: { name: string; dataBase64: string; mimeType?: string; duration?: number }) =>
     post<{ ok: boolean; url?: string; duration?: number; error?: string }>('voiceover', b, { ok: false }),
 
@@ -477,8 +483,24 @@ export const studioApi = {
     resolution?: string;
     title?: string;
     referenceImageUrl?: string;
+    generationGroupKey?: string;
+    generationContext?: Record<string, unknown>;
+    parentVersionId?: string;
   }) =>
     postSeedanceVideo(b),
+
+  listVideoVersions: async (groupKey: string): Promise<VideoGenerationVersion[]> => {
+    try {
+      const r = await fetch(`/api/overseas/studio/video-versions?groupKey=${encodeURIComponent(groupKey)}`, { headers: authHeader() });
+      return r.ok ? await r.json() as VideoGenerationVersion[] : [];
+    } catch { return []; }
+  },
+  selectVideoVersion: async (id: string) => {
+    try {
+      const r = await fetch(`/api/overseas/studio/video-versions/${encodeURIComponent(id)}/select`, { method: 'PATCH', headers: authHeader() });
+      return await r.json() as { ok: boolean; version?: VideoGenerationVersion };
+    } catch { return { ok: false }; }
+  },
 
   storyboardQualityCheck: (b: { materialId: string; storyboard: string; productInfo?: string; critical?: boolean }) =>
     post<{ ok: boolean; quality?: StoryboardQualityResult; error?: string }>('storyboard-quality-check', b, { ok: false }),
@@ -537,9 +559,6 @@ export const studioApi = {
     }
   },
 
-  openCapcut: (payload: Record<string, unknown>) =>
-    post<{ ok: boolean; dir?: string; appOpened?: boolean; draftCreated?: boolean; folderOpened?: boolean; createDraftError?: string; error?: string }>('capcut/open', payload, { ok: false, error: '剪映跳转失败' }),
-
   // 草稿 / 作品
   listProjects: async (): Promise<StudioProject[]> => {
     try {
@@ -577,7 +596,7 @@ export const studioApi = {
       return [];
     }
   },
-  uploadMaterial: (b: { name: string; folder?: string; type: 'video' | 'image' | 'audio'; duration?: number; dataBase64: string; mimeType?: string }) =>
+  uploadMaterial: (b: { name: string; folder?: string; type: 'video' | 'image' | 'audio'; duration?: number; width?: number; height?: number; dataBase64: string; mimeType?: string }) =>
     post<{ ok: boolean; material: Material }>('materials', b, { ok: false, material: null as unknown as Material }),
   analyzeMaterialSegments: (id: string) =>
     post<{ ok: boolean; material?: Material; segments?: MaterialSegment[]; error?: string }>(`materials/${id}/analyze-segments`, {}, { ok: false, error: '片段分析失败' }),
@@ -625,6 +644,7 @@ export interface CoverStyle {
   color: string;                        // 标题颜色 hex
   size: 'S' | 'M' | 'L';                // 字号档位
   position: 'top' | 'center' | 'bottom';// 垂直位置
+  verticalPosition?: number;             // 标题中心纵坐标（0-100%），拖动时精确定位
   align: 'left' | 'center';             // 水平对齐
   font: CoverFont;                      // 字体（系统字体栈，预览与 SVG 一致）
   weight?: 'regular' | 'bold' | 'heavy';// 粗细档位（缺省 bold）
@@ -638,6 +658,9 @@ export interface Material {
   folder: string;
   type: 'video' | 'image' | 'audio';
   duration: number;
+  width?: number;
+  height?: number;
+  aspectRatio?: number;
   size: string;
   file: string;
   url: string;
@@ -654,6 +677,25 @@ export interface Material {
   segmentAnalysisStatus?: 'pending' | 'analyzing' | 'completed' | 'failed';
   segmentAnalysisError?: string;
   segments?: MaterialSegment[];
+  createdAt: string;
+}
+
+export interface VideoGenerationVersion {
+  id: string;
+  groupKey: string;
+  versionNumber: number;
+  parentVersionId?: string;
+  materialId?: string;
+  taskId?: string;
+  title: string;
+  url?: string;
+  poster?: string;
+  duration: number;
+  source: string;
+  model?: string;
+  promptSnapshot: { script: string; productInfo: string; language: string; ratio: string; resolution: string };
+  context?: Record<string, unknown>;
+  isSelected: boolean;
   createdAt: string;
 }
 

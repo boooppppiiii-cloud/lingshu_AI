@@ -71,7 +71,7 @@ export function signAssetUrl(url: string, tenantId: string, ttlMs = 15 * 60 * 10
   return `${parsed.pathname}${parsed.search}`;
 }
 
-function verifyAssetToken(token: unknown, pathname: string): { tenantId: string } | null {
+export function verifyAssetToken(token: unknown, pathname: string): { tenantId: string } | null {
   const [body, supplied] = String(token || '').split('.');
   if (!body || !supplied) return null;
   const expected = assetSignature(body);
@@ -111,7 +111,7 @@ export async function requireScopedAsset(req: Request, res: Response, next: Next
   // Existing pre-isolation assets have no tenant metadata. Keep them available
   // only to authenticated users as legacy shared assets; all new writes use
   // shared/ or tenants/<tenantId>/ paths.
-  if (identity && segments.length === 1) {
+  if ((identity || signed) && segments.length === 1) {
     next();
     return;
   }

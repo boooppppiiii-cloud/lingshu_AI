@@ -164,6 +164,14 @@ type PublishAccount = {
   status: 'connected' | 'error' | 'expired';
   avatarUrl?: string;
 };
+type PublishRecommendation = {
+  accountId: string;
+  platform: PublishPlatform;
+  status: 'recommended' | 'adjust' | 'not_recommended';
+  reasons: string[];
+  actions: string[];
+  coverage: { lingshuRecords: number; platformSyncedRecords: number; level: 'medium' | 'limited' };
+};
 
 const PLATFORM_META: Record<PublishPlatform, { label: string; short: string; color: string; format: string }> = {
   youtube: { label: 'YouTube', short: 'YT', color: '#ff0000', format: 'Shorts / Video' },
@@ -196,6 +204,8 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
   const [videoPath, setVideoPath] = useState('');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
+  const [recommendations, setRecommendations] = useState<PublishRecommendation[]>([]);
+  const [recommendationsLoading, setRecommendationsLoading] = useState(false);
 
   const toggle = (id: string) => {
     setSelected(prev => {
@@ -280,6 +290,8 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
             description: description.trim(),
             privacyStatus: 'public',
             madeForKids: false,
+            projectId: draft?.sourceProjectId,
+            ratio: draft?.ratio,
           }),
         });
         if (draft?.sourceProjectId) {
@@ -312,6 +324,24 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
   const previewRatio = draft?.ratio || (selectedPlatforms.length > 0 && selectedPlatforms.every(platform => platform === 'youtube') ? '16:9' : '9:16');
   const previewAspect = previewRatio === '16:9' ? '16 / 9' : '9 / 16';
   const videoName = videoPath.trim().split(/[\\/]/).filter(Boolean).pop() || '本地视频预览';
+
+  useEffect(() => {
+    if (!selectedConnectedAccounts.length) { setRecommendations([]); return; }
+    const timer = window.setTimeout(() => {
+      setRecommendationsLoading(true);
+      fetchJson<{ recommendations: PublishRecommendation[] }>('/api/overseas/studio/publish-recommendations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          targets: selectedConnectedAccounts.map(account => ({ accountId: account.id, platform: account.platform })),
+          videoPath: videoPath.trim(), title: title.trim(), projectId: draft?.sourceProjectId, ratio: draft?.ratio,
+        }),
+      }).then(result => setRecommendations(result.recommendations || []))
+        .catch(() => setRecommendations([]))
+        .finally(() => setRecommendationsLoading(false));
+    }, 350);
+    return () => window.clearTimeout(timer);
+  }, [selectedConnectedAccounts.map(account => `${account.platform}:${account.id}`).join('|'), videoPath, title, draft?.sourceProjectId, draft?.ratio]);
 
   return (
     <div className="px-6 py-5">
@@ -393,6 +423,28 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                   <p className="mt-2 text-xs text-text-muted">{meta.format}</p>
                 </button>
               );
+            })}
+          </div>
+        </section>
+
+        <section className="rounded-2xl border border-border bg-white p-5 shadow-sm">
+          <div className="flex items-start justify-between gap-3">
+            <div><h3 className="text-sm font-bold text-text-primary">平台发布推荐</h3><p className="mt-1 text-xs text-text-muted">结合平台规则和该账号的灵枢发布记录检查；未同步的平台历史不会被冒充为已检查。</p></div>
+            {recommendationsLoading && <Loader2 size={15} className="animate-spin text-accent" />}
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            {selectedConnectedAccounts.map(account => {
+              const item = recommendations.find(candidate => candidate.accountId === account.id);
+              const meta = PLATFORM_META[account.platform];
+              const status = item?.status || 'recommended';
+              const style = status === 'recommended' ? 'border-green-200 bg-green-50/70' : status === 'adjust' ? 'border-amber-200 bg-amber-50/70' : 'border-red-200 bg-red-50/70';
+              const label = status === 'recommended' ? '推荐发布' : status === 'adjust' ? '调整后发布' : '不建议本次发布';
+              return <div key={account.id} className={`rounded-xl border p-3 ${style}`}>
+                <div className="flex items-center justify-between gap-2"><p className="text-xs font-black text-text-primary">{meta.label} · {account.handle || account.title}</p><span className="text-[10px] font-black">{label}</span></div>
+                <div className="mt-2 space-y-1">{(item?.reasons || ['正在检查当前版本…']).map(reason => <p key={reason} className="text-[11px] text-text-secondary">• {reason}</p>)}</div>
+                {item?.actions?.length ? <p className="mt-2 text-[10px] font-bold text-text-secondary">建议：{item.actions.join('；')}</p> : null}
+                <p className="mt-2 border-t border-black/5 pt-2 text-[10px] text-text-muted">历史覆盖：灵枢 {item?.coverage.lingshuRecords || 0} 条 · 平台同步 {item?.coverage.platformSyncedRecords || 0} 条</p>
+              </div>;
             })}
           </div>
         </section>

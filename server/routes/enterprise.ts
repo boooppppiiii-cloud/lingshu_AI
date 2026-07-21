@@ -551,15 +551,10 @@ function normalizeProfile(profile: EnterpriseProfile): EnterpriseProfile {
   const products = profile.products ?? { categories: '', priceRange: '', moq: '', certifications: '', highlights: '' };
   const existing = Array.isArray(products.items) ? products.items : [];
   const items = existing.length
-    ? existing.filter(item =>
-      item.name || item.sku || item.category || item.priceRange || item.moq || item.certifications || item.highlights ||
-      item.color || item.size || item.tagPrice || item.material || item.imageUrl ||
-      item.images?.length || item.videos?.length || item.documents?.length ||
-      item.factoryImages?.length || item.packagingImages?.length || item.certificateImages?.length ||
-      item.sceneImages?.length || item.brandAssets?.length
-    ).map((item) => ({
+    ? existing.map((item) => ({
       ...item,
-      name: item.name || item.sku || '',
+      // 空名称代表尚在编辑的产品草稿，不能在保存时隐式删除。
+      name: typeof item.name === 'string' ? item.name : (item.sku || ''),
       images: Array.isArray(item.images) ? item.images : [],
       videos: Array.isArray(item.videos) ? item.videos : [],
       documents: Array.isArray(item.documents) ? item.documents : [],

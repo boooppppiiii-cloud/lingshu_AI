@@ -24,6 +24,7 @@ import {
   getTenantAwareGoogleOAuthClient,
 } from '../lib/oauthConfig.js';
 import { parseOAuthState, signOAuthState } from '../lib/tenantPlatformApps.js';
+import { recordSuccessfulPublish } from '../lib/publishHistory.js';
 
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || '';
 const GOOGLE_OAUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -391,7 +392,7 @@ youtubeRouter.get('/oauth/callback', async (req, res) => {
       title: 'YouTube 已连接',
       message: `${record.channelTitle} 已连接成功，可以关闭这个窗口。`,
       returnTo,
-      accountId: record.id,
+      accountId: req.params.id,
       channelTitle: record.channelTitle,
     }));
   } catch (error: any) {
@@ -677,6 +678,10 @@ youtubeRouter.post('/accounts/:id/upload', async (req, res) => {
     tags,
     privacyStatus = 'unlisted',
     madeForKids = false,
+    projectId,
+    generationVersionId,
+    ratio,
+    language,
   } = req.body as {
     videoPath?: string;
     title?: string;
@@ -684,6 +689,10 @@ youtubeRouter.post('/accounts/:id/upload', async (req, res) => {
     tags?: unknown;
     privacyStatus?: 'private' | 'unlisted' | 'public';
     madeForKids?: boolean;
+    projectId?: string;
+    generationVersionId?: string;
+    ratio?: string;
+    language?: string;
   };
 
   if (!videoPath || !title) {
@@ -732,7 +741,20 @@ youtubeRouter.post('/accounts/:id/upload', async (req, res) => {
       status: 'connected',
     });
 
-    res.status(201).json({ ok: true, video: result });
+    const publishRecord = recordSuccessfulPublish({
+      tenantId,
+      platform: 'youtube',
+      accountId: req.params.id,
+      platformContentId: String((result as any)?.id || (result as any)?.videoId || '') || undefined,
+      projectId,
+      generationVersionId,
+      title,
+      description,
+      videoPath,
+      ratio,
+      language,
+    });
+    res.status(201).json({ ok: true, video: result, publishRecord });
   } catch (error: any) {
     console.error('YouTube upload error:', error?.response?.data ?? error);
     const status = error?.response?.status === 401 ? 401 : error?.response?.status === 403 ? 403 : 500;

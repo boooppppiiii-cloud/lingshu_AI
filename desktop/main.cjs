@@ -6,7 +6,7 @@
  */
 const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const path = require('node:path');
-const { composite, exportCapcutPackage } = require('./render.cjs');
+const { composite } = require('./render.cjs');
 
 // express 服务（npm start）默认 8790，同时提供 UI 与 /api。也可用 DESKTOP_URL 覆盖（如 vite dev）。
 const APP_URL = process.env.DESKTOP_URL || 'http://localhost:8792';
@@ -35,12 +35,6 @@ ipcMain.handle('render:start', async (_event, manifest) => {
   if (result.ok && result.outputPath) {
     shell.showItemInFolder(result.outputPath);
   }
-  return result;
-});
-
-ipcMain.handle('capcut:open', async (_event, payload) => {
-  const result = await exportCapcutPackage(payload);
-  if (result.ok && result.dir && !result.appOpened) shell.openPath(result.dir);
   return result;
 });
 

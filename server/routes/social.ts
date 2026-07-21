@@ -31,6 +31,7 @@ import {
   getTenantAwareMetaOAuthClient,
 } from '../lib/oauthConfig.js';
 import { parseOAuthState, signOAuthState } from '../lib/tenantPlatformApps.js';
+import { recordSuccessfulPublish } from '../lib/publishHistory.js';
 
 const COL = 'social_accounts';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -834,7 +835,7 @@ socialRouter.post('/accounts/:id/upload', async (req, res) => {
     res.status(400).json({ error: 'Account is not connected' });
     return;
   }
-  const body = req.body as SocialUploadInput & { videoPath?: string };
+  const body = req.body as SocialUploadInput & { videoPath?: string; projectId?: string; generationVersionId?: string; ratio?: string; language?: string };
   if (!body.title || (!body.videoPath && !body.videoUrl)) {
     res.status(400).json({ error: 'title and videoPath/videoUrl are required' });
     return;
@@ -859,7 +860,20 @@ socialRouter.post('/accounts/:id/upload', async (req, res) => {
     }
     if (!video) throw new Error('不支持的平台');
     await store.update(COL, account.id, { lastSyncAt: new Date().toISOString(), status: 'connected' });
-    res.status(201).json({ ok: true, video });
+    const publishRecord = recordSuccessfulPublish({
+      tenantId: account.tenantId,
+      platform: account.platform,
+      accountId: account.id,
+      platformContentId: String((video as any)?.id || (video as any)?.videoId || (video as any)?.publishId || '') || undefined,
+      projectId: body.projectId,
+      generationVersionId: body.generationVersionId,
+      title: body.title,
+      description: body.description || '',
+      videoPath: body.videoPath,
+      ratio: body.ratio,
+      language: body.language,
+    });
+    res.status(201).json({ ok: true, video, publishRecord });
   } catch (error: any) {
     console.error(`${account.platform} upload error:`, error?.response?.data ?? error?.message ?? error);
     const status = error?.statusCode || error?.response?.status || 500;

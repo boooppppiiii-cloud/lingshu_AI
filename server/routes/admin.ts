@@ -30,7 +30,7 @@ import {
   type VideoAdminAlert,
   type VideoFailureRecord,
 } from '../lib/videoAdminAlerts.js';
-import { attachManualVideoUploadAndQueue, backfillMissingCrawledMedia } from './videos.js';
+import { attachManualVideoUploadAndQueue, backfillMissingCrawledMedia, repairMissingCrawledThumbnails } from './videos.js';
 import { listStyleAdoptionTrends } from '../knowledge/styleMemory.js';
 import {
   decryptSecret,
@@ -192,6 +192,32 @@ async function listAdminInspirationVideos(input: {
     page: input.page,
     perPage: input.perPage,
   };
+}
+
+const inspirationListCache = new Map<string, {
+  expiresAt: number;
+  value?: Awaited<ReturnType<typeof listAdminInspirationVideos>>;
+  pending?: Promise<Awaited<ReturnType<typeof listAdminInspirationVideos>>>;
+}>();
+
+async function cachedAdminInspirationVideos(input: Parameters<typeof listAdminInspirationVideos>[0]) {
+  const key = JSON.stringify(input);
+  const now = Date.now();
+  const cached = inspirationListCache.get(key);
+  if (cached?.value && cached.expiresAt > now) return cached.value;
+  if (cached?.pending) return cached.pending;
+
+  const pending = listAdminInspirationVideos(input)
+    .then(value => {
+      inspirationListCache.set(key, { value, expiresAt: Date.now() + 10_000 });
+      return value;
+    })
+    .catch(error => {
+      inspirationListCache.delete(key);
+      throw error;
+    });
+  inspirationListCache.set(key, { pending, expiresAt: now + 10_000 });
+  return pending;
 }
 
 function readTrendVideoSnapshot(): VideoFailureRecord[] {
@@ -705,14 +731,21 @@ adminRouter.get('/inspiration-videos', async (req, res) => {
   const platform = bodyText(req.query.platform);
   const status = bodyText(req.query.status);
   const contentFormat: InspirationContentFormat = req.query.contentFormat === 'image' ? 'image' : 'video';
-  const result = await listAdminInspirationVideos({
+  const result = await cachedAdminInspirationVideos({
     page,
     perPage,
     platform: platform || undefined,
     status: status || undefined,
     contentFormat,
   });
-  if (contentFormat === 'video') void backfillMissingCrawledMedia(result.items).catch(error => console.warn('[admin] PocketBase video backfill failed:', error instanceof Error ? error.message : error));
+  if (contentFormat === 'video') {
+    void backfillMissingCrawledMedia(result.items).catch(error => console.warn('[admin] PocketBase video backfill failed:', error instanceof Error ? error.message : error));
+  } else {
+    // Thumbnail recovery may involve third-party network requests. Never put it on
+    // the list response's critical path; repaired media appears on the next refresh.
+    void repairMissingCrawledThumbnails(result.items, Math.min(10, perPage))
+      .catch(error => console.warn('[admin] inspiration thumbnail repair failed:', error instanceof Error ? error.message : error));
+  }
   res.json({ admin: admin.email, ...result });
 });
 
