@@ -437,6 +437,7 @@ export default function App() {
               restore={restoreFor('strategy')}
               kickoff={kickoffFor('strategy')}
               onAction={startAgentTask}
+              onNavigate={handleNavigate}
               onSessionRefresh={() => void refreshSession()}
             />
           )}

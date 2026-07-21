@@ -56,6 +56,7 @@ interface DraftResult {
   buyerMessage?: string;
   category?: string;
   originalDraft?: string;
+  strategies?: Array<{ id: string; scenario: string; confidence: number; reason: string }>;
 }
 
 interface MessageTemplate {
@@ -335,6 +336,7 @@ interface StyleMemoryPayload {
   finalSent: string;
   edited: boolean;
   category: string;
+  strategyIds: string[];
 }
 
 async function requestDraft(customer: CustomerProfile, instruction?: string, mode?: 'draft' | 'polish', intent: DraftIntent = mode === 'polish' ? 'polish' : 'reply'): Promise<DraftResult> {
@@ -366,6 +368,14 @@ async function requestDraft(customer: CustomerProfile, instruction?: string, mod
           evidence: Array.isArray(data.evidence) ? data.evidence.map(String) : [],
           buyerMessage: latestBuyerText(customer),
           category: typeof data.category === 'string' ? data.category : intent,
+          strategies: Array.isArray(data.strategies)
+            ? data.strategies.map((item: any) => ({
+                id: String(item?.id || ''),
+                scenario: String(item?.scenario || ''),
+                confidence: Number(item?.confidence || 0),
+                reason: String(item?.reason || ''),
+              })).filter((item: { id: string }) => item.id)
+            : [],
         };
       }
     }
@@ -1531,7 +1541,11 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
       .then(resp => resp.ok ? resp.json() : null)
       .then(data => {
         const value = data?.strategy?.aiAutonomy;
-        if (value === 'remind' || value === 'draft' || value === 'auto') setAutonomyLevel(value);
+        const approvedFaqCount = Array.isArray(data?.faq)
+          ? data.faq.filter((item: any) => item?.approvedForAuto && String(item?.question || '').trim() && String(item?.answer || '').trim()).length
+          : 0;
+        if (value === 'auto') setAutonomyLevel(approvedFaqCount >= 5 ? 'auto' : 'draft');
+        else if (value === 'remind' || value === 'draft') setAutonomyLevel(value);
         setPriceRulesReady(Boolean(data?.bizRules?.quoteMode && data?.bizRules?.samplePolicy && data?.bizRules?.paymentTerms));
       })
       .catch(() => {});
@@ -1718,6 +1732,7 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
       finalSent: finalZh,
       edited: original.trim() !== finalZh.trim(),
       category: meta?.category || 'reply',
+      strategyIds: meta?.strategies?.map(item => item.id).filter(Boolean) ?? [],
     };
   };
 

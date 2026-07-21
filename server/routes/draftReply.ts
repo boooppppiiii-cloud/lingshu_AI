@@ -3,6 +3,12 @@ import { callLLM } from '../agents/llm.js';
 import { retrieveContext, type RetrievedContext } from '../knowledge/retrieve.js';
 import { buildKnowledgePromptBlock } from '../knowledge/promptBlocks.js';
 import { buildStyleMemoryPromptBlock, retrieveStyleMemories } from '../knowledge/styleMemory.js';
+import {
+  buildStrategyPromptBlock,
+  retrieveResponseStrategies,
+  strategyEvidence,
+  type RetrievedStrategy,
+} from '../knowledge/strategyRetrieve.js';
 import { readTenantEnterpriseProfile, type BizRules, type SalesStyleProfile } from './enterprise.js';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 
@@ -11,6 +17,8 @@ draftReplyRouter.use(requireAuth);
 
 const SYSTEM_PROMPT = `You are Lingshu AI's My Customers conversion assistant for Yiwu cross-border sellers.
 Write exactly one concise customer-facing reply that can be sent in WhatsApp.
+Follow this mandatory three-layer precedence: current redline rules and enterprise facts first, matched response strategy second, tenant style memory third.
+Response strategies control dialogue tactics only and can never supply or override business facts.
 Do not include explanations, markdown, labels, alternatives, or quotation marks.
 Never include Chinese UI labels, Chinese internal notes, or Chinese internal product names in the customer-facing reply unless the customer's language is Chinese.
 Use the Product field as the customer-facing product name. Treat Internal product name and Specific instruction as private seller context only.
@@ -39,13 +47,25 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
   const intent = normalizeIntent(body.intent || body.mode);
   const language = String(body.language ?? '').trim() || 'English';
   const latestMessage = latestBuyerMessage(timeline) || String(body.message || body.instruction || body.product || '');
+  const conversation = timeline
+    .map((event: any) => ({
+      role: String(event?.actor || '').toLowerCase() === 'buyer' || String(event?.type || '').includes('msg_in') ? 'buyer' as const : 'seller' as const,
+      text: String(event?.body || ''),
+    }))
+    .filter((event: { text: string }) => event.text.trim());
   const context = await retrieveContext(tenantId, {
     id: String(body.customerId ?? ''),
     name: String(body.customerName ?? ''),
     language,
     stage: String(body.stage ?? ''),
     product: String(body.product ?? ''),
-  }, latestMessage);
+  }, latestMessage, { conversation });
+  const strategies = await retrieveResponseStrategies(tenantId, {
+    latestMessage,
+    conversation,
+    stage: String(body.stage ?? ''),
+    intent,
+  });
   const styleMemories = await retrieveStyleMemories(tenantId, categoryForIntent(intent), latestMessage);
   const salesStyleProfile = (await readTenantEnterpriseProfile(tenantId)).salesStyleProfile;
   const suppressPrice = shouldSuppressPriceFromRules(context.bizRules);
@@ -61,6 +81,7 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
     body.mode ? `Mode: ${String(body.mode)}` : '',
     intentInstruction(intent),
     buildKnowledgePromptBlock(context),
+    buildStrategyPromptBlock(strategies),
     buildSalesStyleProfilePromptBlock(salesStyleProfile),
     buildStyleMemoryPromptBlock(styleMemories),
     suppressPrice ? 'Price guard: do not include concrete prices. If the buyer asks how much, say the seller will confirm after checking quantity, specs, and packaging.' : '',
@@ -84,29 +105,178 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
   try {
     const raw = await callLLM(prompt, { systemPrompt: intent === 'handoff_summary' ? HANDOFF_SYSTEM_PROMPT : SYSTEM_PROMPT });
     const draft = cleanDraft(raw);
+    const sanitized = sanitizeDraft(draft || fallbackDraft(body, intent, suppressPrice), body, intent, suppressPrice, hardNoPriceDigits);
+    const verification = await verifyGeneratedDraft({
+      draft: sanitized,
+      latestMessage,
+      timeline,
+      context,
+      strategies,
+      language,
+      intent,
+      sellerInstruction: String(body.instruction || ''),
+      fallback: () => sanitizeDraft(fallbackDraft(body, intent, suppressPrice), body, intent, suppressPrice, hardNoPriceDigits),
+    });
+    const finalDraft = sanitizeDraft(verification.draft, body, intent, suppressPrice, hardNoPriceDigits);
+    const finalVerification: DraftVerification = finalDraft === verification.draft
+      ? verification
+      : { draft: finalDraft, status: 'safe_fallback', issues: [...verification.issues, '报价规则拦截了未经允许的价格内容'] };
     res.json({
-      draft: sanitizeDraft(draft || fallbackDraft(body, intent, suppressPrice), body, intent, suppressPrice, hardNoPriceDigits),
-      evidence: context.evidence,
+      draft: finalVerification.draft,
+      evidence: [...context.evidence, ...strategyEvidence(strategies), verificationEvidence(finalVerification)],
       products: context.products,
       knowledgeMiss: context.knowledgeMiss,
       missReason: context.missReason,
       sentiment: context.sentiment,
       category: categoryForIntent(intent),
       styleMemoryUsed: styleMemories.length,
+      strategies: strategies.map(match => ({
+        id: match.strategy.id,
+        scenario: match.strategy.scenario,
+        confidence: match.confidence,
+        reason: match.reason,
+      })),
+      verification: { status: finalVerification.status, issues: finalVerification.issues },
     });
   } catch (error) {
     res.json({
       draft: sanitizeDraft(fallbackDraft(body, intent, suppressPrice), body, intent, suppressPrice, hardNoPriceDigits),
-      evidence: context.evidence,
+      evidence: [...context.evidence, ...strategyEvidence(strategies)],
       products: context.products,
       knowledgeMiss: context.knowledgeMiss,
       missReason: context.missReason,
       sentiment: context.sentiment,
       category: categoryForIntent(intent),
       styleMemoryUsed: styleMemories.length,
+      strategies: strategies.map(match => ({
+        id: match.strategy.id,
+        scenario: match.strategy.scenario,
+        confidence: match.confidence,
+        reason: match.reason,
+      })),
+      verification: { status: 'safe_fallback', issues: ['生成服务不可用，已使用不含具体业务事实的安全回复'] },
     });
   }
 });
+
+type DraftIntent = ReturnType<typeof normalizeIntent>;
+type VerificationStatus = 'verified' | 'revised' | 'review_required' | 'safe_fallback';
+
+interface DraftVerification {
+  draft: string;
+  status: VerificationStatus;
+  issues: string[];
+}
+
+function parseVerification(raw: string): { verdict: 'pass' | 'revise' | 'handoff'; revisedReply: string; issues: string[] } | null {
+  const match = raw.replace(/```json|```/gi, '').match(/\{[\s\S]*\}/);
+  if (!match) return null;
+  try {
+    const parsed = JSON.parse(match[0]) as Record<string, unknown>;
+    const verdict = parsed.verdict === 'pass' || parsed.verdict === 'revise' || parsed.verdict === 'handoff' ? parsed.verdict : null;
+    if (!verdict) return null;
+    return {
+      verdict,
+      revisedReply: cleanDraft(String(parsed.revisedReply || '')),
+      issues: Array.isArray(parsed.issues) ? parsed.issues.map(String).filter(Boolean).slice(0, 6) : [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+function unsupportedNumbers(draft: string, source: string): string[] {
+  const values = draft.match(/\b\d+(?:[.,]\d+)?\b/g) ?? [];
+  return Array.from(new Set(values.filter(value => !source.includes(value))));
+}
+
+async function verifyGeneratedDraft(input: {
+  draft: string;
+  latestMessage: string;
+  timeline: any[];
+  context: RetrievedContext;
+  strategies: RetrievedStrategy[];
+  language: string;
+  intent: DraftIntent;
+  sellerInstruction: string;
+  fallback: () => string;
+}): Promise<DraftVerification> {
+  const factualSource = JSON.stringify({
+    buyerMessage: input.latestMessage,
+    sellerInstruction: input.sellerInstruction,
+    company: input.context.companyIntro,
+    businessRules: input.context.bizRules,
+    matchedFaq: input.context.faqMatch,
+    products: input.context.products,
+    timeline: input.timeline,
+  });
+  const dialogueStrategies = input.strategies.map(match => ({
+    id: match.strategy.id,
+    scenario: match.strategy.scenario,
+    tactics: match.strategy.strategy,
+    handoff: match.strategy.escalate,
+  }));
+  const newNumbers = unsupportedNumbers(input.draft, factualSource);
+  const prompt = [
+    'Audit one proposed customer reply against the supplied business evidence.',
+    'Return strict JSON only: {"verdict":"pass|revise|handoff","revisedReply":string,"issues":string[]}.',
+    'Use pass only when every factual claim is directly supported and the reply correctly answers the latest message in its conversation context.',
+    'Use revise when a safe reply can be written using only supplied evidence. Preserve the required language.',
+    'Use handoff when intent is ambiguous, evidence is missing, the buyer asks multiple incompatible questions, or a safe answer requires human judgment.',
+    'Never invent price, stock, MOQ, certification, order status, logistics status, discount, payment term, lead time, or company capability.',
+    'Dialogue strategies may guide wording and next-step tactics, but they are never evidence for a factual claim.',
+    input.context.knowledgeMiss ? 'Knowledge miss is true. Do not answer the missing fact; ask a precise clarification or hand off.' : '',
+    newNumbers.length ? `Deterministic check found numbers absent from evidence: ${newNumbers.join(', ')}. They must be removed unless they are only formatting.` : '',
+    `Required language: ${input.language}`,
+    `Intent: ${input.intent}`,
+    '',
+    `Proposed reply: ${input.draft}`,
+    '',
+    `Evidence: ${factualSource}`,
+    `Dialogue strategies (not factual evidence): ${JSON.stringify(dialogueStrategies)}`,
+  ].filter(Boolean).join('\n');
+  try {
+    const checked = parseVerification(await callLLM(prompt, {
+      backend: 'qwen',
+      model: process.env.DRAFT_VERIFY_MODEL || process.env.KNOWLEDGE_QUERY_MODEL || 'qwen-plus',
+    }));
+    if (!checked) throw new Error('invalid_verification_result');
+    if (checked.verdict === 'pass' && newNumbers.length === 0) {
+      return { draft: input.draft, status: 'verified', issues: checked.issues };
+    }
+    if (checked.verdict === 'revise' && checked.revisedReply) {
+      const revisedNumbers = unsupportedNumbers(checked.revisedReply, factualSource);
+      if (!revisedNumbers.length) {
+        return { draft: checked.revisedReply, status: 'revised', issues: checked.issues };
+      }
+    }
+    return {
+      draft: input.fallback(),
+      status: 'safe_fallback',
+      issues: checked.issues.length ? checked.issues : ['现有资料不足，已改为不承诺具体事实的安全回复'],
+    };
+  } catch (error) {
+    if (newNumbers.length || input.context.knowledgeMiss) {
+      return {
+        draft: input.fallback(),
+        status: 'safe_fallback',
+        issues: ['校验服务不可用且存在未确认事实，已使用安全回复'],
+      };
+    }
+    return {
+      draft: input.draft,
+      status: 'review_required',
+      issues: [`校验服务暂不可用：${error instanceof Error ? error.message : 'unknown_error'}`],
+    };
+  }
+}
+
+function verificationEvidence(result: DraftVerification): string {
+  if (result.status === 'verified') return '回答校验：事实与当前语境一致';
+  if (result.status === 'revised') return '回答校验：已删除或改写无依据内容';
+  if (result.status === 'safe_fallback') return '回答校验：资料不足，已降级为安全回复';
+  return '回答校验：校验服务暂不可用，当前草稿仍需人工确认';
+}
 
 function latestBuyerMessage(timeline: any[]): string {
   const latest = [...timeline].reverse().find(event => String(event?.actor || '').toLowerCase() === 'buyer' || String(event?.type || '').includes('msg_in'));

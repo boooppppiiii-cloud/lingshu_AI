@@ -1,12 +1,13 @@
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { decideAction, findActionRule, type AutonomyLevel } from '../autonomy/actionRules.js';
+import { decideAction, type AutonomyLevel } from '../autonomy/actionRules.js';
 import { guardOutbound } from '../autonomy/outboundGuard.js';
 import { prioritizeCustomer } from '../autonomy/prioritize.js';
 import { retrieveContext, type RetrievedContext } from '../knowledge/retrieve.js';
 import { notifyDeliveryTeam } from '../lib/tenantPlatformApps.js';
 import { distillSalesStyleProfile, markStyleMemoryWonForCustomer } from '../knowledge/styleMemory.js';
+import { readTenantEnterpriseProfile, type EnterpriseProfile } from '../routes/enterprise.js';
 import { r2Upload } from '../storage/r2.js';
 import { store } from '../storage/index.js';
 import { sendTenantWhatsAppText } from './send.js';
@@ -272,18 +273,13 @@ function writeImportStatus(status: ImportStatus): void {
   writeJson(IMPORT_STATUS_FILE, status);
 }
 
-function autonomyLevel(): AutonomyLevel {
-  const profile = readJson<any>(ENTERPRISE_FILE, {});
+function autonomyLevel(profile: EnterpriseProfile): AutonomyLevel {
   const value = profile?.strategy?.aiAutonomy;
   return value === 'remind' || value === 'draft' || value === 'auto' ? value : 'draft';
 }
 
-function enterpriseProfile(): any {
-  return readJson<any>(ENTERPRISE_FILE, {});
-}
-
-function handoffRules(): { keywords: string[]; missStreakToDraft: number; negativeSentiment: boolean } {
-  const rules = enterpriseProfile()?.handoffRules ?? {};
+function handoffRules(profile: EnterpriseProfile): { keywords: string[]; missStreakToDraft: number; negativeSentiment: boolean } {
+  const rules: Partial<NonNullable<EnterpriseProfile['handoffRules']>> = profile.handoffRules ?? {};
   const keywords = Array.isArray(rules.keywords)
     ? rules.keywords.map((item: unknown) => text(item)).filter(Boolean)
     : [];
@@ -325,13 +321,13 @@ function isWithinWorkHours(workHours: { start: string; end: string }, now = new 
   return current >= start || current <= end;
 }
 
-function nightModeState(now = currentDate()): { enabled: boolean; active: boolean; workHours: { start: string; end: string } } {
-  const profile = enterpriseProfile();
+function nightModeState(profile: EnterpriseProfile, now = currentDate()): { enabled: boolean; active: boolean; workHours: { start: string; end: string } } {
+  const notifications = profile.notifications;
   const workHours = {
-    start: /^\d{2}:\d{2}$/.test(String(profile?.notifications?.workHours?.start || '')) ? profile.notifications.workHours.start : '09:00',
-    end: /^\d{2}:\d{2}$/.test(String(profile?.notifications?.workHours?.end || '')) ? profile.notifications.workHours.end : '22:00',
+    start: /^\d{2}:\d{2}$/.test(String(notifications?.workHours?.start || '')) ? notifications!.workHours.start : '09:00',
+    end: /^\d{2}:\d{2}$/.test(String(notifications?.workHours?.end || '')) ? notifications!.workHours.end : '22:00',
   };
-  const enabled = Boolean(profile?.notifications?.nightMode?.enabled);
+  const enabled = Boolean(notifications?.nightMode?.enabled);
   return { enabled, active: enabled && !isWithinWorkHours(workHours, now), workHours };
 }
 
@@ -650,15 +646,23 @@ function inferActionFromText(body: string): string {
 }
 
 function approvedFaqAnswer(context: RetrievedContext, message: string): string {
-  const normalizedMessage = text(message).toLowerCase();
-  const item = context.faqs.find(faq => faq.approvedForAuto && faq.q && faq.a && (
-    normalizedMessage.includes(faq.q.toLowerCase()) || faq.q.toLowerCase().includes(normalizedMessage)
-  ));
-  return item?.a || '';
+  if (!message || !context.faqMatch?.autoSafe) return '';
+  return context.faqMatch.faq.approvedForAuto ? context.faqMatch.faq.a : '';
 }
 
-function autoFaqReadyFromContext(context: RetrievedContext): boolean {
-  return context.faqs.filter(item => item.approvedForAuto).length >= 5;
+function autoFaqLibraryReady(profile: EnterpriseProfile): boolean {
+  return (profile.faq ?? []).filter(item => item.approvedForAuto && text(item.question) && text(item.answer)).length >= 5;
+}
+
+function recentConversationForCustomer(tenantId: string, customerIdValue: string) {
+  return interactions()
+    .filter(item => item.tenantId === tenantId && item.customerId === customerIdValue && item.type !== 'system')
+    .sort((a, b) => a.timestamp - b.timestamp)
+    .slice(-8)
+    .map(item => ({
+      role: item.type === 'msg_in' ? 'buyer' as const : 'seller' as const,
+      text: item.body,
+    }));
 }
 
 function draftForMessage(message: IncomingMessage, context?: RetrievedContext): string {
@@ -750,7 +754,9 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
   }
   if (options.skipAutonomy) return;
 
-  const rules = handoffRules();
+  const profile = await readTenantEnterpriseProfile(tenantId);
+  const autonomy = autonomyLevel(profile);
+  const rules = handoffRules(profile);
   const handoffKeyword = matchedHandoffKeyword(message.body, rules.keywords);
   if (handoffKeyword) {
     const reason = `客户主动要求人工/触发关键词【${handoffKeyword}】`;
@@ -783,7 +789,7 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
     name: customer.name,
     language: customer.language,
     stage: customer.stage,
-  }, message.body);
+  }, message.body, { conversation: recentConversationForCustomer(tenantId, customer.id) });
   if (context.knowledgeMiss) {
     addInteraction({
       id: `${customer.id}-knowledge-miss-${Date.now()}`,
@@ -791,7 +797,7 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
       customerId: customer.id,
       waNumber: message.waNumber,
       type: 'system',
-      body: '知识库未覆盖：客户在问知识库没有的问题，已降级为待确认草稿。',
+      body: '知识库未覆盖：客户在问资料中没有的问题，已停止自动处理并等待人工确认。',
       timestamp: Date.now(),
       audit: { knowledgeMiss: true, buyerMessage: message.body, evidence: context.evidence },
       meta: { knowledgeMiss: true, buyerMessage: message.body, evidence: context.evidence },
@@ -816,9 +822,9 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
       tenantId,
       waNumber: message.waNumber,
       patch: {
-        handlingMode: 'ai_draft',
+        handlingMode: autonomy === 'remind' ? 'human_needed' : 'ai_draft',
         handlingReason: reason,
-        pendingDraft: draft,
+        pendingDraft: autonomy === 'remind' ? undefined : draft,
         blockedAutoReplyReason: 'knowledge_miss_streak',
         knowledgeMissStreak: nextMissStreak,
       },
@@ -855,8 +861,10 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
     return;
   }
   let action = inferActionFromText(message.body);
-  const autonomy = autonomyLevel();
-  const night = nightModeState();
+  if (context.faqMatch?.autoSafe && action !== 'formal_quote' && action !== 'call_request') {
+    action = 'auto_faq_reply';
+  }
+  const night = nightModeState(profile);
   let draft = draftForMessage(message, context);
   let blockedAutoReplyReason = '';
   let approvedFaqHit = false;
@@ -886,7 +894,7 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
       patch: {
         handlingMode: 'human_needed',
         handlingReason: '客户想通电话，已即时提醒负责人',
-        pendingDraft: callDraft,
+        pendingDraft: autonomy === 'remind' ? undefined : callDraft,
         needCall: true,
       },
     });
@@ -899,13 +907,17 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
       approvedFaqHit = true;
     } else {
       action = 'draft_greeting';
-      blockedAutoReplyReason = autoFaqReadyFromContext(context)
+      blockedAutoReplyReason = autoFaqLibraryReady(profile)
         ? '未命中已审批常见问答，已降级为草稿'
         : '需要先录入并审批至少 5 条常见问答';
     }
   }
-  const nightAllowsAuto = night.active && ((action === 'auto_faq_reply' && approvedFaqHit) || findActionRule(action).risk === 'L3');
-  const effectiveAutonomy: AutonomyLevel = night.active ? (nightAllowsAuto ? 'auto' : 'draft') : autonomy;
+  const faqLibraryReady = autoFaqLibraryReady(profile);
+  const configuredAutonomy: AutonomyLevel = autonomy === 'auto' && !faqLibraryReady ? 'draft' : autonomy;
+  const nightAllowsAuto = night.active && action === 'auto_faq_reply' && approvedFaqHit;
+  const effectiveAutonomy: AutonomyLevel = night.active && !nightAllowsAuto
+    ? (configuredAutonomy === 'remind' ? 'remind' : 'draft')
+    : configuredAutonomy;
   const decision = decideAction(action, effectiveAutonomy);
   if (night.active && decision.decision !== 'auto') {
     blockedAutoReplyReason = blockedAutoReplyReason || '夜班模式：非工作时间仅自动回复已审批常见问题和低风险动作';

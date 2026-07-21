@@ -745,6 +745,17 @@ export async function readTenantEnterpriseProfile(tenantId: string): Promise<Ent
   return readTenantProfile(tenantId);
 }
 
+export async function updateTenantEnterpriseProfile(
+  tenantId: string,
+  patch: Partial<EnterpriseProfile>,
+  updatedBy = 'system',
+): Promise<EnterpriseProfile> {
+  const current = await readTenantProfile(tenantId);
+  const next = normalizeProfile({ ...current, ...patch } as EnterpriseProfile);
+  await writeTenantProfile(tenantId, next, updatedBy);
+  return next;
+}
+
 async function writeTenantProfile(tenantId: string, profile: EnterpriseProfile, userId: string): Promise<void> {
   const clean = normalizeProfile(profile) as EnterpriseProfile & { integrations?: unknown };
   delete clean.integrations;
@@ -822,7 +833,7 @@ export function shouldSuppressPrice(profile: EnterpriseProfile): boolean {
 }
 
 export function autoFaqReady(profile: EnterpriseProfile): boolean {
-  return (normalizeProfile(profile).faq ?? []).filter(item => item.approvedForAuto).length >= 5;
+  return (normalizeProfile(profile).faq ?? []).filter(item => item.approvedForAuto && item.question && item.answer).length >= 5;
 }
 
 export function findApprovedFaqAnswer(profile: EnterpriseProfile, message: string): FaqItem | null {

@@ -92,6 +92,22 @@ const STYLE_MEMORY_FIELDS: FieldDef[] = [
   { name: 'edited', type: 'bool' },
   { name: 'category', type: 'text' },
   { name: 'outcome', type: 'text' },
+  { name: 'strategy_ids', type: 'json' },
+];
+
+const RESPONSE_STRATEGY_MEMORY_FIELDS: FieldDef[] = [
+  { name: 'tenant_id', type: 'text', required: true },
+  { name: 'strategy_id', type: 'text', required: true },
+  { name: 'adjustment', type: 'text' },
+  { name: 'evidence_count', type: 'number' },
+  { name: 'status', type: 'select', values: ['active', 'paused'] },
+  { name: 'source', type: 'text' },
+  { name: 'scenario', type: 'text' },
+  { name: 'signals', type: 'json' },
+  { name: 'intent', type: 'text' },
+  { name: 'strategy_steps', type: 'json' },
+  { name: 'risk_link', type: 'text' },
+  { name: 'escalate', type: 'text' },
 ];
 
 const STYLE_ADOPTION_STATS_FIELDS: FieldDef[] = [
@@ -234,6 +250,7 @@ export async function ensureDeliveryCollections(): Promise<void> {
   await ensureCollection('recycle_lists', RECYCLE_LIST_FIELDS);
   await ensureCollection('posting_stats', POSTING_STATS_FIELDS);
   await ensureCollection('style_memory', STYLE_MEMORY_FIELDS);
+  await ensureCollection('response_strategy_memory', RESPONSE_STRATEGY_MEMORY_FIELDS);
   await ensureCollection('style_adoption_stats', STYLE_ADOPTION_STATS_FIELDS);
   await ensureCollection('tenant_profiles', TENANT_PROFILE_FIELDS);
   await ensureCollection('tenant_orders', TENANT_ORDER_FIELDS);

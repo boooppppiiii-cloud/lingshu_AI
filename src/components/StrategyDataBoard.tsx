@@ -3,7 +3,8 @@ import { ArrowRight, ListChecks, Target, TrendingUp, Users, Zap, MessageSquare }
 import TrafficDataBoard from './TrafficDataBoard';
 import InquiryDataBoard from './InquiryDataBoard';
 import CrmDataBoard from './CrmDataBoard';
-import type { AgentAction } from '../App';
+import { CalendarPlanner } from './publishing/CalendarPlanner';
+import type { AgentAction, Page } from '../App';
 import { authHeader } from '../lib/auth';
 import { useCustomers } from '../hooks/useCustomers';
 
@@ -101,7 +102,13 @@ const bodyText = 'text-xs leading-snug text-text-secondary';
 const noteText = 'text-[11px] leading-snug text-text-muted';
 const supplementText = 'text-[11px] font-bold leading-snug text-green-700';
 
-export default function StrategyDataBoard({ onAction }: { onAction?: AgentAction }) {
+export default function StrategyDataBoard({
+  onAction,
+  onNavigate,
+}: {
+  onAction?: AgentAction;
+  onNavigate?: (page: Page) => void;
+}) {
   const [tab, setTab] = useState<TabId>('traffic');
   const [exposure, setExposure] = useState<{ ready: boolean; value: number }>({ ready: false, value: 0 });
   const [orders, setOrders] = useState<OrderRecord[]>([]);
@@ -115,6 +122,15 @@ export default function StrategyDataBoard({ onAction }: { onAction?: AgentAction
   const validOrders = useMemo(() => orders.filter(order => order.status !== '待付款' && order.status !== '退款'), [orders]);
   const convertedInquiries = useMemo(() => whatsAppInquiries.filter(customer => customer.stage === 'quoted' || customer.stage === 'won' || customer.orders.length > 0), [whatsAppInquiries]);
   const needsFollowup = useMemo(() => whatsAppInquiries.filter(customer => customer.handlingMode !== 'ai_auto' || customer.inboxReason), [whatsAppInquiries]);
+
+  const openPublishForDate = (date: Date) => {
+    const draft = { title: `排期内容 ${date.toLocaleDateString()}`, description: '', videoPath: '' };
+    try {
+      localStorage.setItem('ow_publish_draft', JSON.stringify(draft));
+      localStorage.setItem('lingshu:traffic:initial-view', 'publish');
+    } catch { /* ignore */ }
+    onNavigate?.('traffic');
+  };
 
   useEffect(() => {
     let alive = true;
@@ -259,7 +275,16 @@ export default function StrategyDataBoard({ onAction }: { onAction?: AgentAction
           </section>
         </div>
 
-        <div className="min-h-[520px] border-t border-border">
+        {tab === 'traffic' && (
+          <section className="border-t border-border px-6 py-5" id="content-calendar">
+            <CalendarPlanner
+              onCreate={openPublishForDate}
+              onOpenPost={() => document.getElementById('social-real-data')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+            />
+          </section>
+        )}
+
+        <div className="min-h-[520px] border-t border-border" id={tab === 'traffic' ? 'social-real-data' : undefined}>
           <Active windowDays={windowDays} />
         </div>
       </div>

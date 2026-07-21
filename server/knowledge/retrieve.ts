@@ -1,5 +1,5 @@
 import { callLLM } from '../agents/llm.js';
-import { readEnterpriseProfile, type BizRules, type EnterpriseProfile, type FaqItem } from '../routes/enterprise.js';
+import { readTenantEnterpriseProfile, type BizRules, type EnterpriseProfile, type FaqItem } from '../routes/enterprise.js';
 
 export interface CustomerLite {
   id?: string;
@@ -23,11 +23,37 @@ export interface ProductLite {
   attributes?: Record<string, unknown>;
 }
 
+export interface ConversationTurn {
+  role: 'buyer' | 'seller';
+  text: string;
+}
+
+export interface RetrievedFaq {
+  q: string;
+  a: string;
+  approvedForAuto: boolean;
+  source: 'manual' | 'pack' | 'learned';
+}
+
+export interface FaqMatch {
+  faq: RetrievedFaq;
+  confidence: number;
+  ambiguous: boolean;
+  autoSafe: boolean;
+  reason: string;
+  method: 'exact' | 'semantic' | 'heuristic';
+}
+
+export interface RetrieveContextOptions {
+  conversation?: ConversationTurn[];
+}
+
 export interface RetrievedContext {
   companyIntro: string;
   bizRules: BizRules;
-  faqs: Array<{ q: string; a: string; approvedForAuto: boolean; source: 'manual'|'pack'|'learned' }>;
-  matchedFaqs: Array<{ q: string; a: string; approvedForAuto: boolean; source: 'manual'|'pack'|'learned' }>;
+  faqs: RetrievedFaq[];
+  matchedFaqs: RetrievedFaq[];
+  faqMatch: FaqMatch | null;
   products: Array<ProductLite>;
   evidence: string[];
   knowledgeMiss: boolean;
@@ -138,6 +164,130 @@ function matchedFaqs(faqs: RetrievedContext['faqs'], message: string): Retrieved
     .sort((a, b) => b.score - a.score)
     .slice(0, 5)
     .map(row => row.item);
+}
+
+function recentConversation(options: RetrieveContextOptions, latestMessage: string): ConversationTurn[] {
+  const turns = (options.conversation ?? [])
+    .filter(turn => turn && (turn.role === 'buyer' || turn.role === 'seller') && text(turn.text))
+    .slice(-8)
+    .map(turn => ({ role: turn.role, text: text(turn.text).slice(0, 1000) }));
+  const last = turns.at(-1);
+  if (!last || last.role !== 'buyer' || normalize(last.text) !== normalize(latestMessage)) {
+    turns.push({ role: 'buyer', text: text(latestMessage).slice(0, 1000) });
+  }
+  return turns;
+}
+
+function faqCandidates(faqs: RetrievedFaq[], contextText: string): RetrievedFaq[] {
+  const lexical = matchedFaqs(faqs, contextText);
+  const ordered = [...lexical, ...faqs.filter(item => item.approvedForAuto), ...faqs];
+  const seen = new Set<string>();
+  return ordered.filter(item => {
+    const key = `${normalize(item.q)}\u0000${normalize(item.a)}`;
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  }).slice(0, 24);
+}
+
+function parseFaqMatch(raw: string): { faqIndex: number | null; confidence: number; ambiguous: boolean; reason: string } | null {
+  const match = raw.replace(/```json|```/gi, '').match(/\{[\s\S]*\}/);
+  if (!match) return null;
+  try {
+    const parsed = JSON.parse(match[0]) as Record<string, unknown>;
+    const faqIndex = parsed.faqIndex === null ? null : Number(parsed.faqIndex);
+    const confidence = Math.max(0, Math.min(1, Number(parsed.confidence) || 0));
+    return {
+      faqIndex: Number.isInteger(faqIndex) ? faqIndex : null,
+      confidence,
+      ambiguous: parsed.ambiguous !== false,
+      reason: text(parsed.reason).slice(0, 240),
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function isContextDependentFaqQuestion(value: string): boolean {
+  const raw = normalize(value);
+  if (!raw) return true;
+  return /^(how much|price|what about (it|this|that)|is (it|this|that) available|can you do (it|this|that)|why|when|where|which one)[?？!.。！]*$/i.test(raw)
+    || /^(多少钱|什么价格|这个呢|那个呢|可以吗|有吗|为什么|什么时候|在哪里|哪个)[?？!.。！]*$/.test(raw)
+    || /\b(it|this|that|these|those|same one)\b/i.test(raw)
+    || /(这个|那个|这些|那些|同款|上面那个)/.test(raw);
+}
+
+async function resolveFaqMatch(
+  faqs: RetrievedFaq[],
+  latestMessage: string,
+  conversation: ConversationTurn[],
+  evidence: string[],
+): Promise<FaqMatch | null> {
+  if (!faqs.length || !text(latestMessage)) return null;
+  const exact = faqs.find(item => normalize(item.q) === normalize(latestMessage));
+  if (exact && !isContextDependentFaqQuestion(exact.q)) {
+    evidence.push(`FAQ 精确命中：${exact.q}`);
+    return {
+      faq: exact,
+      confidence: 1,
+      ambiguous: false,
+      autoSafe: exact.approvedForAuto,
+      reason: '买家当前问题与标准问题完全一致',
+      method: 'exact',
+    };
+  }
+
+  const contextText = conversation.map(turn => `${turn.role}: ${turn.text}`).join('\n');
+  const candidates = faqCandidates(faqs, contextText || latestMessage);
+  if (!candidates.length) return null;
+  const prompt = [
+    'Judge whether the latest buyer message has exactly the same business intent as one FAQ question.',
+    'Use the recent conversation to resolve pronouns, follow-up questions, product references, and negation.',
+    'Choose null when the message is ambiguous, asks multiple questions, changes the subject, needs missing order/product facts, or only shares a keyword with an FAQ.',
+    'A related topic is not enough. The approved answer must be directly correct for this exact context without adding assumptions.',
+    'Return strict JSON only: {"faqIndex": number|null, "confidence": number, "ambiguous": boolean, "reason": string}.',
+    'faqIndex is zero-based. Use confidence >= 0.90 only when it is safe to send the FAQ answer verbatim.',
+    '',
+    'Recent conversation:',
+    contextText || `buyer: ${latestMessage}`,
+    '',
+    'FAQ candidates:',
+    candidates.map((item, index) => `[${index}] Q: ${item.q}\nA: ${item.a}`).join('\n\n'),
+  ].join('\n');
+  try {
+    const raw = await callLLM(prompt, { backend: 'qwen', model: process.env.KNOWLEDGE_QUERY_MODEL || 'qwen-plus' });
+    const judged = parseFaqMatch(raw);
+    if (judged?.faqIndex != null && judged.faqIndex >= 0 && judged.faqIndex < candidates.length) {
+      const faq = candidates[judged.faqIndex];
+      const autoSafe = faq.approvedForAuto && judged.confidence >= 0.9 && !judged.ambiguous;
+      evidence.push(`FAQ 语境判定：${faq.q}，置信度 ${judged.confidence.toFixed(2)}${autoSafe ? '，可使用已审批原文' : '，仅供草稿参考'}`);
+      return {
+        faq,
+        confidence: judged.confidence,
+        ambiguous: judged.ambiguous,
+        autoSafe,
+        reason: judged.reason || '语义匹配',
+        method: 'semantic',
+      };
+    }
+    evidence.push('FAQ 语境判定未找到可直接回答的标准问题');
+    return null;
+  } catch (error) {
+    const heuristic = matchedFaqs(candidates, latestMessage)[0];
+    if (!heuristic) {
+      evidence.push(`FAQ 语境判定不可用，规则兜底也未命中：${error instanceof Error ? error.message : 'unknown_error'}`);
+      return null;
+    }
+    evidence.push(`FAQ 语境判定不可用，关键词命中仅供草稿参考：${heuristic.q}`);
+    return {
+      faq: heuristic,
+      confidence: 0.6,
+      ambiguous: true,
+      autoSafe: false,
+      reason: '仅关键词规则命中，不能确认当前语境完全一致',
+      method: 'heuristic',
+    };
+  }
 }
 
 function productIntentLikely(message: string): boolean {
@@ -282,23 +432,36 @@ function retrieveProducts(profile: EnterpriseProfile, query: ProductQuery | null
   return scored;
 }
 
-export async function retrieveContext(tenantId: string, customer: CustomerLite, message: string): Promise<RetrievedContext> {
-  const profile = readEnterpriseProfile();
+export async function retrieveContext(
+  tenantId: string,
+  customer: CustomerLite,
+  message: string,
+  options: RetrieveContextOptions = {},
+): Promise<RetrievedContext> {
+  const profile = await readTenantEnterpriseProfile(tenantId);
   const evidence: string[] = [];
   if (tenantId) evidence.push(`租户 ${tenantId} 使用企业知识库`);
   if (customer?.id || customer?.name) evidence.push(`客户上下文：${customer.name || customer.id}`);
+  const conversation = recentConversation(options, message);
+  const conversationQuery = conversation.map(turn => turn.text).join(' ');
   const query = await parseProductQuery(message, evidence);
   const products = retrieveProducts(profile, query, evidence);
-  const faqs = retrieveFaqs(profile, message, evidence);
-  const faqMatches = matchedFaqs(faqs, message);
+  const faqs = retrieveFaqs(profile, conversationQuery || message, evidence);
+  const faqMatch = await resolveFaqMatch(faqs, message, conversation, evidence);
+  const lexicalMatches = matchedFaqs(faqs, conversationQuery || message);
+  const faqMatches = faqMatch
+    ? [faqMatch.faq, ...lexicalMatches.filter(item => item.q !== faqMatch.faq.q)].slice(0, 5)
+    : lexicalMatches;
   const processIntent = isGreetingOrProcessIntent(message);
-  const knowledgeMiss = faqMatches.length === 0 && products.length === 0 && !processIntent;
+  const faqCovered = Boolean(faqMatch && !faqMatch.ambiguous && faqMatch.confidence >= 0.75);
+  const knowledgeMiss = !faqCovered && products.length === 0 && !processIntent;
   if (knowledgeMiss) evidence.push('知识库未覆盖：FAQ 与产品均无有效命中，且不是寒暄/流程类意图');
   return {
     companyIntro: companyIntro(profile),
     bizRules: profile.bizRules ?? EMPTY_BIZ_RULES,
     faqs,
     matchedFaqs: faqMatches,
+    faqMatch,
     products,
     evidence,
     knowledgeMiss,

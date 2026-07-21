@@ -98,10 +98,7 @@ export function DailyBriefing({ customers, onSelectCustomer, onClose }: Props) {
   };
 
   const openPublishingBriefing = () => {
-    if (publishingBriefing?.postId) {
-      localStorage.setItem('lingshu:traffic:source-post-id', publishingBriefing.postId);
-    }
-    window.dispatchEvent(new CustomEvent('lingshu:navigate', { detail: { page: 'traffic', view: 'effects' } }));
+    window.dispatchEvent(new CustomEvent('lingshu:navigate', { detail: { page: 'strategy' } }));
     onClose();
   };
 
@@ -133,7 +130,7 @@ export function DailyBriefing({ customers, onSelectCustomer, onClose }: Props) {
                   <p className="text-xs font-black text-sky-950">
                     你的视频《{publishingBriefing.title}》昨天带来了 {publishingBriefing.inquiries} 条询盘
                   </p>
-                  <p className="mt-1 text-[11px] font-semibold text-sky-800">点击查看内容归因效果</p>
+                  <p className="mt-1 text-[11px] font-semibold text-sky-800">点击查看首页社媒数据</p>
                 </div>
               </button>
             )}

@@ -18,11 +18,12 @@ export const ACTION_RULES: ActionRule[] = [
   { action: 'draft_order_progress', risk: 'L2', desc: '订单进度同步' },
   { action: 'draft_sample_followup', risk: 'L2', desc: '样品跟进' },
   { action: 'draft_reactivate', risk: 'L2', desc: '沉默客户唤醒' },
-  { action: 'auto_logistics_update', risk: 'L3', desc: '物流状态更新' },
-  { action: 'auto_holiday_greeting', risk: 'L3', desc: '节假日祝福' },
-  { action: 'auto_send_catalog', risk: 'L3', desc: '客户明确索要目录时发送已审批资料' },
-  { action: 'auto_aftersale_confirm', risk: 'L3', desc: '标准售后确认' },
-  { action: 'auto_faq_reply', risk: 'L3', desc: '知识库内产品/物流/公司基础问答' },
+  // 没有订单、物流或已审批附件的实时凭证时，这些动作只能生成草稿。
+  { action: 'auto_logistics_update', risk: 'L2', desc: '物流状态草稿（需核对真实运单）' },
+  { action: 'auto_holiday_greeting', risk: 'L2', desc: '节假日问候草稿' },
+  { action: 'auto_send_catalog', risk: 'L2', desc: '目录发送草稿（需核对已审批资料）' },
+  { action: 'auto_aftersale_confirm', risk: 'L2', desc: '售后确认草稿（需核对订单）' },
+  { action: 'auto_faq_reply', risk: 'L3', desc: '高置信命中的已审批标准问答' },
   { action: 'formal_quote', risk: 'L4', desc: '正式报价' },
   { action: 'discount', risk: 'L4', desc: '折扣/让利' },
   { action: 'payment_terms', risk: 'L4', desc: '付款条款' },
@@ -43,9 +44,12 @@ export function findActionRule(action: string): ActionRule {
 export function decideAction(action: string, autonomy: AutonomyLevel = 'draft'): { decision: ActionDecision; rule: ActionRule } {
   const rule = findActionRule(action);
   if (rule.risk === 'L1') return { decision: 'remind', rule };
-  if (rule.risk === 'L4') return { decision: 'draft', rule };
+  if (rule.risk === 'L4') return { decision: autonomy === 'remind' ? 'remind' : 'draft', rule };
   if (rule.risk === 'L2') return { decision: autonomy === 'remind' ? 'remind' : 'draft', rule };
-  if (rule.risk === 'L3') return { decision: autonomy === 'auto' ? 'auto' : 'draft', rule };
+  if (rule.risk === 'L3') {
+    if (autonomy === 'remind') return { decision: 'remind', rule };
+    return { decision: autonomy === 'auto' ? 'auto' : 'draft', rule };
+  }
   return { decision: 'draft', rule };
 }
 

@@ -4,6 +4,7 @@ import { isDemoMode } from '../lib/demo.js';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 import { retrieveContext } from '../knowledge/retrieve.js';
 import { buildKnowledgePromptBlock } from '../knowledge/promptBlocks.js';
+import { buildStrategyPromptBlock, retrieveResponseStrategies, strategyEvidence } from '../knowledge/strategyRetrieve.js';
 import { aggregateKnowledgeMisses } from '../knowledge/misses.js';
 import { recordStyleMemory } from '../knowledge/styleMemory.js';
 import { confirmCustomerSourceAttribution, getNightModeMorningBriefing, getWhatsAppCustomers, getWhatsAppImportStatus, markWhatsAppHumanReply } from '../whatsapp/historyImport.js';
@@ -56,6 +57,7 @@ async function maybeRecordStyleMemory(req: any, tenantId: string, customerId: st
     finalSent: String(memory.finalSent || finalBody || ''),
     edited: Boolean(memory.edited),
     category: String(memory.category || 'reply'),
+    strategyIds: Array.isArray(memory.strategyIds) ? memory.strategyIds.map(String) : [],
   }).catch(error => console.warn('[style-memory:record-failed]', error));
 }
 
@@ -223,8 +225,6 @@ interface CustomerHint {
   timeline: string[];
 }
 
-const CUSTOMER_HINTS: Record<string, CustomerHint> = {};
-
 const SYSTEM_PROMPT = `你是灵枢 AI「我的客户」里的转化助手。
 请返回 2 到 3 条给中国商家看的主动建议。
 每条建议一句话，动作明确，可以继续转成 WhatsApp 回复草稿。
@@ -233,15 +233,37 @@ const SYSTEM_PROMPT = `你是灵枢 AI「我的客户」里的转化助手。
 customerSuggestionsRouter.get('/:id/suggestions', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
   const id = String(req.params.id ?? '');
-  const hint = CUSTOMER_HINTS[id] ?? fallbackHint(id);
+  const customer = getWhatsAppCustomers(tenantId).find(item => item.id === id);
+  if (!customer) {
+    res.status(404).json({ items: [], error: 'customer_not_found' });
+    return;
+  }
+  const customerTimeline = Array.isArray(customer.timeline) ? customer.timeline.slice(-8) : [];
+  const hint: CustomerHint = {
+    name: String(customer.name || customer.waNumber || '客户'),
+    stage: String(customer.stage || 'inquiry'),
+    intentScore: Number(customer.intentScore || 0),
+    product: String(customer.outboundProduct || customer.product || ''),
+    timeline: customerTimeline.map((item: any) => String(item.body || '')).filter(Boolean),
+  };
   const fallback = fallbackSuggestions(hint);
-  const latestMessage = hint.timeline.at(-1) || hint.product || hint.stage;
+  const conversation = customerTimeline.map((item: any) => ({
+    role: item.actor === 'buyer' ? 'buyer' as const : 'seller' as const,
+    text: String(item.body || ''),
+  })).filter((item: { text: string }) => item.text);
+  const latestMessage = [...conversation].reverse().find(item => item.role === 'buyer')?.text || hint.product || hint.stage;
   const context = await retrieveContext(tenantId, {
     id,
     name: hint.name,
     stage: hint.stage,
     product: hint.product,
-  }, latestMessage);
+  }, latestMessage, { conversation });
+  const strategies = await retrieveResponseStrategies(tenantId, {
+    latestMessage,
+    conversation,
+    stage: hint.stage,
+    intent: 'suggestion',
+  });
 
   const prompt = [
     `Customer: ${hint.name}`,
@@ -252,6 +274,7 @@ customerSuggestionsRouter.get('/:id/suggestions', async (req, res) => {
     hint.timeline.map(item => `- ${item}`).join('\n'),
     '',
     buildKnowledgePromptBlock(context),
+    buildStrategyPromptBlock(strategies),
     '',
     'Return only 2-3 short suggestions, one per line.',
   ].join('\n');
@@ -259,21 +282,11 @@ customerSuggestionsRouter.get('/:id/suggestions', async (req, res) => {
   try {
     const raw = await callLLM(prompt, { systemPrompt: SYSTEM_PROMPT });
     const items = parseSuggestions(raw);
-    res.json({ items: items.length > 0 ? items : fallback, evidence: context.evidence });
+    res.json({ items: items.length > 0 ? items : fallback, evidence: [...context.evidence, ...strategyEvidence(strategies)] });
   } catch {
-    res.json({ items: fallback, evidence: context.evidence });
+    res.json({ items: fallback, evidence: [...context.evidence, ...strategyEvidence(strategies)] });
   }
 });
-
-function fallbackHint(id: string): CustomerHint {
-  return {
-    name: id || 'Current customer',
-    stage: 'inquiry',
-    intentScore: 50,
-    product: 'current product',
-    timeline: ['Customer has an active conversation and needs the next reply.'],
-  };
-}
 
 function fallbackSuggestions(hint: CustomerHint): string[] {
   if (hint.stage === 'call_request') {

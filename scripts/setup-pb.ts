@@ -114,6 +114,47 @@ const COLLECTIONS: { name: string; fields: Field[] }[] = [
     ],
   },
   {
+    name: 'style_memory',
+    fields: [
+      { name: 'tenant_id', type: 'text', required: true },
+      { name: 'customer_id', type: 'text' },
+      { name: 'trigger_message', type: 'text' },
+      { name: 'draft_original', type: 'text' },
+      { name: 'final_sent', type: 'text' },
+      { name: 'edited', type: 'bool' },
+      { name: 'category', type: 'text' },
+      { name: 'outcome', type: 'text' },
+      { name: 'strategy_ids', type: 'json' },
+    ],
+  },
+  {
+    name: 'response_strategy_memory',
+    fields: [
+      { name: 'tenant_id', type: 'text', required: true },
+      { name: 'strategy_id', type: 'text', required: true },
+      { name: 'adjustment', type: 'text' },
+      { name: 'evidence_count', type: 'number' },
+      { name: 'status', type: 'text' },
+      { name: 'source', type: 'text' },
+      { name: 'scenario', type: 'text' },
+      { name: 'signals', type: 'json' },
+      { name: 'intent', type: 'text' },
+      { name: 'strategy_steps', type: 'json' },
+      { name: 'risk_link', type: 'text' },
+      { name: 'escalate', type: 'text' },
+    ],
+  },
+  {
+    name: 'style_adoption_stats',
+    fields: [
+      { name: 'tenant_id', type: 'text', required: true },
+      { name: 'week', type: 'text', required: true },
+      { name: 'total', type: 'text' },
+      { name: 'direct_sent', type: 'text' },
+      { name: 'rate', type: 'text' },
+    ],
+  },
+  {
     name: 'tenant_platform_apps',
     fields: [
       { name: 'tenant_id', type: 'text', required: true },
