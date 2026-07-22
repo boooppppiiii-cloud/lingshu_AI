@@ -33,6 +33,19 @@ interface BizRules {
   leadTime?: string;
 }
 
+interface NotificationReceiver {
+  name: string;
+  channel: NotificationChannel;
+  target: string;
+}
+
+interface ExistingNotifications {
+  receivers?: NotificationReceiver[];
+  workHours?: { start?: string; end?: string };
+  quietOutsideHours?: boolean;
+  nightMode?: { enabled?: boolean; autoCategories?: 'approved' };
+}
+
 interface PreviewFaq {
   id?: string;
   question: string;
@@ -129,6 +142,7 @@ export default function KnowledgeIntakePanel({ mode = 'center', onDone, onApplie
   const [preview, setPreview] = useState<KnowledgePreview | null>(null);
   const [selectedFaqs, setSelectedFaqs] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(false);
+  const [profileLoading, setProfileLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
   const [interviewStep, setInterviewStep] = useState(0);
@@ -136,6 +150,7 @@ export default function KnowledgeIntakePanel({ mode = 'center', onDone, onApplie
   const [sampleChoice, setSampleChoice] = useState('');
   const [receiver, setReceiver] = useState({ name: '', channel: 'wecom' as NotificationChannel, target: '' });
   const [workHours, setWorkHours] = useState({ start: '09:00', end: '21:00' });
+  const [existingNotifications, setExistingNotifications] = useState<ExistingNotifications>({});
 
   const refreshCompletion = async () => {
     const response = await fetch('/api/overseas/enterprise/knowledge-completion', { headers: authHeader() });
@@ -144,7 +159,33 @@ export default function KnowledgeIntakePanel({ mode = 'center', onDone, onApplie
     if (data?.capabilities) setCompletion(data as CompletionState);
   };
 
-  useEffect(() => { void refreshCompletion(); }, []);
+  useEffect(() => {
+    void refreshCompletion();
+    void fetch('/api/overseas/enterprise/profile', { headers: authHeader() })
+      .then(response => response.ok ? response.json() : null)
+      .then(data => {
+        if (!data || typeof data !== 'object') return;
+        const currentRules = data.bizRules && typeof data.bizRules === 'object' ? data.bizRules as BizRules : {};
+        const notifications = data.notifications && typeof data.notifications === 'object'
+          ? data.notifications as ExistingNotifications
+          : {};
+        const receivers = Array.isArray(notifications.receivers) ? notifications.receivers : [];
+        const firstReceiver = receivers[0];
+        setRules({ quoteMode: '', bargainPolicy: 'no', ...currentRules });
+        if (currentRules.samplePolicy) {
+          const presetPolicies = ['可以寄样，样品费和运费另算', '样品收费，正式下单后可抵扣样品费', '先确认客户资质和需求，再由我决定'];
+          setSampleChoice(presetPolicies.includes(currentRules.samplePolicy) ? currentRules.samplePolicy : 'custom');
+        }
+        setExistingNotifications(notifications);
+        if (firstReceiver) setReceiver(firstReceiver);
+        setWorkHours({
+          start: notifications.workHours?.start || '09:00',
+          end: notifications.workHours?.end || '21:00',
+        });
+      })
+      .catch(() => null)
+      .finally(() => setProfileLoading(false));
+  }, []);
 
   const capabilityList = useMemo(() => [
     { state: completion.capabilities.productGrounding, icon: PackageCheck },
@@ -165,7 +206,7 @@ export default function KnowledgeIntakePanel({ mode = 'center', onDone, onApplie
       if (!response.ok) throw new Error(data.message || 'AI 暂时没有整理成功，请稍后重试');
       const next = data as KnowledgePreview;
       setPreview(next);
-      setRules(next.bizRules || {});
+      setRules(current => ({ ...current, ...(next.bizRules || {}) }));
       setSelectedFaqs(new Set(next.faqs.map((_, index) => index)));
       setView('preview');
       if (kind === 'extract' && !next.historyMessageCount) {
@@ -223,11 +264,20 @@ export default function KnowledgeIntakePanel({ mode = 'center', onDone, onApplie
 
   const finishInterview = async () => {
     const samplePolicy = sampleChoice === 'custom' ? rules.samplePolicy : sampleChoice;
+    const existingReceivers = Array.isArray(existingNotifications.receivers) ? existingNotifications.receivers : [];
+    const nextReceiver = receiver.target.trim() ? { ...receiver, name: receiver.name.trim() || '负责人', target: receiver.target.trim() } : null;
+    const receivers = nextReceiver
+      ? [...existingReceivers.filter(item => !(item.channel === nextReceiver.channel && item.target.trim() === nextReceiver.target)), nextReceiver]
+      : existingReceivers;
     const notifications = {
-      receivers: receiver.target.trim() ? [{ ...receiver, name: receiver.name.trim() || '负责人' }] : [],
+      ...existingNotifications,
+      receivers,
       workHours,
-      quietOutsideHours: true,
-      nightMode: { enabled: false, autoCategories: 'approved' },
+      quietOutsideHours: existingNotifications.quietOutsideHours ?? true,
+      nightMode: {
+        enabled: existingNotifications.nightMode?.enabled ?? false,
+        autoCategories: 'approved' as const,
+      },
     };
     const profile = await applyKnowledge({
       bizRules: { ...rules, samplePolicy },
@@ -369,8 +419,8 @@ export default function KnowledgeIntakePanel({ mode = 'center', onDone, onApplie
         <div className="flex min-w-0 items-start gap-3">
           <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700"><Bot size={19} /></span>
           <div>
-            <div className="flex flex-wrap items-center gap-2"><h2 className="text-base font-black text-text-primary">让 AI 先学会怎么替你回复</h2><span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-black text-emerald-700">不用填长表</span></div>
-            <p className="mt-1 max-w-2xl text-xs leading-5 text-text-muted">把历史聊天或产品资料交给 AI，它先整理成初稿，你只需要看一眼、改一改、确认哪些能用。</p>
+            <div className="flex flex-wrap items-center gap-2"><h2 className="text-base font-black text-text-primary">快速采集：让 AI 学会怎么替你回复</h2><span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[10px] font-black text-emerald-700">不用填长表</span></div>
+            <p className="mt-1 max-w-2xl text-xs leading-5 text-text-muted">这是资料采集入口，不是另一套设置。AI 会把聊天、产品或访谈整理进下方同一份企业资料，你确认后才会生效。</p>
           </div>
         </div>
         <span className="rounded-full bg-surface-2 px-3 py-1 text-xs font-black text-text-secondary">AI 能力 {Object.values(completion.capabilities).filter(item => item.unlocked).length}/4</span>
@@ -378,14 +428,21 @@ export default function KnowledgeIntakePanel({ mode = 'center', onDone, onApplie
 
       <div className="mt-4 grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">{capabilityList.map(item => <CapabilityCard key={item.state.label} {...item} />)}</div>
 
+      <div className="mt-4 flex flex-wrap items-center gap-2 rounded-lg bg-surface-2 px-3 py-2.5 text-[11px] font-bold text-text-secondary">
+        <span>提供原料</span><ChevronRight size={12} className="text-text-muted" />
+        <span>AI 整理初稿</span><ChevronRight size={12} className="text-text-muted" />
+        <span>你确认</span><ChevronRight size={12} className="text-text-muted" />
+        <span className="text-emerald-700">写入唯一资料库并用于回复</span>
+      </div>
+
       <div className="mt-5 grid gap-3 md:grid-cols-3">
-        <button type="button" disabled={loading} onClick={() => void generatePreview('extract')} className="group rounded-lg border border-emerald-200 bg-emerald-50/55 p-4 text-left transition-colors hover:bg-emerald-50 disabled:opacity-60">
+        <button type="button" disabled={loading || profileLoading} onClick={() => void generatePreview('extract')} className="group rounded-lg border border-emerald-200 bg-emerald-50/55 p-4 text-left transition-colors hover:bg-emerald-50 disabled:opacity-60">
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-emerald-100 text-emerald-700">{loading ? <Loader2 size={16} className="animate-spin" /> : <MessageSquareText size={16} />}</span><p className="mt-3 text-sm font-black text-text-primary">从历史聊天整理</p><p className="mt-1 text-[11px] leading-5 text-text-muted">自动找出常问问题、报价习惯和真实话术。最省事，推荐优先用。</p><span className="mt-3 inline-flex items-center gap-1 text-xs font-black text-emerald-700">开始整理<ChevronRight size={13} /></span>
         </button>
-        <button type="button" disabled={loading} onClick={() => void generatePreview('draft')} className="rounded-lg border border-border bg-white p-4 text-left transition-colors hover:bg-surface-2 disabled:opacity-60">
+        <button type="button" disabled={loading || profileLoading} onClick={() => void generatePreview('draft')} className="rounded-lg border border-border bg-white p-4 text-left transition-colors hover:bg-surface-2 disabled:opacity-60">
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-sky-50 text-sky-700"><WandSparkles size={16} /></span><p className="mt-3 text-sm font-black text-text-primary">根据产品起草</p><p className="mt-1 text-[11px] leading-5 text-text-muted">还没有历史聊天也没关系，AI 用现有产品生成公司介绍和问答初稿。</p><span className="mt-3 inline-flex items-center gap-1 text-xs font-black text-sky-700">让 AI 起草<ChevronRight size={13} /></span>
         </button>
-        <button type="button" onClick={() => { setInterviewStep(0); setView('interview'); setMessage(''); }} className="rounded-lg border border-border bg-white p-4 text-left transition-colors hover:bg-surface-2">
+        <button type="button" disabled={profileLoading} onClick={() => { setInterviewStep(0); setView('interview'); setMessage(''); }} className="rounded-lg border border-border bg-white p-4 text-left transition-colors hover:bg-surface-2 disabled:opacity-60">
           <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-50 text-amber-700"><PenLine size={16} /></span><p className="mt-3 text-sm font-black text-text-primary">回答 5 个小问题</p><p className="mt-1 text-[11px] leading-5 text-text-muted">一次只问一件事，把“价格看情况”变成 AI 听得懂的接待边界。</p><span className="mt-3 inline-flex items-center gap-1 text-xs font-black text-amber-700">开始问答<ChevronRight size={13} /></span>
         </button>
       </div>

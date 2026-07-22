@@ -1316,8 +1316,8 @@ export default function EnterprisePage() {
             className="flex w-full items-center justify-between rounded-lg border border-border bg-white px-5 py-4 text-left shadow-sm transition-colors hover:bg-surface-2"
           >
             <span>
-              <span className="block text-sm font-black text-text-primary">{manualDetailsOpen ? '收起详细设置' : '打开完整资料与高级设置'}</span>
-              <span className="mt-1 block text-[11px] text-text-muted">需要精修产品、FAQ、通知和品牌资料时再展开，不必一次填完。</span>
+              <span className="block text-sm font-black text-text-primary">{manualDetailsOpen ? '收起 AI 当前资料' : '查看和维护 AI 当前掌握的资料'}</span>
+              <span className="mt-1 block text-[11px] text-text-muted">这是 AI 回复时实际读取的唯一资料库。上方采集结果会同步到这里，不需要重复填写。</span>
             </span>
             <ChevronDown size={16} className={`text-text-muted transition-transform ${manualDetailsOpen ? 'rotate-180' : ''}`} />
           </button>
@@ -1328,8 +1328,8 @@ export default function EnterprisePage() {
             <div className="flex items-start gap-3">
               <BookOpen size={15} className="mt-0.5 shrink-0 text-accent" />
               <div className="min-w-0 flex-1">
-                <p className="text-xs font-bold text-text-primary">全局知识注入</p>
-                <p className="mt-1 text-[11px] leading-relaxed text-text-muted">以下资料会进入客户回复、内容创作、交付提醒等 Agent 的上下文。</p>
+                <p className="text-xs font-bold text-text-primary">AI 当前使用的资料</p>
+                <p className="mt-1 text-[11px] leading-relaxed text-text-muted">上方负责采集和起草，这里负责查看、精修和长期维护。修改并保存后，会进入客户回复、内容创作和交付提醒等 Agent 的上下文。</p>
                 <div className="mt-3 flex flex-wrap gap-2">
                   {AGENTS.map(({ icon: Icon, label, color }) => (
                     <span key={label} className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium" style={{ background: `${color}12`, color }}>
@@ -1341,8 +1341,6 @@ export default function EnterprisePage() {
             </div>
           </div>
 
-          {aiAutonomySection}
-          {handoffSafetySection}
           {marketSection}
           {companySection}
 
@@ -1694,13 +1692,15 @@ export default function EnterprisePage() {
           <section className="rounded-lg border border-border bg-white shadow-sm">
             <button type="button" onClick={() => setAdvancedOpen(open => !open)} className="flex w-full items-center justify-between px-5 py-4 text-left">
               <span>
-                <span className="block text-sm font-black text-text-primary">高级设置</span>
-                <span className="mt-1 block text-[11px] text-text-muted">通知与夜班、技术支持授权、经营策略、品牌调性、Agent 学习记录</span>
+                <span className="block text-sm font-black text-text-primary">接待规则与高级设置</span>
+                <span className="mt-1 block text-[11px] text-text-muted">不属于企业资料本身：AI 参与程度、转人工规则、通知与夜班、支持授权和经营偏好。</span>
               </span>
               <ChevronDown size={16} className={`text-text-muted transition-transform ${advancedOpen ? 'rotate-180' : ''}`} />
             </button>
             {advancedOpen && (
               <div className="space-y-5 border-t border-border p-5">
+                {aiAutonomySection}
+                {handoffSafetySection}
                 {notificationSettingsSection}
 
                 <SupportAccessControl />

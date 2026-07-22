@@ -1326,13 +1326,21 @@ enterpriseRouter.post('/knowledge-intake/apply', async (req, res) => {
   const rawNotifications = body.notifications && typeof body.notifications === 'object'
     ? body.notifications as Partial<NotificationSettings>
     : null;
+  const existingReceivers = profile.notifications?.receivers ?? [];
+  const incomingReceivers = Array.isArray(rawNotifications?.receivers) ? rawNotifications.receivers : [];
+  const mergedReceivers = [...existingReceivers];
+  incomingReceivers.forEach(receiver => {
+    const normalizedTarget = text(receiver?.target);
+    if (!normalizedTarget) return;
+    const index = mergedReceivers.findIndex(existing => existing.channel === receiver.channel && text(existing.target) === normalizedTarget);
+    if (index >= 0) mergedReceivers[index] = receiver;
+    else mergedReceivers.push(receiver);
+  });
   const notifications = rawNotifications
     ? normalizeNotifications({
       ...(profile.notifications ?? DEFAULT_NOTIFICATIONS),
       ...rawNotifications,
-      receivers: Array.isArray(rawNotifications.receivers)
-        ? rawNotifications.receivers
-        : profile.notifications?.receivers ?? [],
+      receivers: mergedReceivers,
       workHours: {
         ...(profile.notifications?.workHours ?? DEFAULT_NOTIFICATIONS.workHours),
         ...(rawNotifications.workHours ?? {}),
@@ -1340,7 +1348,10 @@ enterpriseRouter.post('/knowledge-intake/apply', async (req, res) => {
     })
     : profile.notifications;
   const confirmedSections = Array.isArray(body.confirmedSections)
-    ? Array.from(new Set(body.confirmedSections.map(text).filter(Boolean))).slice(0, 12)
+    ? Array.from(new Set([
+      ...(profile.knowledgeIntake?.confirmedSections ?? []),
+      ...body.confirmedSections.map(text).filter(Boolean),
+    ])).slice(0, 12)
     : profile.knowledgeIntake?.confirmedSections ?? [];
   const source = body.source === 'history' || body.source === 'products' || body.source === 'interview'
     ? body.source
