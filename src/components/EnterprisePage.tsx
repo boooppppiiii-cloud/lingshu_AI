@@ -10,6 +10,7 @@ import {
   prepareSheet,
 } from '../lib/productImport';
 import SupportAccessControl from './SupportAccessControl';
+import KnowledgeIntakePanel, { type AppliedProfile } from './enterprise/KnowledgeIntakePanel';
 
 interface ProductAsset {
   name: string;
@@ -129,6 +130,7 @@ interface Profile {
   notifications?: NotificationSettings;
   handoffRules?: HandoffRules;
   salesStyleProfile?: SalesStyleProfile;
+  knowledgeIntake?: { lastExtractedAt?: string; source?: 'history' | 'products' | 'interview'; extractedMessages?: number; confirmedSections?: string[] };
   knowledge: string;
 }
 
@@ -402,6 +404,7 @@ export default function EnterprisePage() {
   const [notificationTesting, setNotificationTesting] = useState('');
   const [notificationMessage, setNotificationMessage] = useState('');
   const [advancedOpen, setAdvancedOpen] = useState(false);
+  const [manualDetailsOpen, setManualDetailsOpen] = useState(false);
   const [notificationsHighlight, setNotificationsHighlight] = useState(false);
   const [bizRulesHighlight, setBizRulesHighlight] = useState(false);
   const [handoffKeywordInput, setHandoffKeywordInput] = useState('');
@@ -530,14 +533,25 @@ export default function EnterprisePage() {
   const products = normalizeProductItems(profile.products);
   const assetStats = productAssetStats(products);
   const completions = sectionCompletion(profile);
-  const completedCount = Object.values(completions).filter(Boolean).length;
-  const progressPercent = Math.round((completedCount / 6) * 100);
   const notificationCompleted = Boolean((profile.notifications?.receivers ?? []).length >= 1 && profile.notifications?.lastTestAt);
   const missingImageRatio = products.length ? (products.length - assetStats.withImage) / products.length : 0;
   const approvedFaqCount = (profile.faq ?? []).filter(item => item.approvedForAuto && item.question.trim() && item.answer.trim()).length;
   const canAutoReply = approvedFaqCount >= 5;
   const configuredAutonomy = profile.strategy?.aiAutonomy ?? 'draft';
   const effectiveAutonomy: AutonomyLevel = configuredAutonomy === 'auto' && !canAutoReply ? 'draft' : configuredAutonomy;
+
+  const applyKnowledgeProfile = (updated: AppliedProfile) => {
+    setProfile(previous => ({
+      ...previous,
+      company: { ...previous.company, ...(updated.company ?? {}) } as Profile['company'],
+      bizRules: { ...(previous.bizRules ?? DEFAULT.bizRules!), ...(updated.bizRules ?? {}) } as BizRules,
+      faq: Array.isArray(updated.faq) ? updated.faq as unknown as FaqItem[] : previous.faq,
+      notifications: updated.notifications
+        ? { ...(previous.notifications ?? DEFAULT.notifications!), ...updated.notifications } as NotificationSettings
+        : previous.notifications,
+      knowledgeIntake: updated.knowledgeIntake as Profile['knowledgeIntake'] ?? previous.knowledgeIntake,
+    }));
+  };
 
   const toggleToken = (field: 'mainMarkets' | 'primaryLanguages', value: string) => {
     setProfile(prev => {
@@ -1277,8 +1291,8 @@ export default function EnterprisePage() {
           <span className="text-sm font-black text-text-primary">企业中心</span>
         </div>
         <div className="flex items-center gap-2">
-          {saveError && <span className="max-w-72 truncate text-[11px] font-bold text-red-600" title={saveError}>{saveError}</span>}
-          <motion.button
+          {manualDetailsOpen && saveError && <span className="max-w-72 truncate text-[11px] font-bold text-red-600" title={saveError}>{saveError}</span>}
+          {manualDetailsOpen && <motion.button
             whileTap={{ scale: 0.96 }}
             onClick={handleSave}
             disabled={saving}
@@ -1288,24 +1302,27 @@ export default function EnterprisePage() {
           >
             {saving ? <Loader2 size={12} className="animate-spin" /> : saveError ? <X size={12} /> : saved ? <CheckCircle2 size={12} /> : <Save size={12} />}
             {saving ? '保存中' : saveError ? '保存失败' : saved ? '已保存' : '保存'}
-          </motion.button>
+          </motion.button>}
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-3xl space-y-5 px-6 py-6">
-          <section className="rounded-lg border border-border bg-white p-5 shadow-sm">
-            <div className="flex items-start justify-between gap-4">
-              <div>
-                <p className="text-sm font-black text-text-primary">企业知识库完成度 {completedCount}/6</p>
-                <p className="mt-1 text-[11px] text-text-muted">资料越全，AI 回复越有分寸</p>
-              </div>
-              <span className="rounded-full bg-surface-2 px-3 py-1 text-xs font-black text-text-secondary">{progressPercent}%</span>
-            </div>
-            <div className="mt-4 h-2 overflow-hidden rounded-full bg-surface-2">
-              <div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${progressPercent}%` }} />
-            </div>
-          </section>
+        <div className="mx-auto max-w-5xl space-y-5 px-6 py-6">
+          <KnowledgeIntakePanel mode="center" onApplied={applyKnowledgeProfile} />
+
+          <button
+            type="button"
+            onClick={() => setManualDetailsOpen(open => !open)}
+            className="flex w-full items-center justify-between rounded-lg border border-border bg-white px-5 py-4 text-left shadow-sm transition-colors hover:bg-surface-2"
+          >
+            <span>
+              <span className="block text-sm font-black text-text-primary">{manualDetailsOpen ? '收起详细设置' : '打开完整资料与高级设置'}</span>
+              <span className="mt-1 block text-[11px] text-text-muted">需要精修产品、FAQ、通知和品牌资料时再展开，不必一次填完。</span>
+            </span>
+            <ChevronDown size={16} className={`text-text-muted transition-transform ${manualDetailsOpen ? 'rotate-180' : ''}`} />
+          </button>
+
+          {manualDetailsOpen && <>
 
           <div className="rounded-lg border border-border bg-white p-4">
             <div className="flex items-start gap-3">
@@ -1744,6 +1761,8 @@ export default function EnterprisePage() {
               </div>
             )}
           </section>
+
+          </>}
 
           <div className="h-4" />
         </div>

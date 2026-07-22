@@ -177,6 +177,7 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
   const [quotaUpdatedAt, setQuotaUpdatedAt] = useState<number | null>(null);
   const [liveSession, setLiveSession] = useState<AuthSession | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    if (typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches) return true;
     try { return localStorage.getItem('lingshu:sidebar-collapsed') === 'true'; } catch { return false; }
   });
   const sessionScope = session?.demo?.guideScope || session?.demo?.expiresAt || null;
@@ -333,10 +334,10 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
               type="button"
               onClick={onOpenBusinessDiagnosis}
               className={`flex w-full items-center rounded-xl border border-emerald-100 bg-white py-2 text-left text-xs font-bold text-emerald-700 shadow-sm transition-colors hover:border-emerald-200 hover:bg-emerald-50 ${sidebarCollapsed ? 'justify-center px-2' : 'gap-2 px-3'}`}
-              title="打开 3 分钟出海诊断"
+              title="打开 AI 接待设置"
             >
               <BookOpen size={14} />
-              {!sidebarCollapsed && <span className="min-w-0 flex-1 truncate">3分钟出海诊断</span>}
+              {!sidebarCollapsed && <span className="min-w-0 flex-1 truncate">AI 接待设置</span>}
             </button>
           </div>
         )}

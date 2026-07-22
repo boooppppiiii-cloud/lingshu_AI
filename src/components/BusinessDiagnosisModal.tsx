@@ -15,6 +15,7 @@ import {
   parseWorkbook,
   prepareSheet,
 } from '../lib/productImport';
+import KnowledgeIntakePanel from './enterprise/KnowledgeIntakePanel';
 
 interface Props {
   open: boolean;
@@ -82,13 +83,13 @@ function defaultLanguage(markets: Market[]) {
 }
 
 async function readProfile(): Promise<EnterpriseProfile> {
-  return fetch('/api/overseas/enterprise/profile').then(r => r.json()).catch(() => ({}));
+  return fetch('/api/overseas/enterprise/profile', { headers: authHeader() }).then(r => r.json()).catch(() => ({}));
 }
 
 async function saveProfile(profile: EnterpriseProfile) {
   await fetch('/api/overseas/enterprise/profile', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
     body: JSON.stringify(profile),
   });
 }
@@ -113,15 +114,15 @@ async function uploadManualImage(file: File) {
   });
   const response = await fetch('/api/overseas/enterprise/assets', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
     body: JSON.stringify({ name: file.name, type: file.type, dataUrl }),
   });
   if (!response.ok) throw new Error('图片上传失败');
   return response.json() as Promise<{ name: string; type: string; size: number; updatedAt: string; url?: string }>;
 }
 
-export default function BusinessDiagnosisModal({ open, session, onClose, onDismissToday, onNavigate }: Props) {
-  const [step, setStep] = useState<1 | 2>(1);
+export default function BusinessDiagnosisModal({ open, session, onClose, onDismissToday }: Props) {
+  const [step, setStep] = useState<1 | 2 | 3>(1);
   const [path, setPath] = useState<ProductImportPath>('upload');
   const [companyName, setCompanyName] = useState(session.tenant?.name || '');
   const [category, setCategory] = useState<Category | ''>('');
@@ -290,7 +291,7 @@ export default function BusinessDiagnosisModal({ open, session, onClose, onDismi
       videos: [],
       documents: [],
     }]);
-    onDismissToday();
+    setStep(3);
   };
 
   const refreshProductApiStatus = useCallback(async () => {
@@ -340,8 +341,8 @@ export default function BusinessDiagnosisModal({ open, session, onClose, onDismi
             <header className="flex items-start justify-between gap-4 border-b border-border px-6 py-4">
               <div>
                 <p className="text-xs font-semibold text-green-700">首次登录 · 全程可跳过</p>
-                <h2 className="text-xl font-bold text-text-primary">3分钟出海诊断</h2>
-                <p className="mt-1 text-sm text-text-muted">先建立生意画像，再接入一个或一批主推商品。</p>
+                <h2 className="text-xl font-bold text-text-primary">5分钟让 AI 开始接待</h2>
+                <p className="mt-1 text-sm text-text-muted">先给 AI 一点真实原料，它来整理，你只负责确认。</p>
               </div>
               <button type="button" onClick={() => void finish(false)} className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-text-muted hover:bg-surface-2" title="跳过">
                 <X size={16} />
@@ -349,9 +350,10 @@ export default function BusinessDiagnosisModal({ open, session, onClose, onDismi
             </header>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-              <div className="mb-5 grid grid-cols-2 gap-2 text-sm font-bold">
+              <div className="mb-5 grid grid-cols-3 gap-2 text-sm font-bold">
                 <div className={`rounded-lg px-4 py-3 ${step === 1 ? 'bg-slate-950 text-white' : 'bg-surface text-text-muted'}`}>1. 生意画像（30秒）</div>
                 <div className={`rounded-lg px-4 py-3 ${step === 2 ? 'bg-slate-950 text-white' : 'bg-surface text-text-muted'}`}>2. 产品接入</div>
+                <div className={`rounded-lg px-4 py-3 ${step === 3 ? 'bg-slate-950 text-white' : 'bg-surface text-text-muted'}`}>3. 教 AI 怎么回复</div>
               </div>
 
               {step === 1 ? (
@@ -393,7 +395,7 @@ export default function BusinessDiagnosisModal({ open, session, onClose, onDismi
                     </button>
                   </div>
                 </div>
-              ) : (
+              ) : step === 2 ? (
                 <div className="grid gap-5">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <button type="button" onClick={() => setStep(1)} className="inline-flex items-center gap-2 rounded-lg border border-border bg-white px-4 py-2 text-sm font-bold text-text-secondary hover:bg-surface">
@@ -449,7 +451,7 @@ export default function BusinessDiagnosisModal({ open, session, onClose, onDismi
                             </div>
                           )}
                           <div className="flex flex-wrap justify-end gap-3">
-                            <button type="button" className="rounded-xl border border-border px-5 py-3 text-sm font-bold text-text-secondary" onClick={() => { void startImport(); onNavigate('enterprise'); onDismissToday(); }}>先导入，去下一步</button>
+                            <button type="button" className="rounded-xl border border-border px-5 py-3 text-sm font-bold text-text-secondary" onClick={() => { void startImport(); setStep(3); }}>先导入，去下一步</button>
                             <button type="button" className="inline-flex items-center gap-2 rounded-xl bg-slate-950 px-5 py-3 text-sm font-bold text-white disabled:opacity-40" disabled={importing} onClick={() => void startImport()}>
                               {importing ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />} 确认并批量入库
                             </button>
@@ -488,8 +490,8 @@ export default function BusinessDiagnosisModal({ open, session, onClose, onDismi
                             <p className={`text-sm font-black ${apiConnected ? 'text-green-700' : 'text-text-primary'}`}>{apiConnected ? '接通成功' : '等待 ERP 推送商品数据'}</p>
                             <p className="mt-1 text-xs text-text-muted">当前企业中心商品数：{apiStatus.count}{apiStatus.lastProductName ? `，最近接入：${apiStatus.lastProductName}` : ''}</p>
                           </div>
-                          <button type="button" className="rounded-xl bg-slate-950 px-5 py-3 text-sm font-bold text-white" onClick={() => { onNavigate('enterprise'); onDismissToday(); }}>
-                            去企业中心查看
+                          <button type="button" className="rounded-xl bg-slate-950 px-5 py-3 text-sm font-bold text-white" onClick={() => setStep(3)}>
+                            下一步：教 AI 回复
                           </button>
                         </div>
                       </div>
@@ -510,6 +512,19 @@ export default function BusinessDiagnosisModal({ open, session, onClose, onDismi
                       </div>
                     </div>
                   )}
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+                    <p className="text-xs text-text-muted">产品可以以后继续批量补充，不影响先设置接待口径。</p>
+                    <button type="button" onClick={() => setStep(3)} className="inline-flex items-center gap-2 rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-bold text-text-secondary hover:bg-surface">
+                      暂时跳过产品 <ChevronRight size={15} />
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid gap-4">
+                  <button type="button" onClick={() => setStep(2)} className="inline-flex w-fit items-center gap-2 rounded-lg border border-border bg-white px-4 py-2 text-sm font-bold text-text-secondary hover:bg-surface">
+                    <ChevronLeft size={15} /> 返回产品接入
+                  </button>
+                  <KnowledgeIntakePanel mode="onboarding" onDone={onDismissToday} />
                 </div>
               )}
             </div>

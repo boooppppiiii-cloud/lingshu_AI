@@ -178,6 +178,12 @@ export interface EnterpriseProfile {
   notifications?: NotificationSettings;
   handoffRules?: HandoffRules;
   salesStyleProfile?: SalesStyleProfile;
+  knowledgeIntake?: {
+    lastExtractedAt?: string;
+    source?: 'history' | 'products' | 'interview';
+    extractedMessages?: number;
+    confirmedSections?: string[];
+  };
   knowledge: string;
 }
 
@@ -775,6 +781,12 @@ export interface KnowledgeCompletion {
   total: 6;
   sections: Record<KnowledgeSectionKey, { completed: boolean; label: string }>;
   notificationsReady: boolean;
+  capabilities: {
+    productGrounding: { unlocked: boolean; label: string; reason: string };
+    quoteDraft: { unlocked: boolean; label: string; reason: string };
+    autoReply: { unlocked: boolean; label: string; reason: string };
+    importantAlerts: { unlocked: boolean; label: string; reason: string };
+  };
 }
 
 function assetCounts(profile: EnterpriseProfile) {
@@ -815,6 +827,30 @@ export function knowledgeCompletion(profile: EnterpriseProfile): KnowledgeComple
     total: 6,
     sections,
     notificationsReady: hasTestedNotificationTarget(normalized),
+    capabilities: {
+      productGrounding: {
+        unlocked: sections.products.completed,
+        label: '看懂产品',
+        reason: sections.products.completed ? 'AI 回复会引用已录入的真实产品' : '先录入 1 个主推产品',
+      },
+      quoteDraft: {
+        unlocked: sections.products.completed && sections.bizRules.completed,
+        label: '会写报价草稿',
+        reason: sections.bizRules.completed ? 'AI 已知道你的报价边界' : '再确认报价方式、样品和付款口径',
+      },
+      autoReply: {
+        unlocked: (normalized.faq ?? []).filter(item => item.approvedForAuto && item.question && item.answer).length >= 5,
+        label: '自动回答常见问题',
+        reason: (normalized.faq ?? []).filter(item => item.approvedForAuto && item.question && item.answer).length >= 5
+          ? '已审批的标准问答可在安全范围内自动发送'
+          : '审批 5 条常见问答后解锁',
+      },
+      importantAlerts: {
+        unlocked: hasTestedNotificationTarget(normalized),
+        label: '及时提醒重要询盘',
+        reason: hasTestedNotificationTarget(normalized) ? '重要询盘会通知指定负责人' : '设置并测试 1 位通知接收人',
+      },
+    },
   };
 }
 
@@ -1213,6 +1249,128 @@ enterpriseRouter.get('/knowledge-completion', async (_req, res) => {
   const { tenantId } = res.locals as AuthLocals;
   const profile = await readTenantProfile(tenantId);
   res.json(knowledgeCompletion(profile));
+});
+
+enterpriseRouter.post('/knowledge-intake/extract', async (_req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  try {
+    const [{ getWhatsAppKnowledgeSamples }, { extractKnowledgeFromHistory }] = await Promise.all([
+      import('../whatsapp/historyImport.js'),
+      import('../knowledge/intake.js'),
+    ]);
+    const profile = await readTenantProfile(tenantId);
+    const samples = getWhatsAppKnowledgeSamples(tenantId, { maxConversations: 60, maxMessages: 500, sinceDays: 180 });
+    const preview = await extractKnowledgeFromHistory(profile, samples);
+    res.json(preview);
+  } catch (error) {
+    console.error('[knowledge-intake] extract failed:', error);
+    res.status(500).json({
+      error: 'knowledge_extraction_failed',
+      message: error instanceof Error ? error.message : '暂时无法整理历史聊天，请稍后重试。',
+    });
+  }
+});
+
+enterpriseRouter.post('/knowledge-intake/draft', async (_req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  try {
+    const { draftKnowledgeFromProducts } = await import('../knowledge/intake.js');
+    const profile = await readTenantProfile(tenantId);
+    res.json(await draftKnowledgeFromProducts(profile));
+  } catch (error) {
+    console.error('[knowledge-intake] product draft failed:', error);
+    res.status(500).json({
+      error: 'knowledge_draft_failed',
+      message: error instanceof Error ? error.message : '暂时无法生成初稿，请稍后重试。',
+    });
+  }
+});
+
+enterpriseRouter.post('/knowledge-intake/apply', async (req, res) => {
+  const { tenantId, userId } = res.locals as AuthLocals;
+  const profile = await readTenantProfile(tenantId);
+  const body = req.body && typeof req.body === 'object' ? req.body as Record<string, unknown> : {};
+  const companyIntro = text(body.companyIntro);
+  const rawRules = body.bizRules && typeof body.bizRules === 'object' ? body.bizRules as Record<string, unknown> : {};
+  const nextRules: BizRules = normalizeBizRules({
+    ...(profile.bizRules ?? DEFAULT_BIZ_RULES),
+    ...(rawRules.quoteMode === 'range' || rawRules.quoteMode === 'human_only' ? { quoteMode: rawRules.quoteMode } : {}),
+    ...(rawRules.bargainPolicy === 'no' || rawRules.bargainPolicy === 'limited' || rawRules.bargainPolicy === 'open' ? { bargainPolicy: rawRules.bargainPolicy } : {}),
+    ...(['priceRange', 'bargainFloor', 'moq', 'samplePolicy', 'paymentTerms', 'leadTime'] as const).reduce<Record<string, string>>((acc, key) => {
+      if (key in rawRules) acc[key] = text(rawRules[key]);
+      return acc;
+    }, {}),
+  } as BizRules, profile.products, profile.operations ?? {});
+
+  const incomingFaqs: FaqItem[] = (Array.isArray(body.faqs) ? body.faqs : [])
+    .map(item => item && typeof item === 'object' ? item as Record<string, unknown> : {})
+    .map(item => ({
+      id: text(item.id) || randomUUID(),
+      question: text(item.question),
+      answer: text(item.answer),
+      approvedForAuto: item.approvedForAuto === true,
+      source: item.source === 'learned' ? 'learned' as const : 'manual' as const,
+    }))
+    .filter(item => item.question && item.answer);
+  const nextFaqs = [...(profile.faq ?? [])];
+  let importedFaqs = 0;
+  incomingFaqs.forEach(item => {
+    const index = nextFaqs.findIndex(existing => text(existing.question).toLowerCase() === item.question.toLowerCase());
+    if (index >= 0) nextFaqs[index] = { ...nextFaqs[index], ...item, id: nextFaqs[index].id };
+    else {
+      nextFaqs.push(item);
+      importedFaqs += 1;
+    }
+  });
+
+  const rawNotifications = body.notifications && typeof body.notifications === 'object'
+    ? body.notifications as Partial<NotificationSettings>
+    : null;
+  const notifications = rawNotifications
+    ? normalizeNotifications({
+      ...(profile.notifications ?? DEFAULT_NOTIFICATIONS),
+      ...rawNotifications,
+      receivers: Array.isArray(rawNotifications.receivers)
+        ? rawNotifications.receivers
+        : profile.notifications?.receivers ?? [],
+      workHours: {
+        ...(profile.notifications?.workHours ?? DEFAULT_NOTIFICATIONS.workHours),
+        ...(rawNotifications.workHours ?? {}),
+      },
+    })
+    : profile.notifications;
+  const confirmedSections = Array.isArray(body.confirmedSections)
+    ? Array.from(new Set(body.confirmedSections.map(text).filter(Boolean))).slice(0, 12)
+    : profile.knowledgeIntake?.confirmedSections ?? [];
+  const source = body.source === 'history' || body.source === 'products' || body.source === 'interview'
+    ? body.source
+    : profile.knowledgeIntake?.source;
+  const extractedMessages = Math.max(0, Number(body.extractedMessages || 0) || 0);
+
+  const nextProfile = normalizeProfile({
+    ...profile,
+    company: {
+      ...profile.company,
+      description: companyIntro || profile.company.description,
+    },
+    bizRules: nextRules,
+    faq: nextFaqs,
+    notifications,
+    knowledgeIntake: {
+      ...profile.knowledgeIntake,
+      lastExtractedAt: new Date().toISOString(),
+      source,
+      extractedMessages: extractedMessages || profile.knowledgeIntake?.extractedMessages || 0,
+      confirmedSections,
+    },
+  });
+  await writeTenantProfile(tenantId, nextProfile, userId);
+  res.json({
+    ok: true,
+    profile: nextProfile,
+    importedFaqs,
+    completion: knowledgeCompletion(nextProfile),
+  });
 });
 
 enterpriseRouter.post('/faq/structure', async (req, res) => {

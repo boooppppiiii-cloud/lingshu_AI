@@ -105,6 +105,11 @@ interface IncomingMessage {
   timestamp: number;
 }
 
+export interface KnowledgeConversationSample {
+  customerId: string;
+  messages: Array<{ actor: 'buyer' | 'seller'; body: string; timestamp: number }>;
+}
+
 function readJson<T>(file: string, fallback: T): T {
   try {
     return JSON.parse(fs.readFileSync(file, 'utf8')) as T;
@@ -1155,4 +1160,40 @@ export function getWhatsAppCustomers(tenantId?: string): any[] {
       timeline,
     };
   });
+}
+
+export function getWhatsAppKnowledgeSamples(
+  tenantId: string,
+  options: { maxConversations?: number; maxMessages?: number; sinceDays?: number } = {},
+): KnowledgeConversationSample[] {
+  const maxConversations = Math.max(1, Math.min(120, options.maxConversations ?? 60));
+  const maxMessages = Math.max(20, Math.min(800, options.maxMessages ?? 500));
+  const since = Date.now() - Math.max(1, options.sinceDays ?? 180) * 86_400_000;
+  const grouped = new Map<string, KnowledgeConversationSample['messages']>();
+
+  interactions()
+    .filter(item => item.tenantId === tenantId && item.timestamp >= since && item.type !== 'system' && item.body.trim())
+    .sort((a, b) => b.timestamp - a.timestamp)
+    .slice(0, maxMessages)
+    .forEach(item => {
+      const current = grouped.get(item.customerId) ?? [];
+      current.push({
+        actor: item.type === 'msg_in' ? 'buyer' : 'seller',
+        body: item.body
+          .replace(/\+?\d[\d\s().-]{7,}\d/g, '[电话号码]')
+          .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[邮箱]')
+          .replace(/\b\d{5,}\b/g, '[编号]')
+          .slice(0, 800),
+        timestamp: item.timestamp,
+      });
+      grouped.set(item.customerId, current);
+    });
+
+  return Array.from(grouped.entries())
+    .slice(0, maxConversations)
+    .map(([customerId, messages]) => ({
+      customerId,
+      messages: messages.sort((a, b) => a.timestamp - b.timestamp).slice(-30),
+    }))
+    .filter(sample => sample.messages.some(message => message.actor === 'buyer'));
 }
