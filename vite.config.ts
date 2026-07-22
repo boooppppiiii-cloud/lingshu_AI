@@ -1,7 +1,7 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'path';
-import { defineConfig, type ServerOptions } from 'vite';
+import { defineConfig, loadEnv, type ServerOptions } from 'vite';
 
 function resolveHmr(): ServerOptions['hmr'] {
   if (process.env.DISABLE_HMR === 'true') return false;
@@ -14,14 +14,16 @@ function resolveHmr(): ServerOptions['hmr'] {
   return true;
 }
 
-const devApiTarget = process.env.DEV_API_TARGET ?? 'http://127.0.0.1:8790';
+export default defineConfig(({ mode }) => {
+  const env = loadEnv(mode, process.cwd(), '');
+  const devApiTarget = process.env.DEV_API_TARGET ?? env.DEV_API_TARGET ?? 'http://127.0.0.1:8790';
 
-export default defineConfig(() => ({
-  plugins: [react(), tailwindcss()],
-  resolve: {
-    alias: { '@': path.resolve(__dirname, 'src') },
-  },
-  server: {
+  return {
+    plugins: [react(), tailwindcss()],
+    resolve: {
+      alias: { '@': path.resolve(__dirname, 'src') },
+    },
+    server: {
     // 合并版使用独立端口，避免和 overseas / 新手引导两个工作区互相抢占。
     port: Number(process.env.DEV_PORT || 5177),
     strictPort: true,
@@ -58,5 +60,6 @@ export default defineConfig(() => ({
         changeOrigin: true,
       },
     },
-  },
-}));
+    },
+  };
+});
