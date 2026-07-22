@@ -162,12 +162,12 @@ const AGENTS = [
 ];
 
 const AUTONOMY_OPTIONS: Array<{ value: AutonomyLevel; title: string; desc: string; detail: string }> = [
-  { value: 'remind', title: '只提醒我', desc: 'AI 发现该联系谁会告诉你', detail: '不替你写、不替你发' },
-  { value: 'draft', title: '帮我写草稿（推荐）', desc: 'AI 写好回复等你确认', detail: '一键发送' },
-  { value: 'auto', title: '低风险消息自动回', desc: '物流通知、基础问答等 AI 直接回复', detail: '报价等大事永远等你确认' },
+  { value: 'remind', title: '只提醒我', desc: 'AI 只判断优先级并提醒', detail: '不生成草稿，不自动发送' },
+  { value: 'draft', title: '草稿需确认（推荐）', desc: 'AI 结合当前对话写草稿', detail: '由你检查后发送' },
+  { value: 'auto', title: '已审批问答自动回', desc: '高置信命中标准问答时直发', detail: '其他情况仍转草稿或人工' },
 ];
 
-const L3_ACTIONS = ['物流状态更新', '节假日祝福', '明确索要目录时发送已审批资料', '标准售后确认', '知识库内基础问答'];
+const AUTO_REPLY_SCOPE = ['当前问题与已审批 FAQ 语义一致', '语境判定置信度不低于 90%', '回答原文通过价格与承诺红线检查'];
 const MARKET_OPTIONS = ['中东', '东南亚', '欧美', '拉美', '其他'];
 const LANGUAGE_OPTIONS = ['英语', '阿拉伯语', '西班牙语', '法语', '俄语', '其他'];
 const CHANNEL_OPTIONS: Array<{ value: NotificationChannel; label: string }> = [
@@ -534,8 +534,10 @@ export default function EnterprisePage() {
   const progressPercent = Math.round((completedCount / 6) * 100);
   const notificationCompleted = Boolean((profile.notifications?.receivers ?? []).length >= 1 && profile.notifications?.lastTestAt);
   const missingImageRatio = products.length ? (products.length - assetStats.withImage) / products.length : 0;
-  const approvedFaqCount = (profile.faq ?? []).filter(item => item.approvedForAuto).length;
+  const approvedFaqCount = (profile.faq ?? []).filter(item => item.approvedForAuto && item.question.trim() && item.answer.trim()).length;
   const canAutoReply = approvedFaqCount >= 5;
+  const configuredAutonomy = profile.strategy?.aiAutonomy ?? 'draft';
+  const effectiveAutonomy: AutonomyLevel = configuredAutonomy === 'auto' && !canAutoReply ? 'draft' : configuredAutonomy;
 
   const toggleToken = (field: 'mainMarkets' | 'primaryLanguages', value: string) => {
     setProfile(prev => {
@@ -706,7 +708,7 @@ export default function EnterprisePage() {
       return;
     }
     if (value === 'auto' && profile.strategy?.aiAutonomy !== 'auto') {
-      const ok = window.confirm(`切换到低风险自动回复后，AI 将可自动处理：\n\n${L3_ACTIONS.map(item => `• ${item}`).join('\n')}\n\n报价、折扣、付款条款、交期承诺仍永远需要你确认。`);
+      const ok = window.confirm(`开启后，只有同时满足以下条件的标准问答才会自动发送：\n\n${AUTO_REPLY_SCOPE.map(item => `• ${item}`).join('\n')}\n\n物流、目录、售后、报价、付款和交期等仍需你确认。`);
       if (!ok) return;
     }
     setProfile(prev => ({ ...prev, strategy: { ...prev.strategy, aiAutonomy: value } }));
@@ -715,12 +717,13 @@ export default function EnterprisePage() {
   const setNightModeEnabled = (enabled: boolean) => {
     if (enabled && !profile.notifications?.nightMode?.enabled) {
       const ok = window.confirm([
-        '开启夜班模式后，非工作时间 AI 只会自动回复以下安全范围：',
+        '开启夜班后，系统会在非工作时间继续按全局 AI 参与程度处理消息：',
         '',
-        '· 已审批的常见问题',
-        '· 物流、目录、标准售后等 L3 低风险动作',
+        '· 全局为“只提醒我”时，夜间仍只提醒',
+        '· 全局为“草稿需确认”时，夜间仍只生成草稿',
+        '· 只有全局已允许自动回复时，夜间才可能发送已审批 FAQ 原文',
         '',
-        '报价、折扣、付款、交期等大事会积累到次日晨报等你确认；客户要求通话仍会立即提醒你。',
+        '夜班不会扩大自动发送权限。需要人工确认的消息会进入次日晨报。',
       ].join('\n'));
       if (!ok) return;
     }
@@ -1021,15 +1024,15 @@ export default function EnterprisePage() {
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-sm font-black text-text-primary">AI 参与程度</p>
-          <p className="mt-1 text-[11px] leading-relaxed text-text-muted">这个设置作用于动作风险，不按客户画像放权。</p>
+          <p className="mt-1 text-[11px] leading-relaxed text-text-muted">只控制 AI 是否写、是否发。语境识别、知识命中和风险保护始终优先。</p>
         </div>
         <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-bold text-slate-600">
-          当前：{AUTONOMY_OPTIONS.find(item => item.value === (profile.strategy?.aiAutonomy ?? 'draft'))?.title}
+          当前：{AUTONOMY_OPTIONS.find(item => item.value === effectiveAutonomy)?.title}
         </span>
       </div>
-      <div className="mt-4 grid grid-cols-3 gap-3">
+      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
         {AUTONOMY_OPTIONS.map(option => {
-          const active = (profile.strategy?.aiAutonomy ?? 'draft') === option.value;
+          const active = effectiveAutonomy === option.value;
           const disabled = option.value === 'auto' && !canAutoReply;
           return (
             <button
@@ -1050,32 +1053,34 @@ export default function EnterprisePage() {
           );
         })}
       </div>
-      <p className="mt-3 rounded-lg bg-sky-50 px-3 py-2 text-[11px] font-semibold leading-relaxed text-sky-800">
-        报价、折扣、付款条款、交期承诺等高风险动作仍需人工确认；报价规则未完善时，草稿不会包含具体价格。
-      </p>
-      <div className="mt-4 rounded-lg border border-emerald-100 bg-emerald-50/70 p-4">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <p className="text-sm font-black text-emerald-950">让 AI 替你上夜班</p>
-            <p className="mt-1 text-[11px] font-semibold leading-5 text-emerald-800">
-              非工作时间，AI 自动回复已审批的常见问题；报价等大事积累到次日晨报等你处理；客户要求通话仍会立即提醒你。
-            </p>
-            <p className="mt-2 text-[11px] text-emerald-700">
-              当前工作时间：{profile.notifications?.workHours.start ?? '09:00'} - {profile.notifications?.workHours.end ?? '22:00'}，夜间自动范围固定为“已审批 FAQ + L3 低风险动作”。
-            </p>
-          </div>
-          <label className="inline-flex cursor-pointer items-center gap-2 rounded-full bg-white px-2.5 py-1.5 text-xs font-black text-emerald-900 shadow-sm">
-            <input
-              type="checkbox"
-              className="h-4 w-4 accent-emerald-600"
-              checked={Boolean(profile.notifications?.nightMode?.enabled)}
-              onChange={event => setNightModeEnabled(event.target.checked)}
-            />
-            {profile.notifications?.nightMode?.enabled ? '已开启' : '未开启'}
-          </label>
+      {configuredAutonomy === 'auto' && !canAutoReply && (
+        <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-800">
+          已审批问答不足 5 条，自动发送已由服务端暂停，当前按“草稿需确认”执行。
+        </p>
+      )}
+      <div className="mt-4 border-t border-border pt-4">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs font-black text-text-primary">自动发送边界</p>
+          <span className="text-[11px] font-bold text-text-muted">已审批 {approvedFaqCount} 条 · 启用要求 5 条</span>
         </div>
+        <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-3">
+          {AUTO_REPLY_SCOPE.map((item, index) => (
+            <div key={item} className="flex items-start gap-2 rounded-md bg-emerald-50 px-3 py-2 text-[11px] font-semibold leading-5 text-emerald-900">
+              <span className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-emerald-600 text-[9px] font-black text-white">{index + 1}</span>
+              {item}
+            </div>
+          ))}
+        </div>
+        <p className="mt-3 text-[11px] font-semibold leading-5 text-text-muted">
+          物流、目录、售后、报价、折扣、付款、交期和合同均不会自动发送；没有真实业务数据或语境不明确时会降级。
+        </p>
       </div>
-      <div className="mt-4 rounded-lg border border-amber-100 bg-amber-50/70 p-4">
+    </section>
+  );
+
+  const handoffSafetySection = (
+    <section className="rounded-lg border border-border bg-white p-5 shadow-sm">
+      <div>
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-sm font-black text-amber-950">转人工规则</p>
@@ -1239,6 +1244,18 @@ export default function EnterprisePage() {
           </div>
         </Field>
       </div>
+      <div className="mt-4 flex items-start justify-between gap-4 border-t border-border pt-4">
+        <div>
+          <p className="text-xs font-black text-text-primary">非工作时间继续接待</p>
+          <p className="mt-1 text-[11px] leading-5 text-text-muted">
+            夜间沿用上方 AI 参与程度，不会提升权限。需要确认的消息进入次日晨报；客户要求通话仍即时提醒。
+          </p>
+        </div>
+        <label className="inline-flex shrink-0 cursor-pointer items-center gap-2 text-xs font-bold text-text-secondary">
+          <Toggle checked={Boolean(profile.notifications?.nightMode?.enabled)} onChange={setNightModeEnabled} />
+          {profile.notifications?.nightMode?.enabled ? '已开启' : '未开启'}
+        </label>
+      </div>
     </div>
   );
 
@@ -1308,6 +1325,7 @@ export default function EnterprisePage() {
           </div>
 
           {aiAutonomySection}
+          {handoffSafetySection}
           {marketSection}
           {companySection}
 
@@ -1660,7 +1678,7 @@ export default function EnterprisePage() {
             <button type="button" onClick={() => setAdvancedOpen(open => !open)} className="flex w-full items-center justify-between px-5 py-4 text-left">
               <span>
                 <span className="block text-sm font-black text-text-primary">高级设置</span>
-                <span className="mt-1 block text-[11px] text-text-muted">技术支持授权、经营策略、品牌调性、Agent 学习记录</span>
+                <span className="mt-1 block text-[11px] text-text-muted">通知与夜班、技术支持授权、经营策略、品牌调性、Agent 学习记录</span>
               </span>
               <ChevronDown size={16} className={`text-text-muted transition-transform ${advancedOpen ? 'rotate-180' : ''}`} />
             </button>
@@ -1678,7 +1696,6 @@ export default function EnterprisePage() {
                     <Field label="重点市场"><input className={inputCls} value={profile.strategy?.focusMarkets ?? ''} onChange={e => set('strategy')('focusMarkets', e.target.value)} /></Field>
                     <Field label="暂不经营市场"><input className={inputCls} value={profile.strategy?.excludedMarkets ?? ''} onChange={e => set('strategy')('excludedMarkets', e.target.value)} /></Field>
                     <Field label="最低利润率"><input className={inputCls} value={profile.strategy?.minMargin ?? ''} onChange={e => set('strategy')('minMargin', e.target.value)} /></Field>
-                    <Field label="Agent 权限"><input className={inputCls} value={profile.strategy?.agentAutonomy ?? ''} onChange={e => set('strategy')('agentAutonomy', e.target.value)} /></Field>
                   </div>
                   <Field label="价格策略"><textarea className={textareaCls} rows={2} value={profile.strategy?.pricingStrategy ?? ''} onChange={e => set('strategy')('pricingStrategy', e.target.value)} /></Field>
                 </div>

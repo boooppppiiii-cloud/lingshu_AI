@@ -49,8 +49,7 @@ export function BasicInfoWidget({
       return;
     }
     if (!customer.sourcePostId) return;
-    localStorage.setItem('lingshu:traffic:source-post-id', customer.sourcePostId);
-    window.dispatchEvent(new CustomEvent('lingshu:navigate', { detail: { page: 'traffic', view: 'effects' } }));
+    window.dispatchEvent(new CustomEvent('lingshu:navigate', { detail: { page: 'strategy' } }));
   };
 
   return (

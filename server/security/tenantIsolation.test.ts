@@ -33,6 +33,14 @@ for (const route of ['agentChat', 'strategy', 'draftReply', 'studio']) {
 assert.doesNotMatch(read('server/routes/draftReply.ts'), /body\.tenantId/, 'draft replies must not accept a caller-selected tenant id');
 assert.match(read('server/routes/agentChat.ts'), /readTenantEnterpriseProfile\(tenantId\)/, 'agent chat must use tenant enterprise context');
 assert.match(read('server/routes/strategy.ts'), /readTenantEnterpriseProfile\(tenantId\)/, 'strategy chat must use tenant enterprise context');
+assert.match(read('server/knowledge/retrieve.ts'), /await readTenantEnterpriseProfile\(tenantId\)/, 'knowledge retrieval must use the authenticated tenant profile');
+const strategyRetrieval = read('server/knowledge/strategyRetrieve.ts');
+assert.match(strategyRetrieval, /where: \{ tenant_id: tenantId, status: 'active' \}/, 'strategy memory retrieval must be tenant scoped');
+const styleMemory = read('server/knowledge/styleMemory.ts');
+assert.match(styleMemory, /await readTenantEnterpriseProfile\(tenantId\)/, 'style distillation must read the tenant profile');
+assert.match(styleMemory, /await updateTenantEnterpriseProfile\(tenantId,/, 'style distillation must update the tenant profile');
+assert.doesNotMatch(styleMemory, /readEnterpriseProfile|updateEnterpriseProfile/, 'style learning must not use the global profile file');
+assert.match(read('server/whatsapp/historyImport.ts'), /await readTenantEnterpriseProfile\(tenantId\)/, 'WhatsApp autonomy must use the inbound message tenant profile');
 
 const assetAccess = read('server/lib/assetAccess.ts');
 assert.match(assetAccess, /segments\[0\] === 'tenants' && segments\[1\] === viewerTenantId/, 'private assets must enforce tenant path ownership');

@@ -1,4 +1,8 @@
 import { Router } from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { pipeline } from 'node:stream/promises';
 import { callLLM } from '../agents/llm.js';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 import { getBestTimeScores } from '../publishing/bestTime.js';
@@ -115,6 +119,53 @@ function normalizeCopy(raw: any, platforms: string[], title: string, description
 }
 
 publishingRouter.use(requireAuth);
+
+publishingRouter.post('/local-videos', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const encodedName = text(req.headers['x-file-name']);
+  let originalName = 'video.mp4';
+  try {
+    originalName = decodeURIComponent(encodedName || originalName);
+  } catch {
+    originalName = encodedName || originalName;
+  }
+  originalName = path.basename(originalName).replace(/[^\w.\-\u4e00-\u9fff]+/g, '-');
+  const ext = path.extname(originalName).toLowerCase();
+  if (!['.mp4', '.mov', '.webm', '.mkv', '.avi'].includes(ext)) {
+    res.status(400).json({ error: '仅支持 mp4、mov、webm、mkv、avi 视频文件' });
+    return;
+  }
+  const maxBytes = Math.max(50, Number(process.env.PUBLISH_UPLOAD_MAX_MB || 2048)) * 1024 * 1024;
+  const declaredBytes = Number(req.headers['content-length'] || 0);
+  if (declaredBytes > maxBytes) {
+    res.status(413).json({ error: `视频不能超过 ${Math.round(maxBytes / 1024 / 1024)}MB` });
+    return;
+  }
+  const tenantFolder = String(tenantId || 'local').replace(/[^\w.-]+/g, '-');
+  const outputDir = path.resolve(process.cwd(), 'data', 'publishing-uploads', tenantFolder);
+  const outputPath = path.join(outputDir, `${randomUUID()}-${originalName}`);
+  fs.mkdirSync(outputDir, { recursive: true });
+  let receivedBytes = 0;
+  const limiter = async function* (source: AsyncIterable<Buffer>) {
+    for await (const chunk of source) {
+      receivedBytes += chunk.length;
+      if (receivedBytes > maxBytes) throw Object.assign(new Error('video_too_large'), { statusCode: 413 });
+      yield chunk;
+    }
+  };
+  try {
+    await pipeline(req, limiter, fs.createWriteStream(outputPath));
+    if (!receivedBytes) throw new Error('empty_video');
+    res.status(201).json({
+      ok: true,
+      video: { name: originalName, videoPath: outputPath, size: receivedBytes },
+    });
+  } catch (error: any) {
+    try { fs.rmSync(outputPath, { force: true }); } catch { /* ignore */ }
+    const status = Number(error?.statusCode) || 400;
+    res.status(status).json({ error: error?.message === 'empty_video' ? '视频文件为空' : error?.message === 'video_too_large' ? '视频文件过大' : '视频接收失败' });
+  }
+});
 
 publishingRouter.get('/best-time', (req, res) => {
   const { tenantId } = res.locals as AuthLocals;

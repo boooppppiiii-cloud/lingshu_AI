@@ -3,7 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import { Compass, LayoutGrid, BarChart3 } from 'lucide-react';
 import AgentWorkspace from './AgentWorkspace';
 import StrategyDataBoard from './StrategyDataBoard';
-import type { AgentAction, ConversationContext, KickoffSignal, RestoreSignal } from '../App';
+import type { AgentAction, ConversationContext, KickoffSignal, Page, RestoreSignal } from '../App';
 
 type ViewMode = 'workspace' | 'board';
 
@@ -14,10 +14,11 @@ interface Props {
   restore?: RestoreSignal;
   kickoff?: KickoffSignal;
   onAction?: AgentAction;
+  onNavigate?: (page: Page) => void;
   onSessionRefresh?: () => void;
 }
 
-export default function StrategyPage({ onAction }: Props) {
+export default function StrategyPage({ onAction, onNavigate }: Props) {
   const [viewMode, setViewMode] = useState<ViewMode>('board');
 
   return (
@@ -46,7 +47,7 @@ export default function StrategyPage({ onAction }: Props) {
         <AnimatePresence mode="wait">
           {viewMode === 'board' ? (
             <motion.div key="board" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">
-              <StrategyDataBoard onAction={onAction} />
+              <StrategyDataBoard onAction={onAction} onNavigate={onNavigate} />
             </motion.div>
           ) : (
             <motion.div key="workspace" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full">

@@ -1,17 +1,18 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   BarChart3,
-  CalendarDays,
   CheckCircle2,
   Film,
   Loader2,
-  MessageCircle,
+  Copy,
+  Plus,
   PlayCircle,
   RefreshCw,
-  Repeat2,
   Send,
   ShieldCheck,
+  Trash2,
+  Upload,
   Wand2,
   Zap,
 } from 'lucide-react';
@@ -19,11 +20,10 @@ import { AnimatePresence, motion } from 'motion/react';
 import InspirationDashboard from './InspirationDashboard';
 import AiCreateStudio from './AiCreateStudio';
 import { ChannelOverview } from './YouTubeIntegration';
-import { CalendarPlanner, type CalendarPost } from './publishing/CalendarPlanner';
 import type { ConversationContext, Page, RestoreSignal, KickoffSignal, AgentAction } from '../App';
 import { authHeader } from '../lib/auth';
 
-type ViewMode = 'calendar' | 'materials' | 'create' | 'publish' | 'effects' | 'recycle' | 'accounts';
+type ViewMode = 'materials' | 'create' | 'publish' | 'accounts';
 type PublishPlatform = 'youtube' | 'tiktok' | 'instagram' | 'facebook';
 
 type PublishDraft = {
@@ -62,26 +62,22 @@ type PlatformCopy = {
   firstComment?: string;
 };
 
-type PublishingEffectPost = {
-  id: string;
-  platform: string;
-  title: string;
-  publishedAt: string;
-  trackCode: string;
-  waLink: string;
-  stats: { views?: number; likes?: number; comments?: number; status?: string };
-  inquiries: number;
-  deals: number;
-};
+type PublishItemStatus = 'draft' | 'publishing' | 'published' | 'partial' | 'failed';
 
-type RecycleList = {
+type PublishQueueItem = {
   id: string;
-  name: string;
-  enabled?: boolean;
-  items?: Array<{ contentId: string; title?: string; paused?: boolean }>;
-  slots?: Array<{ weekday: number; time: string; platforms: string[] }>;
-  refresh_mode?: 'copy' | 'copy_cover' | 'copy_cover_hook';
-  cursor?: number;
+  videoPath: string;
+  title: string;
+  description: string;
+  ratio?: string;
+  sourceProjectId?: string;
+  targetAccountIds: string[];
+  platformCopy: Record<string, PlatformCopy>;
+  firstComment: string;
+  trackWaLink: boolean;
+  status: PublishItemStatus;
+  completedTargets: number;
+  error?: string;
 };
 
 interface Props {
@@ -104,8 +100,6 @@ const PLATFORM_META: Record<PublishPlatform, { label: string; short: string; col
   facebook: { label: 'Facebook', short: 'FB', color: '#1877f2', format: 'Reels / Page Video' },
 };
 
-const WEEKDAY_LABELS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
-
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { ...init, headers: { ...authHeader(), ...(init?.headers ?? {}) } });
   const data = await response.json().catch(() => ({})) as T & { error?: string; message?: string };
@@ -125,6 +119,50 @@ function platformTitle(platform: PublishPlatform, copy?: PlatformCopy, fallback 
   return fallback;
 }
 
+function publishItemId() {
+  return typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : `publish-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function titleFromVideoPath(videoPath: string) {
+  const filename = videoPath.trim().split(/[\\/]/).pop() || '';
+  return filename.replace(/\.(mp4|mov|webm|mkv|avi)$/i, '') || '未命名视频';
+}
+
+function createPublishItem(draft?: PublishDraft | null, targetAccountIds: string[] = []): PublishQueueItem {
+  return {
+    id: publishItemId(),
+    videoPath: draft?.videoPath || '',
+    title: draft?.title || '',
+    description: draft?.description || '',
+    ratio: draft?.ratio,
+    sourceProjectId: draft?.sourceProjectId,
+    targetAccountIds,
+    platformCopy: {},
+    firstComment: '',
+    trackWaLink: true,
+    status: 'draft',
+    completedTargets: 0,
+  };
+}
+
+function readStoredPublishDraft(): PublishDraft | null {
+  try {
+    return JSON.parse(localStorage.getItem('ow_publish_draft') || 'null') as PublishDraft | null;
+  } catch {
+    return null;
+  }
+}
+
+const PUBLISH_STATUS_META: Record<PublishItemStatus, { label: string; className: string }> = {
+  draft: { label: '待配置', className: 'bg-slate-100 text-slate-600' },
+  publishing: { label: '发布中', className: 'bg-sky-50 text-sky-700' },
+  published: { label: '已完成', className: 'bg-emerald-50 text-emerald-700' },
+  partial: { label: '部分失败', className: 'bg-amber-50 text-amber-700' },
+  failed: { label: '发布失败', className: 'bg-red-50 text-red-700' },
+};
+
 export default function TrafficPage({
   onNavigate,
   restore,
@@ -132,7 +170,14 @@ export default function TrafficPage({
   onScriptPanelOpen,
   onScriptPanelClose,
 }: Props) {
-  const [viewMode, setViewMode] = useState<ViewMode>('calendar');
+  const [viewMode, setViewMode] = useState<ViewMode>(() => {
+    try {
+      const initialView = localStorage.getItem('lingshu:traffic:initial-view');
+      localStorage.removeItem('lingshu:traffic:initial-view');
+      if (initialView === 'publish') return 'publish';
+    } catch { /* ignore */ }
+    return 'materials';
+  });
   const [publishDraft, setPublishDraft] = useState<PublishDraft | null>(null);
 
   useEffect(() => {
@@ -140,7 +185,6 @@ export default function TrafficPage({
   }, [restore?.key, kickoff?.key]);
 
   useEffect(() => {
-    if (localStorage.getItem('lingshu:traffic:source-post-id')) setViewMode('effects');
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<{ page?: Page; view?: ViewMode }>).detail;
       if (detail?.page === 'traffic' && detail.view) setViewMode(detail.view);
@@ -151,11 +195,6 @@ export default function TrafficPage({
 
   useEffect(() => {
     const contextByMode: Record<ViewMode, { label: string; summary: string; suggestions: string[] }> = {
-      calendar: {
-        label: '内容日历',
-        summary: '当前在内容日历，适合安排发布时间、查看热力建议、复盘已发布内容带来的询盘。',
-        suggestions: ['找一个适合发布的时间', '把爆款内容排进日历', '查看本周发布节奏', '解释询盘角标含义'],
-      },
       materials: {
         label: '我的社媒',
         summary: '当前在社媒灵感大屏，适合拆解爆款内容、筛选素材方向、规划发布节奏。',
@@ -170,16 +209,6 @@ export default function TrafficPage({
         label: '账号一键发布',
         summary: '当前在账号一键发布页，适合检查授权账号、生成分平台文案包、确认首评和 WhatsApp 追踪链接。',
         suggestions: ['生成四个平台的差异化文案', '检查首评内容', '确认追踪链接', '排到建议时段发布'],
-      },
-      effects: {
-        label: '内容效果',
-        summary: '当前在内容询盘归因看板，适合复盘哪些发布带来了 WhatsApp 询盘和成交。',
-        suggestions: ['找出带来询盘最多的内容', '总结高询盘内容共同点', '推荐下一条变体内容', '解释内容成交归因数据'],
-      },
-      recycle: {
-        label: '保鲜循环',
-        summary: '当前在循环列表，适合把成片加入自动保鲜队列，设置发布频次和改编档位。',
-        suggestions: ['新建一个循环列表', '解释三种保鲜档位', '推荐循环发布时间', '检查防重复规则'],
       },
       accounts: {
         label: '账号流量数据',
@@ -215,14 +244,11 @@ export default function TrafficPage({
       </header>
 
       <div className="flex-shrink-0 border-b border-border bg-surface px-6 py-3">
-        <div className="grid w-full grid-cols-7 gap-1.5 rounded-2xl border border-border bg-surface-2 p-1 shadow-sm">
+        <div className="grid w-full grid-cols-4 gap-1.5 rounded-2xl border border-border bg-surface-2 p-1 shadow-sm">
           {[
-            { mode: 'calendar' as ViewMode, icon: <CalendarDays size={18} />, label: '内容日历' },
             { mode: 'materials' as ViewMode, icon: <Film size={18} />, label: '灵感大屏' },
             { mode: 'create' as ViewMode, icon: <Wand2 size={18} />, label: 'AI智能素材' },
             { mode: 'publish' as ViewMode, icon: <Send size={18} />, label: '一键发布' },
-            { mode: 'effects' as ViewMode, icon: <BarChart3 size={18} />, label: '内容效果' },
-            { mode: 'recycle' as ViewMode, icon: <Repeat2 size={18} />, label: '保鲜循环' },
             { mode: 'accounts' as ViewMode, icon: <BarChart3 size={18} />, label: '账号数据' },
           ].map(({ mode, icon, label }) => {
             const active = viewMode === mode;
@@ -245,17 +271,7 @@ export default function TrafficPage({
 
       <main className="min-h-0 flex-1 overflow-hidden">
         <AnimatePresence mode="wait">
-          {viewMode === 'calendar' ? (
-            <motion.div key="calendar" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full overflow-y-auto px-6 py-5">
-              <CalendarPlanner
-                onCreate={(date) => {
-                  setPublishDraft({ title: `排期内容 ${date.toLocaleDateString()}`, description: '', videoPath: '' });
-                  setViewMode('publish');
-                }}
-                onOpenPost={() => setViewMode('effects')}
-              />
-            </motion.div>
-          ) : viewMode === 'materials' ? (
+          {viewMode === 'materials' ? (
             <motion.div key="materials" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full overflow-y-auto">
               <InspirationDashboard
                 onScriptPanelOpen={onScriptPanelOpen}
@@ -270,18 +286,7 @@ export default function TrafficPage({
             </motion.div>
           ) : viewMode === 'publish' ? (
             <motion.div key="publish" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full overflow-y-auto">
-              <SocialPublishPanel onNavigate={onNavigate} draft={publishDraft} onOpenCalendar={() => setViewMode('calendar')} />
-            </motion.div>
-          ) : viewMode === 'effects' ? (
-            <motion.div key="effects" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full overflow-y-auto">
-              <PublishingEffectsPanel onVariant={(post) => {
-                setPublishDraft({ title: `${post.title} - 变体`, description: '', videoPath: '' });
-                setViewMode('publish');
-              }} />
-            </motion.div>
-          ) : viewMode === 'recycle' ? (
-            <motion.div key="recycle" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full overflow-y-auto">
-              <RecycleListsPanel />
+              <SocialPublishPanel onNavigate={onNavigate} draft={publishDraft} />
             </motion.div>
           ) : (
             <motion.div key="accounts" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full overflow-y-auto px-6 py-5">
@@ -294,26 +299,42 @@ export default function TrafficPage({
   );
 }
 
-function SocialPublishPanel({ onNavigate, draft, onOpenCalendar }: { onNavigate?: (p: Page) => void; draft?: PublishDraft | null; onOpenCalendar: () => void }) {
+function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => void; draft?: PublishDraft | null }) {
   const [accounts, setAccounts] = useState<PublishAccount[]>([]);
-  const [selected, setSelected] = useState<Set<string>>(() => new Set());
-  const [platformCopy, setPlatformCopy] = useState<Record<string, PlatformCopy>>({});
+  const [items, setItems] = useState<PublishQueueItem[]>(() => [createPublishItem(draft || readStoredPublishDraft())]);
+  const [activeItemId, setActiveItemId] = useState('');
+  const [batchPathsOpen, setBatchPathsOpen] = useState(false);
+  const [batchPaths, setBatchPaths] = useState('');
   const [loading, setLoading] = useState(true);
+  const [uploadingVideos, setUploadingVideos] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [adapting, setAdapting] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
-  const [videoPath, setVideoPath] = useState('');
-  const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
   const [recommendations, setRecommendations] = useState<PublishRecommendation[]>([]);
   const [recommendationsLoading, setRecommendationsLoading] = useState(false);
-  const [firstComment, setFirstComment] = useState('');
-  const [trackWaLink, setTrackWaLink] = useState(true);
+  const accountTargetsSeededRef = useRef(false);
+  const appliedDraftRef = useRef(JSON.stringify(draft || readStoredPublishDraft() || {}));
+  const videoInputRef = useRef<HTMLInputElement | null>(null);
 
   const connectedAccounts = accounts.filter(account => account.status === 'connected');
-  const selectedConnectedAccounts = connectedAccounts.filter(account => selected.has(account.id));
+  const activeItem = items.find(item => item.id === activeItemId) || items[0] || null;
+  const selectedConnectedAccounts = connectedAccounts.filter(account => activeItem?.targetAccountIds.includes(account.id));
   const selectedPlatforms = Array.from(new Set(selectedConnectedAccounts.map(account => account.platform)));
+  const connectedAccountIds = new Set(connectedAccounts.map(account => account.id));
+  const totalAssignments = items.reduce(
+    (sum, item) => sum + item.targetAccountIds.filter(id => connectedAccountIds.has(id)).length,
+    0,
+  );
+  const publishableItems = items.filter(item => (
+    item.videoPath.trim() &&
+    item.title.trim() &&
+    item.targetAccountIds.some(id => connectedAccountIds.has(id))
+  ));
+
+  const updateItem = (id: string, patch: Partial<PublishQueueItem>) => {
+    setItems(prev => prev.map(item => item.id === id ? { ...item, ...patch } : item));
+  };
 
   const loadAccounts = async () => {
     setLoading(true);
@@ -332,7 +353,11 @@ function SocialPublishPanel({ onNavigate, draft, onOpenCalendar }: { onNavigate?
         ...(facebook.items ?? []).map(account => ({ id: account.id, platform: 'facebook' as const, title: account.title, handle: account.handle, status: account.status, avatarUrl: account.avatarUrl })),
       ];
       setAccounts(next);
-      setSelected(new Set(next.filter(account => account.status === 'connected').map(account => account.id)));
+      if (!accountTargetsSeededRef.current) {
+        const targetAccountIds = next.filter(account => account.status === 'connected').map(account => account.id);
+        setItems(prev => prev.map(item => item.targetAccountIds.length ? item : { ...item, targetAccountIds }));
+        accountTargetsSeededRef.current = true;
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : '无法读取授权账号');
     } finally {
@@ -343,30 +368,165 @@ function SocialPublishPanel({ onNavigate, draft, onOpenCalendar }: { onNavigate?
   useEffect(() => { void loadAccounts(); }, []);
 
   useEffect(() => {
-    let nextDraft = draft;
-    if (!nextDraft) {
-      try {
-        nextDraft = JSON.parse(localStorage.getItem('ow_publish_draft') || 'null') as PublishDraft | null;
-      } catch {
-        nextDraft = null;
-      }
-    }
-    if (!nextDraft) return;
-    setVideoPath(nextDraft.videoPath || '');
-    setTitle(nextDraft.title || '');
-    setDescription(nextDraft.description || '');
+    if (!draft) return;
+    const fingerprint = JSON.stringify(draft);
+    if (fingerprint === appliedDraftRef.current) return;
+    const next = createPublishItem(draft, connectedAccounts.map(account => account.id));
+    setItems(prev => [...prev, next]);
+    setActiveItemId(next.id);
+    appliedDraftRef.current = fingerprint;
   }, [draft]);
 
-  const toggle = (id: string) => {
-    setSelected(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+  const toggleAccount = (accountId: string) => {
+    if (!activeItem) return;
+    const next = new Set(activeItem.targetAccountIds);
+    if (next.has(accountId)) next.delete(accountId);
+    else next.add(accountId);
+    updateItem(activeItem.id, { targetAccountIds: Array.from(next), status: 'draft', error: undefined });
+  };
+
+  const togglePlatform = (platform: PublishPlatform) => {
+    if (!activeItem) return;
+    const ids = connectedAccounts.filter(account => account.platform === platform).map(account => account.id);
+    const next = new Set(activeItem.targetAccountIds);
+    const allSelected = ids.length > 0 && ids.every(id => next.has(id));
+    ids.forEach(id => allSelected ? next.delete(id) : next.add(id));
+    updateItem(activeItem.id, { targetAccountIds: Array.from(next), status: 'draft', error: undefined });
+  };
+
+  const selectAllAccounts = () => {
+    if (!activeItem) return;
+    updateItem(activeItem.id, {
+      targetAccountIds: connectedAccounts.map(account => account.id),
+      status: 'draft',
+      error: undefined,
+    });
+  };
+
+  const applyAccountsToAll = () => {
+    if (!activeItem) return;
+    setItems(prev => prev.map(item => ({
+      ...item,
+      targetAccountIds: [...activeItem.targetAccountIds],
+      status: item.status === 'publishing' ? item.status : 'draft',
+      error: undefined,
+    })));
+    setNotice(`已把当前账号配置应用到 ${items.length} 条视频。`);
+  };
+
+  const addPublishItem = () => {
+    const next = createPublishItem(null, connectedAccounts.map(account => account.id));
+    setItems(prev => [...prev, next]);
+    setActiveItemId(next.id);
+    setNotice('');
+    setError('');
+  };
+
+  const duplicatePublishItem = (item: PublishQueueItem) => {
+    const next: PublishQueueItem = {
+      ...item,
+      id: publishItemId(),
+      platformCopy: { ...item.platformCopy },
+      targetAccountIds: [...item.targetAccountIds],
+      status: 'draft',
+      completedTargets: 0,
+      error: undefined,
+    };
+    setItems(prev => [...prev, next]);
+    setActiveItemId(next.id);
+  };
+
+  const removePublishItem = (id: string) => {
+    setItems(prev => {
+      if (prev.length === 1) {
+        const replacement = createPublishItem(null, connectedAccounts.map(account => account.id));
+        setActiveItemId(replacement.id);
+        return [replacement];
+      }
+      const next = prev.filter(item => item.id !== id);
+      if (activeItem?.id === id) setActiveItemId(next[0]?.id || '');
       return next;
     });
   };
 
+  const addBatchPaths = () => {
+    const paths = Array.from(new Set(batchPaths
+      .split(/\r?\n/)
+      .map(value => value.trim().replace(/^['"]|['"]$/g, ''))
+      .filter(Boolean)));
+    if (!paths.length) {
+      setError('请至少输入一个本地视频路径');
+      return;
+    }
+    const targetAccountIds = activeItem?.targetAccountIds.length
+      ? activeItem.targetAccountIds
+      : connectedAccounts.map(account => account.id);
+    const additions = paths.map(videoPath => createPublishItem({
+      videoPath,
+      title: titleFromVideoPath(videoPath),
+      description: activeItem?.description || '',
+      ratio: activeItem?.ratio,
+    }, targetAccountIds));
+    setItems(prev => {
+      const onlyBlank = prev.length === 1 && !prev[0].videoPath.trim() && !prev[0].title.trim();
+      return onlyBlank ? additions : [...prev, ...additions];
+    });
+    setActiveItemId(additions[0].id);
+    setBatchPaths('');
+    setBatchPathsOpen(false);
+    setError('');
+    setNotice(`已加入 ${additions.length} 条视频。`);
+  };
+
+  const addSelectedVideoFiles = async (fileList: FileList | null) => {
+    const files = Array.from(fileList || []).filter(file => /\.(mp4|mov|webm|mkv|avi)$/i.test(file.name));
+    if (!files.length) return;
+    setUploadingVideos(true);
+    setError('');
+    setNotice('');
+    const targetAccountIds = activeItem?.targetAccountIds.length
+      ? activeItem.targetAccountIds
+      : connectedAccounts.map(account => account.id);
+    const additions: PublishQueueItem[] = [];
+    const failures: string[] = [];
+    for (const file of files) {
+      try {
+        const response = await fetch('/api/overseas/publishing/local-videos', {
+          method: 'POST',
+          headers: {
+            ...authHeader(),
+            'Content-Type': 'application/octet-stream',
+            'X-File-Name': encodeURIComponent(file.name),
+          },
+          body: file,
+        });
+        const data = await response.json().catch(() => ({})) as { video?: { videoPath?: string }; error?: string };
+        if (!response.ok || !data.video?.videoPath) throw new Error(data.error || '视频接收失败');
+        additions.push(createPublishItem({
+          videoPath: data.video.videoPath,
+          title: titleFromVideoPath(file.name),
+          description: activeItem?.description || '',
+          ratio: activeItem?.ratio,
+        }, targetAccountIds));
+      } catch (uploadError) {
+        failures.push(`${file.name}: ${uploadError instanceof Error ? uploadError.message : '添加失败'}`);
+      }
+    }
+    if (additions.length) {
+      setItems(prev => {
+        const onlyBlank = prev.length === 1 && !prev[0].videoPath.trim() && !prev[0].title.trim();
+        return onlyBlank ? additions : [...prev, ...additions];
+      });
+      setActiveItemId(additions[0].id);
+      setNotice(`已选择并加入 ${additions.length} 条视频。`);
+    }
+    if (failures.length) setError(failures.join('；'));
+    setUploadingVideos(false);
+    if (videoInputRef.current) videoInputRef.current.value = '';
+  };
+
   const adaptCopy = async (platform?: PublishPlatform) => {
+    if (!activeItem) return;
     const platforms = platform ? [platform] : selectedPlatforms;
     if (!platforms.length) {
       setError('请先选择至少一个发布账号');
@@ -378,11 +538,13 @@ function SocialPublishPanel({ onNavigate, draft, onOpenCalendar }: { onNavigate?
       const data = await fetchJson<{ copy: Record<string, PlatformCopy> }>('/api/overseas/publishing/adapt-copy', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, description, platforms, language: 'English' }),
+        body: JSON.stringify({ title: activeItem.title, description: activeItem.description, platforms, language: 'English' }),
       });
-      setPlatformCopy(prev => ({ ...prev, ...data.copy }));
       const first = platforms[0];
-      if (data.copy[first]?.firstComment) setFirstComment(data.copy[first].firstComment || '');
+      updateItem(activeItem.id, {
+        platformCopy: { ...activeItem.platformCopy, ...data.copy },
+        firstComment: data.copy[first]?.firstComment || activeItem.firstComment,
+      });
     } catch (e) {
       setError(e instanceof Error ? e.message : '生成平台文案失败');
     } finally {
@@ -391,74 +553,87 @@ function SocialPublishPanel({ onNavigate, draft, onOpenCalendar }: { onNavigate?
   };
 
   const publish = async () => {
-    const targets = selectedConnectedAccounts;
-    if (!targets.length) {
-      setError('请先选择至少一个已授权账号');
-      return;
-    }
-    if (!title.trim()) {
-      setError('请填写发布标题');
-      return;
-    }
-    if (!videoPath.trim()) {
-      setError('请填写本地成片视频路径');
+    if (!publishableItems.length) {
+      setError('请至少配置一条含视频路径、标题和发布账号的视频');
       return;
     }
     setPublishing(true);
     setNotice('');
     setError('');
-    const failures: string[] = [];
-    for (const account of targets) {
-      const meta = PLATFORM_META[account.platform];
-      const copy = platformCopy[account.platform];
-      try {
-        const url = account.platform === 'youtube'
-          ? `/api/overseas/youtube/accounts/${account.id}/upload`
-          : `/api/overseas/social/accounts/${account.id}/upload`;
-        const publishResult = await fetchJson<{ ok: boolean; video?: unknown; tracking?: unknown }>(url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            videoPath: videoPath.trim(),
-            title: platformTitle(account.platform, copy, title.trim()),
-            description: platformBody(account.platform, copy, description.trim()),
-            firstComment: copy?.firstComment || firstComment,
-            trackWaLink,
-            privacyStatus: 'public',
-            madeForKids: false,
-            projectId: draft?.sourceProjectId,
-            ratio: draft?.ratio,
-          }),
+    let successfulTargets = 0;
+    let failedTargets = 0;
+    let skippedItems = 0;
+
+    for (const item of items) {
+      const targets = connectedAccounts.filter(account => item.targetAccountIds.includes(account.id));
+      if (!item.videoPath.trim() || !item.title.trim() || !targets.length) {
+        skippedItems += 1;
+        updateItem(item.id, {
+          status: 'failed',
+          completedTargets: 0,
+          error: !item.videoPath.trim() ? '缺少视频路径' : !item.title.trim() ? '缺少标题' : '未选择可用账号',
         });
-        if (draft?.sourceProjectId) {
-          await fetch('/api/overseas/studio/publish-links', {
+        continue;
+      }
+      updateItem(item.id, { status: 'publishing', completedTargets: 0, error: undefined });
+      const itemFailures: string[] = [];
+      let itemSuccesses = 0;
+      for (const account of targets) {
+        const meta = PLATFORM_META[account.platform];
+        const copy = item.platformCopy[account.platform];
+        try {
+          const url = account.platform === 'youtube'
+            ? `/api/overseas/youtube/accounts/${account.id}/upload`
+            : `/api/overseas/social/accounts/${account.id}/upload`;
+          const publishResult = await fetchJson<{ ok: boolean; video?: unknown; tracking?: unknown }>(url, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json', ...authHeader() },
+            headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-              projectId: draft.sourceProjectId,
-              accountId: account.id,
-              platform: account.platform,
-              title: title.trim(),
-              publishResult,
+              videoPath: item.videoPath.trim(),
+              title: platformTitle(account.platform, copy, item.title.trim()),
+              description: platformBody(account.platform, copy, item.description.trim()),
+              firstComment: copy?.firstComment || item.firstComment,
+              trackWaLink: item.trackWaLink,
+              privacyStatus: 'public',
+              madeForKids: false,
             }),
           });
+          if (item.sourceProjectId) {
+            await fetch('/api/overseas/studio/publish-links', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', ...authHeader() },
+              body: JSON.stringify({
+                projectId: item.sourceProjectId,
+                accountId: account.id,
+                platform: account.platform,
+                title: item.title.trim(),
+                publishResult,
+              }),
+            });
+          }
+          itemSuccesses += 1;
+          successfulTargets += 1;
+        } catch (e) {
+          failedTargets += 1;
+          itemFailures.push(`${meta.label} · ${account.title}: ${e instanceof Error ? e.message : '发布失败'}`);
         }
-      } catch (e) {
-        failures.push(`${meta.label}: ${e instanceof Error ? e.message : '发布失败'}`);
+        updateItem(item.id, { completedTargets: itemSuccesses + itemFailures.length });
       }
+      updateItem(item.id, {
+        status: itemFailures.length ? (itemSuccesses ? 'partial' : 'failed') : 'published',
+        completedTargets: targets.length,
+        error: itemFailures.length ? itemFailures.join('；') : undefined,
+      });
     }
     setPublishing(false);
-    if (failures.length) {
-      setError(failures.join('；'));
-      return;
-    }
-    setNotice(`已提交 ${targets.length} 个账号发布。每条发布都会生成独立追踪码，可在内容效果里查看询盘。`);
+    if (failedTargets || skippedItems) setError(`${failedTargets} 个发布目标失败，${skippedItems} 条视频配置不完整；可在队列中查看并修改。`);
+    if (successfulTargets) setNotice(`已完成 ${successfulTargets} 个账号发布，每条发布均生成独立追踪码。`);
   };
 
-  const previewRatio = draft?.ratio || (selectedPlatforms.length > 0 && selectedPlatforms.every(platform => platform === 'youtube') ? '16:9' : '9:16');
+  const previewRatio = activeItem?.ratio || (selectedPlatforms.length > 0 && selectedPlatforms.every(platform => platform === 'youtube') ? '16:9' : '9:16');
 
   useEffect(() => {
-    if (!selectedConnectedAccounts.length) { setRecommendations([]); return; }
+    if (!activeItem || !selectedConnectedAccounts.length) { setRecommendations([]); return; }
     const timer = window.setTimeout(() => {
       setRecommendationsLoading(true);
       fetchJson<{ recommendations: PublishRecommendation[] }>('/api/overseas/studio/publish-recommendations', {
@@ -466,14 +641,17 @@ function SocialPublishPanel({ onNavigate, draft, onOpenCalendar }: { onNavigate?
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           targets: selectedConnectedAccounts.map(account => ({ accountId: account.id, platform: account.platform })),
-          videoPath: videoPath.trim(), title: title.trim(), projectId: draft?.sourceProjectId, ratio: draft?.ratio,
+          videoPath: activeItem.videoPath.trim(),
+          title: activeItem.title.trim(),
+          projectId: activeItem.sourceProjectId,
+          ratio: activeItem.ratio,
         }),
       }).then(result => setRecommendations(result.recommendations || []))
         .catch(() => setRecommendations([]))
         .finally(() => setRecommendationsLoading(false));
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [selectedConnectedAccounts.map(account => `${account.platform}:${account.id}`).join('|'), videoPath, title, draft?.sourceProjectId, draft?.ratio]);
+  }, [selectedConnectedAccounts.map(account => `${account.platform}:${account.id}`).join('|'), activeItem?.videoPath, activeItem?.title, activeItem?.sourceProjectId, activeItem?.ratio]);
 
   return (
     <div className="px-6 py-5">
@@ -486,12 +664,12 @@ function SocialPublishPanel({ onNavigate, draft, onOpenCalendar }: { onNavigate?
                   <Send size={16} />
                 </span>
                 <div>
-                  <p className="text-xs font-semibold text-text-muted">账号一键发布</p>
-                  <h2 className="text-lg font-bold text-text-primary">生成分平台文案包，发布后自动归因询盘</h2>
+                  <p className="text-xs font-semibold text-text-muted">批量一键发布</p>
+                  <h2 className="text-lg font-bold text-text-primary">多条视频，多平台、多账号统一配置发布</h2>
                 </div>
               </div>
               <p className="mt-2 text-sm text-text-muted">
-                选择成片和账号后，系统会为各平台生成不同文案，并自动附带 WhatsApp 追踪链接。首评失败不会影响主发布。
+                每条视频可独立选择发布账号和平台文案，批量执行时逐条显示结果。
               </p>
             </div>
             <div className="flex gap-2">
@@ -504,7 +682,101 @@ function SocialPublishPanel({ onNavigate, draft, onOpenCalendar }: { onNavigate?
             </div>
           </div>
 
-          <div className="mt-5 grid gap-3 md:grid-cols-4">
+          <div className="mt-5 border-t border-border pt-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-bold text-text-primary">发布队列</h3>
+                <p className="mt-1 text-xs text-text-muted">{items.length} 条视频 · {totalAssignments} 个发布目标</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <input
+                  ref={videoInputRef}
+                  type="file"
+                  accept="video/mp4,video/quicktime,video/webm,video/x-matroska,video/x-msvideo"
+                  multiple
+                  className="hidden"
+                  onChange={event => void addSelectedVideoFiles(event.target.files)}
+                />
+                <button type="button" onClick={() => videoInputRef.current?.click()} disabled={uploadingVideos} className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-xs font-bold text-white disabled:opacity-50">
+                  {uploadingVideos ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
+                  {uploadingVideos ? '正在加入...' : '选择视频'}
+                </button>
+                <button type="button" onClick={() => setBatchPathsOpen(open => !open)} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold text-text-secondary hover:border-accent hover:text-accent">
+                  <Film size={13} /> 批量路径
+                </button>
+                <button type="button" onClick={addPublishItem} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold text-text-secondary hover:border-accent hover:text-accent">
+                  <Plus size={13} /> 添加空白
+                </button>
+              </div>
+            </div>
+
+            {batchPathsOpen && (
+              <div className="mt-3 rounded-xl border border-border bg-surface p-3">
+                <label className="block">
+                  <span className="mb-1.5 block text-[11px] font-semibold text-text-secondary">每行一个本地视频路径</span>
+                  <textarea
+                    value={batchPaths}
+                    onChange={event => setBatchPaths(event.target.value)}
+                    rows={4}
+                    placeholder={'D:\\videos\\product-a.mp4\nD:\\videos\\product-b.mp4'}
+                    className="w-full resize-y rounded-lg border border-border bg-white px-3 py-2 font-mono text-xs outline-none focus:border-accent"
+                  />
+                </label>
+                <div className="mt-2 flex justify-end gap-2">
+                  <button type="button" onClick={() => setBatchPathsOpen(false)} className="rounded-lg border border-border px-3 py-1.5 text-xs font-bold text-text-secondary">取消</button>
+                  <button type="button" onClick={addBatchPaths} className="rounded-lg bg-accent px-3 py-1.5 text-xs font-bold text-white">加入队列</button>
+                </div>
+              </div>
+            )}
+
+            <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
+              {items.map((item, index) => {
+                const active = item.id === activeItem?.id;
+                const status = PUBLISH_STATUS_META[item.status];
+                const targetCount = item.targetAccountIds.filter(id => connectedAccountIds.has(id)).length;
+                return (
+                  <div key={item.id} className={`flex min-w-0 items-center gap-2 rounded-xl border p-2 transition-colors ${active ? 'border-accent bg-accent-glow' : 'border-border bg-surface'}`}>
+                    <button type="button" onClick={() => setActiveItemId(item.id)} className="min-w-0 flex-1 px-1.5 py-1 text-left">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-black text-text-muted">{String(index + 1).padStart(2, '0')}</span>
+                        <span className="min-w-0 flex-1 truncate text-sm font-bold text-text-primary">{item.title || titleFromVideoPath(item.videoPath) || '待填写视频'}</span>
+                        <span className={`flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${status.className}`}>{status.label}</span>
+                      </div>
+                      <p className="mt-1 truncate text-[11px] text-text-muted">{item.videoPath || '尚未填写视频路径'} · {targetCount} 个账号</p>
+                      {item.error && <p className="mt-1 truncate text-[11px] font-semibold text-red-600" title={item.error}>{item.error}</p>}
+                    </button>
+                    <div className="flex flex-shrink-0 items-center gap-1">
+                      <button type="button" onClick={() => duplicatePublishItem(item)} className="flex h-7 w-7 items-center justify-center rounded-lg text-text-muted hover:bg-white hover:text-text-primary" title="复制配置"><Copy size={12} /></button>
+                      <button type="button" onClick={() => removePublishItem(item.id)} className="flex h-7 w-7 items-center justify-center rounded-lg text-text-muted hover:bg-red-50 hover:text-red-600" title="删除视频"><Trash2 size={12} /></button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="mt-5 border-t border-border pt-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-bold text-text-primary">当前视频发布账号</h3>
+                <p className="mt-1 text-xs text-text-muted">已选择 {selectedConnectedAccounts.length} 个账号，覆盖 {selectedPlatforms.length} 个平台</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {Object.entries(PLATFORM_META).map(([platform, meta]) => {
+                  const platformAccounts = connectedAccounts.filter(account => account.platform === platform);
+                  const selected = platformAccounts.length > 0 && platformAccounts.every(account => activeItem?.targetAccountIds.includes(account.id));
+                  return (
+                    <button key={platform} type="button" disabled={!platformAccounts.length} onClick={() => togglePlatform(platform as PublishPlatform)} className={`rounded-lg border px-2.5 py-1.5 text-[11px] font-bold disabled:opacity-40 ${selected ? 'border-accent bg-accent-glow text-accent' : 'border-border text-text-secondary'}`}>
+                      {meta.short} {platformAccounts.length}
+                    </button>
+                  );
+                })}
+                <button type="button" onClick={selectAllAccounts} className="rounded-lg border border-border px-2.5 py-1.5 text-[11px] font-bold text-text-secondary">全选</button>
+                <button type="button" onClick={applyAccountsToAll} className="rounded-lg border border-border px-2.5 py-1.5 text-[11px] font-bold text-text-secondary">应用到全部视频</button>
+              </div>
+            </div>
+
+          <div className="mt-3 grid gap-3 md:grid-cols-4">
             {loading ? (
               <div className="col-span-full flex items-center justify-center gap-2 rounded-xl border border-border bg-surface py-10 text-sm text-text-muted">
                 <Loader2 size={16} className="animate-spin" /> 正在读取已授权账号...
@@ -516,9 +788,9 @@ function SocialPublishPanel({ onNavigate, draft, onOpenCalendar }: { onNavigate?
               </div>
             ) : accounts.map(account => {
               const meta = PLATFORM_META[account.platform];
-              const active = selected.has(account.id);
+              const active = Boolean(activeItem?.targetAccountIds.includes(account.id));
               return (
-                <button key={account.id} type="button" onClick={() => toggle(account.id)} className={`rounded-2xl border p-4 text-left transition-all ${active ? 'border-accent bg-accent-glow shadow-sm' : 'border-border bg-surface hover:border-border-bright'}`}>
+                <button key={account.id} type="button" onClick={() => toggleAccount(account.id)} disabled={account.status !== 'connected'} className={`rounded-xl border p-3 text-left transition-all disabled:cursor-not-allowed disabled:opacity-55 ${active ? 'border-accent bg-accent-glow shadow-sm' : 'border-border bg-surface hover:border-border-bright'}`}>
                   <div className="flex items-center justify-between gap-3">
                     {account.avatarUrl ? (
                       <img src={account.avatarUrl} alt={account.title} className="h-10 w-10 rounded-xl object-cover" />
@@ -537,6 +809,7 @@ function SocialPublishPanel({ onNavigate, draft, onOpenCalendar }: { onNavigate?
                 </button>
               );
             })}
+          </div>
           </div>
         </section>
 
@@ -568,19 +841,19 @@ function SocialPublishPanel({ onNavigate, draft, onOpenCalendar }: { onNavigate?
               <div className="mt-4 space-y-3">
                 <label className="block">
                   <span className="mb-1.5 block text-[11px] font-semibold text-text-secondary">本地视频路径</span>
-                  <input value={videoPath} onChange={event => setVideoPath(event.target.value)} placeholder="/Users/.../rendered-video.mp4" className="w-full rounded-xl border border-border bg-surface px-3 py-2.5 text-sm outline-none focus:border-accent" />
+                  <input value={activeItem?.videoPath || ''} onChange={event => activeItem && updateItem(activeItem.id, { videoPath: event.target.value, status: 'draft', error: undefined })} placeholder="/Users/.../rendered-video.mp4" className="w-full rounded-xl border border-border bg-surface px-3 py-2.5 text-sm outline-none focus:border-accent" />
                 </label>
                 <label className="block">
                   <span className="mb-1.5 block text-[11px] font-semibold text-text-secondary">基础标题</span>
-                  <input value={title} onChange={event => setTitle(event.target.value)} placeholder="发布标题" className="w-full rounded-xl border border-border bg-surface px-3 py-2.5 text-sm outline-none focus:border-accent" />
+                  <input value={activeItem?.title || ''} onChange={event => activeItem && updateItem(activeItem.id, { title: event.target.value, status: 'draft', error: undefined })} placeholder="发布标题" className="w-full rounded-xl border border-border bg-surface px-3 py-2.5 text-sm outline-none focus:border-accent" />
                 </label>
                 <label className="block">
                   <span className="mb-1.5 block text-[11px] font-semibold text-text-secondary">基础文案</span>
-                  <textarea value={description} onChange={event => setDescription(event.target.value)} rows={5} placeholder="输入卖点、脚本摘要和 hashtag" className="w-full resize-none rounded-xl border border-border bg-surface px-3 py-2.5 text-sm outline-none focus:border-accent" />
+                  <textarea value={activeItem?.description || ''} onChange={event => activeItem && updateItem(activeItem.id, { description: event.target.value, status: 'draft', error: undefined })} rows={5} placeholder="输入卖点、脚本摘要和 hashtag" className="w-full resize-none rounded-xl border border-border bg-surface px-3 py-2.5 text-sm outline-none focus:border-accent" />
                 </label>
                 <div className="rounded-xl border border-emerald-100 bg-emerald-50/80 p-3">
                   <label className="flex cursor-pointer items-start gap-3">
-                    <input type="checkbox" checked={trackWaLink} onChange={event => setTrackWaLink(event.target.checked)} className="mt-1 h-4 w-4 rounded border-border text-accent" />
+                    <input type="checkbox" checked={activeItem?.trackWaLink ?? true} onChange={event => activeItem && updateItem(activeItem.id, { trackWaLink: event.target.checked, status: 'draft' })} className="mt-1 h-4 w-4 rounded border-border text-accent" />
                     <span>
                       <span className="block text-xs font-black text-emerald-900">已附带 WhatsApp 询盘链接</span>
                       <span className="mt-1 block text-[11px] leading-5 text-emerald-800">发布时自动生成短追踪码。买家首条消息带码后，客户来源会精确归因到这条内容。</span>
@@ -604,8 +877,8 @@ function SocialPublishPanel({ onNavigate, draft, onOpenCalendar }: { onNavigate?
               <div className="mt-4 grid gap-3 md:grid-cols-2">
                 {(selectedPlatforms.length ? selectedPlatforms : (['youtube', 'tiktok', 'instagram', 'facebook'] as PublishPlatform[])).map(platform => {
                   const meta = PLATFORM_META[platform];
-                  const copy = platformCopy[platform];
-                  const body = platformBody(platform, copy, description);
+                  const copy = activeItem?.platformCopy[platform];
+                  const body = platformBody(platform, copy, activeItem?.description || '');
                   return (
                     <div key={platform} className="rounded-2xl border border-border bg-surface p-4">
                       <div className="flex items-center justify-between gap-2">
@@ -613,9 +886,9 @@ function SocialPublishPanel({ onNavigate, draft, onOpenCalendar }: { onNavigate?
                         <button type="button" onClick={() => void adaptCopy(platform)} className="rounded-lg border border-border px-2 py-1 text-[11px] font-bold text-text-secondary hover:border-accent hover:text-accent">换一版</button>
                       </div>
                       {platform === 'youtube' && (
-                        <input value={platformTitle(platform, copy, title)} onChange={event => setPlatformCopy(prev => ({ ...prev, [platform]: { ...prev[platform], title: event.target.value } }))} className="mt-3 w-full rounded-lg border border-border bg-white px-3 py-2 text-xs outline-none focus:border-accent" />
+                        <input value={platformTitle(platform, copy, activeItem?.title || '')} onChange={event => activeItem && updateItem(activeItem.id, { platformCopy: { ...activeItem.platformCopy, [platform]: { ...activeItem.platformCopy[platform], title: event.target.value } } })} className="mt-3 w-full rounded-lg border border-border bg-white px-3 py-2 text-xs outline-none focus:border-accent" />
                       )}
-                      <textarea value={body} onChange={event => setPlatformCopy(prev => ({ ...prev, [platform]: { ...prev[platform], ...(platform === 'facebook' ? { text: event.target.value } : platform === 'youtube' ? { description: event.target.value } : { caption: event.target.value }) } }))} rows={4} className="mt-3 w-full resize-none rounded-lg border border-border bg-white px-3 py-2 text-xs outline-none focus:border-accent" />
+                      <textarea value={body} onChange={event => activeItem && updateItem(activeItem.id, { platformCopy: { ...activeItem.platformCopy, [platform]: { ...activeItem.platformCopy[platform], ...(platform === 'facebook' ? { text: event.target.value } : platform === 'youtube' ? { description: event.target.value } : { caption: event.target.value }) } } })} rows={4} className="mt-3 w-full resize-none rounded-lg border border-border bg-white px-3 py-2 text-xs outline-none focus:border-accent" />
                       <div className="mt-2 flex items-center justify-between text-[11px] text-text-muted">
                         <span>{body.length} 字符</span>
                         <span>{platform === 'tiktok' && body.length > 120 ? '超出建议长度' : '长度正常'}</span>
@@ -644,7 +917,7 @@ function SocialPublishPanel({ onNavigate, draft, onOpenCalendar }: { onNavigate?
 
             <label className="mt-4 block">
               <span className="mb-1.5 block text-[11px] font-semibold text-text-secondary">首条评论</span>
-              <textarea value={firstComment} onChange={event => setFirstComment(event.target.value)} rows={4} placeholder="hashtags、wa.me 链接或补充说明。平台不支持时会记录 warning。" className="w-full resize-none rounded-xl border border-border bg-surface px-3 py-2.5 text-xs outline-none focus:border-accent" />
+              <textarea value={activeItem?.firstComment || ''} onChange={event => activeItem && updateItem(activeItem.id, { firstComment: event.target.value, status: 'draft' })} rows={4} placeholder="hashtags、wa.me 链接或补充说明。平台不支持时会记录 warning。" className="w-full resize-none rounded-xl border border-border bg-surface px-3 py-2.5 text-xs outline-none focus:border-accent" />
             </label>
 
             <div className="mt-5 rounded-xl border border-green-100 bg-green-50 p-3">
@@ -653,248 +926,24 @@ function SocialPublishPanel({ onNavigate, draft, onOpenCalendar }: { onNavigate?
                 发布前检查
               </div>
               <ul className="mt-2 space-y-1 text-[11px] leading-relaxed text-green-800">
-                <li>已选择 {selectedPlatforms.length} 个发布平台</li>
-                <li>WhatsApp 追踪链接：{trackWaLink ? '开启' : '关闭'}</li>
-                <li>首评失败不影响主发布，发布详情会显示 warning</li>
+                <li>队列：{items.length} 条视频，{publishableItems.length} 条可发布</li>
+                <li>目标：{totalAssignments} 个账号任务，覆盖 {new Set(items.flatMap(item => connectedAccounts.filter(account => item.targetAccountIds.includes(account.id)).map(account => account.platform))).size} 个平台</li>
+                <li>当前视频追踪链接：{activeItem?.trackWaLink ? '开启' : '关闭'}</li>
               </ul>
             </div>
 
             {notice && <div className="mt-4 flex items-start gap-2 rounded-xl border border-green-100 bg-green-50 px-3 py-2 text-xs text-green-700"><CheckCircle2 size={14} className="mt-0.5 flex-shrink-0" /><span>{notice}</span></div>}
             {error && <div className="mt-4 flex items-start gap-2 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-600"><AlertCircle size={14} className="mt-0.5 flex-shrink-0" /><span>{error}</span></div>}
 
-            <button type="button" onClick={() => void publish()} disabled={publishing || loading} className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 text-sm font-bold text-white shadow-sm hover:brightness-95 disabled:opacity-50">
+            <button type="button" onClick={() => void publish()} disabled={publishing || loading || publishableItems.length === 0} className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 text-sm font-bold text-white shadow-sm hover:brightness-95 disabled:opacity-50">
               {publishing ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
-              {publishing ? '发布中...' : '确认发布'}
+              {publishing ? '批量发布中...' : `发布 ${publishableItems.length} 条视频`}
             </button>
-            <button type="button" onClick={onOpenCalendar} className="mt-2 w-full rounded-xl border border-border px-4 py-3 text-sm font-bold text-text-secondary hover:border-accent hover:text-accent">
-              回到内容日历
+            <button type="button" onClick={() => onNavigate?.('strategy')} className="mt-2 w-full rounded-xl border border-border px-4 py-3 text-sm font-bold text-text-secondary hover:border-accent hover:text-accent">
+              查看内容日历
             </button>
           </aside>
         </div>
-      </div>
-    </div>
-  );
-}
-
-function PublishingEffectsPanel({ onVariant }: { onVariant: (post: PublishingEffectPost) => void }) {
-  const [items, setItems] = useState<PublishingEffectPost[]>([]);
-  const [summary, setSummary] = useState({ posts30d: 0, inquiries30d: 0, deals30d: 0 });
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
-
-  const load = async () => {
-    setLoading(true);
-    setError('');
-    try {
-      const data = await fetchJson<{ items?: PublishingEffectPost[]; summary?: typeof summary }>('/api/overseas/publishing/posts/effects');
-      setItems(data.items || []);
-      setSummary(data.summary || { posts30d: 0, inquiries30d: 0, deals30d: 0 });
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '无法读取内容效果数据');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => { void load(); }, []);
-
-  const threshold = useMemo(() => {
-    const sorted = [...items].sort((a, b) => b.inquiries - a.inquiries);
-    return sorted[Math.max(0, Math.floor(sorted.length * 0.2) - 1)]?.inquiries || 1;
-  }, [items]);
-
-  return (
-    <div className="px-6 py-5">
-      <div className="mx-auto max-w-6xl space-y-5">
-        <section className="rounded-2xl border border-border bg-white p-5 shadow-sm">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div>
-              <p className="text-xs font-semibold text-text-muted">内容到询盘归因</p>
-              <h2 className="text-lg font-bold text-text-primary">哪些内容真的带来了客户</h2>
-            </div>
-            <button type="button" onClick={() => void load()} className="inline-flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-xs font-bold text-text-secondary hover:border-accent hover:text-accent">
-              <RefreshCw size={14} className={loading ? 'animate-spin' : ''} /> 刷新
-            </button>
-          </div>
-          <div className="mt-5 grid gap-3 md:grid-cols-3">
-            {[
-              ['近30天发布', summary.posts30d],
-              ['带来询盘', summary.inquiries30d],
-              ['归因成交', summary.deals30d],
-            ].map(([label, value]) => (
-              <div key={label} className="rounded-2xl border border-border bg-surface p-4">
-                <p className="text-xs font-bold text-text-muted">{label}</p>
-                <p className="mt-2 text-2xl font-black text-text-primary">{value}</p>
-              </div>
-            ))}
-          </div>
-        </section>
-
-        <section className="rounded-2xl border border-border bg-white shadow-sm">
-          <div className="border-b border-border px-5 py-4">
-            <h3 className="text-sm font-bold text-text-primary">发布明细</h3>
-            <p className="mt-1 text-xs text-text-muted">默认按询盘数排序。高询盘内容可以直接做变体再发。</p>
-          </div>
-          {error && <div className="m-5 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-600">{error}</div>}
-          {notice && <div className="m-5 rounded-xl border border-green-100 bg-green-50 px-3 py-2 text-xs text-green-700">{notice}</div>}
-          {loading ? (
-            <div className="flex items-center justify-center gap-2 py-16 text-sm text-text-muted"><Loader2 size={16} className="animate-spin" /> 正在读取...</div>
-          ) : items.length === 0 ? (
-            <div className="py-16 text-center">
-              <p className="text-sm font-bold text-text-primary">还没有可归因的发布记录</p>
-              <p className="mt-1 text-xs text-text-muted">发布内容时保持“附带 WhatsApp 询盘链接”开启，这里就会出现询盘和成交数据。</p>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[760px] text-left text-sm">
-                <thead className="bg-surface text-xs font-bold text-text-muted">
-                  <tr>
-                    <th className="px-5 py-3">内容</th>
-                    <th className="px-4 py-3">平台</th>
-                    <th className="px-4 py-3">播放/互动</th>
-                    <th className="px-4 py-3">询盘数</th>
-                    <th className="px-4 py-3">成交数</th>
-                    <th className="px-4 py-3">追踪码</th>
-                    <th className="px-5 py-3 text-right">动作</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border">
-                  {items.map(item => {
-                    const hot = item.inquiries >= threshold && item.inquiries > 0;
-                    return (
-                      <tr key={item.id} className="hover:bg-surface/60">
-                        <td className="px-5 py-4">
-                          <div className="flex items-center gap-3">
-                            <div className="flex h-12 w-16 items-center justify-center rounded-xl bg-surface-2 text-accent"><PlayCircle size={18} /></div>
-                            <div className="min-w-0">
-                              <p className="truncate font-bold text-text-primary">{item.title || '未命名发布'}</p>
-                              <p className="mt-1 text-xs text-text-muted">{item.publishedAt ? new Date(item.publishedAt).toLocaleString() : '待发布'}</p>
-                            </div>
-                          </div>
-                        </td>
-                        <td className="px-4 py-4 font-bold text-text-secondary">{item.platform}</td>
-                        <td className="px-4 py-4 text-xs text-text-muted">{Number(item.stats?.views || 0).toLocaleString()} 播放 · {Number(item.stats?.likes || 0).toLocaleString()} 赞</td>
-                        <td className="px-4 py-4 text-base font-black text-primary">{item.inquiries}</td>
-                        <td className="px-4 py-4 text-base font-black text-emerald-600">{item.deals}</td>
-                        <td className="px-4 py-4"><span className="rounded-full bg-surface-2 px-2 py-1 text-xs font-bold text-text-secondary">#{item.trackCode}</span></td>
-                        <td className="px-5 py-4 text-right">
-                          <button
-                            type="button"
-                            onClick={() => hot ? onVariant(item) : setNotice('这条内容还没进入前 20% 表现，建议先观察。')}
-                            className={`rounded-lg px-3 py-1.5 text-xs font-bold ${hot ? 'border border-accent text-accent hover:bg-accent-glow' : 'border border-border text-text-muted'}`}
-                          >
-                            AI 做个变体再发
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </section>
-      </div>
-    </div>
-  );
-}
-
-function RecycleListsPanel() {
-  const [items, setItems] = useState<RecycleList[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [notice, setNotice] = useState('');
-  const [name, setName] = useState('主推品保鲜循环');
-  const [mode, setMode] = useState<'copy' | 'copy_cover' | 'copy_cover_hook'>('copy');
-
-  const load = async () => {
-    setLoading(true);
-    try {
-      const data = await fetchJson<{ items?: RecycleList[] }>('/api/overseas/publishing/recycle-lists');
-      setItems(data.items || []);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => { void load(); }, []);
-
-  const create = async () => {
-    const data = await fetchJson<{ item: RecycleList }>('/api/overseas/publishing/recycle-lists', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        name,
-        enabled: false,
-        refreshMode: mode,
-        items: [],
-        slots: [{ weekday: 1, time: '10:00', platforms: ['tiktok', 'instagram'] }],
-      }),
-    });
-    setItems(prev => [data.item, ...prev]);
-    setNotice('循环列表已创建。添加成片后即可开启。');
-  };
-
-  const toggle = async (item: RecycleList) => {
-    const data = await fetchJson<{ item: RecycleList }>(`/api/overseas/publishing/recycle-lists/${item.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ enabled: !item.enabled }),
-    });
-    setItems(prev => prev.map(row => row.id === item.id ? data.item : row));
-  };
-
-  return (
-    <div className="px-6 py-5">
-      <div className="mx-auto max-w-5xl space-y-5">
-        <section className="rounded-2xl border border-border bg-white p-5 shadow-sm">
-          <div className="flex items-center gap-3">
-            <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-sky-50 text-sky-700"><Repeat2 size={18} /></span>
-            <div>
-              <h2 className="text-lg font-black text-text-primary">保鲜循环</h2>
-              <p className="text-xs text-text-muted">把成片放进循环列表，到点自动改编发布，并生成新的 WhatsApp 追踪码。</p>
-            </div>
-          </div>
-          <div className="mt-5 grid gap-3 md:grid-cols-[1fr_220px_120px]">
-            <input value={name} onChange={event => setName(event.target.value)} className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-accent" />
-            <select value={mode} onChange={event => setMode(event.target.value as typeof mode)} className="rounded-xl border border-border bg-surface px-3 py-2 text-sm outline-none focus:border-accent">
-              <option value="copy">只改文案</option>
-              <option value="copy_cover">改文案 + 封面</option>
-              <option value="copy_cover_hook">改文案 + 封面 + 开头3秒</option>
-            </select>
-            <button type="button" onClick={() => void create()} className="rounded-xl bg-accent px-4 py-2 text-sm font-bold text-white">新建</button>
-          </div>
-          {notice && <p className="mt-3 rounded-xl border border-green-100 bg-green-50 px-3 py-2 text-xs text-green-700">{notice}</p>}
-        </section>
-
-        <section className="rounded-2xl border border-border bg-white shadow-sm">
-          <div className="flex items-center justify-between border-b border-border px-5 py-4">
-            <h3 className="text-sm font-bold text-text-primary">循环列表</h3>
-            <button type="button" onClick={() => void load()} className="rounded-lg border border-border p-2 text-text-muted hover:text-text-primary"><RefreshCw size={14} className={loading ? 'animate-spin' : ''} /></button>
-          </div>
-          {items.length === 0 ? (
-            <div className="py-16 text-center text-sm text-text-muted">还没有循环列表。先新建一个，再加入成片。</div>
-          ) : (
-            <div className="divide-y divide-border">
-              {items.map(item => (
-                <div key={item.id} className="flex flex-wrap items-center justify-between gap-3 px-5 py-4">
-                  <div>
-                    <p className="text-sm font-black text-text-primary">{item.name}</p>
-                    <p className="mt-1 text-xs text-text-muted">
-                      {item.items?.length || 0} 条内容 · {item.slots?.length || 0} 个槽位 · {item.refresh_mode || 'copy'}
-                    </p>
-                    <p className="mt-1 text-[11px] text-text-muted">
-                      默认槽位：{item.slots?.[0] ? `${WEEKDAY_LABELS[item.slots[0].weekday]} ${item.slots[0].time} · ${item.slots[0].platforms.join('/')}` : '未设置'}
-                    </p>
-                  </div>
-                  <button type="button" onClick={() => void toggle(item)} className={`rounded-xl px-4 py-2 text-xs font-black ${item.enabled ? 'bg-emerald-50 text-emerald-700' : 'bg-surface-2 text-text-muted'}`}>
-                    {item.enabled ? '已开启' : '已暂停'}
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
-        </section>
       </div>
     </div>
   );

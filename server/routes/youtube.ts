@@ -393,7 +393,7 @@ youtubeRouter.get('/oauth/callback', async (req, res) => {
       title: 'YouTube 已连接',
       message: `${record.channelTitle} 已连接成功，可以关闭这个窗口。`,
       returnTo,
-      accountId: req.params.id,
+      accountId: record.id,
       channelTitle: record.channelTitle,
     }));
   } catch (error: any) {
