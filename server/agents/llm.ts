@@ -1,5 +1,8 @@
 import { GoogleGenAI } from '@google/genai';
 import OpenAI from 'openai';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 export type LLMBackend = 'gemini' | 'qwen' | 'claude';
 
@@ -225,8 +228,14 @@ async function* streamQwenChat(messages: ChatMessage[], opts: LLMCallOptions): A
 }
 
 function createQwenClient(): OpenAI {
-  const apiKey = process.env.DASHSCOPE_API_KEY;
-  if (!apiKey) throw new Error('DASHSCOPE_API_KEY not set');
+  // Keep the text-generation client consistent with the Qwen video/ASR client:
+  // local development stores the key in a protected file instead of .env.
+  const keyFile = (process.env.DASHSCOPE_API_KEY_FILE
+    || path.join(os.homedir(), '.config/lingshu/dashscope.key')).trim();
+  let fileKey = '';
+  try { fileKey = fs.readFileSync(keyFile, 'utf8').trim(); } catch { /* optional local secret file */ }
+  const apiKey = process.env.DASHSCOPE_API_KEY?.trim() || fileKey;
+  if (!apiKey) throw new Error('DASHSCOPE_API_KEY is not set');
 
   return new OpenAI({
     apiKey,

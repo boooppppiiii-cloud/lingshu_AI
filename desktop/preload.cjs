@@ -9,8 +9,6 @@ contextBridge.exposeInMainWorld('desktopRender', {
   available: true,
   /** @param {object} manifest 服务器下发的渲染清单 */
   render: manifest => ipcRenderer.invoke('render:start', manifest),
-  /** 导出剪映/CapCut 手动精修包 */
-  openInCapcut: payload => ipcRenderer.invoke('capcut:open', payload),
   /** 在系统文件管理器中定位本地文件 */
   showItemInFolder: filePath => ipcRenderer.invoke('file:showItemInFolder', filePath),
   /** 订阅进度，返回取消订阅函数 */

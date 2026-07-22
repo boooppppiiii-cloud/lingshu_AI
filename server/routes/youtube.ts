@@ -24,6 +24,7 @@ import {
   getTenantAwareGoogleOAuthClient,
 } from '../lib/oauthConfig.js';
 import { parseOAuthState, signOAuthState } from '../lib/tenantPlatformApps.js';
+import { recordSuccessfulPublish } from '../lib/publishHistory.js';
 import { appendTrackedWaLink, createTrackedPostDraft, finalizeTrackedPost } from '../publishing/waLink.js';
 
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || '';
@@ -392,7 +393,7 @@ youtubeRouter.get('/oauth/callback', async (req, res) => {
       title: 'YouTube 已连接',
       message: `${record.channelTitle} 已连接成功，可以关闭这个窗口。`,
       returnTo,
-      accountId: record.id,
+      accountId: req.params.id,
       channelTitle: record.channelTitle,
     }));
   } catch (error: any) {
@@ -678,8 +679,11 @@ youtubeRouter.post('/accounts/:id/upload', async (req, res) => {
     tags,
     privacyStatus = 'unlisted',
     madeForKids = false,
-    contentId,
+    projectId,
+    generationVersionId,
+    ratio,
     language,
+    contentId,
     trackWaLink = true,
   } = req.body as {
     videoPath?: string;
@@ -688,8 +692,11 @@ youtubeRouter.post('/accounts/:id/upload', async (req, res) => {
     tags?: unknown;
     privacyStatus?: 'private' | 'unlisted' | 'public';
     madeForKids?: boolean;
-    contentId?: string;
+    projectId?: string;
+    generationVersionId?: string;
+    ratio?: string;
     language?: string;
+    contentId?: string;
     trackWaLink?: boolean;
   };
 
@@ -752,7 +759,20 @@ youtubeRouter.post('/accounts/:id/upload', async (req, res) => {
       status: 'connected',
     });
 
-    res.status(201).json({ ok: true, video: result, tracking: trackedPost });
+    const publishRecord = recordSuccessfulPublish({
+      tenantId,
+      platform: 'youtube',
+      accountId: req.params.id,
+      platformContentId: String((result as any)?.id || (result as any)?.videoId || '') || undefined,
+      projectId,
+      generationVersionId,
+      title,
+      description,
+      videoPath,
+      ratio,
+      language,
+    });
+    res.status(201).json({ ok: true, video: result, tracking: trackedPost, publishRecord });
   } catch (error: any) {
     console.error('YouTube upload error:', error?.response?.data ?? error);
     const status = error?.response?.status === 401 ? 401 : error?.response?.status === 403 ? 403 : 500;

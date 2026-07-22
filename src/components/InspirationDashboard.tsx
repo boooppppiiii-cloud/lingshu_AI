@@ -7,7 +7,7 @@ import {
   Lightbulb, Flame, BarChart2, ChevronRight, Film, Download, Plus,
   Bookmark, Maximize2, Minimize2, Lock, Upload, Users, Images,
 } from 'lucide-react';
-import { studioApi, type Material, type MaterialSegment } from '../lib/studioApi';
+import { studioApi, type Material, type MaterialSegment, type VideoGenerationVersion } from '../lib/studioApi';
 import { authHeader } from '../lib/auth';
 import CompetitorAccountsModal from './CompetitorAccountsModal';
 import type { Page } from '../App';
@@ -733,12 +733,6 @@ function frameStartsEarly(time: string): boolean {
   return match ? Number(match[1]) <= 3 : false;
 }
 
-const FRAME_DECISION_LABELS: Record<FrameMaterialMatch['decision'], string> = {
-  copy_now: '立即复制', prioritize_reshoot: '优先补拍', ai_generate: 'AI生成', supporting_only: '仅作辅助镜头', drop: '建议放弃',
-};
-const FRAME_EXECUTION_LABELS: Record<FrameMaterialMatch['replicability']['recommendedExecution'], string> = {
-  local: '本地真实素材', local_plus_ai: '本地素材＋AI补充', local_plus_reshoot: '本地素材＋补拍', ai: 'AI生成', reshoot: '真人/产品补拍', drop: '放弃该镜头',
-};
 const AI_FEASIBILITY_LABELS: Record<FrameMaterialMatch['replicability']['aiFeasibility'], string> = {
   high: '高', medium: '中', low: '低',
 };
@@ -947,7 +941,7 @@ function referenceAnalysisText(video: TrendVideo, analysis: ScriptAnalysis | nul
     `情绪：${analysis.emotion}`,
     `前 10 秒拆解：\n${firstTen}`,
     `粗略结构：\n${structure}`,
-    `15 秒分镜：\n${details}`,
+    `全片导演分镜：\n${details}`,
     `改编提示：${analysis.adaptTip}`,
   ].filter(Boolean).join('\n\n');
 }
@@ -1178,6 +1172,11 @@ function pipelineState(video: TrendVideo): { title: string; desc: string; spinni
 function needsVideoEnhancement(video: TrendVideo): boolean {
   const analysis = video.aiAnalysis;
   if (!analysis?.gemini) return true;
+  const analyzedUntil = (analysis.gemini.scriptDetails15s || []).reduce((max, item) => {
+    const numbers = String(item.time || '').match(/\d+(?:\.\d+)?/g)?.map(Number) || [];
+    return Math.max(max, numbers[1] ?? numbers[0] ?? 0);
+  }, 0);
+  if (video.duration > 0 && analyzedUntil > 0 && analyzedUntil + 1 < video.duration) return true;
   return analysis.analysisSource === 'metadata-fallback' ||
     analysis.analysisQuality === 'metadata' ||
     analysis.downloadStatus === 'ops_queued';
@@ -1194,7 +1193,6 @@ function VideoThumbnail({ platform, title }: { platform: Exclude<Platform, 'all'
       style={{ background: `linear-gradient(135deg, ${meta.bg} 0%, #111827 58%, #334155 100%)` }}>
       <div className="absolute inset-0 opacity-10"
         style={{ backgroundImage: 'linear-gradient(135deg, rgba(255,255,255,.35) 0, transparent 46%), repeating-linear-gradient(45deg, rgba(255,255,255,.3) 0, rgba(255,255,255,.3) 1px, transparent 1px, transparent 11px)' }} />
-      <span className="relative self-start rounded-lg bg-black/45 px-2.5 py-1 text-xs font-bold text-white">{meta.label}</span>
       <div className="relative">
         <div className="mb-2 text-4xl font-black font-display text-white/15 select-none">{initials || meta.label.slice(0, 2).toUpperCase()}</div>
         <p className="line-clamp-3 text-sm font-semibold leading-snug text-white/90 drop-shadow-sm">{shortTitle}</p>
@@ -1215,8 +1213,9 @@ function ThumbnailImage({
   className: string;
 }) {
   const [failed, setFailed] = useState(false);
+  useEffect(() => setFailed(false), [src]);
   if (failed || !src) return <VideoThumbnail platform={platform} title={title} />;
-  return <img src={src} alt="" className={className} draggable={false} loading="lazy" onError={() => setFailed(true)} />;
+  return <img src={src} alt="" className={className} draggable={false} loading="lazy" decoding="async" onError={() => setFailed(true)} />;
 }
 
 function AuthenticatedVideo({ apiUrl, poster, className, controls = false, autoPlay = false, hoverPlay = false }: { apiUrl: string; poster?: string; className: string; controls?: boolean; autoPlay?: boolean; hoverPlay?: boolean }) {
@@ -1241,15 +1240,79 @@ function AuthenticatedVideo({ apiUrl, poster, className, controls = false, autoP
     onMouseLeave={() => { if (!hoverPlay || !videoRef.current) return; videoRef.current.pause(); videoRef.current.currentTime = 0; }} />;
 }
 
+type ImageInsightTab = 'overview' | 'visual' | 'copy' | 'iterate';
+
+function ImageBreakdownContent({ video, analysis, activeTab }: { video: TrendVideo; analysis: ScriptAnalysis; activeTab: ImageInsightTab }) {
+  const gemini = video.aiAnalysis?.gemini;
+  const cleanList = (value?: string[]) => Array.isArray(value) ? value.map(cleanAnalysisText).filter(Boolean) : [];
+  const hooks = cleanList(gemini?.hooks);
+  const sellingPoints = cleanList(gemini?.sellingPoints);
+  const rawVisuals = cleanAnalysisText(gemini?.firstTenSeconds?.visuals);
+  const rawTheme = cleanAnalysisText(gemini?.theme);
+  const rawMood = cleanAnalysisText(gemini?.mood);
+  const rawStyle = cleanAnalysisText(gemini?.scriptSummary15s?.visualStyle || gemini?.globalSettings?.visualStyle);
+  const rawLighting = cleanAnalysisText(gemini?.globalSettings?.lighting);
+  const rawCaption = cleanAnalysisText(video.aiAnalysis?.caption || video.title);
+  const evidenceCount = [rawVisuals, rawTheme, rawMood, rawStyle, rawLighting, ...hooks, ...sellingPoints].filter(Boolean).length;
+  const isAnalyzed = Boolean(gemini && evidenceCount > 0 && video.aiAnalysis?.analysisSource !== 'metadata-fallback');
+  const analysisState = isAnalyzed ? '已读取图片分析结果' : '暂无可信图片分析';
+
+  const EmptyEvidence = ({ title, desc }: { title: string; desc: string }) => (
+    <div className="rounded-2xl border border-dashed border-border bg-surface-2 px-5 py-8 text-center">
+      <Images size={22} className="mx-auto text-text-muted" />
+      <p className="mt-3 text-xs font-black text-text-primary">{title}</p>
+      <p className="mx-auto mt-1.5 max-w-[280px] text-[10px] leading-relaxed text-text-muted">{desc}</p>
+    </div>
+  );
+
+  const EvidenceCard = ({ label, value }: { label: string; value: string }) => (
+    <div className="rounded-xl border border-border bg-white p-3">
+      <div className="flex items-center justify-between gap-2"><p className="text-[10px] font-black text-text-primary">{label}</p><span className="rounded-full bg-surface-2 px-2 py-0.5 text-[9px] text-text-muted">来自 AI 原始结果</span></div>
+      <p className="mt-1.5 text-[10px] leading-relaxed text-text-secondary">{value}</p>
+    </div>
+  );
+
+  if (activeTab === 'overview') return (
+    <div className="space-y-4">
+      <section className={`rounded-2xl border p-3.5 ${isAnalyzed ? 'border-emerald-100 bg-emerald-50/60' : 'border-amber-200 bg-amber-50/70'}`}>
+        <div className="flex items-start gap-3"><div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${isAnalyzed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{isAnalyzed ? <Check size={17}/> : <Clock size={17}/>}</div><div><p className="text-xs font-black text-text-primary">{analysisState}</p><p className="mt-1 text-[10px] leading-relaxed text-text-secondary">{isAnalyzed ? `共找到 ${evidenceCount} 条可追溯证据；页面仅展示模型实际返回内容，不计算无依据的爆款分数。` : '当前记录只有抓取资料或分析字段不足，不能判断“为什么爆”。请先完成图片视觉分析。'}</p></div></div>
+      </section>
+      {!isAnalyzed ? <EmptyEvidence title="无法提取核心爆点" desc="标题、标签和抓取状态不能证明图片的爆点。完成图片视觉分析后，这里才会展示有证据的结论。"/> : <section><div className="mb-2 flex items-center justify-between"><p className="text-[11px] font-black text-text-primary">已提取证据</p><span className="text-[9px] text-text-muted">不做二次脑补</span></div><div className="space-y-2">{rawTheme && <EvidenceCard label="主题" value={rawTheme}/>} {hooks.map((item, index) => <EvidenceCard key={`hook-${index}`} label={`注意力钩子 ${index + 1}`} value={item}/>)} {sellingPoints.map((item, index) => <EvidenceCard key={`point-${index}`} label={`卖点 ${index + 1}`} value={item}/>)}</div></section>}
+    </div>
+  );
+
+  if (activeTab === 'visual') return (
+    <div className="space-y-3">
+      <div><p className="text-[11px] font-black text-text-primary">视觉证据</p><p className="mt-1 text-[10px] text-text-muted">只展示模型对原图实际识别到的画面信息</p></div>
+      {![rawVisuals, rawStyle, rawLighting].some(Boolean) ? <EmptyEvidence title="尚未返回视觉拆解" desc="当前分析没有主体、构图、色彩或光线证据，因此不推断视觉焦点与注意力路径。"/> : <>{rawVisuals && <EvidenceCard label="画面识别" value={rawVisuals}/>} {rawStyle && <EvidenceCard label="视觉风格" value={rawStyle}/>} {rawLighting && <EvidenceCard label="光线" value={rawLighting}/>}</>}
+    </div>
+  );
+
+  if (activeTab === 'copy') return (
+    <div className="space-y-3">
+      <section className="rounded-xl border border-border bg-white p-3"><div className="flex items-center justify-between"><p className="text-[10px] font-bold text-text-muted">原始帖文</p><span className="rounded-full bg-surface-2 px-2 py-0.5 text-[9px] text-text-muted">抓取原文</span></div><p className="mt-2 text-[11px] font-bold leading-relaxed text-text-primary">{rawCaption || '未抓取到原始帖文'}</p></section>
+      {!hooks.length && !sellingPoints.length ? <EmptyEvidence title="尚未返回文案拆解" desc="仅展示原始帖文，不自动推断目标人群、痛点、承诺或句式。完成文案分析后再输出这些结论。"/> : <>{hooks.map((item, index) => <EvidenceCard key={`copy-hook-${index}`} label={`已识别钩子 ${index + 1}`} value={item}/>)}{sellingPoints.map((item, index) => <EvidenceCard key={`copy-point-${index}`} label={`已识别卖点 ${index + 1}`} value={item}/>)}</>}
+    </div>
+  );
+
+  return (
+    <div className="space-y-3">
+      <div><p className="text-[11px] font-black text-text-primary">证据驱动的迭代变量</p><p className="mt-1 text-[10px] text-text-muted">只有已识别元素才能进入下一轮测试，不从品类或标题猜测方案。</p></div>
+      {!isAnalyzed ? <EmptyEvidence title="暂不能生成迭代建议" desc="当前没有足够的图片分析证据。请先完成图片视觉与文案分析，再基于实际爆点生成单变量方案。"/> : <div className="space-y-2">{rawVisuals && <EvidenceCard label="可测试视觉变量" value={rawVisuals}/>} {hooks.map((item, index) => <EvidenceCard key={`iteration-hook-${index}`} label={`可测试钩子变量 ${index + 1}`} value={item}/>)} {sellingPoints.map((item, index) => <EvidenceCard key={`iteration-point-${index}`} label={`可测试卖点变量 ${index + 1}`} value={item}/>)}</div>}
+    </div>
+  );
+}
+
 // ── Analysis Panel ────────────────────────────────────────────────────────────
 function AnalysisPanel({ video, onGenerateScript, onRetry, specialRecommendation }: { video: TrendVideo; onGenerateScript: (analysis?: ScriptAnalysis) => void; onRetry?: () => void; specialRecommendation?: AccountSpecialRecommendation | null }) {
   const [loaded, setLoaded] = useState(false);
   const [analysis, setAnalysis] = useState<ScriptAnalysis | null>(null);
-  const [activeBookmark, setActiveBookmark] = useState<'reason' | 'frames' | 'script' | 'adapt'>('reason');
+  const [activeBookmark, setActiveBookmark] = useState<'reason' | 'frames' | 'script' | 'adapt' | ImageInsightTab>(video.contentFormat === 'image' ? 'overview' : 'reason');
   const [materials, setMaterials] = useState<Material[]>([]);
   const [materialLoading, setMaterialLoading] = useState(false);
   const [generatingFrame, setGeneratingFrame] = useState('');
   const [generatedFrameMaterials, setGeneratedFrameMaterials] = useState<Record<string, GeneratedVideo>>({});
+  const [frameVersions, setFrameVersions] = useState<Record<string, VideoGenerationVersion[]>>({});
   const [frameErrors, setFrameErrors] = useState<Record<string, string>>({});
   const [editingAnalysis, setEditingAnalysis] = useState(false);
   const [savingAnalysis, setSavingAnalysis] = useState(false);
@@ -1295,10 +1358,31 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, specialRecommendation
 
   useEffect(() => {
     setGeneratedFrameMaterials({});
+    setFrameVersions({});
     setFrameErrors({});
     setGeneratingFrame('');
-    setActiveBookmark('reason');
-  }, [video.id]);
+    setActiveBookmark(video.contentFormat === 'image' ? 'overview' : 'reason');
+  }, [video.id, video.contentFormat]);
+
+  useEffect(() => {
+    if (!analysis?.scriptDetails15s?.length) return;
+    let cancelled = false;
+    void Promise.all(analysis.scriptDetails15s.map(async (detail, index) => {
+      const key = `${detail.time}-${index}`;
+      return [key, await studioApi.listVideoVersions(`inspiration:${video.id}:frame:${key}`)] as const;
+    })).then(entries => {
+      if (cancelled) return;
+      const next = Object.fromEntries(entries);
+      setFrameVersions(next);
+      const selected = Object.entries(next).reduce<Record<string, GeneratedVideo>>((acc, [key, versions]) => {
+        const item = versions.find(version => version.isSelected) || versions[0];
+        if (item) acc[key] = { id: item.materialId || item.id, title: item.title, url: item.url, poster: item.poster, duration: item.duration, createdAt: item.createdAt, source: item.source };
+        return acc;
+      }, {});
+      setGeneratedFrameMaterials(selected);
+    });
+    return () => { cancelled = true; };
+  }, [analysis, video.id]);
 
   if (!loaded) {
     return (
@@ -1308,8 +1392,8 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, specialRecommendation
           <Loader2 size={18} className="text-accent animate-spin" />
         </div>
         <div className="text-center space-y-1">
-          <p className="text-sm font-semibold text-text-primary">AI 正在分析脚本结构…</p>
-          <p className="text-xs text-text-muted">前 10 秒五维拆解 · 粗略 3 秒结构 · 提取复用爆点</p>
+          <p className="text-sm font-semibold text-text-primary">{video.contentFormat === 'image' ? 'AI 正在提取图片爆点…' : 'AI 正在分析脚本结构…'}</p>
+          <p className="text-xs text-text-muted">{video.contentFormat === 'image' ? '视觉焦点 · 文案钩子 · 迭代变量' : '前 10 秒五维拆解 · 粗略 3 秒结构 · 提取复用爆点'}</p>
         </div>
         <div className="w-48 h-1.5 rounded-full bg-surface-2 overflow-hidden">
           <motion.div className="h-full rounded-full bg-accent"
@@ -1388,6 +1472,8 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, specialRecommendation
 
   const generateFrameMaterial = async (match: FrameMaterialMatch, index: number) => {
     const key = `${match.detail.time}-${index}`;
+    const groupKey = `inspiration:${video.id}:frame:${key}`;
+    const selectedVersion = frameVersions[key]?.find(item => item.isSelected);
     setGeneratingFrame(key);
     setFrameErrors(prev => ({ ...prev, [key]: '' }));
     try {
@@ -1406,6 +1492,9 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, specialRecommendation
         duration: 5,
         resolution: '720p',
         title: `Seedance 2.0 分镜素材 · ${match.detail.time}`,
+        generationGroupKey: groupKey,
+        generationContext: { entry: 'inspiration-frame', videoId: video.id, frameKey: key, frameTime: match.detail.time },
+        parentVersionId: selectedVersion?.id,
       });
       if (!output.ok || !output.url) throw new Error(output.error || 'Seedance 2.0 未返回视频素材');
       setGeneratedFrameMaterials(prev => ({
@@ -1421,6 +1510,10 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, specialRecommendation
           material: output.material,
         },
       }));
+      setFrameVersions(prev => ({
+        ...prev,
+        [key]: output.version ? [output.version, ...(prev[key] || []).map(item => ({ ...item, isSelected: false }))] : (prev[key] || []),
+      }));
     } catch (err: any) {
       setFrameErrors(prev => ({ ...prev, [key]: String(err?.message || err || 'Seedance 2.0 生成失败') }));
     } finally {
@@ -1428,21 +1521,31 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, specialRecommendation
     }
   };
 
-  const bookmarkTabs = [
+  const bookmarkTabs = video.contentFormat === 'image' ? [
+    { id: 'overview' as const, icon: <Zap size={12} />, label: '爆点总览' },
+    { id: 'visual' as const, icon: <Images size={12} />, label: '视觉拆解' },
+    { id: 'copy' as const, icon: <FileText size={12} />, label: '文案拆解' },
+    { id: 'iterate' as const, icon: <Sparkles size={12} />, label: '迭代建议' },
+  ] : [
     { id: 'reason' as const, icon: <Lightbulb size={12} />, label: '核心原因' },
     { id: 'frames' as const, icon: <Film size={12} />, label: '分镜匹配' },
     { id: 'script' as const, icon: <FileText size={12} />, label: '脚本详析' },
     { id: 'adapt' as const, icon: <Sparkles size={12} />, label: '改编建议' },
   ];
+  const imageEvidenceCount = video.contentFormat === 'image' ? [
+    cleanAnalysisText(video.aiAnalysis?.gemini?.theme),
+    cleanAnalysisText(video.aiAnalysis?.gemini?.firstTenSeconds?.visuals),
+    ...(video.aiAnalysis?.gemini?.hooks || []).map(cleanAnalysisText),
+    ...(video.aiAnalysis?.gemini?.sellingPoints || []).map(cleanAnalysisText),
+  ].filter(Boolean).length : 0;
+  const hasTrustedImageAnalysis = imageEvidenceCount > 0 && video.aiAnalysis?.analysisSource !== 'metadata-fallback';
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <div className="flex-shrink-0 border-b border-border bg-surface px-4 py-3">
         <div className="mb-3 flex flex-wrap items-center gap-2 text-[10px] text-text-muted">
-          <span className="rounded-md border border-border bg-surface-2 px-2 py-1 font-semibold text-text-secondary">{analysis.videoType}</span>
-          <span className="flex items-center gap-1"><BarChart2 size={9} className="text-accent" />信息速度 {analysis.infoSpeed}</span>
-          <span className="flex items-center gap-1"><TrendingUp size={9} />{video.views} 播放</span>
-          <span>{analysis.emotion}</span>
+          <span className="rounded-md border border-border bg-surface-2 px-2 py-1 font-semibold text-text-secondary">{video.contentFormat === 'image' ? 'Instagram 图文' : analysis.videoType}</span>
+          {video.contentFormat === 'image' ? <><span className="flex items-center gap-1"><BarChart2 size={9} className="text-accent" />{hasTrustedImageAnalysis ? `已提取 ${imageEvidenceCount} 条证据` : '图片分析待完成'}</span><span className="flex items-center gap-1"><Images size={9} />{video.aiAnalysis?.imageCount || video.aiAnalysis?.imageUrls?.length || 1} 张图片</span></> : <><span className="flex items-center gap-1"><BarChart2 size={9} className="text-accent" />信息速度 {analysis.infoSpeed}</span><span className="flex items-center gap-1"><TrendingUp size={9} />{video.views} 播放</span><span>{analysis.emotion}</span></>}
         </div>
         <div className="grid grid-cols-4 gap-1 rounded-xl border border-border bg-surface-2 p-1">
           {bookmarkTabs.map(tab => (
@@ -1465,6 +1568,11 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, specialRecommendation
 
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         <AnimatePresence mode="wait">
+          {video.contentFormat === 'image' && ['overview', 'visual', 'copy', 'iterate'].includes(activeBookmark) && (
+            <motion.div key={activeBookmark} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }}>
+              <ImageBreakdownContent video={video} analysis={analysis} activeTab={activeBookmark as ImageInsightTab} />
+            </motion.div>
+          )}
           {activeBookmark === 'reason' && (
             <motion.div key="reason" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -4 }}
               className="space-y-3">
@@ -1514,6 +1622,7 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, specialRecommendation
               <div className="space-y-2">
                 {frameMatches.map((match, i) => {
                   const key = `${match.detail.time}-${i}`;
+                  const versions = frameVersions[key] || [];
                   const hasMaterial = Boolean(match.material);
                   const error = frameErrors[key];
                   return (
@@ -1526,10 +1635,18 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, specialRecommendation
                           </div>
                           <p className="mt-1 text-[10px] text-text-muted">{match.detail.shot} · {match.detail.camera}</p>
                         </div>
-                        <span className={`shrink-0 rounded-full px-2 py-1 text-[9px] font-black ${match.decision === 'copy_now' ? 'bg-green-100 text-green-700' : match.decision === 'drop' ? 'bg-surface-2 text-text-muted' : 'bg-amber-100 text-amber-700'}`}>
-                          {FRAME_DECISION_LABELS[match.decision]}
-                        </span>
+                        <button type="button" onClick={() => void generateFrameMaterial(match, i)} disabled={generatingFrame === key}
+                          className="shrink-0 rounded-lg bg-accent px-2 py-1 text-[9px] font-bold text-white disabled:opacity-50">
+                          {generatingFrame === key ? '生成中…' : versions.length ? '再生成一版' : 'AI 生成'}
+                        </button>
                       </div>
+                      {versions.length > 0 && <div className="mt-2 flex flex-wrap gap-1">
+                        {versions.map(item => <button key={item.id} type="button" onClick={async () => {
+                          await studioApi.selectVideoVersion(item.id);
+                          setFrameVersions(prev => ({ ...prev, [key]: (prev[key] || []).map(v => ({ ...v, isSelected: v.id === item.id })) }));
+                          setGeneratedFrameMaterials(prev => ({ ...prev, [key]: { id: item.materialId || item.id, title: item.title, url: item.url, poster: item.poster, duration: item.duration, createdAt: item.createdAt, source: item.source } }));
+                        }} className={`rounded-md border px-2 py-1 text-[9px] font-bold ${item.isSelected ? 'border-accent bg-accent/10 text-accent' : 'border-border bg-white text-text-muted'}`}>V{item.versionNumber}</button>)}
+                      </div>}
 
                       <div className="mt-2 grid grid-cols-2 gap-2">
                         <div className="rounded-lg border border-orange-100 bg-white px-2.5 py-2">
@@ -1554,10 +1671,7 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, specialRecommendation
                       </div>
 
                       <div className="mt-2 rounded-lg border border-green-100 bg-green-50/70 px-2.5 py-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <p className="text-[9px] font-black text-green-800">企业替换与执行</p>
-                          <span className="rounded bg-white px-1.5 py-0.5 text-[9px] font-black text-green-700">{FRAME_EXECUTION_LABELS[match.replicability.recommendedExecution]}</span>
-                        </div>
+                        <p className="text-[9px] font-black text-green-800">企业替换与执行</p>
                         <p className="mt-1 text-[10px] leading-relaxed text-text-secondary">{match.viralDna.replaceable.join('；')}</p>
                         <div className="mt-1.5 flex flex-wrap gap-1.5 text-[9px] font-bold">
                           <span className="rounded bg-white px-1.5 py-0.5 text-text-secondary">真实素材覆盖 {match.replicability.localCoverage}%</span>
@@ -1665,11 +1779,11 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, specialRecommendation
       </div>
 
       <div className="flex-shrink-0 border-t border-border bg-surface p-4 shadow-[0_-10px_24px_rgba(15,23,42,0.04)]">
-        <button onClick={() => onGenerateScript(analysis || undefined)}
-          className="flex w-full items-center justify-center gap-2 rounded-2xl py-3 text-sm font-black text-white transition-all hover:scale-[1.01] active:scale-[0.99]"
+        <button onClick={() => onGenerateScript(analysis || undefined)} disabled={video.contentFormat === 'image' && !hasTrustedImageAnalysis}
+          className="flex w-full items-center justify-center gap-2 rounded-2xl py-3 text-sm font-black text-white transition-all enabled:hover:scale-[1.01] enabled:active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
           style={{ background: 'linear-gradient(135deg, #16a34a, #059669)', boxShadow: '0 10px 24px rgba(22,163,74,0.26)' }}>
           <Sparkles size={16} />
-          {video.contentFormat === 'image' ? '进入AI图文复刻' : 'AI一键爆款迭代'}
+          {video.contentFormat === 'image' ? (hasTrustedImageAnalysis ? '基于证据生成 3 个新方案' : '先完成图片分析') : 'AI一键爆款迭代'}
           <ChevronRight size={15} />
         </button>
       </div>
@@ -1730,6 +1844,7 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onFavorite, favo
   const [voiceLanguageConfirmed, setVoiceLanguageConfirmed] = useState(false);
   const [videoGenerating, setVideoGenerating] = useState(false);
   const [videoResult, setVideoResult] = useState<GeneratedVideo | null>(null);
+  const [videoVersions, setVideoVersions] = useState<VideoGenerationVersion[]>([]);
   const [videoError, setVideoError] = useState('');
   const [expanded, setExpanded] = useState(false);
   const [seedanceVideoLocked, setSeedanceVideoLocked] = useState(true);
@@ -1775,6 +1890,11 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onFavorite, favo
     setVideoResult(null);
     setVideoError('');
     setProductInfoOpen(false);
+    void studioApi.listVideoVersions(`inspiration:${video.id}:full`).then(versions => {
+      setVideoVersions(versions);
+      const item = versions.find(version => version.isSelected) || versions[0];
+      if (item) setVideoResult({ id: item.materialId || item.id, title: item.title, url: item.url, poster: item.poster, duration: item.duration, createdAt: item.createdAt, source: item.source });
+    });
   }, [video.id]);
 
   useEffect(() => {
@@ -1846,7 +1966,6 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onFavorite, favo
     if (!result) return;
     if (seedanceVideoLocked) return;
     setVideoGenerating(true);
-    setVideoResult(null);
     setVideoError('');
     try {
       const duration = Math.max(4, Math.min(15, Math.round(video.duration || 8)));
@@ -1858,6 +1977,9 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onFavorite, favo
         duration,
         resolution: '720p',
         title: `Seedance 视频 · ${video.title}`,
+        generationGroupKey: `inspiration:${video.id}:full`,
+        generationContext: { entry: 'inspiration-full', videoId: video.id, scriptType, language },
+        parentVersionId: videoVersions.find(item => item.isSelected)?.id,
       });
       if (!output.ok || !output.url) {
         throw new Error(output.error || 'Seedance 未返回可预览的视频地址');
@@ -1873,6 +1995,7 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onFavorite, favo
         material: output.material,
         error: output.error,
       });
+      if (output.version) setVideoVersions(current => [output.version!, ...current.map(item => ({ ...item, isSelected: false }))]);
     } catch (err: any) {
       setVideoError(String(err?.message || err || 'Seedance 视频生成失败'));
     } finally {
@@ -1941,7 +2064,7 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onFavorite, favo
       {/* Tabs */}
       <div className="flex items-center gap-0.5 px-4 py-2 border-b border-border flex-shrink-0">
         {([
-          { id: 'analysis' as const, icon: <BarChart2 size={12} />, label: '脚本分析' },
+          { id: 'analysis' as const, icon: <BarChart2 size={12} />, label: video.contentFormat === 'image' ? '爆图分析' : '脚本分析' },
         ]).map(tab => (
           <button key={tab.id} onClick={() => setActiveTab(tab.id)}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
@@ -2155,6 +2278,13 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onFavorite, favo
                               <div className="min-w-0 flex-1 py-0.5">
                                 <p className="text-xs font-semibold text-text-primary line-clamp-2">Seedance 输出视频</p>
                                 <p className="mt-1 text-[11px] text-text-muted">请先确认生成效果，再进入剪辑流程做字幕、封面、配乐和发布。</p>
+                                {videoVersions.length > 0 && <div className="mt-2 flex flex-wrap gap-1">
+                                  {videoVersions.map(item => <button key={item.id} type="button" onClick={async () => {
+                                    await studioApi.selectVideoVersion(item.id);
+                                    setVideoVersions(current => current.map(v => ({ ...v, isSelected: v.id === item.id })));
+                                    setVideoResult({ id: item.materialId || item.id, title: item.title, url: item.url, poster: item.poster, duration: item.duration, createdAt: item.createdAt, source: item.source });
+                                  }} className={`rounded-md border px-2 py-1 text-[10px] font-bold ${item.isSelected ? 'border-accent bg-accent/10 text-accent' : 'border-border text-text-muted'}`}>V{item.versionNumber}</button>)}
+                                </div>}
                                 <div className="mt-3 flex flex-wrap gap-2">
                                   <button onClick={() => void generateSeedanceVideo()} disabled={videoGenerating}
                                     className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-border text-[11px] font-semibold text-text-secondary hover:text-text-primary disabled:opacity-60">
@@ -2601,6 +2731,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   const [generatingNeedId, setGeneratingNeedId] = useState('');
   const [showAccountsModal, setShowAccountsModal] = useState(false);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
+  const videoRequestRef = useRef(0);
   const platformLabel = PLATFORM_FILTERS.find(f => f.id === platform)?.label ?? '全部平台';
   const sortLabel = sortMode === 'crawlTime' ? '按爬取时间' : '按热度';
   const contentFormatLabel = contentFormat === 'video' ? '视频' : '图文';
@@ -2625,37 +2756,50 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   useEffect(() => { void refreshMaterials(); }, []);
 
   const refreshVideos = async (nextPage = 1, append = false) => {
+    const requestId = ++videoRequestRef.current;
     setVideosLoading(true);
     try {
-      const perPage = 100;
+      // Keep the first paint small. Media cards are expensive and the previous 100-item
+      // response also forced the admin endpoint to finish a full cross-tenant scan first.
+      const perPage = 20;
       const query = `page=${nextPage}&perPage=${perPage}&contentFormat=${contentFormat}`;
-      const [r, adminResponse] = await Promise.all([
-        fetch(`/api/overseas/videos?${query}`, { headers: authHeader() }),
-        fetch(`/api/overseas/admin/inspiration-videos?${query}`, {
-          headers: authHeader(),
-          cache: 'no-store',
-        }),
-      ]);
+      const adminRequest = fetch(`/api/overseas/admin/inspiration-videos?${query}`, {
+        headers: authHeader(),
+      });
+      const r = await fetch(`/api/overseas/videos?${query}`, { headers: authHeader() });
       let data = await r.json().catch(() => ({})) as {
         items?: CrawlerRecord[];
         page?: number;
         totalPages?: number;
       };
+      if (!r.ok) data = {};
+
+      const applyResult = (result: typeof data) => {
+        if (requestId !== videoRequestRef.current) return;
+        const videos = recordsToVideos(result.items || []);
+        setVideoPage(Number(result.page || nextPage));
+        setVideoTotalPages(Math.max(1, Number(result.totalPages || nextPage)));
+        setCrawledVideos(prev => append
+          ? [...prev, ...videos.filter(v => !prev.some(old => old.id === v.id || (!!v.sourceUrl && old.sourceUrl === v.sourceUrl)))]
+          : videos);
+      };
+
+      // Render tenant data as soon as it arrives; admins no longer stare at an empty
+      // screen while the slower cross-tenant aggregation is still running.
+      if (data.items) applyResult(data);
+      if (requestId === videoRequestRef.current) setVideosLoading(false);
+
+      const adminResponse = await adminRequest;
       if (adminResponse.ok) {
-        data = await adminResponse.json().catch(() => data) as typeof data;
-      } else if (!r.ok) {
+        const adminData = await adminResponse.json().catch(() => null) as typeof data | null;
+        if (adminData) applyResult(adminData);
+      } else if (!data.items) {
         throw new Error('视频列表加载失败');
       }
-      const videos = recordsToVideos(data.items || []);
-      setVideoPage(Number(data.page || nextPage));
-      setVideoTotalPages(Math.max(1, Number(data.totalPages || nextPage)));
-      setCrawledVideos(prev => append
-        ? [...prev, ...videos.filter(v => !prev.some(old => old.id === v.id || (!!v.sourceUrl && old.sourceUrl === v.sourceUrl)))]
-        : videos);
     } catch {
-      if (!append) setCrawledVideos([]);
+      if (requestId === videoRequestRef.current && !append) setCrawledVideos([]);
     } finally {
-      setVideosLoading(false);
+      if (requestId === videoRequestRef.current) setVideosLoading(false);
     }
   };
 

@@ -29,6 +29,7 @@ import { analyzeVideo } from '../agents/gemini.js';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 import { signAssetUrl, sharedAssetRelativePath, tenantAssetDir, tenantAssetRelativePath } from '../lib/assetAccess.js';
 import { requireAdminUser } from '../lib/demoAccounts.js';
+import { listPublishRecords, recommendPublish, type PublishPlatform } from '../lib/publishHistory.js';
 
 /* ──────────────────────────────────────────────────────────────────────────
    Studio 路由 —— 服务于「社媒 / AI 生成内容」混剪工作台
@@ -46,57 +47,17 @@ function scopedStudioAssetDir(root: string): string {
 function scopedStudioAssetUrl(prefix: string, file: string): string {
   const tenantId = studioTenantContext.getStore();
   if (!tenantId) throw new Error('studio tenant context unavailable');
-  return `/${prefix}/${tenantAssetRelativePath(tenantId, file)}`;
+  return signAssetUrl(`/${prefix}/${tenantAssetRelativePath(tenantId, file)}`, tenantId);
 }
 const require = createRequire(import.meta.url);
-const { composite, exportCapcutPackage } = require('../../desktop/render.cjs') as {
+const { composite } = require('../../desktop/render.cjs') as {
   composite: (manifest: unknown, onProgress?: (pct: number) => void, outDir?: string) => Promise<{ ok: boolean; outputPath?: string; error?: string }>;
-  exportCapcutPackage: (payload: unknown) => Promise<{ ok: boolean; dir?: string; appOpened?: boolean; draftCreated?: boolean; createDraftError?: string; error?: string }>;
 };
 
 function execFileAsync(file: string, args: string[], timeout = 5000): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(file, args, { timeout }, (err, stdout) => (err ? reject(err) : resolve(String(stdout || ''))));
   });
-}
-
-async function findMacAppBySpotlight(names: string[]): Promise<string[]> {
-  if (process.platform !== 'darwin') return [];
-  const found = new Set<string>();
-  for (const name of names) {
-    try {
-      const stdout = await execFileAsync('mdfind', [`kMDItemKind == "Application" && kMDItemFSName == "${name}.app"`], 4000);
-      stdout.split('\n').map(line => line.trim()).filter(Boolean).forEach(item => found.add(item));
-    } catch {
-      // Spotlight may be disabled or unavailable; app-name and bundle-id attempts still cover common installs.
-    }
-  }
-  return [...found];
-}
-
-async function openMacCapcutApp(): Promise<boolean> {
-  if (process.platform !== 'darwin') return false;
-  const openCommand = (args: string[]) => execFileAsync('open', args, 5000).then(() => true).catch(() => false);
-  const appNames = ['剪映专业版', '剪映', 'CapCut', 'CapCut Global', 'JianyingPro', 'Jianying'];
-  const bundleIds = [
-    'com.lemon.lvpro',
-    'com.lemon.lvpro-intl',
-    'com.lemon.lvoverseas',
-    'com.lemon.capcut',
-    'com.bytedance.CapCut',
-    'com.bytedance.capcut',
-  ];
-
-  for (const appName of appNames) {
-    if (await openCommand(['-a', appName])) return true;
-  }
-  for (const bundleId of bundleIds) {
-    if (await openCommand(['-b', bundleId])) return true;
-  }
-  for (const appPath of await findMacAppBySpotlight(appNames)) {
-    if (await openCommand([appPath])) return true;
-  }
-  return false;
 }
 
 async function enterpriseCtx(): Promise<string> {
@@ -170,6 +131,7 @@ async function createGeneratedVideoMaterial(input: {
   filename: string;
   duration: number;
   tenantId: string;
+  sourceType?: string;
 }): Promise<Material | null> {
   const filePath = path.join(tenantAssetDir(MEDIA_DIR, input.tenantId), input.filename);
   if (!fs.existsSync(filePath)) return null;
@@ -187,6 +149,7 @@ async function createGeneratedVideoMaterial(input: {
     url: generatedMediaUrl(input.tenantId, input.filename),
     scope: 'own',
     tenantId: input.tenantId,
+    sourceType: input.sourceType || 'ai-generated',
     createdAt: new Date().toISOString(),
   };
   const posterOk = await extractPoster(filePath, posterPath, material.duration > 1 ? 1 : 0);
@@ -789,6 +752,9 @@ studioRouter.post('/seedance-video', async (req, res) => {
     resolution = '720p',
     title = 'Seedance 生成视频',
     referenceImageUrl = '',
+    generationGroupKey = '',
+    generationContext = {},
+    parentVersionId = '',
   } = req.body ?? {};
   const duration = normalizeSeedanceVideoDuration(rawDuration);
   const config = seedanceVideoConfig();
@@ -865,10 +831,31 @@ studioRouter.post('/seedance-video', async (req, res) => {
     let material: Material | null = null;
     try {
       url = await downloadGeneratedVideo(remoteUrl, filename, tenantId);
-      material = await createGeneratedVideoMaterial({ title, filename, duration, tenantId });
+      material = await createGeneratedVideoMaterial({ title, filename, duration, tenantId, sourceType: 'ai-seedance' });
     } catch (downloadError) {
       console.warn('[studio] Seedance video download failed, returning remote url:', downloadError);
     }
+    const version = String(generationGroupKey).trim()
+      ? appendVideoVersion({
+          tenantId,
+          groupKey: String(generationGroupKey).trim(),
+          parentVersionId: String(parentVersionId).trim() || undefined,
+          materialId: material?.id,
+          taskId,
+          title: String(title),
+          url,
+          poster: material?.poster,
+          duration,
+          source: 'seedance',
+          model: config.model,
+          promptSnapshot: {
+            script: String(script), productInfo: String(productInfo), language: String(language),
+            ratio: String(ratio), resolution: String(resolution),
+          },
+          context: generationContext && typeof generationContext === 'object' && !Array.isArray(generationContext)
+            ? generationContext as Record<string, unknown> : {},
+        })
+      : undefined;
     res.json({
       ok: true,
       source: 'seedance',
@@ -881,6 +868,7 @@ studioRouter.post('/seedance-video', async (req, res) => {
       model: config.model,
       budget,
       material,
+      version,
       createdAt: new Date().toISOString(),
     });
   } catch (e: any) {
@@ -1052,7 +1040,10 @@ studioRouter.post('/script', async (req, res) => {
   const normalizedMaterialInfos = normalizeMaterialInfos(materialInfos, materials, Number(duration) || 20);
   const structuredMaterials = materialInfoLines(normalizedMaterialInfos);
   const product = productInfo || '';
-  const reference = String(referenceAnalysis || '').slice(0, 8000) || '(no detailed reference analysis provided)';
+  // Long benchmark videos can easily exceed 8k characters once every shot,
+  // beat, dialogue and sound cue is serialized. Preserve the full working
+  // timeline instead of silently dropping the latter half before generation.
+  const reference = String(referenceAnalysis || '').slice(0, 40_000) || '(no detailed reference analysis provided)';
   const highlights = Array.isArray(referenceHighlights) && referenceHighlights.length
     ? referenceHighlights.slice(0, 8).map((item: unknown) => `- ${String(item).slice(0, 180)}`).join('\n')
     : '- No reliable highlights. Infer a simple product-first structure from title, platform, and product info.';
@@ -1591,10 +1582,27 @@ ${src}`;
 
   const run = async (backend: 'qwen' | 'gemini') => {
     const out = await callLLM(prompt, { backend, model: backend === 'qwen' ? 'qwen-plus' : undefined });
-    const parsed = extractJSON<Record<string, unknown>>(out) ?? {};
+    const parsed = extractJSON<Record<string, unknown> | Array<Record<string, unknown>>>(out) ?? {};
+    const sourceTimestamps = src.split(/\n+/).map(line =>
+      line.match(/^\s*(\[[^\]]*?\d+(?:\.\d+)?\s*(?:s|秒)?\s*[-–—]\s*\d+(?:\.\d+)?\s*(?:s|秒)?[^\]]*\])/)?.[1] || '',
+    ).filter(Boolean);
     const translations: Record<string, string> = {};
     for (const code of targetCodes) {
-      const value = String(parsed[code] ?? '').trim();
+      let value = '';
+      if (Array.isArray(parsed)) {
+        // Qwen occasionally returns one object per source line even when an
+        // object-of-strings was requested. Rebuild the expected timestamped
+        // text instead of discarding an otherwise valid translation.
+        value = parsed.map((row, index) => {
+          const line = String(row?.[code] ?? '').trim();
+          if (!line) return '';
+          const timestamp = sourceTimestamps[index] || '';
+          return timestamp && !/^\s*\[[^\]]+\]/.test(line) ? `${timestamp} ${line}` : line;
+        }).filter(Boolean).join('\n');
+      } else {
+        const raw = parsed[code];
+        value = Array.isArray(raw) ? raw.map(String).join('\n') : String(raw ?? '').trim();
+      }
       if (!invalid(value, code)) translations[code] = value;
     }
     return translations;
@@ -1715,6 +1723,7 @@ interface RenderSpec {
   materials?: string[];
   timeline?: {
     name: string;
+    url?: string;
     trimStart?: number;
     trimEnd?: number;
     speed?: number;
@@ -1785,7 +1794,9 @@ function buildManifest(jobId: string, spec: RenderSpec, base: string): RenderMan
     script: spec.script ?? '',
     timeline: (spec.timeline?.length ? spec.timeline : (spec.materials ?? []).map(name => ({ name }))).map((item, index) => {
       const rel = urlByName.get(item.name);
-      return { index, ...item, url: rel ? `${base}${rel}` : null }; // 库里有真实文件→真实 URL，否则 null（mock 占位素材）
+      const directUrl = 'url' in item && typeof item.url === 'string' ? item.url : undefined;
+      const resolvedUrl = absoluteAssetUrl(base, directUrl || rel);
+      return { index, ...item, url: resolvedUrl }; // 优先使用逐镜传入 URL，避免 AI/临时素材被名称映射覆盖
     }),
     voiceover: { voice: spec.voice ?? null, url: absoluteAssetUrl(base, spec.voiceoverUrl) },
     cover: { id: spec.coverId ?? null, title: spec.coverTitle ?? '', url: absoluteAssetUrl(base, spec.coverUrl) },
@@ -1864,6 +1875,59 @@ studioRouter.post('/render/open-output', async (req, res) => {
 
 const MEDIA_DIR = path.join(__dirname, '../../data/media');
 const MATERIALS_FILE = path.join(__dirname, '../../data/materials.json');
+const VIDEO_VERSIONS_FILE = path.join(__dirname, '../../data/studio-video-versions.json');
+
+interface VideoGenerationVersion {
+  id: string;
+  tenantId: string;
+  groupKey: string;
+  versionNumber: number;
+  parentVersionId?: string;
+  materialId?: string;
+  taskId?: string;
+  title: string;
+  url?: string;
+  poster?: string;
+  duration: number;
+  source: string;
+  model?: string;
+  promptSnapshot: {
+    script: string;
+    productInfo: string;
+    language: string;
+    ratio: string;
+    resolution: string;
+  };
+  context?: Record<string, unknown>;
+  isSelected: boolean;
+  createdAt: string;
+}
+
+function loadVideoVersions(): VideoGenerationVersion[] {
+  try { return JSON.parse(fs.readFileSync(VIDEO_VERSIONS_FILE, 'utf8')) as VideoGenerationVersion[]; }
+  catch { return []; }
+}
+
+function persistVideoVersions(list: VideoGenerationVersion[]): void {
+  fs.mkdirSync(path.dirname(VIDEO_VERSIONS_FILE), { recursive: true });
+  fs.writeFileSync(VIDEO_VERSIONS_FILE, JSON.stringify(list, null, 2), 'utf8');
+}
+
+function appendVideoVersion(input: Omit<VideoGenerationVersion, 'id' | 'versionNumber' | 'isSelected' | 'createdAt'>): VideoGenerationVersion {
+  const list = loadVideoVersions();
+  const siblings = list.filter(item => item.tenantId === input.tenantId && item.groupKey === input.groupKey);
+  siblings.forEach(item => { item.isSelected = false; });
+  const version: VideoGenerationVersion = {
+    ...input,
+    id: randomUUID(),
+    versionNumber: Math.max(0, ...siblings.map(item => item.versionNumber)) + 1,
+    isSelected: true,
+    createdAt: new Date().toISOString(),
+  };
+  list.push(version);
+  persistVideoVersions(list);
+  return version;
+}
 
 interface Material {
   id: string;
@@ -1871,6 +1935,9 @@ interface Material {
   folder: string;
   type: 'video' | 'image' | 'audio';
   duration: number; // 秒，图片为 0
+  width?: number;
+  height?: number;
+  aspectRatio?: number;
   size: string;
   file: string;     // data/media 下的文件名
   url: string;      // /media/<file>
@@ -1948,6 +2015,31 @@ function humanSize(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
+// Video generation history. A groupKey identifies one logical output slot
+// (for example an inspiration video or a storyboard shot); regenerations append
+// versions and never replace the previous material.
+studioRouter.get('/video-versions', (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const groupKey = String(req.query.groupKey || '').trim();
+  if (!groupKey) { res.status(400).json({ error: 'groupKey is required' }); return; }
+  const versions = loadVideoVersions()
+    .filter(item => item.tenantId === tenantId && item.groupKey === groupKey)
+    .sort((a, b) => b.versionNumber - a.versionNumber);
+  res.json(versions);
+});
+
+studioRouter.patch('/video-versions/:id/select', (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const list = loadVideoVersions();
+  const target = list.find(item => item.id === req.params.id && item.tenantId === tenantId);
+  if (!target) { res.status(404).json({ ok: false, error: 'version_not_found' }); return; }
+  list.forEach(item => {
+    if (item.tenantId === tenantId && item.groupKey === target.groupKey) item.isSelected = item.id === target.id;
+  });
+  persistVideoVersions(list);
+  res.json({ ok: true, version: target });
+});
+
 function parseAnalysisRange(value: string, fallbackStart: number, totalDuration: number): { start: number; end: number } {
   const values = Array.from(String(value || '').matchAll(/(\d+(?:\.\d+)?)/g)).map(match => Number(match[1]));
   const start = Math.max(0, Math.min(totalDuration || Number.MAX_SAFE_INTEGER, values[0] ?? fallbackStart));
@@ -2012,7 +2104,12 @@ studioRouter.get('/materials', async (req, res) => {
   if (purpose === 'reference') list = list.filter(isReferenceOnlyMaterial);
   else if (purpose !== 'all') list = list.filter(m => !isReferenceOnlyMaterial(m));
   res.json(list
-    .map(m => ({ ...m, usage: materialUsage(m) }))
+    .map(m => ({
+      ...m,
+      url: /^\/(?:media|api\/overseas\/studio\/materials\/pb)\//.test(m.url) ? signAssetUrl(m.url, tenantId) : m.url,
+      poster: m.poster && /^\/(?:media|api\/overseas\/studio\/materials\/pb)\//.test(m.poster) ? signAssetUrl(m.poster, tenantId) : m.poster,
+      usage: materialUsage(m),
+    }))
     .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.createdAt.localeCompare(a.createdAt)));
 });
 
@@ -2040,7 +2137,7 @@ function isMockMaterial(m: Material): boolean {
 // POST /studio/materials  Body: { name, folder?, type, duration?, dataBase64, mimeType?, scope? } → 上传单个文件
 studioRouter.post('/materials', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
-  const { name, folder = 'upload', type, duration = 0, dataBase64, mimeType, scope = 'own', usage, sourceType, sourceUrl } = req.body ?? {};
+  const { name, folder = 'upload', type, duration = 0, width = 0, height = 0, dataBase64, mimeType, scope = 'own', usage, sourceType, sourceUrl } = req.body ?? {};
   if (!dataBase64 || !type) { res.status(400).json({ ok: false, error: 'dataBase64 and type required' }); return; }
   if (!['video', 'image', 'audio'].includes(type)) { res.status(400).json({ ok: false, error: 'invalid type' }); return; }
 
@@ -2076,6 +2173,9 @@ studioRouter.post('/materials', async (req, res) => {
     folder,
     type,
     duration: Number(duration) || 0,
+    width: Math.max(0, Math.round(Number(width) || 0)) || undefined,
+    height: Math.max(0, Math.round(Number(height) || 0)) || undefined,
+    aspectRatio: Number(width) > 0 && Number(height) > 0 ? +(Number(width) / Number(height)).toFixed(4) : undefined,
     size: humanSize(buf.length),
     file: relativeFile,
     url: `/media/${relativeFile}`,
@@ -2212,6 +2312,7 @@ interface CoverStyle {
   color: string;
   size: 'S' | 'M' | 'L';
   position: 'top' | 'center' | 'bottom';
+  verticalPosition?: number;
   align: 'left' | 'center';
   font: CoverFont;
   weight?: 'regular' | 'bold' | 'heavy';
@@ -2245,10 +2346,11 @@ function buildCoverSvg(opts: { title: string; ratio: string; accent: string; bgI
   const lines = wrapTitle(displayTitle, Math.floor(w / (fontSize * 0.6)));
   const totalH = (lines.length - 1) * lineH;
 
-  const firstBaseline =
-    position === 'top' ? Math.round(h * 0.1) + fontSize
-    : position === 'center' ? Math.round((h - totalH) / 2)
-    : h - Math.round(h * 0.06) - totalH;
+  const requestedVerticalPosition = Number(opts.verticalPosition);
+  const verticalPosition = Number.isFinite(requestedVerticalPosition)
+    ? Math.max(8, Math.min(92, requestedVerticalPosition))
+    : position === 'top' ? 14 : position === 'center' ? 50 : 86;
+  const firstBaseline = Math.round(h * verticalPosition / 100 - (fontSize + totalH) / 2 + fontSize * 0.8);
 
   const anchor = align === 'center' ? 'middle' : 'start';
   const tx = align === 'center' ? Math.round(w / 2) : pad;
@@ -2297,6 +2399,10 @@ ${texts}
 function inlineFrame(bgImageUrl?: string): string | undefined {
   if (!bgImageUrl) return undefined;
   try {
+    // 浏览器从视频抽出的静态帧可直接作为封面底图；限制格式和体积，避免任意 data URI 写入。
+    if (/^data:image\/(?:jpeg|png|webp);base64,/i.test(bgImageUrl)) {
+      return bgImageUrl.length <= 8 * 1024 * 1024 ? bgImageUrl : undefined;
+    }
     const tenantId = studioTenantContext.getStore();
     if (!tenantId) return undefined;
     const relative = bgImageUrl.split('?')[0].replace(/^.*\/media\//, '');
@@ -2312,7 +2418,7 @@ function inlineFrame(bgImageUrl?: string): string | undefined {
 // POST /studio/cover  Body: { title, ratio?, accent?, bgImageUrl?, color?, size?, position?, align? } → { ok, url }
 studioRouter.post('/cover', async (req, res) => {
   if (!await consumeDemoQuota(req, res, 'generation')) return;
-  const { title = '', ratio = '9:16', accent = '#d97706', bgImageUrl, color, size, position, align, font, weight, artPreset } = req.body ?? {};
+  const { title = '', ratio = '9:16', accent = '#d97706', bgImageUrl, color, size, position, verticalPosition, align, font, weight, artPreset } = req.body ?? {};
   try {
     fs.mkdirSync(scopedStudioAssetDir(COVERS_ROOT), { recursive: true });
     const file = `${randomUUID()}.svg`;
@@ -2321,7 +2427,7 @@ studioRouter.post('/cover', async (req, res) => {
         res.status(400).json({ ok: false, error: 'cover_frame_required' });
         return;
       }
-	    fs.writeFileSync(path.join(scopedStudioAssetDir(COVERS_ROOT), file), buildCoverSvg({ title, ratio, accent, bgImageUrl: dataUri, color, size, position, align, font, weight, artPreset }), 'utf8');
+	    fs.writeFileSync(path.join(scopedStudioAssetDir(COVERS_ROOT), file), buildCoverSvg({ title, ratio, accent, bgImageUrl: dataUri, color, size, position, verticalPosition, align, font, weight, artPreset }), 'utf8');
     res.json({ ok: true, url: scopedStudioAssetUrl('covers', file), hasFrame: !!dataUri });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: String(e?.message ?? e) });
@@ -2335,6 +2441,15 @@ studioRouter.post('/cover', async (req, res) => {
 
 const TTS_ROOT = path.join(__dirname, '../../data/tts');
 const VOICE_SAMPLES_ROOT = path.join(__dirname, '../../data/voice-samples');
+interface StoredVoiceSample { voiceId: string; name: string; file: string; duration: number; createdAt: string }
+function voiceSampleIndexFile(): string { return path.join(scopedStudioAssetDir(VOICE_SAMPLES_ROOT), 'voice-samples.json'); }
+function readVoiceSampleIndex(): StoredVoiceSample[] {
+  try { return JSON.parse(fs.readFileSync(voiceSampleIndexFile(), 'utf8')) as StoredVoiceSample[]; } catch { return []; }
+}
+function writeVoiceSampleIndex(items: StoredVoiceSample[]): void {
+  fs.mkdirSync(scopedStudioAssetDir(VOICE_SAMPLES_ROOT), { recursive: true });
+  fs.writeFileSync(voiceSampleIndexFile(), JSON.stringify(items, null, 2), 'utf8');
+}
 function minimaxVoiceCacheFile(): string {
   return path.join(scopedStudioAssetDir(VOICE_SAMPLES_ROOT), 'minimax-voice-cache.json');
 }
@@ -3377,7 +3492,15 @@ studioRouter.post('/tts/batch', async (req, res) => {
   res.json({ ok: Object.values(audios).some(item => item.ok && item.url), audios });
 });
 
-// POST /studio/voice-samples Body: { name, dataBase64, mimeType?, duration? } → 录入真人音色样本
+studioRouter.get('/voice-samples', (_req, res) => {
+  const items = readVoiceSampleIndex().map(item => ({
+    ...item,
+    url: scopedStudioAssetUrl('voice-samples', item.file),
+  })).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  res.json(items);
+});
+
+// POST /studio/voice-samples Body: { name, dataBase64, mimeType?, duration? } → 新增真人音色样本
 studioRouter.post('/voice-samples', async (req, res) => {
   if (!await consumeDemoQuota(req, res, 'generation')) return;
   const { name = 'voice-sample.wav', dataBase64, mimeType, duration = 0, replacesVoiceId = '' } = req.body ?? {};
@@ -3423,12 +3546,17 @@ studioRouter.post('/voice-samples', async (req, res) => {
         try { fs.unlinkSync(previousPath); } catch { /* replacement already succeeded; stale sample cleanup is best effort */ }
       }
     }
+    const voiceId = `custom:${id}`;
+    const voiceName = String(name || '真人音色').replace(/\.[^.]+$/, '');
+    const index = readVoiceSampleIndex().filter(item => item.voiceId !== replacedId);
+    index.push({ voiceId, name: voiceName, file, duration: seconds, createdAt: new Date().toISOString() });
+    writeVoiceSampleIndex(index);
     const capabilities = studioAudioCapabilities();
     res.json({
       ok: true,
       id,
-      voiceId: `custom:${id}`,
-      name: String(name || '真人音色').replace(/\.[^.]+$/, ''),
+      voiceId,
+      name: voiceName,
       url: scopedStudioAssetUrl('voice-samples', file),
       duration: seconds,
       synthesisReady: capabilities.customVoice.synthesis,
@@ -3514,7 +3642,11 @@ function withRecommendedBgmNames(list: BgmTrack[]): BgmTrack[] {
 
 // GET /studio/bgm → BgmTrack[]（仅用户上传音乐）
 studioRouter.get('/bgm', (_req, res) => {
-  res.json(withRecommendedBgmNames(userBgms((res.locals as AuthLocals).tenantId)));
+  const { tenantId } = res.locals as AuthLocals;
+  res.json(withRecommendedBgmNames(userBgms(tenantId)).map(track => ({
+    ...track,
+    url: track.url ? signAssetUrl(track.url, tenantId) : track.url,
+  })));
 });
 
 // POST /studio/bgm  Body: { name, mood?, duration?, dataBase64, mimeType? } → 上传真实音乐
@@ -3705,58 +3837,56 @@ studioRouter.post('/variation-batches/:batchId/retry-failed', (req, res) => {
 });
 
 const PUBLISH_LINKS_FILE = path.join(__dirname, '../../data/studio-publish-links.json');
-studioRouter.get('/publish-links', (_req, res) => { try { res.json(JSON.parse(fs.readFileSync(PUBLISH_LINKS_FILE, 'utf8'))); } catch { res.json([]); } });
+studioRouter.get('/publish-records', (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  res.json(listPublishRecords(tenantId, req.query.accountId ? String(req.query.accountId) : undefined));
+});
+studioRouter.post('/publish-recommendations', (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const targets = Array.isArray(req.body?.targets) ? req.body.targets : [];
+  const recommendations = targets
+    .filter((target: any) => ['youtube', 'tiktok', 'instagram', 'facebook'].includes(String(target?.platform)))
+    .map((target: any) => ({
+      accountId: String(target.accountId || ''),
+      platform: String(target.platform),
+      ...recommendPublish({
+        tenantId,
+        platform: String(target.platform) as PublishPlatform,
+        accountId: String(target.accountId || ''),
+        videoPath: String(req.body?.videoPath || ''),
+        projectId: req.body?.projectId ? String(req.body.projectId) : undefined,
+        generationVersionId: req.body?.generationVersionId ? String(req.body.generationVersionId) : undefined,
+        title: String(req.body?.title || ''),
+        ratio: req.body?.ratio ? String(req.body.ratio) : undefined,
+        language: req.body?.language ? String(req.body.language) : undefined,
+      }),
+    }));
+  res.json({ recommendations });
+});
+studioRouter.get('/publish-links', (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  try { res.json((JSON.parse(fs.readFileSync(PUBLISH_LINKS_FILE, 'utf8')) as any[]).filter(item => item.tenantId === tenantId)); } catch { res.json([]); }
+});
 studioRouter.post('/publish-links', (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   let list: Record<string, unknown>[] = []; try { list = JSON.parse(fs.readFileSync(PUBLISH_LINKS_FILE, 'utf8')) as Record<string, unknown>[]; } catch { /* empty */ }
-  const link = { id: randomUUID(), projectId: String(req.body?.projectId || ''), batchId: req.body?.batchId ? String(req.body.batchId) : undefined, variantId: req.body?.variantId ? String(req.body.variantId) : undefined, accountId: String(req.body?.accountId || ''), platform: String(req.body?.platform || ''), title: String(req.body?.title || ''), publishResult: req.body?.publishResult || null, publishedAt: new Date().toISOString() };
+  const link = { id: randomUUID(), tenantId, projectId: String(req.body?.projectId || ''), batchId: req.body?.batchId ? String(req.body.batchId) : undefined, variantId: req.body?.variantId ? String(req.body.variantId) : undefined, accountId: String(req.body?.accountId || ''), platform: String(req.body?.platform || ''), title: String(req.body?.title || ''), publishResult: req.body?.publishResult || null, publishedAt: new Date().toISOString() };
   if (!link.projectId) { res.status(400).json({ ok: false, error: 'projectId required' }); return; }
   list.push(link); fs.mkdirSync(path.dirname(PUBLISH_LINKS_FILE), { recursive: true }); fs.writeFileSync(PUBLISH_LINKS_FILE, JSON.stringify(list, null, 2), 'utf8'); res.status(201).json({ ok: true, link });
 });
 studioRouter.patch('/publish-links/:id/metrics', (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   let list: Record<string, any>[] = []; try { list = JSON.parse(fs.readFileSync(PUBLISH_LINKS_FILE, 'utf8')) as Record<string, any>[]; } catch { /* empty */ }
-  const link = list.find(item => item.id === req.params.id); if (!link) { res.status(404).json({ ok: false, error: 'Publish link not found' }); return; }
+  const link = list.find(item => item.id === req.params.id && item.tenantId === tenantId); if (!link) { res.status(404).json({ ok: false, error: 'Publish link not found' }); return; }
   link.metrics = { views: Number(req.body?.views) || 0, likes: Number(req.body?.likes) || 0, comments: Number(req.body?.comments) || 0, shares: Number(req.body?.shares) || 0, leads: Number(req.body?.leads) || 0, updatedAt: new Date().toISOString() };
   fs.writeFileSync(PUBLISH_LINKS_FILE, JSON.stringify(list, null, 2), 'utf8'); res.json({ ok: true, link });
 });
 studioRouter.get('/publish-performance', (_req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   let list: Record<string, any>[] = []; try { list = JSON.parse(fs.readFileSync(PUBLISH_LINKS_FILE, 'utf8')) as Record<string, any>[]; } catch { /* empty */ }
   const grouped: Record<string, any> = {};
-  for (const link of list) { const key = String(link.projectId || 'unknown'); const row = grouped[key] ||= { projectId: key, posts: 0, views: 0, likes: 0, comments: 0, shares: 0, leads: 0 }; row.posts += 1; for (const metric of ['views', 'likes', 'comments', 'shares', 'leads']) row[metric] += Number(link.metrics?.[metric]) || 0; }
+  for (const link of list.filter(item => item.tenantId === tenantId)) { const key = String(link.projectId || 'unknown'); const row = grouped[key] ||= { projectId: key, posts: 0, views: 0, likes: 0, comments: 0, shares: 0, leads: 0 }; row.posts += 1; for (const metric of ['views', 'likes', 'comments', 'shares', 'leads']) row[metric] += Number(link.metrics?.[metric]) || 0; }
   res.json(Object.values(grouped).map((row: any) => ({ ...row, engagementRate: row.views ? Math.round(((row.likes + row.comments + row.shares) / row.views) * 10000) / 100 : 0 })).sort((a: any, b: any) => b.views - a.views));
-});
-
-// POST /studio/capcut/open → 网页端兜底：导出剪映手动精修包，并打开文件夹
-studioRouter.post('/capcut/open', async (req, res) => {
-  try {
-    const pkg = await exportCapcutPackage(req.body);
-    if (!pkg.ok || !pkg.dir) {
-      res.status(500).json({ ok: false, error: pkg.error || '剪映精修包导出失败' });
-      return;
-    }
-
-    let folderOpened = false;
-    const errors: string[] = [];
-    const openCommand = (args: string[]) => execFileAsync('open', args, 5000);
-
-    try {
-      await openCommand([pkg.dir]);
-      folderOpened = true;
-    } catch (err: any) {
-      errors.push(`打开精修包失败：${err?.message || err}`);
-    }
-
-    res.json({
-      ok: folderOpened,
-      dir: pkg.dir,
-      appOpened: !!pkg.appOpened,
-      draftCreated: !!pkg.draftCreated,
-      folderOpened,
-      error: pkg.createDraftError || (folderOpened ? undefined : '已导出剪映精修包，但未能自动打开文件夹；请手动打开该目录后导入 assets 文件夹素材。'),
-      details: errors,
-    });
-  } catch (err: any) {
-    res.status(500).json({ ok: false, error: err?.message || '剪映精修包导出失败' });
-  }
 });
 
 /* ── 本地降级生成 ──────────────────────────────────────────────────────── */

@@ -332,15 +332,11 @@ function emptyProduct(index: number): ProductItem {
 function normalizeProductItems(products: Profile['products']): ProductItem[] {
   const existing = Array.isArray(products.items) ? products.items : [];
   if (existing.length) {
-    return existing.filter(item =>
-      item.name || item.category || item.priceRange || item.moq || item.certifications || item.highlights ||
-      item.images?.length || item.videos?.length || item.documents?.length ||
-      item.factoryImages?.length || item.packagingImages?.length || item.certificateImages?.length ||
-      item.sceneImages?.length || item.brandAssets?.length
-    ).map((item, index) => ({
+    // 编辑中的空白产品也是有效草稿；仅“删除产品”按钮可以移除产品项。
+    return existing.map((item, index) => ({
       ...emptyProduct(index),
       ...item,
-      name: item.name || `产品${index + 1}`,
+      name: typeof item.name === 'string' ? item.name : `产品${index + 1}`,
       images: Array.isArray(item.images) ? item.images : [],
       videos: Array.isArray(item.videos) ? item.videos : [],
       documents: Array.isArray(item.documents) ? item.documents : [],
@@ -373,7 +369,7 @@ async function uploadEnterpriseAsset(file: File): Promise<ProductAsset> {
   const dataUrl = await fileToDataUrl(file);
   const response = await fetch('/api/overseas/enterprise/assets', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeader() },
     body: JSON.stringify({ name: file.name, type: file.type, dataUrl }),
   });
   if (!response.ok) throw new Error('asset upload failed');
@@ -384,6 +380,7 @@ export default function EnterprisePage() {
   const [profile, setProfile] = useState<Profile>(DEFAULT);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [saveError, setSaveError] = useState('');
   const [loading, setLoading] = useState(true);
   const [templates, setTemplates] = useState<DemoTemplate[]>([]);
   const [templateId, setTemplateId] = useState('');
@@ -413,11 +410,11 @@ export default function EnterprisePage() {
 
   useEffect(() => {
     Promise.all([
-      fetch('/api/overseas/enterprise/profile').then(r => r.json()).catch(() => ({})),
-      fetch('/api/overseas/enterprise/demo/templates').then(r => r.json()).catch(() => []),
+      fetch('/api/overseas/enterprise/profile', { headers: authHeader() }).then(r => r.ok ? r.json() : Promise.reject(new Error(`profile_${r.status}`))).catch(() => ({})),
+      fetch('/api/overseas/enterprise/demo/templates', { headers: authHeader() }).then(r => r.json()).catch(() => []),
       fetch('/api/overseas/enterprise/product-api', { headers: authHeader() }).then(r => r.json()).catch(() => null),
       fetch('/api/overseas/enterprise/product-api/status', { headers: authHeader() }).then(r => r.json()).catch(() => ({ count: 0 })),
-      fetch('/api/overseas/enterprise/faq/packs').then(r => r.json()).catch(() => ({ packs: [], recommendedIndustry: 'general' })),
+      fetch('/api/overseas/enterprise/faq/packs', { headers: authHeader() }).then(r => r.json()).catch(() => ({ packs: [], recommendedIndustry: 'general' })),
     ])
       .then(([data, list, productApi, productApiStatus, packData]: [Partial<Profile>, DemoTemplate[], ProductApiInfo | null, ProductApiStatus, { packs?: FaqPack[]; recommendedIndustry?: string }]) => {
         const next: Profile = {
@@ -571,7 +568,7 @@ export default function EnterprisePage() {
     try {
       const result = await fetch('/api/overseas/enterprise/faq/structure', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeader() },
         body: JSON.stringify({ text: source }),
       }).then(r => r.json());
       setFaqPreview(Array.isArray(result.items) ? result.items : []);
@@ -586,7 +583,7 @@ export default function EnterprisePage() {
   };
 
   const reloadFaqPacks = async () => {
-    const data = await fetch('/api/overseas/enterprise/faq/packs').then(r => r.json()).catch(() => ({ packs: [], recommendedIndustry: 'general' }));
+    const data = await fetch('/api/overseas/enterprise/faq/packs', { headers: authHeader() }).then(r => r.json()).catch(() => ({ packs: [], recommendedIndustry: 'general' }));
     const packs = Array.isArray(data.packs) ? data.packs : [];
     setFaqPacks(packs);
     setRecommendedPackIndustry(data.recommendedIndustry || 'general');
@@ -608,7 +605,7 @@ export default function EnterprisePage() {
     try {
       const result = await fetch('/api/overseas/enterprise/faq/packs/import', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeader() },
         body: JSON.stringify({
           industry: pack.industry,
           scenario: pack.scenario,
@@ -659,7 +656,7 @@ export default function EnterprisePage() {
     try {
       const result = await fetch('/api/overseas/enterprise/notifications/test', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeader() },
         body: JSON.stringify({ receiver }),
       }).then(r => r.json());
       if (result.error) throw new Error(result.error);
@@ -834,14 +831,30 @@ export default function EnterprisePage() {
 
   const handleSave = async () => {
     setSaving(true);
+    setSaved(false);
+    setSaveError('');
     try {
-      await fetch('/api/overseas/enterprise/profile', {
+      const response = await fetch('/api/overseas/enterprise/profile', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...authHeader() },
         body: JSON.stringify(profile),
       });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.message || result.error || `保存失败（${response.status}）`);
+
+      const verifyResponse = await fetch('/api/overseas/enterprise/profile', { headers: authHeader() });
+      const verified = await verifyResponse.json().catch(() => ({})) as Partial<Profile> & { message?: string; error?: string };
+      if (!verifyResponse.ok) throw new Error(verified.message || verified.error || '保存后校验失败');
+      const expectedProducts = normalizeProductItems(profile.products);
+      const verifiedProducts = normalizeProductItems({ ...DEFAULT.products, ...verified.products });
+      const verifiedProductNames = new Set(verifiedProducts.map(item => item.name.trim()));
+      if (expectedProducts.length !== verifiedProducts.length || expectedProducts.some(item => !verifiedProductNames.has(item.name.trim()))) {
+        throw new Error('产品资料保存后校验失败，请重试');
+      }
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : '保存失败，请稍后重试');
     } finally {
       setSaving(false);
     }
@@ -851,7 +864,7 @@ export default function EnterprisePage() {
     if (!templateId) return;
     setDemoBusy(true);
     try {
-      const r = await fetch(`/api/overseas/enterprise/demo/templates/${templateId}/apply`, { method: 'POST' });
+      const r = await fetch(`/api/overseas/enterprise/demo/templates/${templateId}/apply`, { method: 'POST', headers: authHeader() });
       const j = await r.json();
       if (j.profile) {
         const next = { ...j.profile, products: { ...DEFAULT.products, ...j.profile.products, items: normalizeProductItems({ ...DEFAULT.products, ...j.profile.products }) } };
@@ -869,7 +882,7 @@ export default function EnterprisePage() {
   const resetDemo = async () => {
     setDemoBusy(true);
     try {
-      const r = await fetch('/api/overseas/enterprise/demo/reset', { method: 'POST' });
+      const r = await fetch('/api/overseas/enterprise/demo/reset', { method: 'POST', headers: authHeader() });
       const j = await r.json();
       if (j.profile) setProfile({ ...j.profile, products: { ...DEFAULT.products, ...j.profile.products, items: normalizeProductItems({ ...DEFAULT.products, ...j.profile.products }) } });
       setSaved(true);
@@ -1246,16 +1259,20 @@ export default function EnterprisePage() {
           </span>
           <span className="text-sm font-black text-text-primary">企业中心</span>
         </div>
-        <motion.button
-          whileTap={{ scale: 0.96 }}
-          onClick={handleSave}
-          disabled={saving}
-          className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold text-white transition-all disabled:opacity-60"
-          style={{ background: saved ? '#16a34a' : '#0f172a' }}
-        >
-          {saving ? <Loader2 size={12} className="animate-spin" /> : saved ? <CheckCircle2 size={12} /> : <Save size={12} />}
-          {saved ? '已保存' : '保存'}
-        </motion.button>
+        <div className="flex items-center gap-2">
+          {saveError && <span className="max-w-72 truncate text-[11px] font-bold text-red-600" title={saveError}>{saveError}</span>}
+          <motion.button
+            whileTap={{ scale: 0.96 }}
+            onClick={handleSave}
+            disabled={saving}
+            title={saveError || undefined}
+            className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold text-white transition-all disabled:opacity-60"
+            style={{ background: saveError ? '#dc2626' : saved ? '#16a34a' : '#0f172a' }}
+          >
+            {saving ? <Loader2 size={12} className="animate-spin" /> : saveError ? <X size={12} /> : saved ? <CheckCircle2 size={12} /> : <Save size={12} />}
+            {saving ? '保存中' : saveError ? '保存失败' : saved ? '已保存' : '保存'}
+          </motion.button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto">
@@ -1727,16 +1744,20 @@ export default function EnterprisePage() {
           </div>
           <span className="text-sm font-semibold text-text-primary">企业中心</span>
         </div>
-        <motion.button
-          whileTap={{ scale: 0.96 }}
-          onClick={handleSave}
-          disabled={saving}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white transition-all disabled:opacity-60"
-          style={{ background: saved ? '#16a34a' : '#0f172a' }}
-        >
-          {saving ? <Loader2 size={12} className="animate-spin" /> : saved ? <CheckCircle2 size={12} /> : <Save size={12} />}
-          {saved ? '已保存' : '保存'}
-        </motion.button>
+        <div className="flex items-center gap-2">
+          {saveError && <span className="max-w-72 truncate text-[11px] font-bold text-red-600" title={saveError}>{saveError}</span>}
+          <motion.button
+            whileTap={{ scale: 0.96 }}
+            onClick={handleSave}
+            disabled={saving}
+            title={saveError || undefined}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white transition-all disabled:opacity-60"
+            style={{ background: saveError ? '#dc2626' : saved ? '#16a34a' : '#0f172a' }}
+          >
+            {saving ? <Loader2 size={12} className="animate-spin" /> : saveError ? <X size={12} /> : saved ? <CheckCircle2 size={12} /> : <Save size={12} />}
+            {saving ? '保存中' : saveError ? '保存失败' : saved ? '已保存' : '保存'}
+          </motion.button>
+        </div>
       </div>
 
       {/* Content */}

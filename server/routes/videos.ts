@@ -712,8 +712,11 @@ async function crawlImagePostsForTenant(input: {
       skippedExisting += 1;
       const existingAnalysis = parseJsonRecord<Record<string, unknown>>(existingRecord.aiAnalysis, {});
       const imageAnalysis = await analyzeImagePostBestEffort(item, keyword, existingAnalysis.gemini as VideoAiAnalysis | undefined);
-      await store.update(COL, String(existingRecord.id), {
-        thumbnailUrl: item.thumbnailUrl || String(existingRecord.thumbnailUrl || ''),
+      const recordId = String(existingRecord.id);
+      const remoteThumbnail = item.thumbnailUrl || String(existingRecord.thumbnailUrl || '');
+      const thumbnailUrl = await persistImagePostThumbnail(recordId, remoteThumbnail);
+      await store.update(COL, recordId, {
+        thumbnailUrl,
         aiAnalysis: JSON.stringify({
           ...existingAnalysis,
           contentFormat: 'image',
@@ -730,7 +733,7 @@ async function crawlImagePostsForTenant(input: {
           importedAt: existingAnalysis.importedAt || new Date().toISOString(),
         }),
       });
-      existingRecords.push({ ...existingRecord, thumbnailUrl: item.thumbnailUrl || existingRecord.thumbnailUrl });
+      existingRecords.push({ ...existingRecord, thumbnailUrl });
       continue;
     }
 
@@ -767,8 +770,9 @@ async function crawlImagePostsForTenant(input: {
     });
     if (record) {
       imported += 1;
-      records.push(record);
-      void persistThumbnailIfExpiring(String((record as Record<string, unknown>).id), item.thumbnailUrl).catch(() => {});
+      const recordId = String((record as Record<string, unknown>).id);
+      const thumbnailUrl = await persistImagePostThumbnail(recordId, item.thumbnailUrl);
+      records.push({ ...(record as Record<string, unknown>), thumbnailUrl });
     }
     if (imported >= target) break;
   }
@@ -1391,6 +1395,12 @@ videosRouter.get('/', async (req, res) => {
     void backfillMissingCrawledMedia(result.items).catch((e) => {
       console.warn('[videos] opportunistic media backfill failed:', e instanceof Error ? e.message : e);
     });
+  } else {
+    // 历史图文可能仍保存着已过期的第三方 CDN 地址；列表访问时顺便修复，
+    // 下一次刷新即可使用永久的 /media 封面。
+    void repairMissingCrawledThumbnails(result.items, 5).catch((e) => {
+      console.warn('[videos] opportunistic image thumbnail repair failed:', e instanceof Error ? e.message : e);
+    });
   }
 
   res.json(result);
@@ -1803,7 +1813,13 @@ function isMissingLocalThumbnail(url: string): boolean {
 async function cacheThumbnailLocally(recordId: string, url: string): Promise<string | null> {
   try {
     fs.mkdirSync(MEDIA_DIR, { recursive: true });
-    const resp = await fetch(url, { signal: AbortSignal.timeout(20_000) });
+    const resp = await fetch(url, {
+      signal: AbortSignal.timeout(20_000),
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/125 Safari/537.36',
+        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+      },
+    });
     if (!resp.ok) return null;
     const type = resp.headers.get('content-type') || '';
     if (!type.startsWith('image/')) return null;
@@ -1821,6 +1837,45 @@ async function persistThumbnailIfExpiring(recordId: string, url: string): Promis
   if (!isSignedExpiringThumbnail(url) || isExpiredSignedThumbnail(url)) return;
   const local = await cacheThumbnailLocally(recordId, url);
   if (local) await store.update(COL, recordId, { thumbnailUrl: local });
+}
+
+// 图文 CDN 地址普遍会过期或限制浏览器热链。图文入库时始终把首图落到本地，
+// 不能只依赖少数已知的签名参数（不同 Apify actor 返回的 URL 结构并不一致）。
+async function persistImagePostThumbnail(recordId: string, url: string): Promise<string> {
+  if (!/^https?:\/\//i.test(url)) return url;
+  const local = await cacheThumbnailLocally(recordId, url);
+  if (!local) return url;
+  await store.update(COL, recordId, { thumbnailUrl: local });
+  return local;
+}
+
+async function recrawlImagePostThumbnail(record: Record<string, unknown>): Promise<string> {
+  const platform = String(record.platform || '') as Platform;
+  const sourceUrl = String(record.sourceUrl || '').trim();
+  if (!sourceUrl) return '';
+
+  // Instagram 的公开 media 端点会重定向到当前有效的 CDN 图片，不需要登录态，
+  // 可用于恢复数据库仍在但本地缓存文件已丢失的历史图文。
+  if (platform === 'instagram' && /instagram\.com\/p\/[^/?#]+\/?$/i.test(sourceUrl)) {
+    return `${sourceUrl.replace(/\/$/, '')}/media/?size=l`;
+  }
+  if (!process.env.APIFY_TOKEN?.trim()) return '';
+
+  try {
+    if (platform === 'instagram') {
+      const actor = process.env.APIFY_INSTAGRAM_ACTOR?.trim() || 'apify/instagram-scraper';
+      const rows = await runApifyActorDatasetItems(actor, {
+        directUrls: [sourceUrl],
+        resultsType: 'posts',
+        resultsLimit: 1,
+        addParentData: false,
+      }, Number(process.env.APIFY_TIMEOUT_MS || 240_000), 'Instagram thumbnail repair');
+      return firstImageUrl(rows.map(item => [item.displayUrl, item.images, item]));
+    }
+  } catch (error) {
+    console.warn('[videos] image post thumbnail recrawl failed:', error instanceof Error ? error.message : error);
+  }
+  return '';
 }
 
 export async function repairMissingCrawledThumbnails(records: unknown[], limit = 5): Promise<number> {
@@ -1847,6 +1902,14 @@ export async function repairMissingCrawledThumbnails(records: unknown[], limit =
       const usableExistingThumbnail = isMissingLocalThumbnail(existingThumbnail) ? '' : existingThumbnail;
       let thumbnailUrl = thumbnailForPlatform(platform, canonicalUrl, usableExistingThumbnail);
       let sourceUrl = canonicalUrl;
+      const analysis = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
+      if (!thumbnailUrl && analysis.contentFormat === 'image') {
+        const refreshedImage = await recrawlImagePostThumbnail(record);
+        if (refreshedImage) {
+          const local = await cacheThumbnailLocally(String(record.id), refreshedImage);
+          thumbnailUrl = local || refreshedImage;
+        }
+      }
       if (!thumbnailUrl || isExpiredSignedThumbnail(thumbnailUrl)) {
         const meta = await crawlYtDlpMetadata(platform, sourceUrl, String(record.title || platform));
         sourceUrl = meta.sourceUrl || sourceUrl;
@@ -3846,7 +3909,7 @@ function lockAsrTimeline(analysis: VideoAiAnalysis, transcript?: { text: string;
   };
 }
 
-export async function extractQwenAnalysisFrames(filePath: string, maxFrames = 30): Promise<Array<{ base64: string; mimeType: string; timeLabel: string }>> {
+export async function extractQwenAnalysisFrames(filePath: string, maxFrames = 30, duration = 0): Promise<Array<{ base64: string; mimeType: string; timeLabel: string }>> {
   if (!ffmpegBin) throw new Error('ffmpeg is not available for Qwen frame analysis');
   if (!fs.existsSync(ANALYSIS_DIR)) fs.mkdirSync(ANALYSIS_DIR, { recursive: true });
 
@@ -3867,12 +3930,14 @@ export async function extractQwenAnalysisFrames(filePath: string, maxFrames = 30
       densePattern,
     ], { timeout: 90_000 });
     const uniformPattern = path.join(frameDir, 'uniform-%02d.jpg');
+    const uniformCount = Math.max(6, Math.min(12, maxFrames - 18));
+    const uniformInterval = duration > 4 ? Math.max(1, (duration - 1) / Math.max(1, uniformCount - 1)) : 4;
     await execFileAsync(ffmpegBin, [
       '-hide_banner',
       '-loglevel', 'error',
       '-i', filePath,
-      '-vf', 'fps=1/4,scale=720:-1',
-      '-frames:v', '10',
+      '-vf', `fps=1/${uniformInterval},scale=720:-1`,
+      '-frames:v', String(uniformCount),
       '-q:v', '4',
       uniformPattern,
     ], { timeout: 90_000 });
@@ -3887,7 +3952,7 @@ export async function extractQwenAnalysisFrames(filePath: string, maxFrames = 30
       .sort()
       .map((file, index) => ({ file, time: index / 3, dense: true }));
     const supplementalRows = [
-      ...fs.readdirSync(frameDir).filter(file => /^uniform-\d+\.jpg$/i.test(file)).sort().map((file, index) => ({ file, time: index * 4, dense: false })),
+      ...fs.readdirSync(frameDir).filter(file => /^uniform-\d+\.jpg$/i.test(file)).sort().map((file, index) => ({ file, time: index * uniformInterval, dense: false })),
       ...fs.readdirSync(frameDir).filter(file => /^scene-\d+\.jpg$/i.test(file)).sort().map((file, index) => ({ file, time: sceneTimes[index] ?? index * 3, dense: false })),
     ].sort((a, b) => a.time - b.time)
       .filter(row => !denseRows.some(dense => Math.abs(dense.time - row.time) < 0.45))
@@ -3906,6 +3971,22 @@ export async function extractQwenAnalysisFrames(filePath: string, maxFrames = 30
   }
 }
 
+function videoAnalysisTimelineEnd(analysis: VideoAiAnalysis): number {
+  return (analysis.scriptDetails15s || []).reduce((max, detail) => {
+    const range = parseAnalysisTimeRange(String(detail.time || detail.timestamp || ''));
+    return Math.max(max, range?.end || 0);
+  }, 0);
+}
+
+function assertFullVideoTimeline(analysis: VideoAiAnalysis, duration: number, source: string): void {
+  if (!duration || duration <= 0) return;
+  const analyzedUntil = videoAnalysisTimelineEnd(analysis);
+  const tolerance = Math.max(1, Math.min(3, duration * 0.03));
+  if (!analyzedUntil || analyzedUntil + tolerance < duration) {
+    throw new Error(`${source}_incomplete_timeline_${analyzedUntil.toFixed(1)}s_of_${duration.toFixed(1)}s`);
+  }
+}
+
 export async function analyzeDownloadedVideoWithFallback(opts: {
   filePath: string;
   mimeType: string;
@@ -3917,7 +3998,7 @@ export async function analyzeDownloadedVideoWithFallback(opts: {
   sourceLabel: string;
 }): Promise<{ analysis: VideoAiAnalysis; source: string }> {
   const runQwen = async () => {
-    const frames = await extractQwenAnalysisFrames(opts.filePath);
+    const frames = await extractQwenAnalysisFrames(opts.filePath, 30, Number(opts.duration || 0));
     let transcript: Awaited<ReturnType<typeof transcribeAudioWithQwen>> | undefined;
     const asrDir = path.join(ANALYSIS_DIR, `qwen-asr-${Date.now()}-${randomUUID()}`);
     try {
@@ -3945,6 +4026,7 @@ export async function analyzeDownloadedVideoWithFallback(opts: {
       transcript,
     });
     const analysis = lockAsrTimeline(qwenAnalysis, transcript);
+    assertFullVideoTimeline(analysis, Number(opts.duration || 0), 'qwen');
     return { analysis, source: 'qwen-frame-video' };
   };
 
@@ -3962,6 +4044,7 @@ export async function analyzeDownloadedVideoWithFallback(opts: {
     const analysis = isQwenConfigured()
       ? await withTimeout(geminiPromise, qwenFallbackTimeoutMs(), 'Gemini analysis timed out before Qwen fallback')
       : await geminiPromise;
+    assertFullVideoTimeline(analysis, Number(opts.duration || 0), 'gemini');
     return { analysis, source: opts.sourceLabel };
   } catch (e) {
     if (shouldRetryGeminiWithNormalizedVideo(e)) {
@@ -3973,6 +4056,7 @@ export async function analyzeDownloadedVideoWithFallback(opts: {
             videoBase64: buf.toString('base64'),
             mimeType: 'video/mp4',
           });
+          assertFullVideoTimeline(analysis, Number(opts.duration || 0), 'gemini_normalized');
           return { analysis, source: `${opts.sourceLabel}-normalized` };
         } catch (normalizedError) {
           console.warn('[videos] Gemini normalized video analysis failed:', normalizedError instanceof Error ? normalizedError.message : normalizedError);
