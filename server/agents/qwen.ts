@@ -52,10 +52,15 @@ export async function analyzeVideoFramesWithQwen(opts: {
   views?: string;
   tags?: string[];
   transcript?: { text: string; segments: QwenAsrSegment[] };
+  analysisMode?: 'strategy' | 'exact';
 }): Promise<VideoAiAnalysis> {
   if (opts.frames.length === 0) throw new Error('Qwen frame analysis requires at least one frame');
 
+  const modeInstruction = opts.analysisMode === 'exact'
+    ? '当前为全片精确分析：逐张比较全片高密度关键帧，主体动作、对象、构图、运镜、台词或营销功能变化时必须新建镜头，不得合并有效动作。'
+    : '当前为全片策略分析：必须覆盖从 0 秒到结尾，但镜头密度跟随真实内容变化；重复或稳定画面合并为区间并用 beats 记录变化，禁止无意义逐秒拆分。';
   const systemPrompt = `你是一个面向出海电商营销的短视频内容分析专家。
+${modeInstruction}
 你会收到按时间顺序排列的关键帧，以及标题、平台、热度、标签等资料。视频首 4 秒按每秒 3 帧密集抽取，其余为均匀帧和转场帧；必须逐张比较相邻帧，时间精度以帧间隔为上限。
 请基于画面、字幕、标题和元数据推断短视频结构。无法从关键帧确认的字幕、音频或口播必须留空，不要写“按画面/字幕推断”，不要编造品牌、@账号、字幕或台词。
 必须严格区分“可见事实”和“表达意图”：可见事实只写帧中实际出现的物体状态、接触关系、动作和变化；表达意图允许根据上下文推断营销含义，但不得把推断的前因补写成画面动作。例如首帧纸巾已经湿润、随后直接落下，只能写“湿纸巾已位于眼下并落下”，不得编造“流泪后反复擦眼睛”。
