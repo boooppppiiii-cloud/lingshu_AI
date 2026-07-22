@@ -4974,53 +4974,6 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                   </div>
                 </Field>
               )}
-              {contentMode === 'video' && mode === 'clone' && (
-                <div className="overflow-hidden rounded-2xl border border-border bg-surface">
-                  <div className="flex items-start justify-between gap-4 px-5 pt-5">
-                    <SectionTitle title="内容方案" desc="选择内容方向，系统会智能编排成有实质差异的可发布方案。" noMargin />
-                    <button type="button" onClick={() => { configureVariationStrategy('hybrid'); setVariationMax(6); }}
-                      className="shrink-0 rounded-lg border border-border bg-surface px-3 py-1.5 text-[11px] font-semibold text-text-secondary hover:border-accent hover:text-accent">恢复原片配置</button>
-                  </div>
-                  <div className="p-5 pb-0">
-                    <div className="grid gap-2.5 md:grid-cols-3">
-                      {([
-                        { id: 'remix', title: '素材混剪裂变', desc: '不生成新画面，用真实素材改组合、节奏、钩子与语言。', input: `需要：素材库视频（当前 ${materials.filter(item => item.type === 'video').length} 条）`, output: '下一步：按分镜匹配本地素材' },
-                        { id: 'recreate', title: '对标分镜重制', desc: '保留对标镜头功能与节奏，逐镜生成全新的画面素材。', input: `需要：对标视频 + 产品/人物参考（${videoKickoff ? '对标已载入' : '未载入对标'}）`, output: '下一步：逐镜上传参考或AI生成' },
-                        { id: 'hybrid', title: '混合模式', desc: '产品、工厂、证书用真实素材，人物和场景允许AI生成或融合。', input: `需要：真实素材 + 产品信息（${activeProductLabel ? '产品已选' : '未选产品'}）`, output: '下一步：逐镜人工确认来源' },
-                      ] as Array<{ id: VariationStrategy; title: string; desc: string; input: string; output: string }>).map(item => (
-                        <button key={item.id} type="button" onClick={() => configureVariationStrategy(item.id)}
-                          className={`rounded-xl border p-3.5 text-left transition ${variationStrategy === item.id ? 'border-accent bg-accent/5 shadow-[0_0_0_1px_rgba(22,163,74,.18)]' : 'border-border bg-surface hover:border-accent/40'}`}>
-                          <div className="flex items-center justify-between"><span className="text-xs font-black text-text-primary">{item.title}</span>{variationStrategy === item.id && <Check size={14} className="text-accent" />}</div>
-                          <p className="mt-1.5 text-[10px] leading-relaxed text-text-muted">{item.desc}</p>
-                          <p className="mt-2 text-[9px] font-semibold text-text-secondary">{item.input}</p>
-                          <p className="mt-1 text-[9px] text-accent">{item.output}</p>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                  <div className="grid gap-4 p-5 lg:grid-cols-[minmax(0,1fr)_260px]">
-                    <div className="grid gap-3 md:grid-cols-2">
-                      {variationDimensionConfig.map(item => <VariationChipEditor key={item.label} label={item.label} hint={item.hint} value={item.value} onChange={item.setter} suggestions={item.suggestions} />)}
-                    </div>
-                    <aside className="rounded-xl border border-accent/20 bg-accent/5 p-4">
-                      <p className="text-[11px] font-bold text-text-primary">本次内容方案</p>
-                      <div className="mt-3"><span className="text-3xl font-black text-accent">{variationMax}</span><span className="ml-1 text-xs font-semibold text-text-secondary">套</span></div>
-                      <p className="mt-2 text-[10px] leading-relaxed text-text-muted">系统会根据平台原创度、素材可用性和市场适配智能编排，只生成有实质差异的内容方案。</p>
-                      <div className="mt-4 border-t border-accent/15 pt-3">
-                        <div className="flex items-center justify-between text-[11px]"><span className="font-semibold text-text-secondary">方案数量</span><span className="font-bold text-text-primary">{variationMax} 套</span></div>
-                        <input type="range" min={1} max={20} value={variationMax} onChange={event => setVariationMax(Math.max(1, Math.min(20, Number(event.target.value))))} className="mt-2 w-full accent-green-600" />
-                        <div className="mt-1 flex justify-between text-[9px] text-text-muted"><span>1</span><span>20</span></div>
-                      </div>
-                      <button type="button" onClick={() => void createVariationBatch()} disabled={variationBatchCreating}
-                        className={`mt-3 flex w-full items-center justify-center gap-1.5 rounded-lg border px-3 py-2 text-[11px] font-bold transition disabled:opacity-50 ${variationBatchState === 'error' ? 'border-red-200 bg-red-50 text-red-600' : variationBatchState === 'saved' ? 'border-accent bg-accent text-white' : 'border-accent/25 bg-surface text-accent hover:bg-accent/10'}`}>
-                        {variationBatchCreating ? <Loader2 size={12} className="animate-spin" /> : variationBatchState === 'saved' ? <Check size={12} /> : <Save size={12} />}
-                        {variationBatchCreating ? '正在保存…' : variationBatchState === 'error' ? '保存失败，点击重试' : variationBatchState === 'saved' ? '已保存至我的作品' : '保存内容方案'}
-                      </button>
-                      <p className="mt-2 text-center text-[9px] text-text-muted">也可直接点底部“下一步”，方案随草稿保存</p>
-                    </aside>
-                  </div>
-                </div>
-              )}
               {contentMode === 'poster' && (
                 <div className="rounded-2xl border border-border bg-surface p-4">
                   <div className="flex items-start justify-between gap-3">
