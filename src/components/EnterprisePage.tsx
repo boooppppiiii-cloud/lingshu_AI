@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { Building2, Package, Megaphone, BookOpen, Save, CheckCircle2, Loader2, Compass, Zap, MessageSquare, RotateCcw, Plus, Upload, X, Image, Video, FileText, Copy, FileSpreadsheet, Bell, ChevronDown, Globe2, ShieldCheck, type LucideIcon } from 'lucide-react';
+import { Building2, Package, Megaphone, BookOpen, Save, CheckCircle2, Loader2, Compass, Zap, MessageSquare, RotateCcw, Plus, Upload, X, Image, Video, FileText, Copy, FileSpreadsheet, Bell, ChevronLeft, ChevronRight, Globe2, ShieldCheck, type LucideIcon } from 'lucide-react';
 import { authHeader } from '../lib/auth';
 import { completeDemoStep } from '../lib/demoProgress';
 import {
@@ -10,7 +10,7 @@ import {
   prepareSheet,
 } from '../lib/productImport';
 import SupportAccessControl from './SupportAccessControl';
-import KnowledgeIntakePanel, { type AppliedProfile } from './enterprise/KnowledgeIntakePanel';
+import type { AppliedProfile } from './enterprise/KnowledgeIntakePanel';
 
 interface ProductAsset {
   name: string;
@@ -27,6 +27,8 @@ interface ProductItem {
   color?: string;
   size?: string;
   tagPrice?: string;
+  retailPrice?: string;
+  brand?: string;
   material?: string;
   imageUrl?: string;
   priceRange?: string;
@@ -149,7 +151,7 @@ const DEFAULT: Profile = {
   customers: { targetProfiles: '', highValueSignals: '', lowQualitySignals: '', commonQuestions: '', followupStyle: '' },
   operations: { leadTime: '', customization: '', logistics: '', paymentTerms: '', riskNotes: '' },
   agentLearning: { provenAngles: '', weakAngles: '', pendingAssumptions: '', userCorrections: '' },
-  bizRules: { quoteMode: '', priceRange: '', bargainPolicy: 'no', bargainFloor: '', moq: '', samplePolicy: '', paymentTerms: '', leadTime: '' },
+  bizRules: { quoteMode: 'human_only', priceRange: '', bargainPolicy: 'no', bargainFloor: '', moq: '', samplePolicy: '', paymentTerms: '', leadTime: '' },
   faq: [],
   notifications: { receivers: [], workHours: { start: '09:00', end: '22:00' }, quietOutsideHours: true, nightMode: { enabled: false, autoCategories: 'approved' }, lastTestAt: '' },
   handoffRules: { keywords: ['人工', '老板', 'manager', 'complaint', 'refund'], missStreakToDraft: 2, negativeSentiment: true },
@@ -170,8 +172,40 @@ const AUTONOMY_OPTIONS: Array<{ value: AutonomyLevel; title: string; desc: strin
 ];
 
 const AUTO_REPLY_SCOPE = ['当前问题与已审批 FAQ 语义一致', '语境判定置信度不低于 90%', '回答原文通过价格与承诺红线检查'];
-const MARKET_OPTIONS = ['中东', '东南亚', '欧美', '拉美', '其他'];
-const LANGUAGE_OPTIONS = ['英语', '阿拉伯语', '西班牙语', '法语', '俄语', '其他'];
+const MARKET_OPTIONS = ['中东', '东南亚', '中亚', '南亚', '东亚', '欧洲', '北美', '拉美', '非洲', '大洋洲', '俄罗斯及独联体'];
+const LANGUAGE_OPTIONS = ['英语', '阿拉伯语', '西班牙语', '法语', '俄语', '葡萄牙语', '德语', '日语', '韩语', '土耳其语', '印地语', '印尼语', '泰语', '越南语'];
+const CATEGORY_OPTIONS = ['服装', '家居', '饰品', '五金', '美妆个护', '玩具', '消费电子', '汽摩配件', '机械设备', '包装印刷', '食品饮料', '宠物用品'];
+const COMPANY_TYPE_OPTIONS = ['工厂', '工贸一体', '贸易商', '品牌商', '跨境电商'];
+const CERTIFICATION_OPTIONS = ['CE', 'FDA', 'SGS', 'RoHS', 'FCC', 'MSDS', 'ISO', 'BSCI', 'GOTS', 'OEKO-TEX'];
+const BRAND_TONE_OPTIONS = ['专业可靠', '亲切自然', '简洁直接', '高端克制', '热情主动', '务实高效'];
+const COMMUNICATION_STYLE_OPTIONS = ['专业', '轻松', '亲切', '正式'];
+const PAGE_SIZE = 5;
+
+type KnowledgeView = 'products' | 'bizRules' | 'faq' | 'company' | 'materials' | 'salesStyle' | 'advanced';
+type EnterpriseArea = 'facts' | 'service';
+
+const FACT_VIEWS: Array<{ id: KnowledgeView; label: string; hint: string }> = [
+  { id: 'company', label: '公司与市场', hint: '你是谁' },
+  { id: 'products', label: '产品资料', hint: '你卖什么' },
+  { id: 'materials', label: '素材库', hint: '内容创作' },
+];
+
+const SERVICE_VIEWS: Array<{ id: KnowledgeView; label: string; hint: string }> = [
+  { id: 'bizRules', label: '报价与业务规则', hint: '询价转人工' },
+  { id: 'faq', label: '常见问答', hint: '允许怎么答' },
+  { id: 'salesStyle', label: '销售风格', hint: '持续学习' },
+  { id: 'advanced', label: '接待与转人工', hint: '权限和提醒' },
+];
+
+const KNOWLEDGE_VIEW_ICONS: Record<KnowledgeView, LucideIcon> = {
+  company: Globe2,
+  products: Package,
+  materials: Image,
+  bizRules: ShieldCheck,
+  faq: BookOpen,
+  salesStyle: Megaphone,
+  advanced: Bell,
+};
 const CHANNEL_OPTIONS: Array<{ value: NotificationChannel; label: string }> = [
   { value: 'wecom', label: '企业微信' },
   { value: 'dingtalk', label: '钉钉' },
@@ -216,11 +250,13 @@ function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (
   return (
     <button
       type="button"
+      role="switch"
+      aria-checked={checked}
       disabled={disabled}
       onClick={() => onChange(!checked)}
-      className={`relative h-6 w-11 rounded-full transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${checked ? 'bg-emerald-500' : 'bg-slate-300'}`}
+      className={`relative h-6 w-11 shrink-0 rounded-full transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 ${checked ? 'bg-emerald-500' : 'bg-slate-300'}`}
     >
-      <span className={`absolute top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-5' : 'translate-x-0.5'}`} />
+      <span className={`absolute left-0.5 top-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${checked ? 'translate-x-5' : 'translate-x-0'}`} />
     </button>
   );
 }
@@ -234,6 +270,70 @@ function Chip({ active, children, onClick }: { active: boolean; children: React.
     >
       {children}
     </button>
+  );
+}
+
+function OptionSelector({ value, options, onChange, multiple = true, manualPlaceholder = '手动补充' }: {
+  value: string;
+  options: string[];
+  onChange: (value: string) => void;
+  multiple?: boolean;
+  manualPlaceholder?: string;
+}) {
+  const tokens = splitTokens(value);
+  const customTokens = tokens.filter(item => !options.includes(item));
+  const [manualOpen, setManualOpen] = useState(customTokens.length > 0);
+  const [manualValue, setManualValue] = useState(customTokens.join('、'));
+
+  useEffect(() => {
+    const nextCustom = splitTokens(value).filter(item => !options.includes(item)).join('、');
+    setManualValue(nextCustom);
+    if (nextCustom) setManualOpen(true);
+  }, [options, value]);
+
+  const choose = (option: string) => {
+    if (!multiple) {
+      onChange(option);
+      setManualValue('');
+      setManualOpen(false);
+      return;
+    }
+    const next = tokens.includes(option) ? tokens.filter(item => item !== option) : [...tokens, option];
+    onChange(joinTokens(next));
+  };
+
+  const updateManual = (nextManual: string) => {
+    setManualValue(nextManual);
+    if (!multiple) {
+      onChange(nextManual.trim());
+      return;
+    }
+    const selectedKnown = tokens.filter(item => options.includes(item));
+    onChange(joinTokens([...selectedKnown, ...splitTokens(nextManual)]));
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-2">
+        {options.map(option => <Chip key={option} active={tokens.includes(option)} onClick={() => choose(option)}>{option}</Chip>)}
+        <Chip active={manualOpen} onClick={() => setManualOpen(open => !open)}>手动补充</Chip>
+      </div>
+      {manualOpen && <input className={inputCls} value={manualValue} onChange={event => updateManual(event.target.value)} placeholder={manualPlaceholder} />}
+    </div>
+  );
+}
+
+function PaginationControls({ page, total, pageSize, onChange }: { page: number; total: number; pageSize: number; onChange: (page: number) => void }) {
+  const pageCount = Math.max(1, Math.ceil(total / pageSize));
+  if (pageCount <= 1) return null;
+  return (
+    <div className="mt-4 flex items-center justify-between border-t border-border pt-3">
+      <span className="text-[11px] text-text-muted">共 {total} 条 · 第 {page}/{pageCount} 页</span>
+      <div className="flex items-center gap-2">
+        <button type="button" disabled={page <= 1} onClick={() => onChange(page - 1)} className="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-white text-text-secondary disabled:opacity-40" title="上一页"><ChevronLeft size={14} /></button>
+        <button type="button" disabled={page >= pageCount} onClick={() => onChange(page + 1)} className="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-white text-text-secondary disabled:opacity-40" title="下一页"><ChevronRight size={14} /></button>
+      </div>
+    </div>
   );
 }
 
@@ -398,13 +498,17 @@ export default function EnterprisePage() {
   const [faqStructuring, setFaqStructuring] = useState(false);
   const [faqPacks, setFaqPacks] = useState<FaqPack[]>([]);
   const [recommendedPackIndustry, setRecommendedPackIndustry] = useState('general');
+  const [faqPacksOpen, setFaqPacksOpen] = useState(false);
   const [openPackId, setOpenPackId] = useState('');
   const [selectedPackQuestions, setSelectedPackQuestions] = useState<Record<string, string[]>>({});
   const [packImporting, setPackImporting] = useState('');
   const [notificationTesting, setNotificationTesting] = useState('');
   const [notificationMessage, setNotificationMessage] = useState('');
-  const [advancedOpen, setAdvancedOpen] = useState(false);
-  const [manualDetailsOpen, setManualDetailsOpen] = useState(false);
+  const [enterpriseArea, setEnterpriseArea] = useState<EnterpriseArea>('facts');
+  const [knowledgeView, setKnowledgeView] = useState<KnowledgeView>('company');
+  const [productPage, setProductPage] = useState(1);
+  const [materialPage, setMaterialPage] = useState(1);
+  const [faqPage, setFaqPage] = useState(1);
   const [notificationsHighlight, setNotificationsHighlight] = useState(false);
   const [bizRulesHighlight, setBizRulesHighlight] = useState(false);
   const [handoffKeywordInput, setHandoffKeywordInput] = useState('');
@@ -517,6 +621,8 @@ export default function EnterprisePage() {
           },
         ],
       }));
+      setEnterpriseArea('service');
+      setKnowledgeView('faq');
       window.setTimeout(() => {
         document.querySelector('[data-enterprise-faq]')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }, 100);
@@ -531,6 +637,10 @@ export default function EnterprisePage() {
       setProfile(prev => ({ ...prev, [section]: { ...(prev[section] as object), [field]: value } }));
 
   const products = normalizeProductItems(profile.products);
+  const visibleProducts = products.slice((productPage - 1) * PAGE_SIZE, productPage * PAGE_SIZE);
+  const visibleMaterialProducts = products.slice((materialPage - 1) * PAGE_SIZE, materialPage * PAGE_SIZE);
+  const faqItems = profile.faq ?? [];
+  const visibleFaqs = faqItems.slice((faqPage - 1) * PAGE_SIZE, faqPage * PAGE_SIZE);
   const assetStats = productAssetStats(products);
   const completions = sectionCompletion(profile);
   const notificationCompleted = Boolean((profile.notifications?.receivers ?? []).length >= 1 && profile.notifications?.lastTestAt);
@@ -539,6 +649,10 @@ export default function EnterprisePage() {
   const canAutoReply = approvedFaqCount >= 5;
   const configuredAutonomy = profile.strategy?.aiAutonomy ?? 'draft';
   const effectiveAutonomy: AutonomyLevel = configuredAutonomy === 'auto' && !canAutoReply ? 'draft' : configuredAutonomy;
+
+  useEffect(() => { setProductPage(page => Math.min(page, Math.max(1, Math.ceil(products.length / PAGE_SIZE)))); }, [products.length]);
+  useEffect(() => { setMaterialPage(page => Math.min(page, Math.max(1, Math.ceil(products.length / PAGE_SIZE)))); }, [products.length]);
+  useEffect(() => { setFaqPage(page => Math.min(page, Math.max(1, Math.ceil(faqItems.length / PAGE_SIZE)))); }, [faqItems.length]);
 
   const applyKnowledgeProfile = (updated: AppliedProfile) => {
     setProfile(previous => ({
@@ -553,13 +667,28 @@ export default function EnterprisePage() {
     }));
   };
 
-  const toggleToken = (field: 'mainMarkets' | 'primaryLanguages', value: string) => {
-    setProfile(prev => {
-      const current = splitTokens(field === 'mainMarkets' ? prev.company.mainMarkets : prev.company.primaryLanguages);
-      const next = current.includes(value) ? current.filter(item => item !== value) : [...current, value];
-      return { ...prev, company: { ...prev.company, [field]: joinTokens(next) } };
-    });
+  const openKnowledgeIntake = () => {
+    window.dispatchEvent(new CustomEvent('lingshu-assistant-open', {
+      detail: {
+        tool: 'knowledge-intake',
+        context: {
+          agent: 'strategy',
+          label: '智能客服规范',
+          summary: '当前在企业中心的智能客服规范页，正在通过快速采集完善企业知识与接待边界。',
+          suggestions: ['根据产品生成接待初稿', '从历史聊天整理真实话术', '回答 4 个接待问题'],
+        },
+      },
+    }));
   };
+
+  useEffect(() => {
+    const handler = (event: Event) => {
+      const detail = (event as CustomEvent<{ profile?: AppliedProfile }>).detail;
+      if (detail?.profile) applyKnowledgeProfile(detail.profile);
+    };
+    window.addEventListener('lingshu:knowledge-intake-applied', handler);
+    return () => window.removeEventListener('lingshu:knowledge-intake-applied', handler);
+  }, []);
 
   const setBizRule = (field: keyof BizRules, value: string) => {
     setProfile(prev => ({ ...prev, bizRules: { ...(prev.bizRules ?? DEFAULT.bizRules!), [field]: value } }));
@@ -603,7 +732,6 @@ export default function EnterprisePage() {
     const packs = Array.isArray(data.packs) ? data.packs : [];
     setFaqPacks(packs);
     setRecommendedPackIndustry(data.recommendedIndustry || 'general');
-    if (!openPackId && packs.length) setOpenPackId(packs.find((pack: FaqPack) => pack.industry === data.recommendedIndustry)?.id || packs[0].id);
   };
 
   const selectedQuestionsForPack = (pack: FaqPack) => selectedPackQuestions[pack.id] ?? pack.items.filter(item => item.ready && !item.exists).map(item => item.q);
@@ -694,6 +822,8 @@ export default function EnterprisePage() {
   useEffect(() => {
     if (localStorage.getItem('lingshu:enterprise:highlight-autonomy') !== 'auto') return;
     localStorage.removeItem('lingshu:enterprise:highlight-autonomy');
+    setEnterpriseArea('service');
+    setKnowledgeView('advanced');
     setAutonomyHighlight(true);
     window.setTimeout(() => document.getElementById('ai-autonomy')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 80);
     window.setTimeout(() => setAutonomyHighlight(false), 3200);
@@ -702,7 +832,8 @@ export default function EnterprisePage() {
   useEffect(() => {
     if (localStorage.getItem('lingshu:enterprise:highlight-notifications') !== 'true') return;
     localStorage.removeItem('lingshu:enterprise:highlight-notifications');
-    setAdvancedOpen(true);
+    setEnterpriseArea('service');
+    setKnowledgeView('advanced');
     setNotificationsHighlight(true);
     window.setTimeout(() => document.getElementById('notifications')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 120);
     window.setTimeout(() => setNotificationsHighlight(false), 3200);
@@ -711,6 +842,8 @@ export default function EnterprisePage() {
   useEffect(() => {
     if (localStorage.getItem('lingshu:enterprise:highlight-biz-rules') !== 'true') return;
     localStorage.removeItem('lingshu:enterprise:highlight-biz-rules');
+    setEnterpriseArea('service');
+    setKnowledgeView('bizRules');
     setBizRulesHighlight(true);
     window.setTimeout(() => document.getElementById('biz-rules')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 80);
     window.setTimeout(() => setBizRulesHighlight(false), 3200);
@@ -956,9 +1089,12 @@ export default function EnterprisePage() {
           color: item.color,
           size: item.size,
           tagPrice: item.tagPrice,
+          retailPrice: item.retailPrice,
+          moq: item.moq,
+          brand: item.brand,
           material: item.material,
           imageUrl: item.imageUrl,
-          priceRange: item.tagPrice,
+          priceRange: item.retailPrice || item.tagPrice,
           category: profile.products.categories,
           highlights: item.highlights,
           images: item.imageUrl ? [{ name: item.imageUrl.split('/').pop() || '商品主图', type: 'image/url', size: 0, updatedAt: new Date().toISOString(), url: item.imageUrl }] : [],
@@ -1178,14 +1314,10 @@ export default function EnterprisePage() {
     <KnowledgeCard icon={Globe2} title="目标市场与语言" purpose="决定 AI 说什么语言、按哪个时区建议联系时间" completed={completions.market}>
       <div className="space-y-4">
         <Field label="主要市场">
-          <div className="flex flex-wrap gap-2">
-            {MARKET_OPTIONS.map(option => <Chip key={option} active={splitTokens(profile.company.mainMarkets).includes(option)} onClick={() => toggleToken('mainMarkets', option)}>{option}</Chip>)}
-          </div>
+          <OptionSelector value={profile.company.mainMarkets} options={MARKET_OPTIONS} onChange={value => set('company')('mainMarkets', value)} manualPlaceholder="补充目标国家或地区，例如：加勒比地区" />
         </Field>
         <Field label="主要语言">
-          <div className="flex flex-wrap gap-2">
-            {LANGUAGE_OPTIONS.map(option => <Chip key={option} active={splitTokens(profile.company.primaryLanguages).includes(option)} onClick={() => toggleToken('primaryLanguages', option)}>{option}</Chip>)}
-          </div>
+          <OptionSelector value={profile.company.primaryLanguages ?? ''} options={LANGUAGE_OPTIONS} onChange={value => set('company')('primaryLanguages', value)} manualPlaceholder="补充其他语言" />
         </Field>
       </div>
     </KnowledgeCard>
@@ -1198,10 +1330,10 @@ export default function EnterprisePage() {
           <input className={inputCls} value={profile.company.name} onChange={e => set('company')('name', e.target.value)} placeholder="示例贸易有限公司" />
         </Field>
         <Field label="行业类目">
-          <input className={inputCls} value={profile.company.industry} onChange={e => set('company')('industry', e.target.value)} placeholder="跨境电商 / 消费品" />
+          <OptionSelector value={profile.company.industry} options={CATEGORY_OPTIONS} multiple={false} onChange={value => set('company')('industry', value)} manualPlaceholder="补充行业类目" />
         </Field>
         <Field label="企业类型">
-          <input className={inputCls} value={profile.company.companyType ?? ''} onChange={e => set('company')('companyType', e.target.value)} placeholder="工厂 / 工贸一体 / 贸易商" />
+          <OptionSelector value={profile.company.companyType ?? ''} options={COMPANY_TYPE_OPTIONS} multiple={false} onChange={value => set('company')('companyType', value)} manualPlaceholder="补充企业类型" />
         </Field>
         <Field label="成立年份">
           <input className={inputCls} value={profile.company.founded} onChange={e => set('company')('founded', e.target.value)} placeholder="2018" />
@@ -1285,14 +1417,14 @@ export default function EnterprisePage() {
     <div className="flex h-full flex-col bg-surface-2">
       <div className="flex h-12 shrink-0 items-center justify-between border-b border-border bg-white px-5">
         <div className="flex items-center gap-2.5">
-          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-50 text-emerald-700">
-            <Building2 size={14} />
+          <span className="flex h-6 w-6 items-center justify-center rounded-lg bg-emerald-50 text-emerald-600">
+            <Building2 size={13} />
           </span>
-          <span className="text-sm font-black text-text-primary">企业中心</span>
+          <span className="text-sm font-semibold text-text-primary">企业中心</span>
         </div>
         <div className="flex items-center gap-2">
-          {manualDetailsOpen && saveError && <span className="max-w-72 truncate text-[11px] font-bold text-red-600" title={saveError}>{saveError}</span>}
-          {manualDetailsOpen && <motion.button
+          {saveError && <span className="max-w-72 truncate text-[11px] font-bold text-red-600" title={saveError}>{saveError}</span>}
+          <motion.button
             whileTap={{ scale: 0.96 }}
             onClick={handleSave}
             disabled={saving}
@@ -1302,52 +1434,86 @@ export default function EnterprisePage() {
           >
             {saving ? <Loader2 size={12} className="animate-spin" /> : saveError ? <X size={12} /> : saved ? <CheckCircle2 size={12} /> : <Save size={12} />}
             {saving ? '保存中' : saveError ? '保存失败' : saved ? '已保存' : '保存'}
-          </motion.button>}
+          </motion.button>
+        </div>
+      </div>
+
+      <div className="shrink-0 border-b border-border bg-surface px-6 py-3">
+        <div className="grid w-full grid-cols-2 gap-1.5 rounded-2xl border border-border bg-surface-2 p-1 shadow-sm">
+          {([
+            { id: 'facts' as EnterpriseArea, label: '企业真实资料', icon: Building2, initialView: 'company' as KnowledgeView },
+            { id: 'service' as EnterpriseArea, label: '智能客服规范', icon: MessageSquare, initialView: 'bizRules' as KnowledgeView },
+          ]).map(item => {
+            const active = enterpriseArea === item.id;
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => {
+                  setEnterpriseArea(item.id);
+                  setKnowledgeView(item.initialView);
+                  if (item.id === 'service') openKnowledgeIntake();
+                }}
+                className={`flex h-10 items-center justify-center gap-2 rounded-xl px-3 text-sm font-black transition-all ${active ? 'bg-white text-text-primary shadow-sm ring-1 ring-border' : 'text-text-muted hover:bg-white/60 hover:text-text-secondary'}`}
+              >
+                <Icon size={18} className={active ? 'text-accent' : 'text-text-muted'} />
+                <span className="min-w-0 truncate">{item.label}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-5xl space-y-5 px-6 py-6">
-          <KnowledgeIntakePanel mode="center" onApplied={applyKnowledgeProfile} />
-
-          <button
-            type="button"
-            onClick={() => setManualDetailsOpen(open => !open)}
-            className="flex w-full items-center justify-between rounded-lg border border-border bg-white px-5 py-4 text-left shadow-sm transition-colors hover:bg-surface-2"
-          >
-            <span>
-              <span className="block text-sm font-black text-text-primary">{manualDetailsOpen ? '收起 AI 当前资料' : '查看和维护 AI 当前掌握的资料'}</span>
-              <span className="mt-1 block text-[11px] text-text-muted">这是 AI 回复时实际读取的唯一资料库。上方采集结果会同步到这里，不需要重复填写。</span>
-            </span>
-            <ChevronDown size={16} className={`text-text-muted transition-transform ${manualDetailsOpen ? 'rotate-180' : ''}`} />
-          </button>
-
-          {manualDetailsOpen && <>
-
-          <div className="rounded-lg border border-border bg-white p-4">
-            <div className="flex items-start gap-3">
-              <BookOpen size={15} className="mt-0.5 shrink-0 text-accent" />
-              <div className="min-w-0 flex-1">
-                <p className="text-xs font-bold text-text-primary">AI 当前使用的资料</p>
-                <p className="mt-1 text-[11px] leading-relaxed text-text-muted">上方负责采集和起草，这里负责查看、精修和长期维护。修改并保存后，会进入客户回复、内容创作和交付提醒等 Agent 的上下文。</p>
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {AGENTS.map(({ icon: Icon, label, color }) => (
-                    <span key={label} className="flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] font-medium" style={{ background: `${color}12`, color }}>
-                      <Icon size={11} />{label}
-                    </span>
-                  ))}
-                </div>
-              </div>
+        <div className="mx-auto max-w-5xl space-y-5 px-6 py-5">
+          <div className="overflow-x-auto pb-0.5">
+            <div className={`grid gap-1.5 rounded-2xl border border-border bg-surface-2 p-1 shadow-sm ${enterpriseArea === 'facts' ? 'min-w-[480px] grid-cols-3' : 'min-w-[680px] grid-cols-4'}`}>
+              {(enterpriseArea === 'facts' ? FACT_VIEWS : SERVICE_VIEWS).map(item => {
+                const active = knowledgeView === item.id;
+                const Icon = KNOWLEDGE_VIEW_ICONS[item.id];
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => setKnowledgeView(item.id)}
+                    title={`${item.label} · ${item.hint}`}
+                    className={`flex h-10 items-center justify-center gap-2 rounded-xl px-3 text-sm font-black transition-all ${active ? 'bg-white text-text-primary shadow-sm ring-1 ring-border' : 'text-text-muted hover:bg-white/60 hover:text-text-secondary'}`}
+                  >
+                    <Icon size={16} className={active ? (enterpriseArea === 'facts' ? 'text-emerald-600' : 'text-sky-600') : 'text-text-muted'} />
+                    <span className="min-w-0 truncate">{item.label}</span>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
-          {marketSection}
-          {companySection}
+          <div className={`rounded-lg border p-4 ${enterpriseArea === 'facts' ? 'border-emerald-100 bg-emerald-50/60' : 'border-sky-100 bg-sky-50/60'}`}>
+            <div className="flex items-start gap-3">
+              {enterpriseArea === 'facts' ? <Building2 size={15} className="mt-0.5 shrink-0 text-emerald-700" /> : <ShieldCheck size={15} className="mt-0.5 shrink-0 text-sky-700" />}
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-black text-text-primary">{enterpriseArea === 'facts' ? '这里填写客观事实' : '这里设置接待行为'}</p>
+                <p className="mt-1 text-[11px] leading-relaxed text-text-muted">
+                  {enterpriseArea === 'facts'
+                    ? '只记录公司、市场、产品和素材等真实信息。填写这些不会自动扩大 AI 权限。'
+                    : '规定 AI 可以回答什么、哪些话必须等你确认，以及何时提醒销售接手。企业事实仍从另一入口读取。'}
+                </p>
+              </div>
+              {enterpriseArea === 'service' && (
+                <button type="button" onClick={openKnowledgeIntake} className="shrink-0 rounded-lg border border-sky-200 bg-white px-3 py-2 text-[11px] font-black text-sky-700 hover:bg-sky-50">
+                  打开灵小枢快速采集
+                </button>
+              )}
+            </div>
+          </div>
 
+          {knowledgeView === 'company' && <>{marketSection}{companySection}</>}
+
+          {knowledgeView === 'products' && (
           <KnowledgeCard
             icon={Package}
             title="产品资料"
-            purpose="AI 报价、推荐、生成视频的原料"
+            purpose="AI 推荐产品、整理询价条件和生成内容的原料"
             completed={completions.products}
             stat={`已录入 ${products.length} 个产品 · ${assetStats.withImage} 个有主图`}
           >
@@ -1356,10 +1522,10 @@ export default function EnterprisePage() {
             )}
             <div className="mb-4 grid grid-cols-2 gap-4">
               <Field label="主营品类">
-                <input className={inputCls} value={profile.products.categories} onChange={e => set('products')('categories', e.target.value)} placeholder="美妆个护、家居日用、消费电子" />
+                <OptionSelector value={profile.products.categories} options={CATEGORY_OPTIONS} onChange={value => set('products')('categories', value)} manualPlaceholder="补充其他主营品类" />
               </Field>
               <Field label="认证资质">
-                <input className={inputCls} value={profile.products.certifications} onChange={e => set('products')('certifications', e.target.value)} placeholder="CE、FDA、SGS" />
+                <OptionSelector value={profile.products.certifications} options={CERTIFICATION_OPTIONS} onChange={value => set('products')('certifications', value)} manualPlaceholder="补充其他认证，用顿号分隔" />
               </Field>
             </div>
             <Field label="产品核心优势">
@@ -1377,7 +1543,9 @@ export default function EnterprisePage() {
               {productImportMessage && <span className="text-[11px] font-bold text-emerald-700">{productImportMessage}</span>}
             </div>
             <div className="mt-4 space-y-3">
-              {products.map((product, index) => (
+              {visibleProducts.map((product, pageIndex) => {
+                const index = (productPage - 1) * PAGE_SIZE + pageIndex;
+                return (
                 <div key={index} className="rounded-lg border border-border bg-surface-2/50 p-4">
                   <div className="mb-3 flex items-center justify-between gap-3">
                     <p className="text-xs font-black text-text-primary">产品 {index + 1}</p>
@@ -1388,10 +1556,10 @@ export default function EnterprisePage() {
                       <input className={inputCls} value={product.name} onChange={e => updateProduct(index, { name: e.target.value })} placeholder={`产品${index + 1}`} />
                     </Field>
                     <Field label="产品类目">
-                      <input className={inputCls} value={product.category ?? ''} onChange={e => updateProduct(index, { category: e.target.value })} placeholder="所属品类 / 系列" />
+                      <OptionSelector value={product.category ?? ''} options={CATEGORY_OPTIONS} multiple={false} onChange={value => updateProduct(index, { category: value })} manualPlaceholder="补充产品类目" />
                     </Field>
                     <Field label="参考价或标签价">
-                      <input className={inputCls} value={product.priceRange ?? product.tagPrice ?? ''} onChange={e => updateProduct(index, { priceRange: e.target.value })} placeholder="$5 - $500 USD" />
+                      <input className={inputCls} value={product.priceRange ?? product.retailPrice ?? product.tagPrice ?? ''} onChange={e => updateProduct(index, { priceRange: e.target.value })} placeholder="$5 - $500 USD" />
                     </Field>
                     <Field label="起订量">
                       <input className={inputCls} value={product.moq ?? ''} onChange={e => updateProduct(index, { moq: e.target.value })} placeholder="50 件起，支持混批" />
@@ -1401,11 +1569,15 @@ export default function EnterprisePage() {
                     <textarea className={textareaCls} rows={2} value={product.highlights ?? ''} onChange={e => updateProduct(index, { highlights: e.target.value })} placeholder="核心卖点、适用场景、可定制项、交付优势" />
                   </Field>
                 </div>
-              ))}
+                );
+              })}
               {!products.length && <p className="rounded-lg bg-surface-2 px-3 py-3 text-xs text-text-muted">还没有产品，先添加一个产品或导入产品表。</p>}
             </div>
+            <PaginationControls page={productPage} total={products.length} pageSize={PAGE_SIZE} onChange={setProductPage} />
           </KnowledgeCard>
+          )}
 
+          {knowledgeView === 'materials' && (
           <KnowledgeCard
             icon={Image}
             title="素材库"
@@ -1414,7 +1586,8 @@ export default function EnterprisePage() {
             stat={`${assetStats.images} 张图 · ${assetStats.videos} 个视频 · ${assetStats.documents} 份文书`}
           >
             <div className="space-y-3">
-              {products.map((product, index) => {
+              {visibleMaterialProducts.map((product, pageIndex) => {
+                const index = (materialPage - 1) * PAGE_SIZE + pageIndex;
                 const groups = [
                   { key: 'images' as const, label: '产品图', limit: MAX_PRODUCT_ASSETS.images, accept: 'image/*', icon: Image, assets: product.images ?? [] },
                   { key: 'videos' as const, label: '视频', limit: MAX_PRODUCT_ASSETS.videos, accept: 'video/*', icon: Video, assets: product.videos ?? [] },
@@ -1450,26 +1623,21 @@ export default function EnterprisePage() {
                 );
               })}
             </div>
+            <PaginationControls page={materialPage} total={products.length} pageSize={PAGE_SIZE} onChange={setMaterialPage} />
           </KnowledgeCard>
+          )}
 
+          {knowledgeView === 'bizRules' && (
           <KnowledgeCard id="biz-rules" icon={ShieldCheck} title="报价与业务规则" purpose="决定 AI 回复客户时的分寸——它能说什么、不能说什么" completed={completions.bizRules} highlight={bizRulesHighlight}>
-            {!completions.bizRules && <p className="mb-4 rounded-lg bg-sky-50 px-3 py-2 text-xs font-bold text-sky-800">完善报价规则后，AI 才能帮你答价格。</p>}
+            {!completions.bizRules && <p className="mb-4 rounded-lg bg-sky-50 px-3 py-2 text-xs font-bold text-sky-800">补充样品、付款和交期后，AI 转人工时会替销售整理好询价条件。</p>}
             <div className="space-y-4">
-              <Field label="客户问价格时，AI 可以：">
-                <div className="flex flex-wrap gap-2">
-                  {[
-                    { value: 'range' as QuoteMode, label: '报一个区间' },
-                    { value: 'human_only' as QuoteMode, label: "一律说'稍后报价'等人工" },
-                  ].map(option => (
-                    <button key={option.value} type="button" onClick={() => setBizRule('quoteMode', option.value)} className={`rounded-lg border px-3 py-2 text-xs font-bold ${profile.bizRules?.quoteMode === option.value ? 'border-slate-950 bg-slate-950 text-white' : 'border-border bg-white text-text-secondary'}`}>
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-              </Field>
+              <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
+                <p className="text-sm font-black text-amber-900">客户询价 → 标记“等待人工报价”</p>
+                <p className="mt-1 text-xs leading-5 text-amber-800">AI 不回复价格，也不发送“稍后报价”占位消息；系统提醒销售查看数量、规格和包装要求后亲自回复。</p>
+              </div>
               <div className="grid grid-cols-2 gap-4">
-                <Field label="如果允许报区间，AI 应使用这段价格说明">
-                  <input className={inputCls} value={profile.bizRules?.priceRange ?? ''} onChange={e => setBizRule('priceRange', e.target.value)} placeholder="$5 - $500 USD，按数量和规格确认" />
+                <Field label="内部参考价格（不会自动发给客户）">
+                  <input className={inputCls} value={profile.bizRules?.priceRange ?? ''} onChange={e => setBizRule('priceRange', e.target.value)} placeholder="$5 - $500 USD，仅供销售参考" />
                 </Field>
                 <Field label="客户问 MOQ 时，AI 应怎么说">
                   <input className={inputCls} value={profile.bizRules?.moq ?? ''} onChange={e => setBizRule('moq', e.target.value)} placeholder="常规 50 件起，支持混批" />
@@ -1487,7 +1655,7 @@ export default function EnterprisePage() {
                   <input className={inputCls} value={profile.bizRules?.bargainFloor ?? ''} onChange={e => setBizRule('bargainFloor', e.target.value)} placeholder="可小幅让利，但不承诺低于成本线" />
                 </Field>
               </div>
-              <Field label="客户还价时，AI 可以：">
+              <Field label="销售议价偏好（仅用于内部建议）：">
                 <div className="flex flex-wrap gap-2">
                   {[
                     { value: 'no' as BargainPolicy, label: '不议价' },
@@ -1502,7 +1670,9 @@ export default function EnterprisePage() {
               </Field>
             </div>
           </KnowledgeCard>
+          )}
 
+          {knowledgeView === 'faq' && (
           <div data-enterprise-faq>
           <KnowledgeCard icon={BookOpen} title="常见问答" purpose="客户问到这些，AI 直接用你的标准答案回复" completed={completions.faq} stat={`${profile.faq?.length ?? 0} 条 · ${approvedFaqCount} 条已审批`}>
             {faqPacks.length > 0 && (
@@ -1510,10 +1680,13 @@ export default function EnterprisePage() {
                 <div className="mb-3 flex items-center justify-between gap-3">
                   <div>
                     <p className="text-xs font-black text-text-primary">场景知识包</p>
-                    <p className="mt-1 text-[11px] text-text-muted">按行业和场景导入标准问答，导入后仍需老板逐条审批才能自动回复。</p>
+                    <p className="mt-1 text-[11px] text-text-muted">需要时再打开，按行业导入标准问答；导入后仍需逐条审批。</p>
                   </div>
-                  <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-bold text-text-secondary">默认：{faqPacks.find(pack => pack.industry === recommendedPackIndustry)?.industryLabel || '通用'}</span>
+                  <button type="button" onClick={() => setFaqPacksOpen(open => !open)} className="rounded-lg border border-border bg-white px-3 py-2 text-[11px] font-bold text-text-secondary hover:bg-surface-2">
+                    {faqPacksOpen ? '收起知识包' : `打开知识包（推荐${faqPacks.find(pack => pack.industry === recommendedPackIndustry)?.industryLabel || '通用'}）`}
+                  </button>
                 </div>
+                {faqPacksOpen && (
                 <div className="grid gap-3 md:grid-cols-2">
                   {[...faqPacks].sort((a, b) => Number(b.industry === recommendedPackIndustry) - Number(a.industry === recommendedPackIndustry)).map(pack => {
                     const open = openPackId === pack.id;
@@ -1567,6 +1740,7 @@ export default function EnterprisePage() {
                     );
                   })}
                 </div>
+                )}
               </div>
             )}
             {profile.customers?.commonQuestions?.trim() && !(profile.faq ?? []).length && (
@@ -1594,7 +1768,7 @@ export default function EnterprisePage() {
               <button type="button" onClick={addFaq} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-950 px-3 py-2 text-xs font-bold text-white"><Plus size={12} />添加问答</button>
             </div>
             <div className="space-y-3">
-              {(profile.faq ?? []).map((item, index) => (
+              {visibleFaqs.map((item, index) => (
                 <details key={item.id} className="rounded-lg border border-border bg-surface-2/50 p-3" open={index === 0}>
                   <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
                     <input className={`${inputCls} flex-1`} value={item.question} onChange={e => updateFaq(item.id, { question: e.target.value })} placeholder="客户会怎么问？" />
@@ -1612,9 +1786,12 @@ export default function EnterprisePage() {
               ))}
               {!(profile.faq ?? []).length && <p className="rounded-lg bg-surface-2 px-3 py-3 text-xs text-text-muted">还没有问答，先添加 5 条常见问题。</p>}
             </div>
+            <PaginationControls page={faqPage} total={faqItems.length} pageSize={PAGE_SIZE} onChange={setFaqPage} />
           </KnowledgeCard>
           </div>
+          )}
 
+          {knowledgeView === 'salesStyle' && (
           <section className="rounded-lg border border-border bg-white p-5 shadow-sm">
             <div className="flex items-start justify-between gap-3">
               <div>
@@ -1688,16 +1865,16 @@ export default function EnterprisePage() {
               </div>
             )}
           </section>
+          )}
 
+          {knowledgeView === 'advanced' && (
           <section className="rounded-lg border border-border bg-white shadow-sm">
-            <button type="button" onClick={() => setAdvancedOpen(open => !open)} className="flex w-full items-center justify-between px-5 py-4 text-left">
+            <div className="flex w-full items-center justify-between px-5 py-4 text-left">
               <span>
                 <span className="block text-sm font-black text-text-primary">接待规则与高级设置</span>
                 <span className="mt-1 block text-[11px] text-text-muted">不属于企业资料本身：AI 参与程度、转人工规则、通知与夜班、支持授权和经营偏好。</span>
               </span>
-              <ChevronDown size={16} className={`text-text-muted transition-transform ${advancedOpen ? 'rotate-180' : ''}`} />
-            </button>
-            {advancedOpen && (
+            </div>
               <div className="space-y-5 border-t border-border p-5">
                 {aiAutonomySection}
                 {handoffSafetySection}
@@ -1710,8 +1887,8 @@ export default function EnterprisePage() {
                   <div className="grid grid-cols-2 gap-4">
                     <Field label="当前阶段目标"><input className={inputCls} value={profile.strategy?.currentGoal ?? ''} onChange={e => set('strategy')('currentGoal', e.target.value)} /></Field>
                     <Field label="本期重点产品"><input className={inputCls} value={profile.strategy?.focusProducts ?? ''} onChange={e => set('strategy')('focusProducts', e.target.value)} /></Field>
-                    <Field label="重点市场"><input className={inputCls} value={profile.strategy?.focusMarkets ?? ''} onChange={e => set('strategy')('focusMarkets', e.target.value)} /></Field>
-                    <Field label="暂不经营市场"><input className={inputCls} value={profile.strategy?.excludedMarkets ?? ''} onChange={e => set('strategy')('excludedMarkets', e.target.value)} /></Field>
+                    <Field label="重点市场"><OptionSelector value={profile.strategy?.focusMarkets ?? ''} options={MARKET_OPTIONS} onChange={value => set('strategy')('focusMarkets', value)} manualPlaceholder="补充重点国家或地区" /></Field>
+                    <Field label="暂不经营市场"><OptionSelector value={profile.strategy?.excludedMarkets ?? ''} options={MARKET_OPTIONS} onChange={value => set('strategy')('excludedMarkets', value)} manualPlaceholder="补充暂不经营地区" /></Field>
                     <Field label="最低利润率"><input className={inputCls} value={profile.strategy?.minMargin ?? ''} onChange={e => set('strategy')('minMargin', e.target.value)} /></Field>
                   </div>
                   <Field label="价格策略"><textarea className={textareaCls} rows={2} value={profile.strategy?.pricingStrategy ?? ''} onChange={e => set('strategy')('pricingStrategy', e.target.value)} /></Field>
@@ -1720,9 +1897,9 @@ export default function EnterprisePage() {
                 <div className="rounded-lg border border-border bg-surface-2/40 p-4">
                   <div className="mb-3 flex items-center gap-2"><Megaphone size={14} className="text-text-secondary" /><h3 className="text-sm font-black text-text-primary">品牌调性</h3></div>
                   <div className="grid grid-cols-2 gap-4">
-                    <Field label="品牌调性关键词"><input className={inputCls} value={profile.brand.tone} onChange={e => set('brand')('tone', e.target.value)} /></Field>
-                    <Field label="沟通风格"><input className={inputCls} value={profile.brand.style} onChange={e => set('brand')('style', e.target.value)} /></Field>
-                    <Field label="首选输出语言"><input className={inputCls} value={profile.brand.preferredLanguages ?? ''} onChange={e => set('brand')('preferredLanguages', e.target.value)} /></Field>
+                    <Field label="品牌调性关键词"><OptionSelector value={profile.brand.tone} options={BRAND_TONE_OPTIONS} onChange={value => set('brand')('tone', value)} manualPlaceholder="补充品牌调性" /></Field>
+                    <Field label="沟通风格"><OptionSelector value={profile.brand.style} options={COMMUNICATION_STYLE_OPTIONS} multiple={false} onChange={value => set('brand')('style', value)} manualPlaceholder="补充沟通风格" /></Field>
+                    <Field label="首选输出语言"><OptionSelector value={profile.brand.preferredLanguages ?? ''} options={LANGUAGE_OPTIONS} onChange={value => set('brand')('preferredLanguages', value)} manualPlaceholder="补充输出语言" /></Field>
                     <Field label="核心卖点"><input className={inputCls} value={profile.brand.usp} onChange={e => set('brand')('usp', e.target.value)} /></Field>
                   </div>
                   <Field label="禁忌话题"><input className={inputCls} value={profile.brand.taboos} onChange={e => set('brand')('taboos', e.target.value)} /></Field>
@@ -1759,10 +1936,8 @@ export default function EnterprisePage() {
                   {orderImportMessage && <p className="mt-2 text-[11px] font-bold text-emerald-700">{orderImportMessage}</p>}
                 </div>
               </div>
-            )}
           </section>
-
-          </>}
+          )}
 
           <div className="h-4" />
         </div>

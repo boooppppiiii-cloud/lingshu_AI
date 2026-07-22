@@ -119,6 +119,8 @@ export interface EnterpriseProfile {
       color?: string;
       size?: string;
       tagPrice?: string;
+      retailPrice?: string;
+      brand?: string;
       material?: string;
       imageUrl?: string;
       priceRange?: string;
@@ -196,7 +198,7 @@ interface ProductApiSecret {
 }
 
 const DEFAULT_BIZ_RULES: BizRules = {
-  quoteMode: '',
+  quoteMode: 'human_only',
   priceRange: '',
   bargainPolicy: 'no',
   bargainFloor: '',
@@ -638,7 +640,7 @@ function normalizeHandoffRules(input: EnterpriseProfile['handoffRules']): Handof
 }
 
 function normalizeQuoteMode(value: unknown): QuoteMode {
-  return value === 'range' || value === 'human_only' ? value : '';
+  return value === 'range' || value === 'human_only' ? 'human_only' : '';
 }
 
 function normalizeBargainPolicy(value: unknown): BargainPolicy {
@@ -655,7 +657,7 @@ function normalizeBizRules(
   const moq = text(merged.moq) || text(products.moq);
   const paymentTerms = text(merged.paymentTerms) || text(operations.paymentTerms);
   const leadTime = text(merged.leadTime) || text(operations.leadTime);
-  const quoteMode = normalizeQuoteMode(merged.quoteMode) || (priceRange ? 'range' : '');
+  const quoteMode = normalizeQuoteMode(merged.quoteMode) || (priceRange ? 'human_only' : '');
   return {
     quoteMode,
     priceRange,
@@ -835,8 +837,8 @@ export function knowledgeCompletion(profile: EnterpriseProfile): KnowledgeComple
       },
       quoteDraft: {
         unlocked: sections.products.completed && sections.bizRules.completed,
-        label: '会写报价草稿',
-        reason: sections.bizRules.completed ? 'AI 已知道你的报价边界' : '再确认报价方式、样品和付款口径',
+        label: '识别询价并转人工',
+        reason: sections.bizRules.completed ? 'AI 会整理询价条件并提醒销售接手' : '再确认样品、付款和交期口径',
       },
       autoReply: {
         unlocked: (normalized.faq ?? []).filter(item => item.approvedForAuto && item.question && item.answer).length >= 5,
@@ -859,8 +861,7 @@ export function bizRulesReady(profile: EnterpriseProfile): boolean {
 }
 
 export function shouldSuppressPrice(profile: EnterpriseProfile): boolean {
-  const normalized = normalizeProfile(profile);
-  return !bizRulesReady(normalized) || normalized.bizRules?.quoteMode === 'human_only';
+  return true;
 }
 
 export function autoFaqReady(profile: EnterpriseProfile): boolean {
@@ -880,9 +881,8 @@ export function buildBizRulesInstruction(profile: EnterpriseProfile): string {
   const lines = [
     'Enterprise business rules:',
     `Quote mode: ${rules.quoteMode || 'not_configured'}`,
-    rules.quoteMode === 'range' && rules.priceRange ? `Allowed price range wording: ${rules.priceRange}` : '',
-    rules.quoteMode === 'human_only' ? 'Hard rule: never include price numbers, currency symbols, unit prices, discounts, or exact amounts. Tell the buyer that a human seller will confirm the quote.' : '',
-    !bizRulesReady(normalized) ? 'Hard rule: quote rules are incomplete. Do not include concrete prices. Ask for missing details and say the seller will confirm pricing.' : '',
+    rules.priceRange ? `Internal price reference only; never send it to the buyer: ${rules.priceRange}` : '',
+    'Hard rule: never send prices, currency amounts, unit prices, discounts, or quotation promises. Mark price requests as waiting_for_human_quote and hand them to a human seller.',
     rules.moq ? `MOQ guidance: ${rules.moq}` : '',
     rules.samplePolicy ? `Sample policy: ${rules.samplePolicy}` : '',
     rules.paymentTerms ? `Payment terms: ${rules.paymentTerms}` : '',
@@ -966,6 +966,9 @@ type ApiProductInput = {
   color?: unknown;
   size?: unknown;
   tagPrice?: unknown;
+  retailPrice?: unknown;
+  moq?: unknown;
+  brand?: unknown;
   material?: unknown;
   imageUrl?: unknown;
   highlights?: unknown;
@@ -987,6 +990,9 @@ function normalizeApiProduct(input: ApiProductInput): NonNullable<EnterpriseProf
     color: text(input.color),
     size: text(input.size),
     tagPrice: text(input.tagPrice),
+    retailPrice: text(input.retailPrice),
+    moq: text(input.moq),
+    brand: text(input.brand),
     material: text(input.material),
     imageUrl,
     highlights: text(input.highlights),

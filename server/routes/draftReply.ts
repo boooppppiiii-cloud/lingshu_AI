@@ -47,6 +47,19 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
   const intent = normalizeIntent(body.intent || body.mode);
   const language = String(body.language ?? '').trim() || 'English';
   const latestMessage = latestBuyerMessage(timeline) || String(body.message || body.instruction || body.product || '');
+  const quoteRequest = intent !== 'polish'
+    && intent !== 'handoff_summary'
+    && /\b(price|quote|quotation|discount|unit cost|how much)\b|报价|价格|单价|多少钱|折扣|优惠/i.test(latestMessage);
+  if (quoteRequest) {
+    res.json({
+      draft: '',
+      handoffRequired: true,
+      handlingReason: '客户正在询价，已标记为等待人工报价',
+      evidence: ['命中报价红线：AI 不直接回复价格，需销售人工接手'],
+      category: '报价',
+    });
+    return;
+  }
   const conversation = timeline
     .map((event: any) => ({
       role: String(event?.actor || '').toLowerCase() === 'buyer' || String(event?.type || '').includes('msg_in') ? 'buyer' as const : 'seller' as const,
@@ -69,7 +82,7 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
   const styleMemories = await retrieveStyleMemories(tenantId, categoryForIntent(intent), latestMessage);
   const salesStyleProfile = (await readTenantEnterpriseProfile(tenantId)).salesStyleProfile;
   const suppressPrice = shouldSuppressPriceFromRules(context.bizRules);
-  const hardNoPriceDigits = context.bizRules?.quoteMode === 'human_only';
+  const hardNoPriceDigits = intent !== 'polish';
   const prompt = [
     `Customer ID: ${String(body.customerId ?? '')}`,
     `Product: ${String(body.product ?? '')}`,
@@ -84,7 +97,7 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
     buildStrategyPromptBlock(strategies),
     buildSalesStyleProfilePromptBlock(salesStyleProfile),
     buildStyleMemoryPromptBlock(styleMemories),
-    suppressPrice ? 'Price guard: do not include concrete prices. If the buyer asks how much, say the seller will confirm after checking quantity, specs, and packaging.' : '',
+    suppressPrice ? 'Price guard: never include or promise a price. Price questions must be handed to a human seller and must not produce a customer-facing placeholder reply.' : '',
     hardNoPriceDigits ? 'Extra hard rule: the reply must not contain any Arabic numerals, currency symbols, unit prices, discount numbers, or exact amounts.' : '',
     body.instruction ? `Specific instruction: ${String(body.instruction)}` : '',
     'Recent timeline:',
@@ -297,8 +310,7 @@ function buildSalesStyleProfilePromptBlock(profile?: SalesStyleProfile): string 
 }
 
 function shouldSuppressPriceFromRules(rules: BizRules): boolean {
-  const ready = Boolean(rules?.quoteMode && rules.samplePolicy && rules.paymentTerms);
-  return !ready || rules.quoteMode === 'human_only';
+  return true;
 }
 
 function normalizeIntent(value: unknown): 'reply'|'opener'|'followup'|'reactivate'|'post_call'|'polish'|'handoff_summary' {
@@ -334,6 +346,7 @@ function sanitizeDraft(
   suppressPrice: boolean,
   hardNoPriceDigits: boolean,
 ): string {
+  if (intent === 'polish') return draft;
   if (!suppressPrice) return draft;
   if (hardNoPriceDigits && /[0-9$¥€£]/.test(draft)) return noPriceFallback(body, intent);
   if (containsPriceNumber(draft)) return noPriceFallback(body, intent);
@@ -355,12 +368,12 @@ function noPriceFallback(body: any, intent: ReturnType<typeof normalizeIntent>):
   }
   const language = normalizeLanguage(body.language);
   if (language === 'arabic') {
-    return `شكرا لرسالتك. سأراجع الكمية والمواصفات والتغليف المطلوب ثم أطلب من الزميل المسؤول تأكيد العرض المناسب لك قريبا.`;
+    return `شكرًا لرسالتك. هل يمكنك مشاركة الكمية المستهدفة والمواصفات ومتطلبات التغليف؟`;
   }
   if (language === 'spanish') {
-    return `Gracias por tu mensaje. Voy a revisar la cantidad, las especificaciones y el empaque, y nuestro equipo confirmará la oferta adecuada para ti.`;
+    return `Gracias por tu mensaje. ¿Puedes compartir la cantidad, las especificaciones y los requisitos de empaque?`;
   }
-  return `Thanks for your message. I will check the quantity, specifications, and packaging requirements, then our team will confirm the right offer for you.`;
+  return `Thanks for your message. Could you share the target quantity, specifications, and packaging requirements?`;
 }
 
 function fallbackDraft(body: any, intent: ReturnType<typeof normalizeIntent>, suppressPrice = false): string {
@@ -376,23 +389,23 @@ function fallbackDraft(body: any, intent: ReturnType<typeof normalizeIntent>, su
   const language = normalizeLanguage(body.language);
   if (language === 'arabic') {
     if (intent === 'opener') return `مرحبًا، نحن فريق المبيعات. يمكننا دعم توريد ${product} بالجملة. ما الكمية والسوق المستهدف؟`;
-    if (intent === 'followup') return `أتابع معك بخصوص ${product}. إذا كانت الكمية أو متطلبات التغليف واضحة، يمكنني تأكيد أفضل سعر ومدة التسليم لك.`;
+    if (intent === 'followup') return `أتابع معك بخصوص ${product}. هل حددت الكمية المستهدفة ومتطلبات التغليف؟`;
     if (intent === 'reactivate') return `مرحبًا، حدّثنا مؤخرًا خيارات ${product}. إذا كنت لا تزال مهتمًا، يمكنني إرسال أحدث الكتالوج والعرض لك.`;
     if (intent === 'post_call') return `شكرًا على المكالمة. سأتابع التفاصيل التي ناقشناها وأرسل لك الخطوة التالية قريبًا.`;
-    return `شكرًا لرسالتك. سأؤكد لك الحد الأدنى للطلب وأفضل سعر ومدة التسليم لـ ${product}، ثم أرسل التفاصيل قريبًا.`;
+    return `شكرًا لرسالتك. هل يمكنك مشاركة الكمية المستهدفة والمواصفات ومتطلبات التغليف الخاصة بـ ${product}؟`;
   }
   if (language === 'spanish') {
     if (intent === 'opener') return `Hola, somos el equipo de ventas. Podemos apoyar suministro mayorista de ${product}. ¿Cuál es tu cantidad objetivo y mercado?`;
-    if (intent === 'followup') return `Te escribo para dar seguimiento a ${product}. Si la cantidad o el empaque ya están claros, puedo confirmar el mejor precio y el tiempo de entrega.`;
+    if (intent === 'followup') return `Te escribo para dar seguimiento a ${product}. ¿Ya tienes definida la cantidad y los requisitos de empaque?`;
     if (intent === 'reactivate') return `Hola, actualizamos recientemente nuestras opciones de ${product}. Si todavía te interesa, puedo enviarte el catálogo y la oferta más reciente.`;
     if (intent === 'post_call') return `Gracias por la llamada. Daré seguimiento a los detalles que conversamos y te enviaré el siguiente paso pronto.`;
-    return `Gracias por tu mensaje. Voy a confirmar el MOQ, el mejor precio y el tiempo de entrega de ${product}, y te enviaré los detalles pronto.`;
+    return `Gracias por tu mensaje. ¿Puedes compartir la cantidad, las especificaciones y los requisitos de empaque de ${product}?`;
   }
   if (intent === 'opener') return `Hi, this is our sales team. We can support wholesale supply for ${product}. May I know your target quantity and market?`;
-  if (intent === 'followup') return `Just following up on ${product}. If the quantity or packaging requirements are clear, I can confirm the best price and delivery time for you.`;
+  if (intent === 'followup') return `Just following up on ${product}. Have you confirmed the target quantity and packaging requirements?`;
   if (intent === 'reactivate') return `Hi, we recently updated our options for ${product}. If you are still interested, I can send the latest catalog and wholesale offer for your review.`;
   if (intent === 'post_call') return `Thanks for the call. I will follow up on the details we discussed and send you the next step shortly.`;
-  return `Thanks for your message. I will confirm the MOQ, best price, and delivery time for ${product}, then send you the details shortly.`;
+  return `Thanks for your message. Could you share the target quantity, specifications, and packaging requirements for ${product}?`;
 }
 
 function normalizeLanguage(value: unknown): 'arabic' | 'spanish' | 'english' {
