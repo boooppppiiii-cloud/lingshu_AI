@@ -16,6 +16,7 @@ import type { AgentAction, AgentType, Message, Page } from '../App';
 import { authHeader } from '../lib/auth';
 import { ORBIT_AGENT_IDS, type OrbitAgentId, useAssistantStore } from '../stores/assistantStore';
 import AgentReply from './AgentReply';
+import KnowledgeIntakePanel, { type AppliedProfile } from './enterprise/KnowledgeIntakePanel';
 
 interface AssistantContext {
   agent: AgentType;
@@ -36,6 +37,8 @@ interface AssistantTodoItem {
   tone: 'red' | 'amber' | 'blue' | 'green';
   completed: boolean;
 }
+
+type AssistantTool = 'knowledge-intake';
 
 interface Props {
   page: Page;
@@ -108,10 +111,10 @@ const SKILL_AGENTS: Array<{
   Icon: typeof Compass;
   position: { x: number; y: number };
 }> = [
-  { id: 'strategy', label: '策略助手', agentType: 'strategy', color: '#16A34A', bg: '#DCFCE7', Icon: Compass, position: { x: 0, y: -1 } },
-  { id: 'content', label: '内容助手', agentType: 'traffic', color: '#16A34A', bg: '#DCFCE7', Icon: Zap, position: { x: -0.5, y: -0.866 } },
-  { id: 'customer', label: '客户助手', agentType: 'conversion', color: '#0891B2', bg: '#E0F7FA', Icon: Users, position: { x: -0.866, y: -0.5 } },
-  { id: 'retention', label: '唤醒助手', agentType: 'retention', color: '#16A34A', bg: '#DCFCE7', Icon: ShoppingCart, position: { x: -1, y: 0 } },
+  { id: 'strategy', label: '策略助手', agentType: 'strategy', color: '#60A5FA', bg: '#EFF6FF', Icon: Compass, position: { x: 0, y: -1 } },
+  { id: 'content', label: '内容助手', agentType: 'traffic', color: '#60A5FA', bg: '#EFF6FF', Icon: Zap, position: { x: -0.5, y: -0.866 } },
+  { id: 'customer', label: '客户助手', agentType: 'conversion', color: '#60A5FA', bg: '#EFF6FF', Icon: Users, position: { x: -0.866, y: -0.5 } },
+  { id: 'retention', label: '唤醒助手', agentType: 'retention', color: '#60A5FA', bg: '#EFF6FF', Icon: ShoppingCart, position: { x: -1, y: 0 } },
 ];
 
 const AGENT_DISPLAY_NAME: Record<OrbitAgentId, string> = {
@@ -125,6 +128,54 @@ function pageKey(page: Page) {
   if (page === 'youtube' || page === 'channels') return 'plugins';
   if (page === 'retention') return 'conversion';
   return page;
+}
+
+type AssistantExpression = 'happy' | 'wink' | 'thinking' | 'excited';
+
+const PAGE_EXPRESSION: Record<Page, AssistantExpression> = {
+  strategy: 'happy',
+  traffic: 'excited',
+  conversion: 'thinking',
+  retention: 'happy',
+  orders: 'wink',
+  enterprise: 'thinking',
+  plugins: 'excited',
+  scheduled: 'wink',
+  admin: 'thinking',
+  adminDelivery: 'thinking',
+  channels: 'excited',
+  youtube: 'excited',
+};
+
+const EXPRESSION_CROP_LEFT: Record<AssistantExpression, number> = {
+  happy: -23,
+  wink: -83,
+  thinking: -143,
+  excited: -204,
+};
+
+function AssistantExpressionFace({ expression }: { expression: AssistantExpression }) {
+  return (
+    <span className="absolute inset-0 overflow-hidden rounded-[15px]" aria-hidden="true">
+      <AnimatePresence initial={false} mode="wait">
+        <motion.span
+          key={expression}
+          className="absolute inset-0"
+          initial={{ opacity: 0, scale: 0.82, rotate: -5 }}
+          animate={{ opacity: 1, scale: 1, rotate: 0 }}
+          exit={{ opacity: 0, scale: 0.86, rotate: 5 }}
+          transition={{ duration: 0.18, ease: 'easeOut' }}
+        >
+          <img
+            src="/lingshu-expressions.png"
+            alt=""
+            className="absolute top-[-36px] h-auto max-w-none drop-shadow-[0_8px_12px_rgba(52,196,113,0.16)]"
+            style={{ left: EXPRESSION_CROP_LEFT[expression] + 4, width: 276 }}
+          />
+        </motion.span>
+      </AnimatePresence>
+    </span>
+  );
 }
 
 function orbitIdForAgent(agent: AgentType): OrbitAgentId {
@@ -246,6 +297,7 @@ export default function GlobalAssistant({
   const [mode, setMode] = useState<'breathing' | 'expanded' | 'chat'>('breathing');
   const [panelView, setPanelView] = useState<'todo' | 'chat'>('chat');
   const [activeAgent, setActiveAgent] = useState<OrbitAgentId>('strategy');
+  const [assistantTool, setAssistantTool] = useState<AssistantTool | null>(null);
   const [liveContext, setLiveContext] = useState<AssistantContext | null>(null);
   const [enterpriseContext, setEnterpriseContext] = useState('');
   const [loading, setLoading] = useState(false);
@@ -265,6 +317,7 @@ export default function GlobalAssistant({
   const hydrateThread = useAssistantStore(state => state.hydrateThread);
 
   const pageContext = useMemo(() => liveContext ?? DEFAULT_CONTEXT[pageKey(page)] ?? DEFAULT_CONTEXT.strategy, [liveContext, page]);
+  const assistantExpression = PAGE_EXPRESSION[page];
   const activeContext = useMemo(() => contextForOrbit(activeAgent, pageContext), [activeAgent, pageContext]);
   const activeThread = threads[activeAgent];
   const todoItems = pageContext.todoItems ?? [];
@@ -275,8 +328,8 @@ export default function GlobalAssistant({
   const pendingBadge = pendingCount > 9 ? '9+' : String(pendingCount);
   const activeAgentLabel = SKILL_AGENTS.find(agent => agent.id === activeAgent)?.label ?? '灵枢助手';
   const isCustomerTodoView = panelView === 'todo' && activeAgent === 'customer' && pageContext.agent === 'conversion';
-  const panelTitle = isCustomerTodoView ? '今日待办' : activeAgentLabel;
-  const panelSubtitle = isCustomerTodoView ? '当前：我的客户' : `当前：${activeContext.label}`;
+  const panelTitle = assistantTool === 'knowledge-intake' ? '灵小枢 · 快速采集' : isCustomerTodoView ? '今日待办' : activeAgentLabel;
+  const panelSubtitle = assistantTool === 'knowledge-intake' ? '当前：智能客服规范' : isCustomerTodoView ? '当前：我的客户' : `当前：${activeContext.label}`;
   const radius = 110;
 
   const persistThread = useCallback((agentId: OrbitAgentId) => {
@@ -289,6 +342,7 @@ export default function GlobalAssistant({
   }, []);
 
   const openAgent = useCallback((agentId: OrbitAgentId) => {
+    setAssistantTool(null);
     setActiveAgent(agentId);
     setPanelView(agentId === 'customer' && pageContext.agent === 'conversion' && (pendingCount > 0 || todoItems.length > 0) ? 'todo' : 'chat');
     setUnreadCount(agentId, 0);
@@ -438,7 +492,7 @@ export default function GlobalAssistant({
 
   useEffect(() => {
     const handler = (event: Event) => {
-      const detail = (event as CustomEvent<{ text?: string; context?: Partial<AssistantContext> }>).detail;
+      const detail = (event as CustomEvent<{ text?: string; context?: Partial<AssistantContext>; tool?: AssistantTool }>).detail;
       let targetContext = pageContext;
       if (detail?.context?.agent && detail.context.label && detail.context.summary) {
         targetContext = {
@@ -453,6 +507,7 @@ export default function GlobalAssistant({
       }
       const targetAgent = orbitIdForAgent(targetContext.agent);
       openAgent(targetAgent);
+      if (detail?.tool === 'knowledge-intake') setAssistantTool('knowledge-intake');
       const text = detail?.text?.trim();
       if (text) window.setTimeout(() => void send(text, targetAgent, targetContext), 0);
     };
@@ -484,6 +539,12 @@ export default function GlobalAssistant({
   }, [page]);
 
   useEffect(() => {
+    if (page === 'enterprise' || assistantTool !== 'knowledge-intake') return;
+    setAssistantTool(null);
+    setMode('breathing');
+  }, [assistantTool, page]);
+
+  useEffect(() => {
     if (mode !== 'chat') return;
     const timer = window.setTimeout(() => persistThread(activeAgent), 500);
     return () => window.clearTimeout(timer);
@@ -506,6 +567,10 @@ export default function GlobalAssistant({
   const handleLauncherClick = () => {
     if (longPressedRef.current) {
       longPressedRef.current = false;
+      return;
+    }
+    if (assistantTool === 'knowledge-intake') {
+      setMode('chat');
       return;
     }
     if (mode === 'expanded') {
@@ -580,26 +645,29 @@ export default function GlobalAssistant({
       </AnimatePresence>
 
       <AnimatePresence>
-        {mode === 'chat' && (
+        {(mode === 'chat' || assistantTool === 'knowledge-intake') && (
           <motion.section
             data-global-assistant="panel"
             layoutId={`assistant-${activeAgent}`}
             initial={{ opacity: 0, y: 18, scale: 0.96 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
+            animate={mode === 'chat' ? { opacity: 1, y: 0, scale: 1 } : { opacity: 0, y: 18, scale: 0.96 }}
             exit={{ opacity: 0, y: 18, scale: 0.96 }}
             transition={reduceMotion ? { duration: 0.16 } : { type: 'spring', stiffness: 240, damping: 24 }}
-            className="absolute bottom-14 right-0 z-10 flex h-[min(720px,calc(100vh-112px))] w-[420px] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-2xl border border-border bg-white shadow-2xl"
+            className={`absolute bottom-14 right-0 z-10 flex h-[min(720px,calc(100vh-112px))] max-w-[calc(100vw-32px)] flex-col overflow-hidden rounded-2xl border border-border bg-white shadow-2xl ${assistantTool === 'knowledge-intake' ? 'w-[560px]' : 'w-[420px]'} ${mode === 'chat' ? 'pointer-events-auto visible' : 'pointer-events-none invisible'}`}
           >
             <header className="flex h-12 shrink-0 items-center justify-between border-b border-border px-4">
               <div className="flex min-w-0 items-center gap-2">
                 <button
                   type="button"
                   onClick={() => {
-                    if (isCustomerTodoView) setPanelView('chat');
+                    if (assistantTool === 'knowledge-intake') {
+                      setAssistantTool(null);
+                      setPanelView('chat');
+                    } else if (isCustomerTodoView) setPanelView('chat');
                     else setMode('expanded');
                   }}
                   className="rounded-lg p-1.5 text-text-muted hover:bg-surface-2"
-                  title={isCustomerTodoView ? '返回客户助手' : '返回展开态'}
+                  title={assistantTool === 'knowledge-intake' ? '返回灵小枢对话' : isCustomerTodoView ? '返回客户助手' : '返回展开态'}
                 >
                   <ArrowLeft size={16} />
                 </button>
@@ -613,7 +681,18 @@ export default function GlobalAssistant({
               </button>
             </header>
 
-            {isCustomerTodoView ? (
+            {assistantTool === 'knowledge-intake' ? (
+              <div className="min-h-0 flex-1 overflow-y-auto bg-surface-2 p-3">
+                <KnowledgeIntakePanel
+                  mode="center"
+                  compact
+                  onApplied={(profile: AppliedProfile) => {
+                    window.dispatchEvent(new CustomEvent('lingshu:knowledge-intake-applied', { detail: { profile } }));
+                    onSessionRefresh?.();
+                  }}
+                />
+              </div>
+            ) : isCustomerTodoView ? (
               <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
                 <div className="space-y-3">
                   <div className="rounded-2xl border border-cyan-100 bg-cyan-50 p-4">
@@ -742,30 +821,22 @@ export default function GlobalAssistant({
       </AnimatePresence>
 
       {mode !== 'chat' && (
-        <div className="relative z-10 h-16 w-16">
-          <motion.span
-            className="absolute inset-0 rounded-full border border-dashed border-text-muted/60"
-            animate={mode === 'breathing' && pendingCount > 0 && !reduceMotion ? { scale: [1, 1.08, 1], opacity: [0.4, 0.7, 0.4] } : { scale: 1, opacity: 0.72 }}
-            transition={{ duration: 2.4, ease: 'easeInOut', repeat: mode === 'breathing' && pendingCount > 0 && !reduceMotion ? Infinity : 0 }}
-          />
-          <motion.span
-            className="absolute inset-2 rounded-full border border-dashed border-text-muted/50"
-            animate={mode === 'breathing' && pendingCount > 0 && !reduceMotion ? { scale: [1, 1.08, 1], opacity: [0.4, 0.7, 0.4] } : { scale: 1, opacity: 0.65 }}
-            transition={{ duration: 2.4, ease: 'easeInOut', repeat: mode === 'breathing' && pendingCount > 0 && !reduceMotion ? Infinity : 0, delay: 0.18 }}
-          />
-          <button
+        <div className="relative z-10 h-14 w-14">
+          <motion.button
             type="button"
             data-global-assistant="launcher"
             onPointerDown={handlePointerDown}
             onPointerUp={handlePointerUp}
             onPointerLeave={handlePointerUp}
             onClick={handleLauncherClick}
-            className="absolute left-1/2 top-1/2 flex h-12 w-12 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-slate-950 text-white shadow-[0_16px_38px_rgba(15,23,42,0.22)]"
+            className="absolute inset-0 flex items-center justify-center bg-transparent outline-none transition-transform hover:-translate-y-0.5 focus-visible:ring-2 focus-visible:ring-[#6FDBA1] focus-visible:ring-offset-2"
+            animate={mode === 'breathing' && pendingCount > 0 && !reduceMotion ? { scale: [1, 1.05, 1], y: [0, -2, 0] } : { scale: 1, y: 0 }}
+            transition={{ duration: 2.4, ease: 'easeInOut', repeat: mode === 'breathing' && pendingCount > 0 && !reduceMotion ? Infinity : 0 }}
             title={mode === 'expanded' ? `打开${AGENT_DISPLAY_NAME[orbitIdForAgent(pageContext.agent)]}` : '展开灵枢助手'}
           >
-            <Bot size={21} />
+            <AssistantExpressionFace expression={assistantExpression} />
             {pendingCount > 0 && <span className="absolute -right-1 -top-1 min-w-5 rounded-full bg-red px-1 text-[11px] font-black text-white">{pendingBadge}</span>}
-          </button>
+          </motion.button>
         </div>
       )}
     </div>

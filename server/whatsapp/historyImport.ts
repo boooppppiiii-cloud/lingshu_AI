@@ -675,7 +675,6 @@ function draftForMessage(message: IncomingMessage, context?: RetrievedContext): 
   if (product) {
     const details = [
       product.sku ? `SKU ${product.sku}` : product.name,
-      product.priceRange ? `price range ${product.priceRange}` : '',
       product.moq ? `MOQ ${product.moq}` : '',
       product.material ? `material ${product.material}` : '',
     ].filter(Boolean).join(', ');
@@ -789,6 +788,33 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
     return;
   }
 
+  const inferredAction = inferActionFromText(message.body);
+  if (inferredAction === 'formal_quote') {
+    const reason = '客户正在询价，已标记为等待人工报价';
+    addInteraction({
+      id: `${customer.id}-waiting-human-quote-${Date.now()}`,
+      tenantId,
+      customerId: customer.id,
+      waNumber: message.waNumber,
+      type: 'system',
+      body: `${reason}。AI 不会直接回复价格，请销售确认数量、规格和包装后亲自报价。`,
+      timestamp: Date.now(),
+      audit: { action: 'formal_quote', risk: 'L4', handoff: true, reason },
+      meta: { action: 'formal_quote', waitingForQuote: true, handoff: true, reason },
+    });
+    upsertCustomer({
+      tenantId,
+      waNumber: message.waNumber,
+      patch: {
+        handlingMode: 'human_needed',
+        handlingReason: reason,
+        pendingDraft: undefined,
+        blockedAutoReplyReason: 'waiting_for_human_quote',
+      },
+    });
+    return;
+  }
+
   const context = await retrieveContext(tenantId, {
     id: customer.id,
     name: customer.name,
@@ -865,7 +891,7 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
     });
     return;
   }
-  let action = inferActionFromText(message.body);
+  let action = inferredAction;
   if (context.faqMatch?.autoSafe && action !== 'formal_quote' && action !== 'call_request') {
     action = 'auto_faq_reply';
   }

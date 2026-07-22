@@ -1,4 +1,4 @@
-import { type ReactNode, useEffect, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import {
   Home, Share2, Users, LayoutGrid,
@@ -173,6 +173,7 @@ function AdminPageGuide({ page }: { page: Page }) {
 export default function Layout({ page, onNavigate, conversation, children, session, onLogout, suppressRightPanel, onAction, onSessionUpdate, demoGuideActive, onDemoGuideShown, onOpenBusinessDiagnosis }: LayoutProps) {
   const isInConversation = conversation !== null && !suppressRightPanel;
   const [quotaOpen, setQuotaOpen] = useState(false);
+  const quotaAreaRef = useRef<HTMLDivElement>(null);
   const [quotaLoading, setQuotaLoading] = useState(false);
   const [quotaUpdatedAt, setQuotaUpdatedAt] = useState<number | null>(null);
   const [liveSession, setLiveSession] = useState<AuthSession | null>(null);
@@ -200,6 +201,21 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
     try { localStorage.setItem('lingshu:sidebar-collapsed', String(sidebarCollapsed)); } catch { /* storage can be unavailable */ }
     if (sidebarCollapsed) setQuotaOpen(false);
   }, [sidebarCollapsed]);
+  useEffect(() => {
+    if (!quotaOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (!quotaAreaRef.current?.contains(event.target as Node)) setQuotaOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setQuotaOpen(false);
+    };
+    document.addEventListener('pointerdown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [quotaOpen]);
   const secondaryItems = isAdminSession(activeSession)
     ? [
       ...SECONDARY_NAV.items,
@@ -252,7 +268,7 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
         initial={false}
         animate={{ width: sidebarCollapsed ? 64 : 220 }}
         transition={{ type: 'spring', damping: 30, stiffness: 320 }}
-        className="flex-shrink-0 flex flex-col border-r border-border overflow-hidden"
+        className="relative z-40 flex-shrink-0 flex flex-col border-r border-border overflow-visible"
         style={{ background: '#f2f3f5' }}
       >
         {/* Logo */}
@@ -343,7 +359,7 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
         )}
 
         {/* Bottom user */}
-        <div className="relative px-3 py-3 border-t border-border flex-shrink-0">
+        <div ref={quotaAreaRef} className="relative px-3 py-3 border-t border-border flex-shrink-0">
           <AnimatePresence>
             {quotaOpen && (
               <motion.div
@@ -351,7 +367,9 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
                 animate={{ opacity: 1, y: 0, scale: 1 }}
                 exit={{ opacity: 0, y: 8, scale: 0.98 }}
                 transition={{ duration: 0.16 }}
-                className="absolute left-3 bottom-[68px] w-[324px] rounded-2xl bg-white border border-border shadow-xl p-3 z-30"
+                role="dialog"
+                aria-label="Token 使用"
+                className="absolute left-3 bottom-[68px] z-50 max-h-[calc(100vh-96px)] w-[min(324px,calc(100vw-88px))] overflow-y-auto rounded-2xl border border-border bg-white p-3 shadow-xl"
               >
                 <div className="flex items-start justify-between gap-2 mb-3">
                   <div>
@@ -464,12 +482,14 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
             <button
               onClick={openQuota}
               title="查看 Token 使用"
+              aria-expanded={quotaOpen}
+              aria-haspopup="dialog"
               className="w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
               style={{ background: 'linear-gradient(135deg, #4ade80, #16a34a)' }}
             >
               {initial}
             </button>
-            {!sidebarCollapsed && <button onClick={openQuota} className="flex-1 min-w-0 text-left rounded-lg -my-1 py-1 hover:bg-black/5 transition-colors">
+            {!sidebarCollapsed && <button onClick={openQuota} aria-expanded={quotaOpen} aria-haspopup="dialog" className="flex-1 min-w-0 text-left rounded-lg -my-1 py-1 hover:bg-black/5 transition-colors">
               <p className="text-xs font-semibold text-text-primary truncate">{tenantName}</p>
               <p className="text-[10px] text-text-muted truncate">
                 {demo && isTrialAccount ? `Token 剩余 ${tokenLabel}` : (SUB_LABEL[subStatus] ?? subStatus)}

@@ -50,6 +50,8 @@ type CustomerFilterKey = 'source' | 'country' | 'language' | 'stage' | 'handling
 
 interface DraftResult {
   draft: string;
+  handoffRequired?: boolean;
+  handlingReason?: string;
   knowledgeMiss?: boolean;
   missReason?: string;
   evidence?: string[];
@@ -243,22 +245,22 @@ function customerConversationLanguage(customer: CustomerProfile): string {
 
 function fallbackCustomerReply(customer: CustomerProfile): string {
   if (replyLanguage(customer) === 'Arabic') {
-    return `Thanks for your message. I will confirm the MOQ, best price, and delivery time for ${customer.outboundProduct}, then send you the details shortly.`;
+    return `شكرًا لرسالتك. هل يمكنك مشاركة الكمية المستهدفة والمواصفات ومتطلبات التغليف الخاصة بـ ${customer.outboundProduct}؟`;
   }
   if (replyLanguage(customer) === 'Spanish') {
-    return `Gracias por tu mensaje. Voy a confirmar el MOQ, el mejor precio y el tiempo de entrega de ${customer.outboundProduct}, y te enviaré los detalles pronto.`;
+    return `Gracias por tu mensaje. ¿Puedes compartir la cantidad, las especificaciones y los requisitos de empaque de ${customer.outboundProduct}?`;
   }
-  return `Thanks for your message. I will confirm the MOQ, best price, and delivery time for ${customer.outboundProduct}, then send you the details shortly.`;
+  return `Thanks for your message. Could you share the target quantity, specifications, and packaging requirements for ${customer.outboundProduct}?`;
 }
 
 function fallbackCustomerReplyZh(customer: CustomerProfile): string {
   if (customer.needCall || customer.inboxReason === 'call') {
-    return `您好，我们可以根据您要的${customer.product}快速确认规格、价格和交期。请您补充一下目标规格、包装要求和交付时间，我会尽快整理方案给您。`;
+    return `您好，我们可以根据您要的${customer.product}安排销售跟进。请补充目标规格、包装要求和方便沟通的时间。`;
   }
   if (customer.stage === 'silent30' || customer.stage === 'silent60') {
     return `您好，之前您关注过${customer.product}，我们最近有新款和更适合批量采购的方案。如果您还在看这类产品，我可以发一份最新目录给您参考。`;
   }
-  return `您好，感谢您的咨询。我先为您确认${customer.product}的起订量、最优价格和交期，稍后把完整信息发给您。`;
+  return `您好，感谢您的咨询。请补充${customer.product}的目标数量、规格和包装要求，方便我们准确跟进。`;
 }
 
 function chooseTemplateName(customer: CustomerProfile): string {
@@ -314,20 +316,26 @@ function translateChineseReplyForCustomer(customer: CustomerProfile, text: strin
   if (language === 'Arabic') {
     if (wantsCall) return `شكرًا لرسالتك. بخصوص ${product}، يمكن لمديرنا شرح الخيارات والسعر ومدة التسليم في مكالمة قصيرة. ما الوقت المناسب لك اليوم؟`;
     if (isWakeup) return `مرحبًا، لدينا خيارات جديدة من ${product}. إذا كنت لا تزال مهتمًا، يمكنني إرسال الكتالوج الأحدث لك.`;
-    return `شكرًا لرسالتك. سأؤكد لك الحد الأدنى للطلب وأفضل سعر ومدة التسليم لـ ${product}، ثم أرسل لك التفاصيل قريبًا.`;
+    return `شكرًا لرسالتك. هل يمكنك مشاركة الكمية المستهدفة والمواصفات ومتطلبات التغليف الخاصة بـ ${product}؟`;
   }
   if (language === 'Spanish') {
     if (wantsCall) return `Gracias por tu mensaje. Para ${product}, nuestro gerente puede explicarte las opciones, el precio y el plazo de entrega en una llamada breve. ¿Qué horario te conviene hoy?`;
     if (isWakeup) return `Hola, tenemos nuevas opciones de ${product}. Si todavía te interesa, puedo enviarte el catálogo actualizado.`;
-    return `Gracias por tu mensaje. Voy a confirmar el MOQ, el mejor precio y el tiempo de entrega de ${product}, y te enviaré los detalles pronto.`;
+    return `Gracias por tu mensaje. ¿Puedes compartir la cantidad, las especificaciones y los requisitos de empaque de ${product}?`;
   }
   if (wantsCall) return `Thanks for your message. For ${product}, our manager can explain the options, price, and delivery time in a short call. What time works for you today?`;
   if (isWakeup) return `Hi, we have new options for ${product}. If you are still interested, I can send you the latest catalog for review.`;
-  return `Thanks for your message. I will confirm the MOQ, best price, and delivery time for ${product}, then send you the details shortly.`;
+  return `Thanks for your message. Could you share the target quantity, specifications, and packaging requirements for ${product}?`;
 }
 
 function latestBuyerText(customer: CustomerProfile): string {
   return [...customer.timeline].reverse().find(event => event.type === 'whatsapp' && event.actor === 'buyer')?.body || '';
+}
+
+function isWaitingForHumanQuote(customer: CustomerProfile): boolean {
+  const latest = latestBuyerText(customer);
+  return customer.handlingReason.includes('等待人工报价')
+    || /\b(price|quote|quotation|discount|unit cost|how much)\b|报价|价格|单价|多少钱|折扣|优惠/i.test(latest);
 }
 
 interface StyleMemoryPayload {
@@ -358,6 +366,15 @@ async function requestDraft(customer: CustomerProfile, instruction?: string, mod
     });
     if (resp.ok) {
       const data = await resp.json();
+      if (data?.handoffRequired) {
+        return {
+          draft: '',
+          handoffRequired: true,
+          handlingReason: typeof data.handlingReason === 'string' ? data.handlingReason : '客户正在询价，需要人工报价',
+          evidence: Array.isArray(data.evidence) ? data.evidence.map(String) : [],
+          category: typeof data.category === 'string' ? data.category : '报价',
+        };
+      }
       if (typeof data?.draft === 'string' && data.draft.trim()) {
         const draft = normalizeDraftForChineseEditing(data.draft.trim(), customer);
         return {
@@ -1593,6 +1610,11 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
     if (!selected) return;
     const lastBuyer = [...selected.timeline].reverse().find(event => event.type === 'whatsapp' && event.actor === 'buyer');
     if (!lastBuyer) return;
+    if (isWaitingForHumanQuote(selected)) {
+      setDraftSuggestion(null);
+      setDraftMeta(null);
+      return;
+    }
     const key = `${selected.id}:${lastBuyer.id}`;
     if (key === lastDraftKey) return;
     setLastDraftKey(key);
@@ -1807,16 +1829,32 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
 
   const generateManualDraft = async (instruction: string, intent: DraftIntent = 'reply') => {
     if (!selected) return;
+    if (intent !== 'polish' && isWaitingForHumanQuote(selected)) {
+      showToast('客户正在询价，已标记等待人工报价，请由销售亲自回复。');
+      return;
+    }
     setDraftSuggestion(null);
     setDraftMeta(null);
     const result = await requestDraft(selected, instruction, undefined, intent);
+    if (result.handoffRequired) {
+      showToast(result.handlingReason || '该消息需要人工接手。');
+      return;
+    }
     setDraftSuggestion(result.draft);
     setDraftMeta(result);
   };
 
   const regenerateDraft = async () => {
     if (!selected) return;
+    if (isWaitingForHumanQuote(selected)) {
+      showToast('报价问题不生成 AI 回复，请由销售亲自回复。');
+      return;
+    }
     const result = await requestDraft(selected, undefined, undefined, 'reply');
+    if (result.handoffRequired) {
+      showToast(result.handlingReason || '该消息需要人工接手。');
+      return;
+    }
     setDraftSuggestion(result.draft);
     setDraftMeta(result);
   };

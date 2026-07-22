@@ -40,7 +40,7 @@ function parseJsonObject(raw: string): Record<string, unknown> {
 }
 
 function normalizeQuoteMode(value: unknown): BizRules['quoteMode'] | undefined {
-  return value === 'range' || value === 'human_only' ? value : undefined;
+  return value === 'range' || value === 'human_only' ? 'human_only' : undefined;
 }
 
 function normalizeBargainPolicy(value: unknown): BizRules['bargainPolicy'] | undefined {
@@ -98,7 +98,7 @@ function productSummary(profile: EnterpriseProfile): string {
     sku: item.sku || '',
     name: item.name,
     category: item.category || '',
-    price: item.priceRange || item.tagPrice || '',
+    price: item.priceRange || item.retailPrice || item.tagPrice || '',
     moq: item.moq || '',
     highlights: item.highlights || '',
     certifications: item.certifications || '',
@@ -154,13 +154,13 @@ function fallbackFromProducts(profile: EnterpriseProfile): KnowledgeIntakePrevie
     conversationCount: 0,
     companyIntro,
     bizRules: {
+      quoteMode: 'human_only',
       moq: profile.products.moq || undefined,
       priceRange: profile.products.priceRange || undefined,
     },
     faqs,
     evidence: productNames.length ? [`根据已录入的 ${productNames.length} 个主推产品生成初稿`] : [],
-    missing: ['报价方式', '样品政策', '付款方式', '交期口径'].filter(item => {
-      if (item === '报价方式') return !profile.bizRules?.quoteMode;
+    missing: ['样品政策', '付款方式', '交期口径'].filter(item => {
       if (item === '样品政策') return !profile.bizRules?.samplePolicy;
       if (item === '付款方式') return !profile.bizRules?.paymentTerms;
       return !profile.bizRules?.leadTime;
@@ -185,8 +185,9 @@ export async function extractKnowledgeFromHistory(
     '4. FAQ 默认都不能自动发送，approvedForAuto 固定 false。',
     '5. companyIntro 只写 60-140 字，可直接给海外买家或用于 AI 回复。',
     '6. evidence 写 2-6 条中文依据说明，不含客户姓名、电话、地址。',
+    '7. quoteMode 固定为 human_only。AI 只能识别询价并整理条件，不能直接报价，也不能生成“稍后报价”占位消息。',
     '输出结构：',
-    '{"companyIntro":"","bizRules":{"quoteMode":"range|human_only","priceRange":"","bargainPolicy":"no|limited|open","bargainFloor":"","moq":"","samplePolicy":"","paymentTerms":"","leadTime":""},"faqs":[{"question":"","answer":"","approvedForAuto":false}],"evidence":[],"missing":[]}',
+    '{"companyIntro":"","bizRules":{"quoteMode":"human_only","priceRange":"","bargainPolicy":"no|limited|open","bargainFloor":"","moq":"","samplePolicy":"","paymentTerms":"","leadTime":""},"faqs":[{"question":"","answer":"","approvedForAuto":false}],"evidence":[],"missing":[]}',
     '已录入的企业/产品资料（用于核对，不能覆盖聊天事实）：',
     productSummary(profile),
     '过去六个月的脱敏会话：',
@@ -223,7 +224,7 @@ export async function draftKnowledgeFromProducts(profile: EnterpriseProfile): Pr
     'companyIntro 写 60-140 字。FAQ 写 5-8 条最容易确认的初稿，答案中不确定的信息用“请告诉我采购数量，我们为你确认”收口。',
     'FAQ 的 approvedForAuto 固定 false。',
     '输出结构：',
-    '{"companyIntro":"","bizRules":{"quoteMode":"range|human_only","priceRange":"","bargainPolicy":"no|limited|open","bargainFloor":"","moq":"","samplePolicy":"","paymentTerms":"","leadTime":""},"faqs":[{"question":"","answer":"","approvedForAuto":false}],"evidence":[],"missing":[]}',
+    '{"companyIntro":"","bizRules":{"quoteMode":"human_only","priceRange":"","bargainPolicy":"no|limited|open","bargainFloor":"","moq":"","samplePolicy":"","paymentTerms":"","leadTime":""},"faqs":[{"question":"","answer":"","approvedForAuto":false}],"evidence":[],"missing":[]}',
     '企业与产品资料：',
     productSummary(profile),
   ].join('\n');

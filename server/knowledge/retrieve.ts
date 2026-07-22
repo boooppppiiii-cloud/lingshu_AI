@@ -16,6 +16,8 @@ export interface ProductLite {
   priceRange?: string;
   moq?: string;
   tagPrice?: string;
+  retailPrice?: string;
+  brand?: string;
   material?: string;
   color?: string;
   size?: string;
@@ -312,9 +314,11 @@ function toProductLite(item: NonNullable<EnterpriseProfile['products']['items']>
     sku: text(item.sku),
     name: text(item.name || item.sku),
     category: text(item.category),
-    priceRange: text(item.priceRange || item.tagPrice),
+    priceRange: text(item.priceRange || item.retailPrice || item.tagPrice),
     moq: text(item.moq),
     tagPrice: text(item.tagPrice),
+    retailPrice: text(item.retailPrice),
+    brand: text(item.brand),
     material: text(item.material),
     color: text(item.color),
     size: text(item.size),
