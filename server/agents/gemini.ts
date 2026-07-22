@@ -258,8 +258,13 @@ export function normalizeVideoAnalysis(parsed: Partial<VideoAiAnalysis>): VideoA
 export async function analyzeVideo(opts: {
   videoBase64: string;
   mimeType: string;
+  analysisMode?: 'strategy' | 'exact';
 }): Promise<VideoAiAnalysis> {
+  const modeInstruction = opts.analysisMode === 'exact'
+    ? '当前为全片精确分析：按真实镜头、主体动作、对象、构图、运镜、台词或营销功能变化高密度拆分全片，不得合并有效动作。'
+    : '当前为默认全片策略分析：必须从 0 秒覆盖到结尾，镜头密度跟随真实内容变化；重复或稳定画面应合并为区间并用 beats 记录变化，禁止无意义逐秒拆分。';
   const systemInstruction = `你是一个面向出海电商营销的短视频内容分析专家。
+${modeInstruction}
 请分析提供的视频，并提取结构化信息。除 recommendedScriptType 字段外，所有字符串内容必须使用简体中文输出。
 只输出合法 JSON，不要 markdown，不要代码块，不要前后解释。
 ${GEMINI_ANALYSIS_DIRECTOR_CONTRACT}
@@ -278,7 +283,7 @@ ${GEMINI_ANALYSIS_DIRECTOR_CONTRACT}
   - visuals: 画面
   - voiceMusic: 配音配乐
 - coarseStructure: array，覆盖原视频完整时长，按约 3–8 秒或内容结构变化拆解；每项包含 time、label、description
-- scriptSummary15s: object，15 秒脚本详析摘要，包含 visualStyle（指定画风）、coreEmotion（核心情绪）、competitors（竞品/品牌/视觉参照物数组；如无明确识别则空数组）
+- scriptSummary15s: object（字段名仅为历史兼容），原视频全片脚本详析摘要，包含 visualStyle（指定画风）、coreEmotion（核心情绪）、competitors（竞品/品牌/视觉参照物数组；如无明确识别则空数组）
 - scriptDetails15s: array（字段名仅为历史兼容），必须逐时间戳详析原视频完整时长，从 0 秒连续覆盖到视频结束，不得在 15 秒处截断；每项必须包含：
   - time: string，必须使用 "start-end s" 时间区间，例如 "0.2-1.0s"；按导演镜头切分，主体动作、展示对象、运镜或营销功能改变时新建镜头
   - environment: string，环境/场景，例如“白色浴室台面”“居家卧室”“户外街景”
@@ -340,7 +345,7 @@ ${GEMINI_ANALYSIS_DIRECTOR_CONTRACT}
   - visuals: 画面
   - voiceMusic: 配音配乐
 - coarseStructure: array，覆盖原视频完整时长，按内容结构变化拆解；每项包含 time、label、description
-- scriptSummary15s: object，15 秒脚本详析摘要，包含 visualStyle（指定画风）、coreEmotion（核心情绪）、competitors（竞品/品牌/视觉参照物数组；如无明确识别则空数组）
+- scriptSummary15s: object（字段名仅为历史兼容），原视频全片脚本详析摘要，包含 visualStyle（指定画风）、coreEmotion（核心情绪）、competitors（竞品/品牌/视觉参照物数组；如无明确识别则空数组）
 - scriptDetails15s: array（字段名仅为历史兼容），逐时间戳详析原视频完整时长，从 0 秒连续覆盖到视频结束，不得在 15 秒处截断；每项必须包含：
   - time: string，统一使用 "start-end s"，数字最多保留两位小数，例如 "0-0.2s" 或 "5.2-7.25s"
   - environment: string，环境/场景，例如“白色浴室台面”“居家卧室”“户外街景”

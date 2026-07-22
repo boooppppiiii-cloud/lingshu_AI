@@ -131,6 +131,8 @@ interface VideoAnalysisPayload {
   downloadError?: string;
   analysisSource?: string;
   analysisQuality?: string;
+  analysisMode?: 'strategy' | 'exact';
+  requestedAnalysisMode?: 'strategy' | 'exact';
   analysisError?: string;
   videoStorage?: string;
   analyzedAt?: string;
@@ -1304,7 +1306,7 @@ function ImageBreakdownContent({ video, analysis, activeTab }: { video: TrendVid
 }
 
 // ── Analysis Panel ────────────────────────────────────────────────────────────
-function AnalysisPanel({ video, onGenerateScript, onRetry, specialRecommendation }: { video: TrendVideo; onGenerateScript: (analysis?: ScriptAnalysis) => void; onRetry?: () => void; specialRecommendation?: AccountSpecialRecommendation | null }) {
+function AnalysisPanel({ video, onGenerateScript, onRetry, onExactAnalysis, specialRecommendation }: { video: TrendVideo; onGenerateScript: (analysis?: ScriptAnalysis) => void; onRetry?: () => void; onExactAnalysis?: () => void; specialRecommendation?: AccountSpecialRecommendation | null }) {
   const [loaded, setLoaded] = useState(false);
   const [analysis, setAnalysis] = useState<ScriptAnalysis | null>(null);
   const [activeBookmark, setActiveBookmark] = useState<'reason' | 'frames' | 'script' | 'adapt' | ImageInsightTab>(video.contentFormat === 'image' ? 'overview' : 'reason');
@@ -1779,6 +1781,12 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, specialRecommendation
       </div>
 
       <div className="flex-shrink-0 border-t border-border bg-surface p-4 shadow-[0_-10px_24px_rgba(15,23,42,0.04)]">
+        {video.contentFormat !== 'image' && <div className="mb-3 rounded-xl border border-accent/20 bg-accent/5 p-3">
+          <div className="flex items-center justify-between gap-3">
+            <div><p className="text-[11px] font-black text-text-primary">{video.aiAnalysis?.analysisMode === 'exact' ? '全片精确分析版' : '全片策略分析版'}</p><p className="mt-0.5 text-[10px] leading-relaxed text-text-muted">{video.aiAnalysis?.analysisMode === 'exact' ? '已按高密度镜头与动作变化分析全片。' : '默认覆盖全片，按真实内容变化拆分，控制 Token 成本。'}</p></div>
+            {video.aiAnalysis?.analysisMode !== 'exact' && <button type="button" onClick={onExactAnalysis} disabled={video.aiAnalysis?.requestedAnalysisMode === 'exact'} className="shrink-0 rounded-lg border border-accent bg-white px-2.5 py-1.5 text-[10px] font-black text-accent hover:bg-accent/5 disabled:cursor-wait disabled:opacity-50">{video.aiAnalysis?.requestedAnalysisMode === 'exact' ? '精确分析生成中…' : '生成全片精确分析'}</button>}
+          </div>
+        </div>}
         <button onClick={() => onGenerateScript(analysis || undefined)} disabled={video.contentFormat === 'image' && !hasTrustedImageAnalysis}
           className="flex w-full items-center justify-center gap-2 rounded-2xl py-3 text-sm font-black text-white transition-all enabled:hover:scale-[1.01] enabled:active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
           style={{ background: 'linear-gradient(135deg, #16a34a, #059669)', boxShadow: '0 10px 24px rgba(22,163,74,0.26)' }}>
@@ -1797,6 +1805,7 @@ interface ScriptPanelProps {
   activePanelTab: 'analysis' | 'generate';
   onClose: () => void;
   onRetry?: () => void;
+  onExactAnalysis?: () => void;
   onFavorite?: () => void;
   favoriting?: boolean;
   specialRecommendation?: AccountSpecialRecommendation | null;
@@ -1830,7 +1839,7 @@ interface GeneratedVideo {
   error?: string;
 }
 
-function ScriptPanel({ video, activePanelTab, onClose, onRetry, onFavorite, favoriting, specialRecommendation, onNavigate, onEnterWorkflow }: ScriptPanelProps) {
+function ScriptPanel({ video, activePanelTab, onClose, onRetry, onExactAnalysis, onFavorite, favoriting, specialRecommendation, onNavigate, onEnterWorkflow }: ScriptPanelProps) {
   const [activeTab, setActiveTab] = useState<'analysis' | 'generate'>(activePanelTab);
   const [scriptType, setScriptType] = useState<ScriptType>('voiceover');
   const [language, setLanguage] = useState('zh');
@@ -1919,6 +1928,11 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onFavorite, favo
     setVideoResult(null);
     setVideoError('');
     const realAnalysis = getAnalysis(video);
+    const analyzedDuration = (realAnalysis?.scriptDetails15s || []).reduce((max, item) => {
+      const values = String(item.time || '').match(/\d+(?:\.\d+)?/g)?.map(Number) || [];
+      return Math.max(max, values[1] ?? values[0] ?? 0);
+    }, 0);
+    const fullVideoDuration = Math.max(1, Math.ceil(video.duration || analyzedDuration || 15));
     const languageLabel = LANGUAGES.find(l => l.code === language)?.label;
     const fallbackScript = makeFallbackScript(video, realAnalysis, productInfo, languageLabel, language, scriptType);
     try {
@@ -1933,7 +1947,7 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onFavorite, favo
           productInfo,
           language,
           platform: video.platform,
-          duration: 15,
+          duration: fullVideoDuration,
           scriptType,
           referenceTitle: video.title,
           referenceAnalysis: referenceAnalysisText(video, realAnalysis),
@@ -2079,7 +2093,7 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onFavorite, favo
         {activeTab === 'analysis' ? (
           <motion.div key="analysis" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             className="flex flex-col flex-1 min-h-0 overflow-hidden">
-            <AnalysisPanel key={video.id} video={video} onGenerateScript={enterQuickCutFromAnalysis} onRetry={onRetry} specialRecommendation={specialRecommendation} />
+            <AnalysisPanel key={video.id} video={video} onGenerateScript={enterQuickCutFromAnalysis} onRetry={onRetry} onExactAnalysis={onExactAnalysis} specialRecommendation={specialRecommendation} />
           </motion.div>
         ) : (
           <motion.div key="generate" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -3158,6 +3172,30 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
     await analyzeVideoOnly(video);
   };
 
+  const requestExactFullAnalysis = async (video: TrendVideo) => {
+    if (!video.recordId || analyzingVideoIds.includes(video.id)) return;
+    setAnalyzingVideoIds(ids => [...ids, video.id]);
+    setMaterialMessage(`已提交全片精确分析：${video.title}`);
+    try {
+      const response = await fetch(`/api/overseas/videos/${video.recordId}/reanalyze`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...authHeader() },
+        body: JSON.stringify({ analysisMode: 'exact' }),
+      });
+      const data = await response.json().catch(() => ({})) as { error?: string };
+      if (!response.ok) throw new Error(data.error || '全片精确分析提交失败');
+      const markQueued = (item: TrendVideo): TrendVideo => ({ ...item, aiAnalysis: { ...(item.aiAnalysis || {}), requestedAnalysisMode: 'exact' } });
+      setCrawledVideos(items => items.map(item => item.id === video.id ? markQueued(item) : item));
+      setSelectedVideo(item => item?.id === video.id ? markQueued(item) : item);
+      void refreshVideos();
+    } catch (error) {
+      setMaterialMessage(error instanceof Error ? error.message : '全片精确分析提交失败');
+    } finally {
+      setAnalyzingVideoIds(ids => ids.filter(id => id !== video.id));
+      setTimeout(() => setMaterialMessage(''), 3500);
+    }
+  };
+
   return (
     <div className="relative">
       <div className="transition-all duration-300">
@@ -3601,6 +3639,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
             activePanelTab={scriptPanelTab}
             onClose={() => setSelectedVideo(null)}
             onRetry={() => void retryVideoPipeline(selectedVideo)}
+            onExactAnalysis={() => void requestExactFullAnalysis(selectedVideo)}
             onFavorite={() => void favoriteMaterial(selectedVideo)}
             favoriting={favoritingMaterialIds.includes(selectedVideo.id)}
             specialRecommendation={accountRecommendationByVideoId.get(selectedVideo.id)}

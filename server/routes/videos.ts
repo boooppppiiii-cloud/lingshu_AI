@@ -139,7 +139,7 @@ function objectRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
 }
 
-function hasCompleteVideoGeminiAnalysis(gemini: unknown): boolean {
+function hasCompleteVideoGeminiAnalysis(gemini: unknown, duration = 0): boolean {
   const analysis = objectRecord(gemini);
   if (!Object.keys(analysis).length) return false;
 
@@ -160,10 +160,19 @@ function hasCompleteVideoGeminiAnalysis(gemini: unknown): boolean {
     })
     : [];
 
+  const analyzedUntil = scriptDetails.reduce((max, item) => {
+    const detail = objectRecord(item);
+    const values = String(detail.time || detail.timestamp || '').match(/\d+(?:\.\d+)?/g)?.map(Number) || [];
+    return Math.max(max, values[1] ?? values[0] ?? 0);
+  }, 0);
+  const tolerance = duration > 0 ? Math.max(1, Math.min(3, duration * 0.03)) : 0;
+  const coversFullVideo = duration <= 0 || analyzedUntil + tolerance >= duration;
+
   return textPresent(analysis.theme)
     && firstTenCount >= 3
     && coarseStructure.length >= 2
-    && scriptDetails.length >= 2;
+    && scriptDetails.length >= 2
+    && coversFullVideo;
 }
 
 function isVideoLevelAnalysis(analysis: Record<string, unknown>): boolean {
@@ -233,6 +242,7 @@ function videoLevelSuccessPatch(input: {
     gemini: input.analysis,
     analysisSource: input.source,
     analysisQuality: 'video',
+    analysisMode: 'strategy',
     downloadStatus: 'analyzed',
     videoFetchStatus: input.videoFetchStatus,
     geminiStatus: 'analyzed',
@@ -1460,7 +1470,7 @@ videosRouter.patch('/:id/analysis-corrections', async (req, res) => {
   const { tenantId, userId } = res.locals as AuthLocals;
   const record = await store.getById(COL, req.params.id);
   if (!record || record.tenantId !== tenantId) { res.status(404).json({ error: 'Not found' }); return; }
-  const details = Array.isArray(req.body?.scriptDetails15s) ? req.body.scriptDetails15s.slice(0, 60) : null;
+  const details = Array.isArray(req.body?.scriptDetails15s) ? req.body.scriptDetails15s.slice(0, 500) : null;
   const summary = req.body?.scriptSummary15s && typeof req.body.scriptSummary15s === 'object' ? req.body.scriptSummary15s : null;
   if (!details) { res.status(400).json({ error: 'scriptDetails15s required' }); return; }
   const previous = parseJsonRecord<Record<string, any>>(record.aiAnalysis, {});
@@ -1486,6 +1496,7 @@ videosRouter.patch('/:id/reanalyze', async (req, res) => {
     return;
   }
 
+  const analysisMode = req.body?.analysisMode === 'exact' ? 'exact' : 'strategy';
   const fileId = record.videoFileId as string | undefined;
   if (!fileId) {
     const sourceUrl = String(record.sourceUrl || '').trim();
@@ -1493,7 +1504,10 @@ videosRouter.patch('/:id/reanalyze', async (req, res) => {
       res.status(400).json({ error: 'No video file or public sourceUrl attached to this record' });
       return;
     }
-    await queueAnalyzeSource(record);
+    const previous = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
+    const queuedRecord = { ...record, aiAnalysis: JSON.stringify({ ...previous, requestedAnalysisMode: analysisMode }) };
+    await store.update(COL, req.params.id, { aiAnalysis: queuedRecord.aiAnalysis });
+    await queueAnalyzeSource(queuedRecord);
     res.json({ status: 'pending' });
     return;
   }
@@ -1501,7 +1515,7 @@ videosRouter.patch('/:id/reanalyze', async (req, res) => {
   const previous = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
   await store.update(COL, req.params.id, {
     status: 'pending',
-    aiAnalysis: JSON.stringify({ ...previous, analysisError: undefined, reanalyzeQueuedAt: new Date().toISOString() }),
+    aiAnalysis: JSON.stringify({ ...previous, requestedAnalysisMode: analysisMode, analysisError: undefined, reanalyzeQueuedAt: new Date().toISOString() }),
   });
   const localPath = path.join(MEDIA_DIR, fileId);
   if (fs.existsSync(localPath)) {
@@ -1517,7 +1531,7 @@ videosRouter.patch('/:id/reanalyze', async (req, res) => {
       poster: String(previous.materialPoster || record.thumbnailUrl || '') || undefined,
       scope: 'own',
       createdAt: new Date().toISOString(),
-    });
+    }, analysisMode);
   } else {
     void triggerVideoAnalysis(req.params.id, fileId, undefined, userId);
   }
@@ -1572,6 +1586,7 @@ async function triggerVideoAnalysis(
       duration: Number(record?.duration || 0),
       tags: parseJsonRecord<string[]>(record?.tags, []),
       sourceLabel: 'gemini-upload-video',
+      analysisMode: previous.requestedAnalysisMode === 'exact' ? 'exact' : 'strategy',
     });
     cleanupTempVideo(tempPath);
     tempPath = '';
@@ -1585,7 +1600,7 @@ async function triggerVideoAnalysis(
           analysis: result.analysis,
           source: result.source,
           videoFetchStatus: 'manual_upload',
-          extra: { manualVideoUploadStatus: 'analyzed' },
+          extra: { manualVideoUploadStatus: 'analyzed', analysisMode: previous.requestedAnalysisMode === 'exact' ? 'exact' : 'strategy', requestedAnalysisMode: undefined },
         }),
       }),
       status: 'analyzed',
@@ -2187,9 +2202,10 @@ async function analyzeSourceVideoJobInner(input: {
   forceManualFailure?: boolean;
 }): Promise<unknown> {
   const recordId = input.record?.id ? String(input.record.id) : '';
+  const requestedMode = parseJsonRecord<Record<string, unknown>>(input.record?.aiAnalysis, {}).requestedAnalysisMode;
   let tempPath = '';
   try {
-    if (input.platform === 'youtube' && !input.skipYoutubeUrlAnalysis && (input.forceManualFailure || !shouldUseQwenFirst())) {
+    if (requestedMode !== 'exact' && input.platform === 'youtube' && !input.skipYoutubeUrlAnalysis && (input.forceManualFailure || !shouldUseQwenFirst())) {
       const direct = await tryAnalyzeYouTubeUrl(input);
       if (direct) return direct;
       if (input.forceManualFailure) {
@@ -2261,6 +2277,8 @@ async function analyzeSourceVideoJobInner(input: {
       });
     }
 
+    const requestedAnalysis = parseJsonRecord<Record<string, unknown>>(input.record?.aiAnalysis, {});
+    const analysisMode = requestedAnalysis.requestedAnalysisMode === 'exact' ? 'exact' : 'strategy';
     const videoAnalysis = await analyzeDownloadedVideoWithFallback({
       filePath: downloaded.filePath,
       mimeType: downloaded.mimeType,
@@ -2270,6 +2288,7 @@ async function analyzeSourceVideoJobInner(input: {
       views: String(input.record?.views || ''),
       tags: parseJsonRecord<string[]>(input.record?.tags, []),
       sourceLabel: 'gemini-temp-video',
+      analysisMode,
     });
 
     if (recordId) {
@@ -2283,7 +2302,7 @@ async function analyzeSourceVideoJobInner(input: {
             analysis: videoAnalysis.analysis,
             source: videoAnalysis.source,
             videoFetchStatus: 'fetched',
-            extra: { tempVideoDeleted: true },
+            extra: { tempVideoDeleted: true, analysisMode, requestedAnalysisMode: undefined },
           }),
         }),
       });
@@ -2577,7 +2596,7 @@ async function tryAnalyzeYouTubeUrl(input: {
   }
 }
 
-async function analyzeDownloadedMaterial(recordId: string, filePath: string, material: Material): Promise<void> {
+async function analyzeDownloadedMaterial(recordId: string, filePath: string, material: Material, analysisMode: 'strategy' | 'exact' = 'strategy'): Promise<void> {
   try {
     await store.update(COL, recordId, { status: 'pending' as VideoStatus });
     const videoAnalysis = await analyzeDownloadedVideoWithFallback({
@@ -2586,6 +2605,7 @@ async function analyzeDownloadedMaterial(recordId: string, filePath: string, mat
       title: material.name,
       duration: material.duration,
       sourceLabel: 'gemini-video',
+      analysisMode,
     });
     const latest = await store.getById(COL, recordId);
     const previous = parseJsonRecord(latest?.aiAnalysis, {});
@@ -2598,6 +2618,8 @@ async function analyzeDownloadedMaterial(recordId: string, filePath: string, mat
           source: videoAnalysis.source,
           videoFetchStatus: 'fetched',
           extra: {
+            analysisMode,
+            requestedAnalysisMode: undefined,
             materialId: material.id,
             materialUrl: material.url,
             materialPoster: material.poster,
@@ -3930,7 +3952,7 @@ export async function extractQwenAnalysisFrames(filePath: string, maxFrames = 30
       densePattern,
     ], { timeout: 90_000 });
     const uniformPattern = path.join(frameDir, 'uniform-%02d.jpg');
-    const uniformCount = Math.max(6, Math.min(12, maxFrames - 18));
+    const uniformCount = Math.max(6, Math.min(42, Math.ceil((maxFrames - 12) * 0.55)));
     const uniformInterval = duration > 4 ? Math.max(1, (duration - 1) / Math.max(1, uniformCount - 1)) : 4;
     await execFileAsync(ffmpegBin, [
       '-hide_banner',
@@ -3944,8 +3966,9 @@ export async function extractQwenAnalysisFrames(filePath: string, maxFrames = 30
     const scenePattern = path.join(frameDir, 'scene-%02d.jpg');
     let sceneTimes: number[] = [];
     try {
-      const sceneRun = await execFileAsync(ffmpegBin, ['-hide_banner', '-loglevel', 'info', '-i', filePath, '-vf', "select='gt(scene,0.16)',showinfo,scale=720:-1", '-fps_mode', 'vfr', '-frames:v', '12', '-q:v', '4', scenePattern], { timeout: 90_000, maxBuffer: 8 * 1024 * 1024 });
-      sceneTimes = Array.from(sceneRun.stderr.matchAll(/pts_time:([0-9.]+)/g)).map(match => Number(match[1])).filter(Number.isFinite).slice(0, 12);
+      const sceneCount = Math.max(12, maxFrames - 12 - uniformCount);
+      const sceneRun = await execFileAsync(ffmpegBin, ['-hide_banner', '-loglevel', 'info', '-i', filePath, '-vf', "select='gt(scene,0.16)',showinfo,scale=720:-1", '-fps_mode', 'vfr', '-frames:v', String(sceneCount), '-q:v', '4', scenePattern], { timeout: 90_000, maxBuffer: 8 * 1024 * 1024 });
+      sceneTimes = Array.from(sceneRun.stderr.matchAll(/pts_time:([0-9.]+)/g)).map(match => Number(match[1])).filter(Number.isFinite).slice(0, sceneCount);
     } catch { /* retain uniform frames */ }
     const denseRows = fs.readdirSync(frameDir)
       .filter(file => /^dense-\d+\.jpg$/i.test(file))
@@ -3996,9 +4019,11 @@ export async function analyzeDownloadedVideoWithFallback(opts: {
   views?: string;
   tags?: string[];
   sourceLabel: string;
+  analysisMode?: 'strategy' | 'exact';
 }): Promise<{ analysis: VideoAiAnalysis; source: string }> {
   const runQwen = async () => {
-    const frames = await extractQwenAnalysisFrames(opts.filePath, 30, Number(opts.duration || 0));
+    const exactFrameCount = Math.max(30, Math.min(90, Math.ceil(Number(opts.duration || 0) * 1.5)));
+    const frames = await extractQwenAnalysisFrames(opts.filePath, opts.analysisMode === 'exact' ? exactFrameCount : 30, Number(opts.duration || 0));
     let transcript: Awaited<ReturnType<typeof transcribeAudioWithQwen>> | undefined;
     const asrDir = path.join(ANALYSIS_DIR, `qwen-asr-${Date.now()}-${randomUUID()}`);
     try {
@@ -4024,6 +4049,7 @@ export async function analyzeDownloadedVideoWithFallback(opts: {
       views: opts.views,
       tags: opts.tags,
       transcript,
+      analysisMode: opts.analysisMode || 'strategy',
     });
     const analysis = lockAsrTimeline(qwenAnalysis, transcript);
     assertFullVideoTimeline(analysis, Number(opts.duration || 0), 'qwen');
@@ -4040,6 +4066,7 @@ export async function analyzeDownloadedVideoWithFallback(opts: {
     const geminiPromise = analyzeVideo({
         videoBase64: buf.toString('base64'),
         mimeType: opts.mimeType,
+        analysisMode: opts.analysisMode || 'strategy',
       });
     const analysis = isQwenConfigured()
       ? await withTimeout(geminiPromise, qwenFallbackTimeoutMs(), 'Gemini analysis timed out before Qwen fallback')
@@ -4055,6 +4082,7 @@ export async function analyzeDownloadedVideoWithFallback(opts: {
           const analysis = await analyzeVideo({
             videoBase64: buf.toString('base64'),
             mimeType: 'video/mp4',
+            analysisMode: opts.analysisMode || 'strategy',
           });
           assertFullVideoTimeline(analysis, Number(opts.duration || 0), 'gemini_normalized');
           return { analysis, source: `${opts.sourceLabel}-normalized` };
