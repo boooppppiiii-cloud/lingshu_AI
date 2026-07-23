@@ -663,32 +663,59 @@ export default function BusinessDiagnosisModal({ open, session, onDismissToday, 
             animate={{ opacity: 1, y: 0, scale: 1 }}
             transition={{ type: 'spring', stiffness: 240, damping: 20, delay: 0.08 }}
           >
-            <motion.div className="relative h-[250px] w-[250px] shrink-0 md:h-[330px] md:w-[330px]">
+            <motion.div
+              className="relative h-[250px] w-[250px] shrink-0 md:h-[330px] md:w-[330px]"
+              style={{ perspective: 620, transformStyle: 'preserve-3d' }}
+            >
+              <span
+                aria-hidden="true"
+                className="absolute inset-[18%] z-0 rounded-full bg-[radial-gradient(circle,rgba(207,247,227,0.54)_0%,rgba(207,247,227,0.18)_48%,transparent_72%)] blur-md"
+              />
+              <motion.div
+                aria-hidden="true"
+                className="absolute inset-[3%] z-0 rounded-full [transform-style:preserve-3d]"
+                style={{ rotateX: 66, rotateY: -8 }}
+                animate={reduceMotion ? undefined : { rotateZ: [-12, 348] }}
+                transition={{ duration: 15, repeat: Infinity, ease: 'linear' }}
+              >
+                <span
+                  className="absolute inset-0 rounded-full opacity-90 drop-shadow-[0_10px_8px_rgba(52,196,113,0.18)]"
+                  style={{
+                    background: 'conic-gradient(from 15deg, rgba(52,196,113,0.18), rgba(52,196,113,0.92), rgba(207,247,227,0.3), rgba(52,196,113,0.72), rgba(52,196,113,0.18))',
+                    WebkitMaskImage: 'radial-gradient(circle, transparent 68%, #000 69%, #000 72%, transparent 73%)',
+                    maskImage: 'radial-gradient(circle, transparent 68%, #000 69%, #000 72%, transparent 73%)',
+                  }}
+                />
+                <span className="absolute left-[5%] top-[42%] h-3 w-3 rounded-full bg-[#6FDBA1] shadow-[0_0_0_6px_rgba(207,247,227,0.55),0_8px_12px_rgba(52,196,113,0.24)]" />
+                <span className="absolute right-[7%] top-[25%] h-2.5 w-2.5 rounded-full border-2 border-[#34C471] bg-white shadow-[0_7px_12px_rgba(52,196,113,0.22)]" />
+              </motion.div>
+              <motion.div
+                aria-hidden="true"
+                className="absolute inset-[17%] z-0 rounded-full [transform-style:preserve-3d]"
+                style={{ rotateX: 58, rotateY: 18 }}
+                animate={reduceMotion ? undefined : { rotateZ: [24, -336] }}
+                transition={{ duration: 11, repeat: Infinity, ease: 'linear' }}
+              >
+                <span
+                  className="absolute inset-0 rounded-full opacity-80"
+                  style={{
+                    background: 'conic-gradient(from 190deg, rgba(111,219,161,0.12), rgba(111,219,161,0.82), rgba(255,255,255,0.2), rgba(111,219,161,0.12))',
+                    WebkitMaskImage: 'radial-gradient(circle, transparent 63%, #000 64%, #000 68%, transparent 69%)',
+                    maskImage: 'radial-gradient(circle, transparent 63%, #000 64%, #000 68%, transparent 69%)',
+                  }}
+                />
+                <span className="absolute right-[10%] top-[50%] h-2.5 w-2.5 rotate-45 rounded-[3px] border border-[#34C471] bg-[#CFF7E3] shadow-[0_6px_10px_rgba(52,196,113,0.22)]" />
+              </motion.div>
               <motion.span
                 aria-hidden="true"
-                className="absolute inset-[14%] rounded-full border border-dashed border-[#34C471]/70"
-                animate={reduceMotion ? undefined : { rotate: 360 }}
-                transition={{ duration: 18, repeat: Infinity, ease: 'linear' }}
-              />
-              <motion.span
-                aria-hidden="true"
-                className="absolute inset-[27%] rounded-full border border-dashed border-[#6FDBA1]/80"
-                animate={reduceMotion ? undefined : { rotate: -360 }}
-                transition={{ duration: 14, repeat: Infinity, ease: 'linear' }}
-              />
-              <motion.span
-                aria-hidden="true"
-                className="absolute left-[7%] top-[36%] h-3 w-3 rounded-full bg-[#6FDBA1] shadow-[0_0_0_6px_rgba(207,247,227,0.7)]"
-                animate={reduceMotion ? undefined : { scale: [1, 1.25, 1] }}
-                transition={{ duration: 2.4, repeat: Infinity, ease: 'easeInOut' }}
-              />
-              <span aria-hidden="true" className="absolute right-[8%] top-[20%] h-3 w-3 rotate-45 border border-[#34C471] bg-[#CFF7E3]" />
-              <span aria-hidden="true" className="absolute bottom-[18%] right-[5%] h-2.5 w-2.5 rounded-full border-2 border-[#34C471] bg-white/70" />
-              <span aria-hidden="true" className="absolute left-[16%] top-[13%] text-2xl font-light text-[#34C471]">+</span>
+                className="absolute left-[12%] top-[20%] z-0 text-2xl font-light text-[#34C471]/80 drop-shadow-[0_6px_8px_rgba(52,196,113,0.2)]"
+                animate={reduceMotion ? undefined : { y: [0, -7, 0], rotate: [0, 10, 0], scale: [0.92, 1.08, 0.92] }}
+                transition={{ duration: 3.2, repeat: Infinity, ease: 'easeInOut' }}
+              >+</motion.span>
               <motion.img
                 src="/lingshu-mascot.png"
                 alt="灵小枢挥手欢迎"
-                className="absolute inset-[4%] h-[92%] w-[92%] object-contain mix-blend-multiply drop-shadow-[0_18px_18px_rgba(52,196,113,0.18)]"
+                className="absolute inset-[4%] z-10 h-[92%] w-[92%] object-contain drop-shadow-[0_18px_18px_rgba(52,196,113,0.18)]"
                 style={{
                   WebkitMaskImage: 'radial-gradient(ellipse 48% 50% at 50% 50%, #000 52%, rgba(0,0,0,0.88) 68%, transparent 100%)',
                   maskImage: 'radial-gradient(ellipse 48% 50% at 50% 50%, #000 52%, rgba(0,0,0,0.88) 68%, transparent 100%)',

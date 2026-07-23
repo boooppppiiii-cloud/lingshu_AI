@@ -1337,7 +1337,7 @@ function CustomerInfoRail({
   if (!customer) {
     return (
       <aside className="flex h-full w-[340px] shrink-0 items-center justify-center border-l border-border bg-surface px-6 text-center">
-        <p className="text-xs leading-relaxed text-text-muted">选择客户后，这里会显示客户资料、订单、意向信号和 AI 动作。</p>
+        <p className="text-xs font-bold text-text-muted">未选择客户</p>
       </aside>
     );
   }
@@ -1346,7 +1346,6 @@ function CustomerInfoRail({
     <aside className="h-full w-[340px] shrink-0 overflow-y-auto border-l border-border bg-surface px-4 py-4">
       <div className="mb-2 px-1">
         <p className="text-xs font-black text-text-primary">今日处理</p>
-        <p className="mt-0.5 text-[11px] text-text-muted">先看是否需要你接手，再看客户资料。</p>
       </div>
       <div className="grid gap-3">
         <PrimaryActionCard customer={customer} notificationReady={notificationReady} onModeChange={onHandlingModeChange} onToast={onToast} onGenerateDraft={onGenerateDraft} onFocusReply={onFocusReply} onViewDraft={onViewDraft} onCompleteTodo={onCompleteTodo} />
@@ -1930,7 +1929,7 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
 
 
   return (
-    <div className="flex h-full min-w-0 flex-col bg-white">
+    <div className="flex h-full min-w-0 flex-col bg-white" data-lingshu-guide="customer-workbench">
       <div className="flex h-12 flex-shrink-0 items-center justify-between border-b border-border px-5">
         <div className="flex items-center gap-2.5">
           <div className="flex h-6 w-6 items-center justify-center rounded-lg" style={{ background: 'rgba(22,163,74,0.1)', color: '#16a34a' }}>
@@ -1991,10 +1990,9 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
       )}
       {learnCandidate && learnDialogOpen && (
         <div className="fixed inset-0 z-[90] flex items-center justify-center bg-slate-950/30 px-4">
-          <div className="w-full max-w-lg rounded-3xl border border-border bg-white p-5 shadow-xl">
+          <div data-lingshu-guide="customer-knowledge-save" className="w-full max-w-lg rounded-3xl border border-border bg-white p-5 shadow-xl">
             <div className="mb-4">
               <p className="text-sm font-black text-text-primary">存进知识库</p>
-              <p className="mt-1 text-xs text-text-muted">这条客户问题之前没有覆盖。保存后会进入 FAQ，默认不自动回复，等老板审批。</p>
             </div>
             <label className="grid gap-1 text-xs font-bold text-text-secondary">
               Q：客户常问问题

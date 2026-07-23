@@ -187,10 +187,9 @@ export default function AgentWorkspace() {
     }));
   };
   return (
-    <div className="p-6 h-full overflow-y-auto">
+    <div className="p-6 h-full overflow-y-auto" data-lingshu-guide="assistant-team">
       <div className="mb-6">
         <h2 className="text-lg font-bold text-text-primary font-display">你的 AI 智囊团</h2>
-        <p className="text-sm text-text-muted mt-0.5">一张脸，四个脑子 · 点击卡片唤起灵枢助手</p>
       </div>
       <section className="mb-6 rounded-2xl border border-border bg-surface overflow-hidden">
         <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border">

@@ -3,7 +3,6 @@ import { ArrowRight, ListChecks, Target, TrendingUp, Users, Zap, MessageSquare }
 import TrafficDataBoard from './TrafficDataBoard';
 import InquiryDataBoard from './InquiryDataBoard';
 import CrmDataBoard from './CrmDataBoard';
-import { CalendarPlanner } from './publishing/CalendarPlanner';
 import type { AgentAction, Page } from '../App';
 import { authHeader } from '../lib/auth';
 import { useCustomers } from '../hooks/useCustomers';
@@ -99,7 +98,6 @@ const bodyTitle = 'text-sm font-bold text-text-primary';
 const metricValueText = 'text-2xl font-bold leading-none text-text-primary';
 const actionTitleText = 'text-sm font-bold text-text-primary';
 const bodyText = 'text-xs leading-snug text-text-secondary';
-const noteText = 'text-[11px] leading-snug text-text-muted';
 const supplementText = 'text-[11px] font-bold leading-snug text-green-700';
 
 export default function StrategyDataBoard({
@@ -122,15 +120,6 @@ export default function StrategyDataBoard({
   const validOrders = useMemo(() => orders.filter(order => order.status !== '待付款' && order.status !== '退款'), [orders]);
   const convertedInquiries = useMemo(() => whatsAppInquiries.filter(customer => customer.stage === 'quoted' || customer.stage === 'won' || customer.orders.length > 0), [whatsAppInquiries]);
   const needsFollowup = useMemo(() => whatsAppInquiries.filter(customer => customer.handlingMode !== 'ai_auto' || customer.inboxReason), [whatsAppInquiries]);
-
-  const openPublishForDate = (date: Date) => {
-    const draft = { title: `排期内容 ${date.toLocaleDateString()}`, description: '', videoPath: '' };
-    try {
-      localStorage.setItem('ow_publish_draft', JSON.stringify(draft));
-      localStorage.setItem('lingshu:traffic:initial-view', 'publish');
-    } catch { /* ignore */ }
-    onNavigate?.('traffic');
-  };
 
   useEffect(() => {
     let alive = true;
@@ -203,7 +192,7 @@ export default function StrategyDataBoard({
   }, [convertedInquiries.length, effectiveInquiries.length, exposure, needsFollowup.length, validOrders.length]);
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col" data-lingshu-guide="strategy-dashboard">
       <div className="px-6 pt-3 pb-3 border-b border-border flex-shrink-0">
         <div className="grid w-full grid-cols-3 gap-1.5 rounded-2xl border border-border bg-surface-2 p-1 shadow-sm">
           {TABS.map(x => (
@@ -239,8 +228,6 @@ export default function StrategyDataBoard({
                     <h3 className={bodyTitle}>{item.label}</h3>
                   </div>
                   <p className={`mt-2.5 ${metricValueText}`}>{item.value}</p>
-                  <p className={`mt-1 ${noteText}`}>{item.desc}</p>
-                  <p className={`mt-2 ${supplementText}`}>{item.source}</p>
                 </div>
                 );
               })}
@@ -252,7 +239,6 @@ export default function StrategyDataBoard({
                   <span className={sectionIcon}><ListChecks size={14} /></span>
                   <h2>本周优先动作</h2>
                 </div>
-                <p className={`mt-1.5 ${noteText}`}>动作只基于已接入数据或明确标注的数据缺口生成。</p>
                 <div className="mt-3 space-y-2.5">
                   {actionItems.map(item => (
                     <button
@@ -274,15 +260,6 @@ export default function StrategyDataBoard({
             </div>
           </section>
         </div>
-
-        {tab === 'traffic' && (
-          <section className="border-t border-border px-6 py-5" id="content-calendar">
-            <CalendarPlanner
-              onCreate={openPublishForDate}
-              onOpenPost={() => document.getElementById('social-real-data')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-            />
-          </section>
-        )}
 
         <div className="min-h-[520px] border-t border-border" id={tab === 'traffic' ? 'social-real-data' : undefined}>
           <Active windowDays={windowDays} />

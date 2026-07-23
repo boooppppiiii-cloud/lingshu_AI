@@ -613,7 +613,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
   };
 
   return (
-    <div className="flex h-full flex-col bg-white">
+    <div className="flex h-full flex-col bg-white" data-lingshu-guide="scheduled-tasks">
       <div className="h-12 flex items-center justify-between px-5 border-b border-border flex-shrink-0">
         <div className="flex items-center gap-2.5">
           <div className="w-6 h-6 rounded-lg flex items-center justify-center" style={{ background: 'rgba(22,163,74,0.1)', color: '#16a34a' }}>
@@ -646,10 +646,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
       <div className="flex-1 flex flex-col overflow-hidden">
         <div className="px-8 py-5 border-b border-gray-100">
           <div className="flex items-center justify-between">
-            <div>
-              <h1 className="text-base font-semibold text-gray-900">{activeGroupMeta.label}</h1>
-              <p className="text-sm text-gray-500 mt-0.5">{activeGroupMeta.desc}</p>
-            </div>
+            <h1 className="text-base font-semibold text-gray-900">{activeGroupMeta.label}</h1>
             <button
               type="button"
               data-demo-target={!showAdd && activeGroup === 'social' ? 'scheduled_run' : undefined}
@@ -704,7 +701,6 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
                   <span className="text-xs text-gray-500 pb-1">等待/处理中</span>
                 </div>
                 <p className="text-xs text-gray-500 mt-2">Ops 队列 {fetchQueue.ops?.total ?? 0} · Worker {fetchQueue.ops?.workerActive ? '运行中' : fetchQueue.ops?.workerEnabled ? '待命' : '关闭'}</p>
-                <p className="text-xs text-gray-400 mt-1">queued {fetchQueue.byStatus?.queued ?? 0} / downloading {fetchQueue.byStatus?.downloading ?? 0} / retrying {fetchQueue.byStatus?.download_retrying ?? 0} / metadata {fetchQueue.byStatus?.metadata_only ?? 0}</p>
               </div>
 
               <div className="rounded-xl border border-gray-200 p-4 bg-white">
@@ -717,7 +713,6 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
                   <span className="text-xs text-gray-500 pb-1">Gemini 队列</span>
                 </div>
                 <p className="text-xs text-gray-500 mt-2">已分析 {analysisQueue.analyzedRecords ?? 0} · 待处理 {analysisQueue.pendingRecords ?? 0} · 失败 {analysisQueue.failedRecords ?? 0}</p>
-                <p className="text-xs text-gray-400 mt-1">queued {analysisQueue.byStatus?.queued ?? 0} / analyzing {analysisQueue.byStatus?.analyzing ?? 0} / video {analysisQueue.byStatus?.analyzed ?? 0} / metadata {analysisQueue.byStatus?.metadata_fallback ?? 0}</p>
               </div>
             </div>
           </div>
@@ -731,7 +726,6 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
             <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/50 p-8 text-center text-gray-400">
               <Clock size={40} className="mb-3 opacity-40" />
               <p className="text-sm font-medium">还没有定时任务</p>
-              <p className="text-xs mt-1">可以从上方模板直接创建，或点击“新建任务”自定义执行频率</p>
             </div>
           )}
 

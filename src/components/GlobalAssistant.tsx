@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import type { AgentAction, AgentType, Message, Page } from '../App';
 import { authHeader } from '../lib/auth';
+import { ASSISTANT_GUIDES, type AssistantGuide } from '../lib/assistantGuides';
 import { ORBIT_AGENT_IDS, type OrbitAgentId, useAssistantStore } from '../stores/assistantStore';
 import AgentReply from './AgentReply';
 import KnowledgeIntakePanel, { type AppliedProfile } from './enterprise/KnowledgeIntakePanel';
@@ -39,6 +40,16 @@ interface AssistantTodoItem {
 }
 
 type AssistantTool = 'knowledge-intake';
+
+const GUIDE_MEMORY_KEY = 'lingshu-feature-guides-human-v1';
+const GUIDE_HOVER_DELAY_MS = 900;
+const GUIDE_COOLDOWN_MS = 45_000;
+const GUIDE_VISIBLE_MS = 6_000;
+
+type GuideMemory = {
+  seen: string[];
+  lastShownAt: number;
+};
 
 interface Props {
   page: Page;
@@ -147,30 +158,30 @@ const PAGE_EXPRESSION: Record<Page, AssistantExpression> = {
   youtube: 'excited',
 };
 
-const EXPRESSION_CROP_LEFT: Record<AssistantExpression, number> = {
-  happy: -23,
-  wink: -83,
-  thinking: -143,
-  excited: -204,
+const LAUNCHER_MASCOT_CROP_LEFT: Record<AssistantExpression, number> = {
+  happy: -26,
+  wink: -97,
+  thinking: -169,
+  excited: -241,
 };
 
-function AssistantExpressionFace({ expression }: { expression: AssistantExpression }) {
+function AssistantLauncherMascot({ expression }: { expression: AssistantExpression }) {
   return (
-    <span className="absolute inset-0 overflow-hidden rounded-[15px]" aria-hidden="true">
+    <span className="relative block h-[72px] w-[60px] overflow-hidden" aria-hidden="true">
       <AnimatePresence initial={false} mode="wait">
         <motion.span
           key={expression}
           className="absolute inset-0"
-          initial={{ opacity: 0, scale: 0.82, rotate: -5 }}
+          initial={{ opacity: 0, scale: 0.9, rotate: -3 }}
           animate={{ opacity: 1, scale: 1, rotate: 0 }}
-          exit={{ opacity: 0, scale: 0.86, rotate: 5 }}
+          exit={{ opacity: 0, scale: 0.92, rotate: 3 }}
           transition={{ duration: 0.18, ease: 'easeOut' }}
         >
           <img
-            src="/lingshu-expressions.png"
+            src="/lingshu-expressions-body-transparent.png"
             alt=""
-            className="absolute top-[-36px] h-auto max-w-none drop-shadow-[0_8px_12px_rgba(52,196,113,0.16)]"
-            style={{ left: EXPRESSION_CROP_LEFT[expression] + 4, width: 276 }}
+            className="absolute top-[-36px] h-auto max-w-none drop-shadow-[0_5px_8px_rgba(52,196,113,0.14)]"
+            style={{ left: LAUNCHER_MASCOT_CROP_LEFT[expression], width: 329 }}
           />
         </motion.span>
       </AnimatePresence>
@@ -299,10 +310,16 @@ export default function GlobalAssistant({
   const [activeAgent, setActiveAgent] = useState<OrbitAgentId>('strategy');
   const [assistantTool, setAssistantTool] = useState<AssistantTool | null>(null);
   const [liveContext, setLiveContext] = useState<AssistantContext | null>(null);
+  const [featureGuide, setFeatureGuide] = useState<(AssistantGuide & { id: string }) | null>(null);
   const [enterpriseContext, setEnterpriseContext] = useState('');
   const [loading, setLoading] = useState(false);
   const longPressRef = useRef<number | null>(null);
   const longPressedRef = useRef(false);
+  const featureGuideTimerRef = useRef<number | null>(null);
+  const featureGuideHoverTimerRef = useRef<number | null>(null);
+  const seenGuideIdsRef = useRef(new Set<string>());
+  const lastGuideShownAtRef = useRef(0);
+  const lastGuideTargetRef = useRef<HTMLElement | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const assistantRootRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -354,6 +371,104 @@ export default function GlobalAssistant({
   const openCurrentPageAgent = useCallback(() => {
     openAgent(orbitIdForAgent(pageContext.agent));
   }, [openAgent, pageContext.agent]);
+
+  const rememberGuide = useCallback((id: string, shownAt: number) => {
+    seenGuideIdsRef.current.add(id);
+    lastGuideShownAtRef.current = shownAt;
+    try {
+      const memory: GuideMemory = {
+        seen: [...seenGuideIdsRef.current],
+        lastShownAt: shownAt,
+      };
+      window.localStorage.setItem(GUIDE_MEMORY_KEY, JSON.stringify(memory));
+    } catch {
+      // Storage can be unavailable in privacy mode; in-memory deduplication still works.
+    }
+  }, []);
+
+  const showFeatureGuide = useCallback((id: string) => {
+    const guide = ASSISTANT_GUIDES[id];
+    if (!guide || seenGuideIdsRef.current.has(id)) return;
+    const now = Date.now();
+    if (now - lastGuideShownAtRef.current < GUIDE_COOLDOWN_MS) return;
+    if (featureGuideTimerRef.current) window.clearTimeout(featureGuideTimerRef.current);
+    rememberGuide(id, now);
+    setFeatureGuide({ ...guide, id });
+    featureGuideTimerRef.current = window.setTimeout(() => setFeatureGuide(null), GUIDE_VISIBLE_MS);
+  }, [rememberGuide]);
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(GUIDE_MEMORY_KEY);
+      if (!stored) return;
+      const memory = JSON.parse(stored) as Partial<GuideMemory>;
+      if (Array.isArray(memory.seen)) seenGuideIdsRef.current = new Set(memory.seen.filter(id => typeof id === 'string'));
+      if (typeof memory.lastShownAt === 'number') lastGuideShownAtRef.current = memory.lastShownAt;
+    } catch {
+      // Ignore malformed or unavailable storage and start with a clean guide memory.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (mode !== 'breathing') {
+      setFeatureGuide(null);
+      return;
+    }
+    const findTarget = (event: Event) => {
+      const target = event.target;
+      return target instanceof Element ? target.closest<HTMLElement>('[data-lingshu-guide]') : null;
+    };
+    const cancelPendingHover = () => {
+      if (featureGuideHoverTimerRef.current) window.clearTimeout(featureGuideHoverTimerRef.current);
+      featureGuideHoverTimerRef.current = null;
+    };
+    const showFromEvent = (event: Event) => {
+      const target = findTarget(event);
+      if (!target) return;
+      const id = target.dataset.lingshuGuide;
+      if (!id) return;
+      if (event.type === 'pointerover') {
+        const related = (event as PointerEvent).relatedTarget;
+        if (related instanceof Node && target.contains(related)) return;
+        if (lastGuideTargetRef.current === target) return;
+        cancelPendingHover();
+        lastGuideTargetRef.current = target;
+        featureGuideHoverTimerRef.current = window.setTimeout(() => {
+          if (lastGuideTargetRef.current === target) showFeatureGuide(id);
+        }, GUIDE_HOVER_DELAY_MS);
+        return;
+      }
+      cancelPendingHover();
+      lastGuideTargetRef.current = target;
+      showFeatureGuide(id);
+    };
+    const clearPointerTarget = (event: Event) => {
+      const target = findTarget(event);
+      if (!target) return;
+      const related = (event as PointerEvent).relatedTarget;
+      if (related instanceof Node && target.contains(related)) return;
+      if (lastGuideTargetRef.current === target) {
+        lastGuideTargetRef.current = null;
+        cancelPendingHover();
+      }
+    };
+    document.addEventListener('pointerover', showFromEvent, true);
+    document.addEventListener('pointerout', clearPointerTarget, true);
+    document.addEventListener('focusin', showFromEvent, true);
+    document.addEventListener('click', showFromEvent, true);
+    return () => {
+      cancelPendingHover();
+      document.removeEventListener('pointerover', showFromEvent, true);
+      document.removeEventListener('pointerout', clearPointerTarget, true);
+      document.removeEventListener('focusin', showFromEvent, true);
+      document.removeEventListener('click', showFromEvent, true);
+    };
+  }, [mode, showFeatureGuide]);
+
+  useEffect(() => () => {
+    if (featureGuideTimerRef.current) window.clearTimeout(featureGuideTimerRef.current);
+    if (featureGuideHoverTimerRef.current) window.clearTimeout(featureGuideHoverTimerRef.current);
+  }, []);
 
   const send = useCallback(async (text: string, targetAgent = activeAgent, forcedContext?: AssistantContext) => {
     const visibleText = text.trim();
@@ -605,6 +720,39 @@ export default function GlobalAssistant({
         />
       )}
       <AnimatePresence>
+        {mode === 'breathing' && featureGuide && (
+          <motion.div
+            key={featureGuide.id}
+            data-lingshu-guide-bubble={featureGuide.id}
+            initial={{ opacity: 0, y: 8, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 6, scale: 0.97 }}
+            className="absolute bottom-1 right-[72px] z-20 w-[236px] max-w-[calc(100vw-104px)] rounded-2xl border border-emerald-100 bg-white p-3 shadow-[0_16px_42px_rgba(15,23,42,0.16)]"
+          >
+            <button type="button" onClick={() => setFeatureGuide(null)} className="absolute right-2.5 top-2.5 rounded-lg p-1 text-text-muted hover:bg-surface-2" aria-label="关闭用法提示">
+              <X size={13} />
+            </button>
+            <div className="pr-6">
+              <p className="text-xs font-black text-emerald-700">{featureGuide.title}</p>
+              <p className="mt-1 text-xs leading-[1.65] text-text-secondary">{featureGuide.message}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const agentId = orbitIdForAgent(featureGuide.agent);
+                setFeatureGuide(null);
+                openAgent(agentId);
+              }}
+              className="mt-2 text-[11px] font-black text-emerald-700 hover:text-emerald-800"
+            >
+              问问灵小枢 →
+            </button>
+            <span className="absolute -right-2 bottom-6 h-4 w-4 rotate-45 border-r border-t border-emerald-100 bg-white" />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
         {mode === 'expanded' && (
           <motion.div
             className="pointer-events-none absolute bottom-0 right-0 z-10 h-52 w-52"
@@ -821,7 +969,7 @@ export default function GlobalAssistant({
       </AnimatePresence>
 
       {mode !== 'chat' && (
-        <div className="relative z-10 h-14 w-14">
+        <div className="relative z-10 h-[72px] w-[60px]">
           <motion.button
             type="button"
             data-global-assistant="launcher"
@@ -829,12 +977,12 @@ export default function GlobalAssistant({
             onPointerUp={handlePointerUp}
             onPointerLeave={handlePointerUp}
             onClick={handleLauncherClick}
-            className="absolute inset-0 flex items-center justify-center bg-transparent outline-none transition-transform hover:-translate-y-0.5 focus-visible:ring-2 focus-visible:ring-[#6FDBA1] focus-visible:ring-offset-2"
+            className="absolute inset-0 flex items-center justify-center rounded-2xl bg-transparent outline-none transition-transform hover:-translate-y-0.5 focus-visible:ring-2 focus-visible:ring-[#6FDBA1] focus-visible:ring-offset-2"
             animate={mode === 'breathing' && pendingCount > 0 && !reduceMotion ? { scale: [1, 1.05, 1], y: [0, -2, 0] } : { scale: 1, y: 0 }}
             transition={{ duration: 2.4, ease: 'easeInOut', repeat: mode === 'breathing' && pendingCount > 0 && !reduceMotion ? Infinity : 0 }}
             title={mode === 'expanded' ? `打开${AGENT_DISPLAY_NAME[orbitIdForAgent(pageContext.agent)]}` : '展开灵枢助手'}
           >
-            <AssistantExpressionFace expression={assistantExpression} />
+            <AssistantLauncherMascot expression={assistantExpression} />
             {pendingCount > 0 && <span className="absolute -right-1 -top-1 min-w-5 rounded-full bg-red px-1 text-[11px] font-black text-white">{pendingBadge}</span>}
           </motion.button>
         </div>

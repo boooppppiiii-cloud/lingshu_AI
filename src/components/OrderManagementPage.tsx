@@ -201,7 +201,7 @@ export default function OrderManagementPage() {
   const smallInput = `${input} w-full`;
 
   return (
-    <div className="flex h-full flex-col bg-white">
+    <div className="flex h-full flex-col bg-white" data-lingshu-guide="orders-workbench">
       <div className="flex h-12 flex-shrink-0 items-center justify-between border-b border-border px-5">
         <div className="flex items-center gap-2.5">
           <div className="flex h-6 w-6 items-center justify-center rounded-lg bg-green-50 text-green-700">
@@ -217,16 +217,6 @@ export default function OrderManagementPage() {
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         <div className="mx-auto max-w-6xl px-6 py-5">
-          <div className="mb-5 rounded-xl border border-border bg-surface px-4 py-3">
-            <div className="flex items-start gap-2.5">
-              <PackageCheck size={15} className="mt-0.5 text-green-700" />
-              <div>
-                <p className="text-sm font-semibold text-text-primary">订单经营数据</p>
-                <p className="mt-1 text-xs leading-relaxed text-text-muted">记录真实订单、GMV、毛利、渠道来源和履约状态；数据来自企业中心导入或手工录入。</p>
-              </div>
-            </div>
-          </div>
-
         <div className="mb-5 grid gap-3 md:grid-cols-4">
           {[
             { label: '有效 GMV', value: money(summary.gmv), desc: `${summary.orders} 个有效订单`, icon: <DollarSign size={14} />, color: '#047857', bg: '#D1FAE5' },
@@ -248,10 +238,7 @@ export default function OrderManagementPage() {
         <div className="mb-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
           <section className="card !rounded-xl p-4">
             <div className="mb-3 flex items-center justify-between">
-              <div>
-                <p className="text-sm font-semibold text-text-primary">GMV 趋势</p>
-                <p className="text-[11px] text-text-muted">按订单日期聚合，排除待付款与退款。</p>
-              </div>
+              <p className="text-sm font-semibold text-text-primary">GMV 趋势</p>
               <span className="rounded-full bg-surface-2 px-2.5 py-1 text-[10px] font-semibold text-text-muted">当前筛选</span>
             </div>
             <div className="h-56">
@@ -269,8 +256,7 @@ export default function OrderManagementPage() {
 
           <section className="card !rounded-xl p-4">
             <p className="text-sm font-semibold text-text-primary">市场贡献</p>
-            <p className="mb-3 mt-0.5 text-[11px] text-text-muted">识别 GMV 主力市场，辅助备货与投放。</p>
-            <div className="h-56">
+            <div className="mt-3 h-56">
               <ResponsiveContainer width="100%" height="100%">
                 <BarChart data={marketBars} layout="vertical" margin={{ top: 6, right: 16, bottom: 0, left: 16 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" horizontal={false} />

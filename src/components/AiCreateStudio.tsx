@@ -6023,12 +6023,11 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                   </div>
                 )}
                 {remainingStoryboardCount > 0 && storyboardSlots.length > 0 && (
-                  <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
+                  <div data-lingshu-guide="ai-storyboard" className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3">
                     <div className="flex items-start gap-2">
                       <span className="flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full bg-amber-500 text-xs font-black text-white">!</span>
                       <div className="min-w-0 flex-1">
                         <p className="text-xs font-black text-amber-950">还剩 {remainingStoryboardCount} 个分镜没有视频</p>
-                        <p className="mt-1 text-[10px] leading-relaxed text-amber-800">拖入已有素材或使用 AI 生成即可。来源会自动识别，不需要额外确认。</p>
                       </div>
                     </div>
                     <button
@@ -6054,7 +6053,6 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
 	                  <div className="flex min-h-[240px] flex-col items-center justify-center rounded-xl border border-dashed border-border bg-white px-6 text-center">
 	                    <Film size={28} className="text-text-muted opacity-35" />
 	                    <p className="mt-3 text-sm font-black text-text-primary">暂无分镜</p>
-	                    <p className="mt-1 text-[11px] leading-relaxed text-text-muted">请先返回“口播脚本”生成带时间戳的分镜脚本，再进行素材匹配。</p>
 	                  </div>
 	                )}
 	                {storyboardSlots.map((slot, index) => {
@@ -6415,7 +6413,6 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                         </button>;
                       })}
                     </div>
-                    <p className="mt-2 text-[10px] text-text-muted">系统会从所选音色中为每套内容匹配最适合的声音；点击某个音色可切换当前试听。</p>
                   </div>
                   <button type="button" onClick={openVoiceSamplePicker}
                     className="inline-flex h-10 items-center gap-1.5 rounded-xl border border-border bg-white px-3 text-xs font-bold text-text-secondary hover:border-accent hover:text-accent">
@@ -6425,7 +6422,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
               )}
 
               {voiceoverMode === 'ai' && (
-                <details className="group mt-3 max-w-2xl rounded-xl border border-border bg-surface-2">
+                <details data-lingshu-guide="ai-voice" className="group mt-3 max-w-2xl rounded-xl border border-border bg-surface-2">
                   <summary className="flex cursor-pointer list-none items-center justify-between px-4 py-3 text-xs font-bold text-text-secondary [&::-webkit-details-marker]:hidden">
                     <span>高级配音设置</span>
                     <span className="flex items-center gap-2 text-[10px] font-medium text-text-muted">
@@ -6437,7 +6434,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                   <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                     <div>
                       <p className="text-xs font-black text-text-primary">表达方式与目标时长</p>
-                      <p className="mt-0.5 text-[10px] text-text-muted">当前编辑：{LANGS.find(item => item.code === activeVoiceLang)?.label || activeVoiceLang}。参数按语言独立保存，音频会校准到约 {duration}s 并重新对齐字幕。</p>
+                      <p className="mt-0.5 text-[10px] font-bold text-text-muted">当前：{LANGS.find(item => item.code === activeVoiceLang)?.label || activeVoiceLang} · 约 {duration}s</p>
                     </div>
                     <select value={ttsPreset} onChange={e => applyTtsPreset(e.target.value as TtsStyleOptions['preset'])}
                       className="rounded-lg border border-border bg-white px-2.5 py-1.5 text-xs font-bold text-text-secondary outline-none">
@@ -6869,16 +6866,15 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                 );
               })}
             </div>
-            <div className="mb-5 rounded-xl border border-accent/20 bg-accent/5 p-3">
-              <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-xs font-black text-text-primary">声音方案</p><p className="mt-1 text-[10px] text-text-muted">已选 {voiceCandidates.length} 个音色 · {bgmCandidates.length || 1} 个配乐方向，不会默认生成全部组合。</p></div>
+            <div data-lingshu-guide="ai-voice" className="mb-5 rounded-xl border border-accent/20 bg-accent/5 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-xs font-black text-text-primary">声音方案</p><p className="mt-1 text-[10px] font-bold text-text-muted">{voiceCandidates.length} 个音色 · {bgmCandidates.length || 1} 个配乐方向</p></div>
                 <div className="inline-flex rounded-lg border border-border bg-white p-1">{([1, 2] as const).map(count => <button key={count} type="button" onClick={() => setSoundCandidatesPerContent(count)} className={`rounded-md px-2.5 py-1 text-[10px] font-bold ${soundCandidatesPerContent === count ? 'bg-accent text-white' : 'text-text-muted'}`}>每套保留 {count} 个</button>)}</div>
               </div>
             </div>
-            <div className="rounded-2xl border border-border bg-surface p-4">
+            <div data-lingshu-guide="ai-audio-mix" className="rounded-2xl border border-border bg-surface p-4">
               <div className="mb-3 flex items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-black text-text-primary">音量调节</p>
-                  <p className="mt-0.5 text-xs text-text-muted">分别控制背景乐和口播音量，口播出现时自动压低背景乐。</p>
                 </div>
                 <span className="rounded-lg bg-accent-glow px-2.5 py-1 text-[11px] font-bold text-accent">ducking</span>
               </div>

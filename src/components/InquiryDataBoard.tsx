@@ -55,7 +55,7 @@ export default function InquiryDataBoard(_props: { windowDays?: number }) {
       {loading ? (
         <div className="rounded-xl border border-dashed border-border bg-surface p-6 text-sm text-text-muted">正在读取 WhatsApp 客户会话...</div>
       ) : inquiries.length === 0 ? (
-        <EmptyState text="我的客户 tab 中暂无 WhatsApp 会话，因此询盘页不展示无真实来源的漏斗、响应时效或来源占比组件。" />
+        <EmptyState text="暂无 WhatsApp 客户会话。" />
       ) : (
         <>
           <div className="mb-4 grid gap-3 md:grid-cols-4">
@@ -68,7 +68,6 @@ export default function InquiryDataBoard(_props: { windowDays?: number }) {
           <section className="rounded-xl border border-border bg-white">
             <div className="border-b border-border px-4 py-3">
               <p className="text-sm font-bold text-text-primary">WhatsApp 询盘明细</p>
-              <p className="mt-1 text-xs text-text-muted">只展示客户页已有字段，不生成无法从客户会话判断的漏斗或响应指标。</p>
             </div>
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
@@ -110,9 +109,6 @@ export default function InquiryDataBoard(_props: { windowDays?: number }) {
         </>
       )}
 
-      <p className="mt-4 flex items-center gap-1.5 text-[11px] text-text-muted">
-        <Info size={12} /> 已删除公共平台评论、询盘漏斗、响应时效、来源占比等不来自 WhatsApp/我的客户 tab 的组件。
-      </p>
     </div>
   );
 }

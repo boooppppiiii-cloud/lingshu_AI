@@ -1476,7 +1476,7 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, onExactAnalysis, acti
   const hasTrustedImageAnalysis = video.contentFormat === 'image' && video.aiAnalysis?.imageEvidence?.status === 'analyzed' && imageEvidenceCount > 0;
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col" data-lingshu-guide="analysis-evidence">
       <div className="flex-shrink-0 border-b border-border bg-surface px-4 py-3">
         <div className="mb-3 flex flex-wrap items-center gap-2 text-[10px] text-text-muted">
           <span className="rounded-md border border-border bg-surface-2 px-2 py-1 font-semibold text-text-secondary">{video.contentFormat === 'image' ? `${getPlatformMeta(video.platform).label} 图文` : analysis.videoType}</span>
@@ -1702,7 +1702,7 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, onExactAnalysis, acti
       <div className="flex-shrink-0 border-t border-border bg-surface p-4 shadow-[0_-10px_24px_rgba(15,23,42,0.04)]">
         {video.contentFormat !== 'image' && <div className="mb-3 rounded-xl border border-accent/20 bg-accent/5 p-3">
           <div className="flex items-center justify-between gap-3">
-            <div><p className="text-[11px] font-black text-text-primary">{video.aiAnalysis?.analysisMode === 'exact' ? '全片精确分析版' : '全片策略分析版'}</p><p className="mt-0.5 text-[10px] leading-relaxed text-text-muted">{video.aiAnalysis?.analysisMode === 'exact' ? '已按高密度镜头与动作变化分析全片。' : '默认覆盖全片，按真实内容变化拆分，控制 Token 成本。'}</p></div>
+            <p className="text-[11px] font-black text-text-primary">{video.aiAnalysis?.analysisMode === 'exact' ? '全片精确分析版' : '全片策略分析版'}</p>
             {video.aiAnalysis?.analysisMode !== 'exact' && <button type="button" onClick={onExactAnalysis} disabled={video.aiAnalysis?.requestedAnalysisMode === 'exact'} className="shrink-0 rounded-lg border border-accent bg-white px-2.5 py-1.5 text-[10px] font-black text-accent hover:bg-accent/5 disabled:cursor-wait disabled:opacity-50">{video.aiAnalysis?.requestedAnalysisMode === 'exact' ? '精确分析生成中…' : '生成全片精确分析'}</button>}
           </div>
           {actionNotice && <p role="status" aria-live="polite" className="mt-2 rounded-lg border border-accent/20 bg-white px-2.5 py-2 text-[10px] font-semibold leading-relaxed text-text-secondary">{actionNotice}</p>}
@@ -2215,7 +2215,6 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onExactAnalysis,
                               </div>
                               <div className="min-w-0 flex-1 py-0.5">
                                 <p className="text-xs font-semibold text-text-primary line-clamp-2">Seedance 输出视频</p>
-                                <p className="mt-1 text-[11px] text-text-muted">请先确认生成效果，再进入剪辑流程做字幕、封面、配乐和发布。</p>
                                 {videoVersions.length > 0 && <div className="mt-2 flex flex-wrap gap-1">
                                   {videoVersions.map(item => <button key={item.id} type="button" onClick={async () => {
                                     await studioApi.selectVideoVersion(item.id);
