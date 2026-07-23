@@ -25,6 +25,7 @@ import { studioRouter } from './routes/studio.js';
 import { authRouter } from './routes/auth.js';
 import { youtubeRouter } from './routes/youtube.js';
 import { socialRouter } from './routes/social.js';
+import { socialEngagementRouter } from './routes/socialEngagement.js';
 import { platformIntegrationsRouter } from './routes/platformIntegrations.js';
 import { adminRouter } from './routes/admin.js';
 import { assistantThreadsRouter } from './routes/assistantThreads.js';
@@ -35,7 +36,7 @@ import { assistLinksRouter } from './routes/assistLinks.js';
 import { initWhatsAppCustomerMaintenance } from './whatsapp/historyImport.js';
 import { whatsappOAuthRouter } from './routes/whatsappOAuth.js';
 import { publishingRouter } from './routes/publishing.js';
-import { ensureDeliveryCollections, ensureTrendVideoAnalysisCapacity } from './storage/ensureDeliveryCollections.js';
+import { backfillTrendVideoContentFormat, ensureDeliveryCollections, ensureTrendVideoAnalysisCapacity } from './storage/ensureDeliveryCollections.js';
 import { supportAccessRouter } from './routes/supportAccess.js';
 import { crawlWorkerRouter, initCrawlWorkerCloudFallback } from './routes/crawlWorker.js';
 import { requireScopedAsset, syncAssetSession } from './lib/assetAccess.js';
@@ -48,6 +49,7 @@ configureNetworkProxy();
 try {
   await ensureDeliveryCollections();
   await ensureTrendVideoAnalysisCapacity();
+  await backfillTrendVideoContentFormat();
 } catch (error) {
   console.error('[pb-init] failed to ensure tenants / tenant_platform_apps collections:', error instanceof Error ? error.message : error);
 }
@@ -198,6 +200,7 @@ app.use('/api/overseas/publishing', publishingRouter);
 app.use('/api', assistLinksRouter);
 app.use('/api/overseas/youtube', youtubeRouter);
 app.use('/api/overseas/social', socialRouter);
+app.use('/api/overseas/social-engagement', socialEngagementRouter);
 app.use('/api/overseas/scheduler', schedulerRouter);
 app.use('/api/overseas/plugins', pluginsRouter);
 app.use('/api/overseas/auth', authRouter);

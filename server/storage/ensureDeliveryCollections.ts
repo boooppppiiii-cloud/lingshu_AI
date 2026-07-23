@@ -258,6 +258,7 @@ export async function ensureDeliveryCollections(): Promise<void> {
 }
 
 export async function ensureTrendVideoAnalysisCapacity(): Promise<void> {
+  const requiredMax = 1_000_000;
   const res = await adminFetch('/api/collections/trend_videos');
   if (!res.ok) throw new Error(`读取集合 trend_videos 失败 (${res.status})`);
   const collection = await res.json() as {
@@ -267,22 +268,69 @@ export async function ensureTrendVideoAnalysisCapacity(): Promise<void> {
   const fields = collection.fields;
   if (fields) {
     const analysis = fields.find(field => field.name === 'aiAnalysis');
-    if (!analysis || Number(analysis.max || 0) === 0) return;
+    const hasContentFormat = fields.some(field => field.name === 'contentFormat');
+    const needsAnalysisExpansion = Boolean(analysis && Number(analysis.max || 0) < requiredMax);
+    if (!needsAnalysisExpansion && hasContentFormat) return;
+    const nextFields = fields
+      .map(field => field.name === 'aiAnalysis' && needsAnalysisExpansion ? { ...field, max: requiredMax } : field)
+      .concat(hasContentFormat ? [] : [newField({ name: 'contentFormat', type: 'select', values: ['video', 'image'] })]);
     const patch = await adminFetch('/api/collections/trend_videos', {
       method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ fields: fields.map(field => field.name === 'aiAnalysis' ? { ...field, max: 0 } : field) }),
+      body: JSON.stringify({ fields: nextFields }),
     });
-    if (!patch.ok) throw new Error(`扩容 trend_videos.aiAnalysis 失败 (${patch.status})`);
-    console.log('[pb-init] removed trend_videos.aiAnalysis length limit');
+    if (!patch.ok) throw new Error(`更新 trend_videos 索引字段失败 (${patch.status})`);
+    console.log('[pb-init] ensured trend_videos contentFormat / aiAnalysis capacity');
     return;
   }
   const schema = collection.schema ?? [];
   const analysis = schema.find(field => field.name === 'aiAnalysis');
-  if (!analysis || Number(analysis.options?.max || 0) === 0) return;
+  const hasContentFormat = schema.some(field => field.name === 'contentFormat');
+  const needsAnalysisExpansion = Boolean(analysis && Number(analysis.options?.max || 0) < requiredMax);
+  if (!needsAnalysisExpansion && hasContentFormat) return;
+  const nextSchema = schema
+    .map(field => field.name === 'aiAnalysis' && needsAnalysisExpansion ? { ...field, options: { ...(field.options ?? {}), max: requiredMax } } : field)
+    .concat(hasContentFormat ? [] : [oldSchemaField({ name: 'contentFormat', type: 'select', values: ['video', 'image'] })]);
   const patch = await adminFetch('/api/collections/trend_videos', {
     method: 'PATCH', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ schema: schema.map(field => field.name === 'aiAnalysis' ? { ...field, options: { ...(field.options ?? {}), max: 0 } } : field) }),
+    body: JSON.stringify({ schema: nextSchema }),
   });
-  if (!patch.ok) throw new Error(`扩容 trend_videos.aiAnalysis 失败 (${patch.status})`);
-  console.log('[pb-init] removed trend_videos.aiAnalysis length limit');
+  if (!patch.ok) throw new Error(`更新 trend_videos 索引字段失败 (${patch.status})`);
+  console.log('[pb-init] ensured trend_videos contentFormat / aiAnalysis capacity');
+}
+
+export async function backfillTrendVideoContentFormat(): Promise<void> {
+  let updated = 0;
+  // Newly added PocketBase fields are empty on historical records. Repeatedly
+  // consume page one so pagination cannot skip rows as they leave the filter.
+  for (let batch = 0; batch < 100; batch += 1) {
+    const params = new URLSearchParams({
+      page: '1',
+      perPage: '100',
+      filter: 'contentFormat = ""',
+      fields: 'id,aiAnalysis,contentFormat',
+    });
+    const response = await adminFetch(`/api/collections/trend_videos/records?${params}`);
+    if (!response.ok) throw new Error(`读取 trend_videos.contentFormat 待迁移记录失败 (${response.status})`);
+    const payload = await response.json() as { items?: Array<{ id?: string; aiAnalysis?: unknown; contentFormat?: string }> };
+    const items = payload.items ?? [];
+    if (!items.length) break;
+    await Promise.all(items.map(async record => {
+      if (!record.id) return;
+      let analysis: Record<string, unknown> = {};
+      try {
+        const parsed = typeof record.aiAnalysis === 'string' ? JSON.parse(record.aiAnalysis) : record.aiAnalysis;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) analysis = parsed as Record<string, unknown>;
+      } catch { /* legacy malformed analysis defaults to video */ }
+      const contentFormat = analysis.contentFormat === 'image' ? 'image' : 'video';
+      const patch = await adminFetch(`/api/collections/trend_videos/records/${encodeURIComponent(record.id)}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ contentFormat }),
+      });
+      if (!patch.ok) throw new Error(`回填 trend_videos/${record.id}.contentFormat 失败 (${patch.status})`);
+      updated += 1;
+    }));
+    if (items.length < 100) break;
+  }
+  if (updated > 0) console.log(`[pb-init] backfilled trend_videos.contentFormat for ${updated} records`);
 }

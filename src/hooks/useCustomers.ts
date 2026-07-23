@@ -30,19 +30,13 @@ export function useCustomers(refreshKey = 0): {
     let alive = true;
     let timer: number | undefined;
     const loadLiveCustomers = async () => {
-      const data = await fetch('/api/overseas/customers?source=whatsapp', { headers: authHeader() }).then(resp => resp.ok ? resp.json() : null);
+      const data = await fetch('/api/overseas/customers', { headers: authHeader() }).then(resp => resp.ok ? resp.json() : null);
       const items = Array.isArray(data?.items) ? data.items : [];
       if (alive) setCustomers(items.map((item: CustomerProfile) => cloneCustomer({ ...item, isReal: true })));
     };
     const load = async () => {
       setLoading(true);
       try {
-        const status = await fetch('/api/overseas/platform-integrations/whatsapp/status', { headers: authHeader() }).then(resp => resp.ok ? resp.json() : null);
-        const shouldUseLive = Boolean(status?.connected && status?.source !== 'demo');
-        if (!shouldUseLive) {
-          if (alive) setCustomers([]);
-          return;
-        }
         await loadLiveCustomers();
         timer = window.setInterval(() => {
           void loadLiveCustomers().catch(() => {});

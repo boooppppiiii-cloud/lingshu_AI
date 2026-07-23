@@ -515,31 +515,46 @@ export async function getVideoComments(
  */
 export async function getMyVideoComments(
   config: YouTubeConfig,
-  maxResults: number = 1000
+  maxResults: number = 1000,
+  channelId?: string,
 ): Promise<YouTubeComment[]> {
   const token = await getAccessToken(config);
+  const resolvedChannelId = channelId || (await getMyChannelInfo(config)).id;
 
-  // Get all comments on my videos
-  const res = await axios.get(`${YOUTUBE_API_URL}/comments`, {
+  // commentThreads is the supported endpoint for channel-wide comment discovery.
+  const res = await axios.get(`${YOUTUBE_API_URL}/commentThreads`, {
     params: {
       part: 'snippet',
-      myThreads: true,
+      allThreadsRelatedToChannelId: resolvedChannelId,
       textFormat: 'plainText',
       maxResults: Math.min(100, maxResults),
-      fields: 'items(id,snippet(authorDisplayName,authorProfileImageUrl,textDisplay,likeCount,publishedAt,videoId))',
+      order: 'time',
+      fields: 'items(snippet(videoId,topLevelComment(id,snippet(authorDisplayName,authorProfileImageUrl,textDisplay,likeCount,publishedAt))))',
     },
     headers: { Authorization: `Bearer ${token}` },
   });
 
   return (res.data.items || []).map((item: any) => ({
-    id: item.id,
-    authorName: item.snippet.authorDisplayName,
-    authorProfileImageUrl: item.snippet.authorProfileImageUrl,
-    textDisplay: item.snippet.textDisplay,
-    likeCount: item.snippet.likeCount,
-    publishedAt: item.snippet.publishedAt,
+    id: item.snippet.topLevelComment.id,
+    authorName: item.snippet.topLevelComment.snippet.authorDisplayName,
+    authorProfileImageUrl: item.snippet.topLevelComment.snippet.authorProfileImageUrl,
+    textDisplay: item.snippet.topLevelComment.snippet.textDisplay,
+    likeCount: item.snippet.topLevelComment.snippet.likeCount,
+    publishedAt: item.snippet.topLevelComment.snippet.publishedAt,
     videoId: item.snippet.videoId,
   }));
+}
+
+/** Reply to an existing top-level comment. Requires youtube.force-ssl OAuth scope. */
+export async function replyToYouTubeComment(config: YouTubeConfig, parentId: string, text: string): Promise<{ id: string }> {
+  const token = await getAccessToken(config);
+  const res = await axios.post(`${YOUTUBE_API_URL}/comments`, {
+    snippet: { parentId, textOriginal: text },
+  }, {
+    params: { part: 'snippet' },
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+  });
+  return { id: String(res.data?.id || '') };
 }
 
 /**

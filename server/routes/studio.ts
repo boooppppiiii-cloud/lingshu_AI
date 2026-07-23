@@ -1451,6 +1451,66 @@ Schema:
   res.json({ ok: true, source: 'fallback', ...fallbackPosterBrief({ productInfo, platform, ratio, posterStyle, language }) });
 });
 
+// POST /studio/lead-content-package
+// 基于竞品公开图文证据 + 企业中心真实资料，生成“吸引—解释—信任”三条连续获客内容。
+studioRouter.post('/lead-content-package', async (req, res) => {
+  if (!await consumeDemoQuota(req, res, 'generation')) return;
+  const { productInfo = '', platform = 'instagram', language = 'en', ratio = '4:5', referenceEvidence = null, referenceTitle = '' } = req.body ?? {};
+  if (!referenceEvidence?.observedFacts?.length) { res.status(400).json({ error: '缺少可信的竞品逐图证据，不能生成获客内容包' }); return; }
+  const enterprise = await enterpriseCtx();
+  const prompt = `你是外贸 B2B 社媒获客内容总监。请基于企业真实资料和竞品公开图文的结构化证据，生成三条连续图文内容：吸引目标买家、解释合作能力、建立供应商信任。
+
+企业资料（唯一商业事实来源）：
+${enterprise || '(企业中心资料为空)'}
+
+当前选择产品：
+${String(productInfo || '(未选择产品)').slice(0, 5000)}
+
+竞品标题（仅用于定位参考，不得复制）：${String(referenceTitle || '').slice(0, 300)}
+竞品证据：
+${JSON.stringify(referenceEvidence).slice(0, 12000)}
+
+平台：${platform}；语言：${langName(language)}；比例：${ratio}
+
+硬规则：
+- 只复用竞品的通用布局、信息层级、色彩关系和轮播功能；禁止复制竞品品牌、Logo、产品、包装、联系方式和原句。
+- MOQ、价格、认证、交期、出口国家、工厂年限等只能来自企业资料；缺失时写入 fieldsToConfirm，不能出现在 poster 或 caption。
+- 三条内容必须分别服务 buyer_attention、capability_explanation、supplier_trust，不是三张相似 A/B 图。
+- 每条建议 5 张轮播，每张都必须有明确 role、headline、body、assetRole；文字简洁。
+- 输出合法 JSON，不要 markdown。
+
+Schema:
+{
+  "strategySummary":"string",
+  "referenceModulesUsed":[{"module":"string","evidence":"string","application":"string"}],
+  "items":[{
+    "role":"buyer_attention|capability_explanation|supplier_trust",
+    "title":"string",
+    "objective":"string",
+    "slides":[{"index":1,"role":"attention|product|detail|process|proof|cta","headline":"string","body":"string","assetRole":"product image|factory image|certificate image|packaging image|scene image|brand visual|none"}],
+    "caption":"string",
+    "hashtags":["string"],
+    "cta":"string",
+    "dmOpening":"string",
+    "imagePrompt":"string"
+  }],
+  "fieldsToConfirm":["string"]
+}`;
+  const failures: string[] = [];
+  for (const backend of ['qwen', 'gemini'] as const) {
+    try {
+      const text = await callLLM(prompt, { backend, systemPrompt: enterprise || undefined });
+      const parsed = extractJSON<any>(text);
+      if (Array.isArray(parsed?.items) && parsed.items.length >= 3) {
+        res.json({ ok: true, source: 'ai', provider: backend, strategySummary: String(parsed.strategySummary || ''), referenceModulesUsed: Array.isArray(parsed.referenceModulesUsed) ? parsed.referenceModulesUsed.slice(0, 12) : [], items: parsed.items.slice(0, 3), fieldsToConfirm: Array.isArray(parsed.fieldsToConfirm) ? parsed.fieldsToConfirm.map(String).slice(0, 20) : [] });
+        return;
+      }
+      failures.push(`${backend}: parse_failed`);
+    } catch (error) { failures.push(`${backend}: ${String((error as Error)?.message || error).slice(0, 180)}`); }
+  }
+  res.status(502).json({ error: '获客内容包生成失败', details: failures });
+});
+
 // POST /studio/fb-poster/render  Body: { poster, caption, imagePrompt, ratio, materialIds? }
 studioRouter.post('/fb-poster/render', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
@@ -1588,6 +1648,11 @@ ${src}`;
   const invalid = (value: string, code: string) => {
     const textValue = String(value || '').trim();
     if (!textValue) return true;
+    const spokenValue = textValue
+      .replace(/\[[^\]]*?\d+(?:\.\d+)?\s*(?:s|秒)?\s*[-–—]\s*\d+(?:\.\d+)?\s*(?:s|秒)?[^\]]*\]/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!spokenValue) return true;
     if (code !== 'zh' && /[\u4e00-\u9fff]/.test(textValue)) return true;
     if (/translation unavailable|无法翻译|不能翻译|作为AI|Here is|```/i.test(textValue)) return true;
     return false;

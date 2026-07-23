@@ -6,6 +6,7 @@ import type { VideoAiAnalysis } from '../types/index.js';
 import { normalizeVideoAnalysis } from './gemini.js';
 
 const QWEN_VL_MODEL = () => (process.env.QWEN_VL_MODEL ?? 'qwen-vl-max').trim();
+const QWEN_EXACT_VL_MODEL = () => (process.env.QWEN_EXACT_VL_MODEL ?? 'qwen3-vl-flash').trim();
 const BASE_URL = () => (process.env.DASHSCOPE_BASE_URL ?? 'https://dashscope.aliyuncs.com/compatible-mode/v1').trim();
 
 function client(): OpenAI {
@@ -14,10 +15,24 @@ function client(): OpenAI {
   try { fileKey = fs.readFileSync(keyFile, 'utf8').trim(); } catch { /* optional local secret file */ }
   const apiKey = process.env.DASHSCOPE_API_KEY?.trim() || fileKey;
   if (!apiKey) throw new Error('DASHSCOPE_API_KEY is not set');
-  return new OpenAI({ apiKey, baseURL: BASE_URL() });
+  return new OpenAI({
+    apiKey,
+    baseURL: BASE_URL(),
+    timeout: Math.max(30_000, Number(process.env.QWEN_REQUEST_TIMEOUT_MS || 90_000)),
+    maxRetries: Math.max(0, Math.min(2, Number(process.env.QWEN_MAX_RETRIES || 0))),
+  });
 }
 
 export interface QwenAsrSegment { start: number; end: number; text: string; confidence?: number }
+export interface ImagePostEvidenceAnalysis {
+  version: 2;
+  status: 'analyzed';
+  observedFacts: Array<{ imageIndex: number; subjects: string[]; scene: string; composition: string; colors: string[]; visibleText: string[]; confidence: number }>;
+  carouselFlow: Array<{ imageIndex: number; role: 'attention' | 'product' | 'detail' | 'proof' | 'process' | 'cta' | 'unknown'; evidence: string; confidence: number }>;
+  copyEvidence: { hooks: Array<{ text: string; source: 'caption' | 'ocr'; evidence: string }>; sellingPoints: Array<{ text: string; source: 'caption' | 'ocr'; evidence: string }>; cta: string[] };
+  reusableModules: Array<{ module: string; evidence: string; preserve: string; replace: string; confidence: number }>;
+  uncertainties: string[];
+}
 export async function transcribeAudioWithQwen(opts: { audio: Buffer; fileName?: string }): Promise<{ text: string; segments: QwenAsrSegment[] }> {
   const completion = await client().chat.completions.create({
     model: process.env.QWEN_ASR_MODEL || 'qwen3-asr-flash',
@@ -100,13 +115,13 @@ ${modeInstruction}
   ];
 
   const completion = await client().chat.completions.create({
-    model: QWEN_VL_MODEL(),
+    model: opts.analysisMode === 'exact' ? QWEN_EXACT_VL_MODEL() : QWEN_VL_MODEL(),
     messages: [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: content as any },
     ],
     response_format: { type: 'json_object' },
-    max_tokens: 8000,
+    max_tokens: Number(opts.duration || 0) > 60 ? 8000 : 4500,
   });
 
   const raw = completion.choices[0]?.message?.content ?? '';
@@ -114,13 +129,13 @@ ${modeInstruction}
   let normalized = normalizeVideoAnalysis(parsed);
   if (!normalized.scriptDetails15s?.length) {
     const repair = await client().chat.completions.create({
-      model: QWEN_VL_MODEL(),
+      model: opts.analysisMode === 'exact' ? QWEN_EXACT_VL_MODEL() : QWEN_VL_MODEL(),
       messages: [
         { role: 'system', content: `你是视频导演分镜修复器。只输出合法JSON对象，且只能包含scriptDetails15s。首4秒是每秒3帧，必须逐相邻帧比较，不得跳过亚秒动作。每项包含time、environment、shot、camera、purpose、visual、dialogue、onScreenText、ambientSound、bgm、soundEffects、beats、persistentState、authenticity、observedFacts、inferredIntent、causalGap、omniPrompt、omniNegativePrompt、confidence、needsReview、subtitle、audio、note。observedFacts只能写实际可见内容，inferredIntent写推断含义，causalGap写未展示的因果动作；绝不能把causalGap补进visual、beats或omniPrompt。omniPrompt和omniNegativePrompt使用英文。time必须为start-end s区间；口播与屏幕字幕分离；品牌、款名、价格、左右眼不确定时needsReview=true。` },
         { role: 'user', content: content as any },
       ],
       response_format: { type: 'json_object' },
-      max_tokens: 8000,
+      max_tokens: Number(opts.duration || 0) > 60 ? 8000 : 4500,
     });
     const repaired = parseJson<Partial<VideoAiAnalysis>>(repair.choices[0]?.message?.content ?? '', {});
     normalized = normalizeVideoAnalysis({ ...parsed, scriptDetails15s: repaired.scriptDetails15s });
@@ -128,61 +143,71 @@ ${modeInstruction}
   return normalized;
 }
 
-export async function analyzeImagePostWithQwen(opts: {
-  imageBase64: string;
-  mimeType: string;
+export async function analyzeImagePostEvidenceWithQwen(opts: {
+  images: Array<{ base64: string; mimeType: string; imageIndex: number }>;
   title?: string;
   caption?: string;
   platform?: string;
-  views?: string;
   tags?: string[];
-  imageCount?: number;
-}): Promise<VideoAiAnalysis> {
-  if (!opts.imageBase64) throw new Error('Qwen image analysis requires an image');
+}): Promise<ImagePostEvidenceAnalysis> {
+  if (!opts.images.length) throw new Error('Qwen image evidence analysis requires at least one image');
+  const prompt = `你是外贸 B2B 社媒竞品图文的证据提取器。你会收到按轮播顺序排列的公开图片，以及原始 caption 和标签。
+只描述图片中实际可见或原文中明确出现的内容，不判断“为什么爆”，不编造目标人群、效果、认证、价格、MOQ、工厂资质或互动结果。
+必须区分观察事实与推断。无法确认就写入 uncertainties。所有字符串用简体中文。只输出合法 JSON。
 
-  const systemPrompt = `你是一个面向出海 B2B 社媒获客的图文海报分析专家。
-你会收到一张社媒图文帖的首图，以及标题、caption、平台、互动数据、标签等资料。
-请分析它作为“爆款图文/海报参考”的可复用模块，并输出兼容短视频分析结构的 JSON。所有字符串用简体中文。
-只输出合法 JSON，不要 markdown，不要代码块，不要前后解释。
+Schema:
+{
+  "version": 2,
+  "status": "analyzed",
+  "observedFacts": [{"imageIndex":1,"subjects":[],"scene":"","composition":"","colors":[],"visibleText":[],"confidence":0.0}],
+  "carouselFlow": [{"imageIndex":1,"role":"attention|product|detail|proof|process|cta|unknown","evidence":"基于可见内容的理由","confidence":0.0}],
+  "copyEvidence": {
+    "hooks": [{"text":"原文或OCR中的文字","source":"caption|ocr","evidence":"对应原句"}],
+    "sellingPoints": [{"text":"原文或OCR中的明确卖点","source":"caption|ocr","evidence":"对应原句"}],
+    "cta": ["原文或OCR中明确出现的行动指令"]
+  },
+  "reusableModules": [{"module":"布局或信息模块","evidence":"可见证据","preserve":"可复用的通用结构","replace":"必须替换的竞品内容","confidence":0.0}],
+  "uncertainties": []
+}
 
-必需 JSON 字段：
-- theme: string，概括这张图文/海报的产品、场景和营销目标
-- hooks: string[], 2-4 个可复用开头钩子/爆点，必须结合 caption 与画面
-- sellingPoints: string[], 3-6 个可复用卖点表达或信息模块
-- mood: string，视觉风格/审美质感，例如“高端工厂招商海报”“洁净实验室背书”“节日促销图文”
-- structure: string，模块结构，例如“标题区 -> 产品主视觉 -> 背景氛围 -> 信息栏 -> 认证徽章 -> CTA”
-- baseRequirements: string，说明可复用的画风、构图、色彩、光影、排版密度和图文生成注意点
-- firstTenSeconds: object，虽然是静态图，也按五维输出：atmosphere、audioVisual、camera、visuals、voiceMusic；audioVisual/voiceMusic 可写“静态图无音频，caption 承担解释”
-- coarseStructure: array，把图文拆成可复用模块；每项包含 time、label、description。time 可用“标题区/产品主视觉/背景/信息栏/CTA”
-- scriptSummary15s: object，包含 visualStyle、coreEmotion、competitors
-- scriptDetails15s: array，逐模块详析，每项包含 time、environment、shot、camera、visual、subtitle、audio、note；subtitle 只写画面中能看清的文字或 caption 中确定表达，不能编造
-- recommendedScriptType: "storyboard"`;
-
+硬规则：
+- observedFacts 按每张图分别输出，imageIndex 从 1 开始。
+- visibleText 只能写实际能读清的 OCR 文字。
+- reusableModules 只能复用构图、信息层级、色彩关系、轮播功能；竞品品牌、Logo、产品、包装、联系方式必须写入 replace。
+- 不输出爆款评分，不根据点赞量推断因果。`;
   const meta = [
-    `标题：${opts.title || '未知'}`,
-    opts.caption ? `原始 caption：${opts.caption}` : '',
-    `平台：${opts.platform || '未知'}`,
-    opts.views ? `互动/热度：${opts.views}` : '',
-    opts.imageCount ? `图组张数：${opts.imageCount}` : '',
+    `标题：${opts.title || ''}`,
+    `原始 caption：${opts.caption || ''}`,
+    `平台：${opts.platform || ''}`,
     opts.tags?.length ? `标签：${opts.tags.join(', ')}` : '',
+    `图片数量：${opts.images.length}`,
   ].filter(Boolean).join('\n');
-
+  const content: Array<Record<string, unknown>> = [
+    { type: 'text', text: `${meta}\n\n按顺序分析下面的轮播图片。` },
+    ...opts.images.sort((a, b) => a.imageIndex - b.imageIndex).map(image => ({
+      type: 'image_url',
+      image_url: { url: `data:${image.mimeType};base64,${image.base64.replace(/^data:[^,]+,/, '')}` },
+    })),
+  ];
   const completion = await client().chat.completions.create({
     model: QWEN_VL_MODEL(),
-    messages: [
-      { role: 'system', content: systemPrompt },
-      {
-        role: 'user',
-        content: [
-          { type: 'text', text: `${meta}\n\n请拆解这张图文/海报，输出上述 JSON。` },
-          { type: 'image_url', image_url: { url: `data:${opts.mimeType};base64,${opts.imageBase64.replace(/^data:[^,]+,/, '')}` } },
-        ] as any,
-      },
-    ],
+    messages: [{ role: 'system', content: prompt }, { role: 'user', content: content as any }],
     response_format: { type: 'json_object' },
+    max_tokens: 7000,
   });
-
-  const raw = completion.choices[0]?.message?.content ?? '';
-  const parsed = parseJson<Partial<VideoAiAnalysis>>(raw, {});
-  return normalizeVideoAnalysis({ ...parsed, recommendedScriptType: 'storyboard' });
+  const parsed = parseJson<Partial<ImagePostEvidenceAnalysis>>(completion.choices[0]?.message?.content ?? '', {});
+  if (!Array.isArray(parsed.observedFacts) || !parsed.observedFacts.length) throw new Error('Qwen returned no image facts');
+  return {
+    version: 2,
+    status: 'analyzed',
+    observedFacts: parsed.observedFacts.slice(0, opts.images.length),
+    carouselFlow: Array.isArray(parsed.carouselFlow) ? parsed.carouselFlow.slice(0, opts.images.length) : [],
+    copyEvidence: {
+      hooks: Array.isArray(parsed.copyEvidence?.hooks) ? parsed.copyEvidence!.hooks.slice(0, 8) : [],
+      sellingPoints: Array.isArray(parsed.copyEvidence?.sellingPoints) ? parsed.copyEvidence!.sellingPoints.slice(0, 12) : [],
+      cta: Array.isArray(parsed.copyEvidence?.cta) ? parsed.copyEvidence!.cta.slice(0, 6) : [],
+    },
+    reusableModules: Array.isArray(parsed.reusableModules) ? parsed.reusableModules.slice(0, 12) : [],
+    uncertainties: Array.isArray(parsed.uncertainties) ? parsed.uncertainties.map(String).slice(0, 12) : [],
+  };
 }

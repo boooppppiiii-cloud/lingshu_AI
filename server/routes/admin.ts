@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
+import { gunzipSync } from 'node:zlib';
 import { writeAuditLog } from '../lib/auditLog.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -30,7 +31,7 @@ import {
   type VideoAdminAlert,
   type VideoFailureRecord,
 } from '../lib/videoAdminAlerts.js';
-import { attachManualVideoUploadAndQueue, backfillMissingCrawledMedia, repairMissingCrawledThumbnails } from './videos.js';
+import { attachManualVideoUploadAndQueue } from './videos.js';
 import { listStyleAdoptionTrends } from '../knowledge/styleMemory.js';
 import {
   decryptSecret,
@@ -113,15 +114,22 @@ type InspirationContentFormat = 'video' | 'image';
 
 function recordAnalysis(record: Record<string, unknown>): Record<string, unknown> {
   const value = record.aiAnalysis;
-  if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+  let analysis: Record<string, unknown> = {};
+  if (value && typeof value === 'object' && !Array.isArray(value)) analysis = { ...(value as Record<string, unknown>) };
   try {
-    const parsed = JSON.parse(String(value || '{}')) as unknown;
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? parsed as Record<string, unknown>
-      : {};
-  } catch {
-    return {};
+    if (!Object.keys(analysis).length) {
+      const parsed = JSON.parse(String(value || '{}')) as unknown;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) analysis = parsed as Record<string, unknown>;
+    }
+  } catch { /* malformed legacy analysis remains empty */ }
+  const compressed = typeof analysis.imageEvidenceGzip === 'string' ? analysis.imageEvidenceGzip : '';
+  if (!analysis.imageEvidence && compressed) {
+    try { analysis.imageEvidence = JSON.parse(gunzipSync(Buffer.from(compressed, 'base64')).toString('utf8')); }
+    catch { /* keep evidence unavailable rather than inventing it */ }
   }
+  delete analysis.imageEvidenceGzip;
+  delete analysis.imageEvidenceEncoding;
+  return analysis;
 }
 
 function isAdminInspirationRecord(record: Record<string, unknown>, contentFormat: InspirationContentFormat): boolean {
@@ -142,6 +150,11 @@ function isAdminInspirationRecord(record: Record<string, unknown>, contentFormat
   }
 
   if (analysis.contentFormat === 'image' || analysis.analysisQuality !== 'video' || !analysis.gemini) return false;
+  // A precise re-analysis must not make an already valid benchmark disappear
+  // while the replacement analysis is queued, or after that upgrade fails.
+  // The original video-level evidence remains useful and the drawer needs the
+  // live record so it can show progress/failure instead of reverting to cache.
+  if (analysis.requestedAnalysisMode === 'exact' || analysis.analysisMode === 'exact') return true;
   const analysisSource = String(analysis.analysisSource || '');
   const geminiStatus = String(analysis.geminiStatus || '');
   const downloadStatus = String(analysis.downloadStatus || '');
@@ -160,7 +173,7 @@ async function listAdminInspirationVideos(input: {
 }) {
   const records: Record<string, unknown>[] = [];
   const seenSourceUrls = new Set<string>();
-  const where: Record<string, string> = {};
+  const where: Record<string, string> = { contentFormat: input.contentFormat };
   if (input.platform) where.platform = input.platform;
   if (input.status) where.status = input.status;
   let scanPage = 1;
@@ -186,7 +199,10 @@ async function listAdminInspirationVideos(input: {
   const totalItems = records.length;
   const start = (input.page - 1) * input.perPage;
   return {
-    items: records.slice(start, start + input.perPage),
+    items: records.slice(start, start + input.perPage).map(record => ({
+      ...record,
+      aiAnalysis: JSON.stringify(recordAnalysis(record)),
+    })),
     totalItems,
     totalPages: Math.max(1, Math.ceil(totalItems / input.perPage)),
     page: input.page,
@@ -200,6 +216,8 @@ const inspirationListCache = new Map<string, {
   pending?: Promise<Awaited<ReturnType<typeof listAdminInspirationVideos>>>;
 }>();
 
+const INSPIRATION_LIST_CACHE_MS = 5_000;
+
 async function cachedAdminInspirationVideos(input: Parameters<typeof listAdminInspirationVideos>[0]) {
   const key = JSON.stringify(input);
   const now = Date.now();
@@ -207,16 +225,21 @@ async function cachedAdminInspirationVideos(input: Parameters<typeof listAdminIn
   if (cached?.value && cached.expiresAt > now) return cached.value;
   if (cached?.pending) return cached.pending;
 
+  // Status changes from explicit analysis actions must be visible on the next
+  // dashboard poll. A five-minute stale response made completed records disappear
+  // or revert to their old button state.
+  if (cached?.value) inspirationListCache.delete(key);
+
   const pending = listAdminInspirationVideos(input)
     .then(value => {
-      inspirationListCache.set(key, { value, expiresAt: Date.now() + 10_000 });
+      inspirationListCache.set(key, { value, expiresAt: Date.now() + INSPIRATION_LIST_CACHE_MS });
       return value;
     })
     .catch(error => {
       inspirationListCache.delete(key);
       throw error;
     });
-  inspirationListCache.set(key, { pending, expiresAt: now + 10_000 });
+  inspirationListCache.set(key, { pending, expiresAt: now + INSPIRATION_LIST_CACHE_MS });
   return pending;
 }
 
@@ -739,14 +762,9 @@ adminRouter.get('/inspiration-videos', async (req, res) => {
     status: status || undefined,
     contentFormat,
   });
-  if (contentFormat === 'video') {
-    void backfillMissingCrawledMedia(result.items).catch(error => console.warn('[admin] PocketBase video backfill failed:', error instanceof Error ? error.message : error));
-  } else {
-    // Thumbnail recovery may involve third-party network requests. Never put it on
-    // the list response's critical path; repaired media appears on the next refresh.
-    void repairMissingCrawledThumbnails(result.items, Math.min(10, perPage))
-      .catch(error => console.warn('[admin] inspiration thumbnail repair failed:', error instanceof Error ? error.message : error));
-  }
+  // Listing must stay read-only. Media repair and AI analysis used to be launched
+  // here, so every dashboard refresh spawned more downloads/ffmpeg work and could
+  // starve an explicit user-requested analysis.
   res.json({ admin: admin.email, ...result });
 });
 

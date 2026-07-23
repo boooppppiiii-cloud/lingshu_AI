@@ -19,7 +19,7 @@ import {
 import { AnimatePresence, motion } from 'motion/react';
 import InspirationDashboard from './InspirationDashboard';
 import AiCreateStudio from './AiCreateStudio';
-import { ChannelOverview } from './YouTubeIntegration';
+import AccountActivity from './AccountActivity';
 import type { ConversationContext, Page, RestoreSignal, KickoffSignal, AgentAction } from '../App';
 import { authHeader } from '../lib/auth';
 
@@ -211,9 +211,9 @@ export default function TrafficPage({
         suggestions: ['生成四个平台的差异化文案', '检查首评内容', '确认追踪链接', '排到建议时段发布'],
       },
       accounts: {
-        label: '账号流量数据',
-        summary: '当前在账号流量数据看板，适合复盘各平台账号表现、找出增长趋势和下一轮内容优化方向。',
-        suggestions: ['复盘账号流量表现', '找出上升最快的平台', '给我下周发布建议', '总结高表现内容规律'],
+        label: '账号动态',
+        summary: '当前在账号动态，适合查看账号表现、内容状态，以及识别评论中的高意向商机。',
+        suggestions: ['查看待回复高意向评论', '判断评论采购意图', '生成真人化回复', '复盘账号表现'],
       },
     };
     window.dispatchEvent(new CustomEvent('lingshu-assistant-context', {
@@ -249,7 +249,7 @@ export default function TrafficPage({
             { mode: 'materials' as ViewMode, icon: <Film size={18} />, label: '灵感大屏' },
             { mode: 'create' as ViewMode, icon: <Wand2 size={18} />, label: 'AI智能素材' },
             { mode: 'publish' as ViewMode, icon: <Send size={18} />, label: '一键发布' },
-            { mode: 'accounts' as ViewMode, icon: <BarChart3 size={18} />, label: '账号数据' },
+            { mode: 'accounts' as ViewMode, icon: <BarChart3 size={18} />, label: '账号动态' },
           ].map(({ mode, icon, label }) => {
             const active = viewMode === mode;
             return (
@@ -289,8 +289,8 @@ export default function TrafficPage({
               <SocialPublishPanel onNavigate={onNavigate} draft={publishDraft} />
             </motion.div>
           ) : (
-            <motion.div key="accounts" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full overflow-y-auto px-6 py-5">
-              <ChannelOverview />
+            <motion.div key="accounts" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full overflow-y-auto">
+              <AccountActivity />
             </motion.div>
           )}
         </AnimatePresence>

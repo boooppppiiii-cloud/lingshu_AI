@@ -1,5 +1,6 @@
 import { GoogleGenAI, type Content } from '@google/genai';
 import type { VideoAiAnalysis, VoiceoverContent, StoryboardContent, ScriptType, Language } from '../types/index.js';
+import type { ImagePostEvidenceAnalysis } from './qwen.js';
 import { GEMINI_ANALYSIS_DIRECTOR_CONTRACT, GEMINI_STORYBOARD_DIRECTOR_CONTRACT } from '../prompts/geminiVideoScriptDirector.js';
 
 const MODEL = () => (process.env.GEMINI_MODEL ?? 'gemini-2.5-flash').trim();
@@ -103,6 +104,40 @@ async function generateText(opts: {
 
 function parseJson<T>(raw: string, fallback: T): T {
   try { return JSON.parse(raw) as T; } catch { return fallback; }
+}
+
+export async function analyzeImagePostEvidenceWithGemini(opts: {
+  images: Array<{ base64: string; mimeType: string; imageIndex: number }>;
+  title?: string;
+  caption?: string;
+  platform?: string;
+  tags?: string[];
+}): Promise<ImagePostEvidenceAnalysis> {
+  if (!opts.images.length) throw new Error('Gemini image evidence analysis requires at least one image');
+  const prompt = `你是外贸 B2B 社媒竞品图文的证据提取器。图片按轮播顺序提供。
+只写图片中实际可见或原 caption 明确出现的内容；不得推断爆款原因、目标人群、效果、认证、价格、MOQ、工厂资质或互动结果。无法确认就放入 uncertainties。所有字符串用简体中文，只输出合法 JSON。
+
+标题：${opts.title || ''}
+平台：${opts.platform || ''}
+原始 caption：${opts.caption || ''}
+标签：${(opts.tags || []).join(', ')}
+
+Schema:
+{"version":2,"status":"analyzed","observedFacts":[{"imageIndex":1,"subjects":[],"scene":"","composition":"","colors":[],"visibleText":[],"confidence":0}],"carouselFlow":[{"imageIndex":1,"role":"attention|product|detail|proof|process|cta|unknown","evidence":"","confidence":0}],"copyEvidence":{"hooks":[{"text":"","source":"caption|ocr","evidence":""}],"sellingPoints":[{"text":"","source":"caption|ocr","evidence":""}],"cta":[]},"reusableModules":[{"module":"","evidence":"","preserve":"","replace":"","confidence":0}],"uncertainties":[]}`;
+  const contents: Content[] = [{
+    role: 'user',
+    parts: [
+      { text: prompt },
+      ...opts.images.flatMap(image => [
+        { text: `第 ${image.imageIndex} 张图片` },
+        { inlineData: { mimeType: image.mimeType, data: image.base64.replace(/^data:[^,]+,/, '') } },
+      ]),
+    ],
+  }];
+  const raw = await withRetry(() => generateText({ contents, jsonMode: true }));
+  const parsed = parseJson<Partial<ImagePostEvidenceAnalysis>>(raw, {});
+  if (!Array.isArray(parsed.observedFacts) || !parsed.observedFacts.length) throw new Error('Gemini image evidence result is incomplete');
+  return { ...parsed, version: 2, status: 'analyzed' } as ImagePostEvidenceAnalysis;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

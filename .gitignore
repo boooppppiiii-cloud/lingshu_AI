@@ -25,6 +25,7 @@ data/covers/
 data/analysis-temp/
 data/qwen-reanalysis-original.json
 data/studio-variation-batches.json
+data/studio-video-versions.json
 data/crawler-ops-queue.json
 data/apify-video-usage.json
 data/video-admin-alerts.json

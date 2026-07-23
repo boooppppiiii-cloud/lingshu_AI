@@ -297,6 +297,27 @@ export interface FbPosterRenderResult {
   error?: string;
 }
 
+export interface LeadContentPackageResult {
+  ok: boolean;
+  source?: 'ai';
+  provider?: 'qwen' | 'gemini';
+  strategySummary: string;
+  referenceModulesUsed: Array<{ module: string; evidence: string; application: string }>;
+  items: Array<{
+    role: 'buyer_attention' | 'capability_explanation' | 'supplier_trust';
+    title: string;
+    objective: string;
+    slides: Array<{ index: number; role: string; headline: string; body: string; assetRole: string }>;
+    caption: string;
+    hashtags: string[];
+    cta: string;
+    dmOpening: string;
+    imagePrompt: string;
+  }>;
+  fieldsToConfirm: string[];
+  error?: string;
+}
+
 function productCategoryFromInfo(productInfo?: string): string {
   const text = String(productInfo || '');
   const match = text.match(/(?:产品类目|所属类目|产品名称|主推产品|category|product)[：:]\s*([^\n]+)/i);
@@ -413,6 +434,9 @@ export const studioApi = {
     referenceNotes?: string;
   }) =>
     post<FbPosterResult>('fb-poster', b, localPosterFallback(b)),
+
+  leadContentPackage: (b: { productInfo: string; platform: string; language: string; ratio: string; referenceTitle: string; referenceEvidence: unknown }) =>
+    post<LeadContentPackageResult>('lead-content-package', b, { ok: false, strategySummary: '', referenceModulesUsed: [], items: [], fieldsToConfirm: [], error: '获客内容包生成失败' }),
 
   fbPosterRender: (b: {
     poster: FbPosterBrief;
