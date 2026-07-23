@@ -147,30 +147,30 @@ const PAGE_EXPRESSION: Record<Page, AssistantExpression> = {
   youtube: 'excited',
 };
 
-const EXPRESSION_CROP_LEFT: Record<AssistantExpression, number> = {
-  happy: -23,
-  wink: -83,
-  thinking: -143,
-  excited: -204,
+const LAUNCHER_MASCOT_CROP_LEFT: Record<AssistantExpression, number> = {
+  happy: -26,
+  wink: -97,
+  thinking: -169,
+  excited: -241,
 };
 
-function AssistantExpressionFace({ expression }: { expression: AssistantExpression }) {
+function AssistantLauncherMascot({ expression }: { expression: AssistantExpression }) {
   return (
-    <span className="absolute inset-0 overflow-hidden rounded-[15px]" aria-hidden="true">
+    <span className="relative block h-[72px] w-[60px] overflow-hidden" aria-hidden="true">
       <AnimatePresence initial={false} mode="wait">
         <motion.span
           key={expression}
           className="absolute inset-0"
-          initial={{ opacity: 0, scale: 0.82, rotate: -5 }}
+          initial={{ opacity: 0, scale: 0.9, rotate: -3 }}
           animate={{ opacity: 1, scale: 1, rotate: 0 }}
-          exit={{ opacity: 0, scale: 0.86, rotate: 5 }}
+          exit={{ opacity: 0, scale: 0.92, rotate: 3 }}
           transition={{ duration: 0.18, ease: 'easeOut' }}
         >
           <img
-            src="/lingshu-expressions.png"
+            src="/lingshu-expressions-body-transparent.png"
             alt=""
-            className="absolute top-[-36px] h-auto max-w-none drop-shadow-[0_8px_12px_rgba(52,196,113,0.16)]"
-            style={{ left: EXPRESSION_CROP_LEFT[expression] + 4, width: 276 }}
+            className="absolute top-[-36px] h-auto max-w-none drop-shadow-[0_5px_8px_rgba(52,196,113,0.14)]"
+            style={{ left: LAUNCHER_MASCOT_CROP_LEFT[expression], width: 329 }}
           />
         </motion.span>
       </AnimatePresence>
@@ -821,7 +821,7 @@ export default function GlobalAssistant({
       </AnimatePresence>
 
       {mode !== 'chat' && (
-        <div className="relative z-10 h-14 w-14">
+        <div className="relative z-10 h-[72px] w-[60px]">
           <motion.button
             type="button"
             data-global-assistant="launcher"
@@ -829,12 +829,12 @@ export default function GlobalAssistant({
             onPointerUp={handlePointerUp}
             onPointerLeave={handlePointerUp}
             onClick={handleLauncherClick}
-            className="absolute inset-0 flex items-center justify-center bg-transparent outline-none transition-transform hover:-translate-y-0.5 focus-visible:ring-2 focus-visible:ring-[#6FDBA1] focus-visible:ring-offset-2"
+            className="absolute inset-0 flex items-center justify-center rounded-2xl bg-transparent outline-none transition-transform hover:-translate-y-0.5 focus-visible:ring-2 focus-visible:ring-[#6FDBA1] focus-visible:ring-offset-2"
             animate={mode === 'breathing' && pendingCount > 0 && !reduceMotion ? { scale: [1, 1.05, 1], y: [0, -2, 0] } : { scale: 1, y: 0 }}
             transition={{ duration: 2.4, ease: 'easeInOut', repeat: mode === 'breathing' && pendingCount > 0 && !reduceMotion ? Infinity : 0 }}
             title={mode === 'expanded' ? `打开${AGENT_DISPLAY_NAME[orbitIdForAgent(pageContext.agent)]}` : '展开灵枢助手'}
           >
-            <AssistantExpressionFace expression={assistantExpression} />
+            <AssistantLauncherMascot expression={assistantExpression} />
             {pendingCount > 0 && <span className="absolute -right-1 -top-1 min-w-5 rounded-full bg-red px-1 text-[11px] font-black text-white">{pendingBadge}</span>}
           </motion.button>
         </div>
