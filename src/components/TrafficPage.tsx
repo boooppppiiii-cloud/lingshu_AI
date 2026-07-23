@@ -20,6 +20,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import InspirationDashboard from './InspirationDashboard';
 import AiCreateStudio from './AiCreateStudio';
 import { ChannelOverview } from './YouTubeIntegration';
+import { CalendarPlanner, type CalendarPost } from './publishing/CalendarPlanner';
 import type { ConversationContext, Page, RestoreSignal, KickoffSignal, AgentAction } from '../App';
 import { authHeader } from '../lib/auth';
 
@@ -62,7 +63,8 @@ type PlatformCopy = {
   firstComment?: string;
 };
 
-type PublishItemStatus = 'draft' | 'publishing' | 'published' | 'partial' | 'failed';
+type PublishItemStatus = 'draft' | 'publishing' | 'scheduled' | 'published' | 'partial' | 'failed';
+type DeliveryMode = 'now' | 'schedule';
 
 type PublishQueueItem = {
   id: string;
@@ -75,6 +77,9 @@ type PublishQueueItem = {
   platformCopy: Record<string, PlatformCopy>;
   firstComment: string;
   trackWaLink: boolean;
+  deliveryMode: DeliveryMode;
+  scheduledAt: string;
+  calendarPostIds?: string[];
   status: PublishItemStatus;
   completedTargets: number;
   error?: string;
@@ -142,9 +147,23 @@ function createPublishItem(draft?: PublishDraft | null, targetAccountIds: string
     platformCopy: {},
     firstComment: '',
     trackWaLink: true,
+    deliveryMode: 'now',
+    scheduledAt: '',
     status: 'draft',
     completedTargets: 0,
   };
+}
+
+function dateTimeLocalValue(date: Date): string {
+  const offset = date.getTimezoneOffset() * 60_000;
+  return new Date(date.getTime() - offset).toISOString().slice(0, 16);
+}
+
+function nextScheduleValue(): string {
+  const next = new Date(Date.now() + 60 * 60_000);
+  next.setMinutes(next.getMinutes() < 30 ? 30 : 0, 0, 0);
+  if (next.getMinutes() === 0) next.setHours(next.getHours() + 1);
+  return dateTimeLocalValue(next);
 }
 
 function readStoredPublishDraft(): PublishDraft | null {
@@ -158,6 +177,7 @@ function readStoredPublishDraft(): PublishDraft | null {
 const PUBLISH_STATUS_META: Record<PublishItemStatus, { label: string; className: string }> = {
   draft: { label: '待配置', className: 'bg-slate-100 text-slate-600' },
   publishing: { label: '发布中', className: 'bg-sky-50 text-sky-700' },
+  scheduled: { label: '已排期', className: 'bg-violet-50 text-violet-700' },
   published: { label: '已完成', className: 'bg-emerald-50 text-emerald-700' },
   partial: { label: '部分失败', className: 'bg-amber-50 text-amber-700' },
   failed: { label: '发布失败', className: 'bg-red-50 text-red-700' },
@@ -246,16 +266,17 @@ export default function TrafficPage({
       <div className="flex-shrink-0 border-b border-border bg-surface px-6 py-3">
         <div className="grid w-full grid-cols-4 gap-1.5 rounded-2xl border border-border bg-surface-2 p-1 shadow-sm">
           {[
-            { mode: 'materials' as ViewMode, icon: <Film size={18} />, label: '灵感大屏' },
-            { mode: 'create' as ViewMode, icon: <Wand2 size={18} />, label: 'AI智能素材' },
-            { mode: 'publish' as ViewMode, icon: <Send size={18} />, label: '一键发布' },
-            { mode: 'accounts' as ViewMode, icon: <BarChart3 size={18} />, label: '账号数据' },
-          ].map(({ mode, icon, label }) => {
+            { mode: 'materials' as ViewMode, icon: <Film size={18} />, label: '灵感大屏', guide: 'social-inspiration' },
+            { mode: 'create' as ViewMode, icon: <Wand2 size={18} />, label: 'AI智能素材', guide: 'ai-create' },
+            { mode: 'publish' as ViewMode, icon: <Send size={18} />, label: '一键发布', guide: 'publishing-workbench' },
+            { mode: 'accounts' as ViewMode, icon: <BarChart3 size={18} />, label: '账号数据', guide: 'social-performance' },
+          ].map(({ mode, icon, label, guide }) => {
             const active = viewMode === mode;
             return (
               <button
                 key={mode}
                 type="button"
+                data-lingshu-guide={guide}
                 onClick={() => setViewMode(mode)}
                 className={`flex h-10 items-center justify-center gap-2 rounded-xl px-3 text-sm font-black transition-all ${
                   active ? 'bg-white text-text-primary shadow-sm ring-1 ring-border' : 'text-text-muted hover:bg-white/60 hover:text-text-secondary'
@@ -313,9 +334,11 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
   const [error, setError] = useState('');
   const [recommendations, setRecommendations] = useState<PublishRecommendation[]>([]);
   const [recommendationsLoading, setRecommendationsLoading] = useState(false);
+  const [calendarRefreshKey, setCalendarRefreshKey] = useState(0);
   const accountTargetsSeededRef = useRef(false);
   const appliedDraftRef = useRef(JSON.stringify(draft || readStoredPublishDraft() || {}));
   const videoInputRef = useRef<HTMLInputElement | null>(null);
+  const publishSettingsRef = useRef<HTMLElement | null>(null);
 
   const connectedAccounts = accounts.filter(account => account.status === 'connected');
   const activeItem = items.find(item => item.id === activeItemId) || items[0] || null;
@@ -329,11 +352,80 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
   const publishableItems = items.filter(item => (
     item.videoPath.trim() &&
     item.title.trim() &&
-    item.targetAccountIds.some(id => connectedAccountIds.has(id))
+    item.targetAccountIds.some(id => connectedAccountIds.has(id)) &&
+    item.status !== 'published' &&
+    item.status !== 'scheduled'
   ));
+  const immediateItems = publishableItems.filter(item => item.deliveryMode === 'now');
+  const scheduledItems = publishableItems.filter(item => item.deliveryMode === 'schedule' && Boolean(item.scheduledAt));
 
   const updateItem = (id: string, patch: Partial<PublishQueueItem>) => {
     setItems(prev => prev.map(item => item.id === id ? { ...item, ...patch } : item));
+  };
+
+  const setDeliveryMode = (mode: DeliveryMode) => {
+    if (!activeItem) return;
+    updateItem(activeItem.id, {
+      deliveryMode: mode,
+      scheduledAt: mode === 'schedule' ? (activeItem.scheduledAt || nextScheduleValue()) : activeItem.scheduledAt,
+      status: 'draft',
+      error: undefined,
+    });
+  };
+
+  const scheduleForCalendarDate = (date: Date) => {
+    let scheduled = new Date(date);
+    scheduled.setHours(20, 0, 0, 0);
+    if (scheduled.getTime() <= Date.now()) {
+      scheduled = new Date(Date.now() + 60 * 60_000);
+      scheduled.setMinutes(scheduled.getMinutes() < 30 ? 30 : 0, 0, 0);
+      if (scheduled.getMinutes() === 0) scheduled.setHours(scheduled.getHours() + 1);
+    }
+    const scheduledAt = dateTimeLocalValue(scheduled);
+    if (activeItem) {
+      updateItem(activeItem.id, { deliveryMode: 'schedule', scheduledAt, status: 'draft', error: undefined });
+    } else {
+      const next = {
+        ...createPublishItem(null, connectedAccounts.map(account => account.id)),
+        deliveryMode: 'schedule' as const,
+        scheduledAt,
+      };
+      setItems([next]);
+      setActiveItemId(next.id);
+    }
+    setNotice(`已把当前视频安排到 ${scheduled.toLocaleString('zh-CN', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}，补齐素材后即可加入日历。`);
+    window.setTimeout(() => publishSettingsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60);
+  };
+
+  const openCalendarPost = (post: CalendarPost) => {
+    const fallbackTargetIds = connectedAccounts
+      .filter(account => account.platform === post.platform)
+      .map(account => account.id);
+    const targetAccountIds = (post.targetAccountIds || []).filter(id => connectedAccountIds.has(id));
+    const patch: Partial<PublishQueueItem> = {
+      videoPath: post.videoPath || '',
+      title: post.title,
+      description: post.description || '',
+      targetAccountIds: targetAccountIds.length ? targetAccountIds : fallbackTargetIds,
+      firstComment: post.firstComment || '',
+      deliveryMode: 'now',
+      scheduledAt: dateTimeLocalValue(new Date(post.publishedAt)),
+      calendarPostIds: [post.id],
+      status: 'draft',
+      completedTargets: 0,
+      error: undefined,
+    };
+    const existing = items.find(item => item.calendarPostIds?.includes(post.id));
+    if (existing) {
+      updateItem(existing.id, patch);
+      setActiveItemId(existing.id);
+    } else {
+      const next = { ...createPublishItem(null), ...patch } as PublishQueueItem;
+      setItems(previous => [...previous, next]);
+      setActiveItemId(next.id);
+    }
+    setNotice(`已将“${post.title}”带回发布队列。确认素材和账号后，可直接提交平台。`);
+    window.setTimeout(() => publishSettingsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60);
   };
 
   const loadAccounts = async () => {
@@ -428,6 +520,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
       id: publishItemId(),
       platformCopy: { ...item.platformCopy },
       targetAccountIds: [...item.targetAccountIds],
+      calendarPostIds: undefined,
       status: 'draft',
       completedTargets: 0,
       error: undefined,
@@ -561,10 +654,12 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
     setNotice('');
     setError('');
     let successfulTargets = 0;
+    let scheduledTargets = 0;
     let failedTargets = 0;
     let skippedItems = 0;
 
     for (const item of items) {
+      if (item.status === 'published' || item.status === 'scheduled') continue;
       const targets = connectedAccounts.filter(account => item.targetAccountIds.includes(account.id));
       if (!item.videoPath.trim() || !item.title.trim() || !targets.length) {
         skippedItems += 1;
@@ -572,6 +667,63 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
           status: 'failed',
           completedTargets: 0,
           error: !item.videoPath.trim() ? '缺少视频路径' : !item.title.trim() ? '缺少标题' : '未选择可用账号',
+        });
+        continue;
+      }
+      if (item.deliveryMode === 'schedule') {
+        const scheduledTime = Date.parse(item.scheduledAt);
+        if (!Number.isFinite(scheduledTime) || scheduledTime <= Date.now()) {
+          skippedItems += 1;
+          updateItem(item.id, {
+            status: 'failed',
+            completedTargets: 0,
+            error: '请选择未来的排期时间',
+          });
+          continue;
+        }
+        updateItem(item.id, { status: 'publishing', completedTargets: 0, error: undefined });
+        const itemFailures: string[] = [];
+        const createdIds: string[] = [];
+        for (const postId of item.calendarPostIds || []) {
+          try {
+            await fetchJson(`/api/overseas/publishing/calendar/${postId}`, { method: 'DELETE' });
+          } catch {
+            // The previous placeholder may already have been removed; creating the new plan can continue.
+          }
+        }
+        const platforms = Array.from(new Set(targets.map(account => account.platform)));
+        for (const platform of platforms) {
+          const platformAccounts = targets.filter(account => account.platform === platform);
+          const copy = item.platformCopy[platform];
+          try {
+            const result = await fetchJson<{ item: CalendarPost }>('/api/overseas/publishing/calendar', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                scheduledAt: new Date(scheduledTime).toISOString(),
+                platform,
+                title: platformTitle(platform, copy, item.title.trim()),
+                description: platformBody(platform, copy, item.description.trim()),
+                contentId: item.sourceProjectId,
+                firstComment: copy?.firstComment || item.firstComment,
+                videoPath: item.videoPath.trim(),
+                targetAccountIds: platformAccounts.map(account => account.id),
+                targetAccountLabels: platformAccounts.map(account => account.handle || account.title),
+                trackWaLink: item.trackWaLink,
+              }),
+            });
+            createdIds.push(result.item.id);
+            scheduledTargets += platformAccounts.length;
+          } catch (scheduleError) {
+            failedTargets += platformAccounts.length;
+            itemFailures.push(`${PLATFORM_META[platform].label}: ${scheduleError instanceof Error ? scheduleError.message : '加入排期失败'}`);
+          }
+        }
+        updateItem(item.id, {
+          status: itemFailures.length ? (createdIds.length ? 'partial' : 'failed') : 'scheduled',
+          calendarPostIds: createdIds.length ? createdIds : item.calendarPostIds,
+          completedTargets: targets.length,
+          error: itemFailures.length ? itemFailures.join('；') : undefined,
         });
         continue;
       }
@@ -624,10 +776,20 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
         completedTargets: targets.length,
         error: itemFailures.length ? itemFailures.join('；') : undefined,
       });
+      if (!itemFailures.length && itemSuccesses > 0 && item.calendarPostIds?.length) {
+        await Promise.all(item.calendarPostIds.map(postId =>
+          fetch(`/api/overseas/publishing/calendar/${postId}`, {
+            method: 'DELETE',
+            headers: authHeader(),
+          }).catch(() => undefined),
+        ));
+      }
     }
     setPublishing(false);
+    setCalendarRefreshKey(value => value + 1);
     if (failedTargets || skippedItems) setError(`${failedTargets} 个发布目标失败，${skippedItems} 条视频配置不完整；可在队列中查看并修改。`);
     if (successfulTargets) setNotice(`已完成 ${successfulTargets} 个账号发布，每条发布均生成独立追踪码。`);
+    if (scheduledTargets) setNotice(previous => `${previous ? `${previous} ` : ''}已将 ${scheduledTargets} 个账号任务加入内容日历；到期前可继续调整，提交平台仍需在灵枢确认。`);
   };
 
   const previewRatio = activeItem?.ratio || (selectedPlatforms.length > 0 && selectedPlatforms.every(platform => platform === 'youtube') ? '16:9' : '9:16');
@@ -654,9 +816,17 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
   }, [selectedConnectedAccounts.map(account => `${account.platform}:${account.id}`).join('|'), activeItem?.videoPath, activeItem?.title, activeItem?.sourceProjectId, activeItem?.ratio]);
 
   return (
-    <div className="px-6 py-5">
-      <div className="mx-auto max-w-6xl space-y-5">
-        <section className="rounded-2xl border border-border bg-white p-5 shadow-sm">
+    <div className="px-6 pb-5 pt-3">
+      <div className="mx-auto max-w-[1600px] space-y-4">
+        <section id="publishing-calendar" className="scroll-mt-5 rounded-2xl border border-border bg-surface/60 p-3 shadow-sm">
+          <CalendarPlanner
+            refreshKey={calendarRefreshKey}
+            onCreate={scheduleForCalendarDate}
+            onOpenPost={openCalendarPost}
+          />
+        </section>
+
+        <section data-lingshu-guide="publishing-workbench" className="rounded-2xl border border-border bg-white p-5 shadow-sm">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-2">
@@ -664,13 +834,9 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                   <Send size={16} />
                 </span>
                 <div>
-                  <p className="text-xs font-semibold text-text-muted">批量一键发布</p>
-                  <h2 className="text-lg font-bold text-text-primary">多条视频，多平台、多账号统一配置发布</h2>
+                  <h2 className="text-lg font-bold text-text-primary">一键发布与内容排产</h2>
                 </div>
               </div>
-              <p className="mt-2 text-sm text-text-muted">
-                每条视频可独立选择发布账号和平台文案，批量执行时逐条显示结果。
-              </p>
             </div>
             <div className="flex gap-2">
               <button type="button" onClick={() => void loadAccounts()} disabled={loading} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border text-text-muted hover:text-text-primary disabled:opacity-50">
@@ -742,7 +908,9 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                         <span className="min-w-0 flex-1 truncate text-sm font-bold text-text-primary">{item.title || titleFromVideoPath(item.videoPath) || '待填写视频'}</span>
                         <span className={`flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${status.className}`}>{status.label}</span>
                       </div>
-                      <p className="mt-1 truncate text-[11px] text-text-muted">{item.videoPath || '尚未填写视频路径'} · {targetCount} 个账号</p>
+                      <p className="mt-1 truncate text-[11px] text-text-muted">
+                        {item.videoPath || '尚未填写视频路径'} · {targetCount} 个账号 · {item.deliveryMode === 'now' ? '立即发布' : item.scheduledAt ? `排期 ${new Date(item.scheduledAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : '待选排期'}
+                      </p>
                       {item.error && <p className="mt-1 truncate text-[11px] font-semibold text-red-600" title={item.error}>{item.error}</p>}
                     </button>
                     <div className="flex flex-shrink-0 items-center gap-1">
@@ -755,7 +923,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
             </div>
           </div>
 
-          <div className="mt-5 border-t border-border pt-4">
+          <div data-lingshu-guide="publish-accounts" className="mt-5 border-t border-border pt-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 className="text-sm font-bold text-text-primary">当前视频发布账号</h3>
@@ -783,7 +951,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
               </div>
             ) : accounts.length === 0 ? (
               <div className="col-span-full rounded-xl border border-dashed border-border bg-surface px-4 py-8 text-center">
-                <p className="text-sm font-bold text-text-primary">还没有可发布账号</p>
+                <p className="text-sm font-bold text-text-primary">还没有已连接账号</p>
                 <p className="mt-1 text-xs text-text-muted">请先进入集成中心完成 YouTube / TikTok / Instagram / Facebook 授权。</p>
               </div>
             ) : accounts.map(account => {
@@ -800,7 +968,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                       </span>
                     )}
                     <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${account.status === 'connected' ? 'bg-green-50 text-green-700' : 'bg-slate-100 text-text-muted'}`}>
-                      {account.status === 'connected' ? '可发布' : '需重新授权'}
+                      {account.status === 'connected' ? '已连接' : '需重新授权'}
                     </span>
                   </div>
                   <p className="mt-3 text-sm font-bold text-text-primary">{meta.label} <span className="text-xs text-text-muted">({meta.short})</span></p>
@@ -813,9 +981,9 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
           </div>
         </section>
 
-        <section className="rounded-2xl border border-border bg-white p-5 shadow-sm">
+        <section data-lingshu-guide="publish-recommendations" className="rounded-2xl border border-border bg-white p-5 shadow-sm">
           <div className="flex items-start justify-between gap-3">
-            <div><h3 className="text-sm font-bold text-text-primary">平台发布推荐</h3><p className="mt-1 text-xs text-text-muted">结合平台规则和该账号的灵枢发布记录检查；未同步的平台历史不会被冒充为已检查。</p></div>
+            <h3 className="text-sm font-bold text-text-primary">平台发布推荐</h3>
             {recommendationsLoading && <Loader2 size={15} className="animate-spin text-accent" />}
           </div>
           <div className="mt-4 grid gap-3 md:grid-cols-2">
@@ -900,8 +1068,39 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
             </div>
           </section>
 
-          <aside className="rounded-2xl border border-border bg-white p-5 shadow-sm">
+          <aside ref={publishSettingsRef} className="scroll-mt-24 rounded-2xl border border-border bg-white p-5 shadow-sm">
             <h3 className="text-sm font-bold text-text-primary">发布设置</h3>
+            <div data-lingshu-guide="publish-mode" className="mt-4 rounded-2xl border border-border bg-surface p-3">
+              <p className="text-[11px] font-bold text-text-secondary">当前视频的发布方式</p>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDeliveryMode('now')}
+                  className={`rounded-xl border px-3 py-2 text-xs font-black ${activeItem?.deliveryMode === 'now' ? 'border-accent bg-accent text-white' : 'border-border bg-white text-text-secondary'}`}
+                >
+                  立即发布
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDeliveryMode('schedule')}
+                  className={`rounded-xl border px-3 py-2 text-xs font-black ${activeItem?.deliveryMode === 'schedule' ? 'border-violet-500 bg-violet-600 text-white' : 'border-border bg-white text-text-secondary'}`}
+                >
+                  加入排期
+                </button>
+              </div>
+              {activeItem?.deliveryMode === 'schedule' && (
+                <label className="mt-3 block">
+                  <span className="mb-1.5 block text-[11px] font-semibold text-text-secondary">计划发布时间</span>
+                  <input
+                    type="datetime-local"
+                    min={dateTimeLocalValue(new Date(Date.now() + 5 * 60_000))}
+                    value={activeItem.scheduledAt}
+                    onChange={event => updateItem(activeItem.id, { scheduledAt: event.target.value, status: 'draft', error: undefined })}
+                    className="w-full rounded-xl border border-border bg-white px-3 py-2.5 text-xs outline-none focus:border-violet-400"
+                  />
+                </label>
+              )}
+            </div>
             <div className="mt-4 rounded-2xl border border-border bg-surface p-3">
               <div className="mb-3 flex items-center justify-between gap-2">
                 <span className="text-xs font-bold text-text-primary">发布预览</span>
@@ -926,21 +1125,26 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                 发布前检查
               </div>
               <ul className="mt-2 space-y-1 text-[11px] leading-relaxed text-green-800">
-                <li>队列：{items.length} 条视频，{publishableItems.length} 条可发布</li>
+                <li>队列：{items.length} 条视频，{immediateItems.length} 条立即发布，{scheduledItems.length} 条加入排期</li>
                 <li>目标：{totalAssignments} 个账号任务，覆盖 {new Set(items.flatMap(item => connectedAccounts.filter(account => item.targetAccountIds.includes(account.id)).map(account => account.platform))).size} 个平台</li>
                 <li>当前视频追踪链接：{activeItem?.trackWaLink ? '开启' : '关闭'}</li>
               </ul>
             </div>
+            {selectedPlatforms.includes('tiktok') && (
+              <div className="mt-3 rounded-xl border border-amber-200 bg-amber-50 p-3 text-[10px] leading-5 text-amber-800">
+                TikTok 正式公开发布前，还需按平台要求读取创作者信息，并让用户确认可见范围、评论、合拍和拼接选项；应用未通过审核时通常只能私密发布。
+              </div>
+            )}
 
             {notice && <div className="mt-4 flex items-start gap-2 rounded-xl border border-green-100 bg-green-50 px-3 py-2 text-xs text-green-700"><CheckCircle2 size={14} className="mt-0.5 flex-shrink-0" /><span>{notice}</span></div>}
             {error && <div className="mt-4 flex items-start gap-2 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-600"><AlertCircle size={14} className="mt-0.5 flex-shrink-0" /><span>{error}</span></div>}
 
             <button type="button" onClick={() => void publish()} disabled={publishing || loading || publishableItems.length === 0} className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 text-sm font-bold text-white shadow-sm hover:brightness-95 disabled:opacity-50">
               {publishing ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
-              {publishing ? '批量发布中...' : `发布 ${publishableItems.length} 条视频`}
+              {publishing ? '正在执行发布计划...' : `执行发布计划 · 立即 ${immediateItems.length} / 排期 ${scheduledItems.length}`}
             </button>
-            <button type="button" onClick={() => onNavigate?.('strategy')} className="mt-2 w-full rounded-xl border border-border px-4 py-3 text-sm font-bold text-text-secondary hover:border-accent hover:text-accent">
-              查看内容日历
+            <button type="button" onClick={() => document.getElementById('publishing-calendar')?.scrollIntoView({ behavior: 'smooth', block: 'start' })} className="mt-2 w-full rounded-xl border border-border px-4 py-3 text-sm font-bold text-text-secondary hover:border-accent hover:text-accent">
+              返回顶部内容排产
             </button>
           </aside>
         </div>

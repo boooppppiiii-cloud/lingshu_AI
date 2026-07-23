@@ -34,6 +34,19 @@ interface RecycleListRecord {
   updated?: string;
 }
 
+interface PostingScheduleRecord {
+  id: string;
+  tenant_id: string;
+  platform: string;
+  market: string;
+  time_zone: string;
+  utc_offset: number;
+  preset: 'light' | 'standard' | 'high';
+  slots: Array<{ weekday: number; time: string }>;
+  created?: string;
+  updated?: string;
+}
+
 function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
 }
@@ -64,13 +77,19 @@ function publicPost(post: PostRecord) {
     platform: text(post.platform),
     platformPostId: text(post.platform_post_id),
     title: text(post.title) || text(post.track_code),
+    description: text(stats.description),
     publishedAt: text(post.published_at || post.created),
     trackCode: text(post.track_code),
     waLink: text(post.wa_link),
     stats,
     status: text(stats.status) || (post.platform_post_id ? 'published' : 'scheduled'),
     coverUrl: text(stats.coverUrl),
+    videoUrl: text(stats.videoUrl || stats.mediaUrl || stats.url),
+    duration: numberValue(stats.duration),
     firstComment: text(stats.firstComment),
+    videoPath: text(stats.videoPath),
+    targetAccountIds: Array.isArray(stats.targetAccountIds) ? stats.targetAccountIds.map(String).map(text).filter(Boolean) : [],
+    targetAccountLabels: Array.isArray(stats.targetAccountLabels) ? stats.targetAccountLabels.map(String).map(text).filter(Boolean) : [],
     warnings: Array.isArray(stats.warnings) ? stats.warnings : [],
     isRecycle: Boolean(stats.isRecycle),
     inquiries: numberValue(post.inquiries),
@@ -116,6 +135,54 @@ function normalizeCopy(raw: any, platforms: string[], title: string, description
     out[platform] = { ...platformCopyFallback(platform, title, description), ...value };
   }
   return out;
+}
+
+function presetSchedule(preset: PostingScheduleRecord['preset'] = 'standard'): Array<{ weekday: number; time: string }> {
+  const weekdays = preset === 'light' ? [1, 3, 5] : preset === 'high' ? [0, 1, 2, 3, 4, 5, 6] : [1, 2, 3, 4, 5];
+  return weekdays.map(weekday => ({ weekday, time: '20:00' }));
+}
+
+function normalizeScheduleSlots(value: unknown, preset: PostingScheduleRecord['preset']): Array<{ weekday: number; time: string }> {
+  if (!Array.isArray(value)) return presetSchedule(preset);
+  const slots = value
+    .map(slot => ({
+      weekday: Math.max(0, Math.min(6, Number(slot?.weekday) || 0)),
+      time: /^\d{2}:\d{2}$/.test(text(slot?.time)) ? text(slot?.time) : '20:00',
+    }))
+    .filter((slot, index, list) => list.findIndex(item => item.weekday === slot.weekday && item.time === slot.time) === index)
+    .sort((left, right) => left.weekday - right.weekday || left.time.localeCompare(right.time));
+  return slots.length ? slots : presetSchedule(preset);
+}
+
+function fallbackQueueSuggestion(input: {
+  currentTitle: string;
+  feedback: string;
+  festival: string;
+}): { title: string; brief: string; tags: string[] } {
+  const variants = [
+    { title: '主推产品：3 个采购决策点', brief: '用买家视角拆解用途、采购关注点和询盘入口，不补写未确认参数。', tags: ['主推品', '采购决策'] },
+    { title: '工厂能力：从打样到交付', brief: '展示流程与交付节点，企业资料缺失的部分保持待确认。', tags: ['工厂实力', '交付'] },
+    { title: '采购 FAQ：MOQ、定制与样品', brief: '围绕高频询盘组织短内容，引导买家索取目录和报价。', tags: ['采购FAQ', '询盘'] },
+    { title: '质量证明：细节、包装与检验', brief: '用可拍摄的细节建立信任，只引用企业中心已有事实。', tags: ['质量', '信任'] },
+    { title: '应用场景：买家如何使用这款产品', brief: '从真实使用场景切入，结尾保留清晰的 WhatsApp 询盘动作。', tags: ['场景', '转化'] },
+  ];
+  const currentIndex = variants.findIndex(item => item.title === input.currentTitle);
+  const selected = variants[(currentIndex + 1 + variants.length) % variants.length];
+  if (input.feedback) {
+    return {
+      title: selected.title,
+      brief: `${selected.brief} 修改要求：${input.feedback.slice(0, 120)}`,
+      tags: selected.tags,
+    };
+  }
+  if (input.festival) {
+    return {
+      title: `${input.festival}：采购准备清单`,
+      brief: '围绕节庆采购窗口组织备货、交付与询盘内容，不虚构折扣或库存。',
+      tags: ['节庆', '备货'],
+    };
+  }
+  return selected;
 }
 
 publishingRouter.use(requireAuth);
@@ -171,7 +238,70 @@ publishingRouter.get('/best-time', (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
   const platform = text(req.query.platform) || 'tiktok';
   const weekday = Math.max(0, Math.min(6, Number(req.query.weekday ?? new Date().getDay()) || 0));
-  res.json({ platform, weekday, scores: getBestTimeScores(tenantId, platform, weekday) });
+  const offsetValue = text(req.query.utcOffset);
+  const parsedOffset = offsetValue ? Number(offsetValue) : Number.NaN;
+  const utcOffset = Number.isFinite(parsedOffset) ? Math.max(-12, Math.min(14, parsedOffset)) : undefined;
+  res.json({
+    platform,
+    weekday,
+    scores: getBestTimeScores(tenantId, platform, weekday, utcOffset),
+    source: 'platform_reference',
+    confidence: 'reference',
+    utcOffset: utcOffset ?? null,
+  });
+});
+
+publishingRouter.get('/posting-schedule', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const platform = text(req.query.platform) || 'tiktok';
+  const result = await store.list<PostingScheduleRecord>('publishing_schedules', {
+    where: { tenant_id: tenantId, platform },
+    perPage: 1,
+    sort: '-updated',
+  });
+  const item = result.items[0];
+  res.json({
+    item: item || {
+      id: '',
+      tenant_id: tenantId,
+      platform,
+      market: 'global',
+      time_zone: 'UTC',
+      utc_offset: 0,
+      preset: 'standard',
+      slots: presetSchedule('standard'),
+    },
+  });
+});
+
+publishingRouter.put('/posting-schedule', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const platform = text(req.body?.platform) || 'tiktok';
+  const requestedPreset = text(req.body?.preset);
+  const preset: PostingScheduleRecord['preset'] = requestedPreset === 'light' || requestedPreset === 'high' ? requestedPreset : 'standard';
+  const next = {
+    tenant_id: tenantId,
+    platform,
+    market: text(req.body?.market) || 'global',
+    time_zone: text(req.body?.timeZone || req.body?.time_zone) || 'UTC',
+    utc_offset: Math.max(-12, Math.min(14, numberValue(req.body?.utcOffset ?? req.body?.utc_offset))),
+    preset,
+    slots: normalizeScheduleSlots(req.body?.slots, preset),
+  };
+  const result = await store.list<PostingScheduleRecord>('publishing_schedules', {
+    where: { tenant_id: tenantId, platform },
+    perPage: 1,
+    sort: '-updated',
+  });
+  const existing = result.items[0];
+  if (existing) {
+    await store.update('publishing_schedules', existing.id, next);
+    const item = await store.getById<PostingScheduleRecord>('publishing_schedules', existing.id);
+    res.json({ item: item || { ...existing, ...next } });
+    return;
+  }
+  const item = await store.create<PostingScheduleRecord>('publishing_schedules', next);
+  res.status(201).json({ item: item || { id: '', ...next } });
 });
 
 publishingRouter.get('/calendar', async (req, res) => {
@@ -209,12 +339,35 @@ publishingRouter.post('/calendar', async (req, res) => {
     stats: {
       status: 'scheduled',
       coverUrl: text(req.body?.coverUrl),
+      description: text(req.body?.description),
       firstComment: text(req.body?.firstComment),
+      videoPath: text(req.body?.videoPath),
+      targetAccountIds: Array.isArray(req.body?.targetAccountIds)
+        ? req.body.targetAccountIds.map(String).map(text).filter(Boolean)
+        : [],
+      targetAccountLabels: Array.isArray(req.body?.targetAccountLabels)
+        ? req.body.targetAccountLabels.map(String).map(text).filter(Boolean)
+        : [],
       warnings: [],
     },
   });
   const saved = await store.getById<PostRecord>('posts', tracked.id);
   res.status(201).json({ item: saved ? publicPost(saved) : publicPost(tracked) });
+});
+
+publishingRouter.delete('/calendar/:id', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const post = await store.getById<PostRecord>('posts', String(req.params.id));
+  if (!post || post.tenant_id !== tenantId) {
+    res.status(404).json({ error: 'post_not_found' });
+    return;
+  }
+  if (post.platform_post_id) {
+    res.status(409).json({ error: 'published_post_cannot_be_removed' });
+    return;
+  }
+  await store.delete('posts', post.id);
+  res.status(204).end();
 });
 
 publishingRouter.patch('/calendar/:id', async (req, res) => {
@@ -265,6 +418,41 @@ publishingRouter.post('/adapt-copy', async (req, res) => {
     res.json({ copy: normalizeCopy(parsed, targetPlatforms, title, description) });
   } catch {
     res.json({ copy: normalizeCopy({}, targetPlatforms, title, description) });
+  }
+});
+
+publishingRouter.post('/queue/suggestions/regenerate', async (req, res) => {
+  const platform = text(req.body?.platform) || 'tiktok';
+  const market = text(req.body?.market) || '综合市场';
+  const scheduledAt = text(req.body?.scheduledAt);
+  const festival = text(req.body?.festival);
+  const feedback = text(req.body?.feedback);
+  const currentTitle = text(req.body?.currentTitle);
+  const fallback = fallbackQueueSuggestion({ currentTitle, feedback, festival });
+  const prompt = [
+    '你是 B2B 外贸社媒内容排产助手。请只返回严格 JSON。',
+    `平台：${platform}`,
+    `目标市场：${market}`,
+    `建议发布时间：${scheduledAt}`,
+    festival ? `关联节庆：${festival}` : '',
+    currentTitle ? `当前选题：${currentTitle}` : '',
+    feedback ? `老板修改意见：${feedback}` : '',
+    '输出字段：title（20字以内）、brief（60字以内）、tags（2个短标签）。',
+    '不得虚构企业产品参数、认证、价格、库存、客户案例或优惠；缺失事实用内容结构表达。',
+    '选题要适合短视频并自然引导采购商询盘。',
+  ].filter(Boolean).join('\n');
+  try {
+    const raw = await callLLM(prompt);
+    const parsed = JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0] || raw);
+    res.json({
+      suggestion: {
+        title: text(parsed?.title) || fallback.title,
+        brief: text(parsed?.brief) || fallback.brief,
+        tags: Array.isArray(parsed?.tags) ? parsed.tags.map(String).map(text).filter(Boolean).slice(0, 3) : fallback.tags,
+      },
+    });
+  } catch {
+    res.json({ suggestion: fallback });
   }
 });
 

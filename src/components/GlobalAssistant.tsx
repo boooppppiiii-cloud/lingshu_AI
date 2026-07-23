@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import type { AgentAction, AgentType, Message, Page } from '../App';
 import { authHeader } from '../lib/auth';
+import { ASSISTANT_GUIDES, type AssistantGuide } from '../lib/assistantGuides';
 import { ORBIT_AGENT_IDS, type OrbitAgentId, useAssistantStore } from '../stores/assistantStore';
 import AgentReply from './AgentReply';
 import KnowledgeIntakePanel, { type AppliedProfile } from './enterprise/KnowledgeIntakePanel';
@@ -39,6 +40,16 @@ interface AssistantTodoItem {
 }
 
 type AssistantTool = 'knowledge-intake';
+
+const GUIDE_MEMORY_KEY = 'lingshu-feature-guides-human-v1';
+const GUIDE_HOVER_DELAY_MS = 900;
+const GUIDE_COOLDOWN_MS = 45_000;
+const GUIDE_VISIBLE_MS = 6_000;
+
+type GuideMemory = {
+  seen: string[];
+  lastShownAt: number;
+};
 
 interface Props {
   page: Page;
@@ -299,10 +310,16 @@ export default function GlobalAssistant({
   const [activeAgent, setActiveAgent] = useState<OrbitAgentId>('strategy');
   const [assistantTool, setAssistantTool] = useState<AssistantTool | null>(null);
   const [liveContext, setLiveContext] = useState<AssistantContext | null>(null);
+  const [featureGuide, setFeatureGuide] = useState<(AssistantGuide & { id: string }) | null>(null);
   const [enterpriseContext, setEnterpriseContext] = useState('');
   const [loading, setLoading] = useState(false);
   const longPressRef = useRef<number | null>(null);
   const longPressedRef = useRef(false);
+  const featureGuideTimerRef = useRef<number | null>(null);
+  const featureGuideHoverTimerRef = useRef<number | null>(null);
+  const seenGuideIdsRef = useRef(new Set<string>());
+  const lastGuideShownAtRef = useRef(0);
+  const lastGuideTargetRef = useRef<HTMLElement | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const assistantRootRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<AbortController | null>(null);
@@ -354,6 +371,104 @@ export default function GlobalAssistant({
   const openCurrentPageAgent = useCallback(() => {
     openAgent(orbitIdForAgent(pageContext.agent));
   }, [openAgent, pageContext.agent]);
+
+  const rememberGuide = useCallback((id: string, shownAt: number) => {
+    seenGuideIdsRef.current.add(id);
+    lastGuideShownAtRef.current = shownAt;
+    try {
+      const memory: GuideMemory = {
+        seen: [...seenGuideIdsRef.current],
+        lastShownAt: shownAt,
+      };
+      window.localStorage.setItem(GUIDE_MEMORY_KEY, JSON.stringify(memory));
+    } catch {
+      // Storage can be unavailable in privacy mode; in-memory deduplication still works.
+    }
+  }, []);
+
+  const showFeatureGuide = useCallback((id: string) => {
+    const guide = ASSISTANT_GUIDES[id];
+    if (!guide || seenGuideIdsRef.current.has(id)) return;
+    const now = Date.now();
+    if (now - lastGuideShownAtRef.current < GUIDE_COOLDOWN_MS) return;
+    if (featureGuideTimerRef.current) window.clearTimeout(featureGuideTimerRef.current);
+    rememberGuide(id, now);
+    setFeatureGuide({ ...guide, id });
+    featureGuideTimerRef.current = window.setTimeout(() => setFeatureGuide(null), GUIDE_VISIBLE_MS);
+  }, [rememberGuide]);
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem(GUIDE_MEMORY_KEY);
+      if (!stored) return;
+      const memory = JSON.parse(stored) as Partial<GuideMemory>;
+      if (Array.isArray(memory.seen)) seenGuideIdsRef.current = new Set(memory.seen.filter(id => typeof id === 'string'));
+      if (typeof memory.lastShownAt === 'number') lastGuideShownAtRef.current = memory.lastShownAt;
+    } catch {
+      // Ignore malformed or unavailable storage and start with a clean guide memory.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (mode !== 'breathing') {
+      setFeatureGuide(null);
+      return;
+    }
+    const findTarget = (event: Event) => {
+      const target = event.target;
+      return target instanceof Element ? target.closest<HTMLElement>('[data-lingshu-guide]') : null;
+    };
+    const cancelPendingHover = () => {
+      if (featureGuideHoverTimerRef.current) window.clearTimeout(featureGuideHoverTimerRef.current);
+      featureGuideHoverTimerRef.current = null;
+    };
+    const showFromEvent = (event: Event) => {
+      const target = findTarget(event);
+      if (!target) return;
+      const id = target.dataset.lingshuGuide;
+      if (!id) return;
+      if (event.type === 'pointerover') {
+        const related = (event as PointerEvent).relatedTarget;
+        if (related instanceof Node && target.contains(related)) return;
+        if (lastGuideTargetRef.current === target) return;
+        cancelPendingHover();
+        lastGuideTargetRef.current = target;
+        featureGuideHoverTimerRef.current = window.setTimeout(() => {
+          if (lastGuideTargetRef.current === target) showFeatureGuide(id);
+        }, GUIDE_HOVER_DELAY_MS);
+        return;
+      }
+      cancelPendingHover();
+      lastGuideTargetRef.current = target;
+      showFeatureGuide(id);
+    };
+    const clearPointerTarget = (event: Event) => {
+      const target = findTarget(event);
+      if (!target) return;
+      const related = (event as PointerEvent).relatedTarget;
+      if (related instanceof Node && target.contains(related)) return;
+      if (lastGuideTargetRef.current === target) {
+        lastGuideTargetRef.current = null;
+        cancelPendingHover();
+      }
+    };
+    document.addEventListener('pointerover', showFromEvent, true);
+    document.addEventListener('pointerout', clearPointerTarget, true);
+    document.addEventListener('focusin', showFromEvent, true);
+    document.addEventListener('click', showFromEvent, true);
+    return () => {
+      cancelPendingHover();
+      document.removeEventListener('pointerover', showFromEvent, true);
+      document.removeEventListener('pointerout', clearPointerTarget, true);
+      document.removeEventListener('focusin', showFromEvent, true);
+      document.removeEventListener('click', showFromEvent, true);
+    };
+  }, [mode, showFeatureGuide]);
+
+  useEffect(() => () => {
+    if (featureGuideTimerRef.current) window.clearTimeout(featureGuideTimerRef.current);
+    if (featureGuideHoverTimerRef.current) window.clearTimeout(featureGuideHoverTimerRef.current);
+  }, []);
 
   const send = useCallback(async (text: string, targetAgent = activeAgent, forcedContext?: AssistantContext) => {
     const visibleText = text.trim();
@@ -604,6 +719,39 @@ export default function GlobalAssistant({
           className="fixed inset-0 z-0 cursor-default bg-transparent"
         />
       )}
+      <AnimatePresence>
+        {mode === 'breathing' && featureGuide && (
+          <motion.div
+            key={featureGuide.id}
+            data-lingshu-guide-bubble={featureGuide.id}
+            initial={{ opacity: 0, y: 8, scale: 0.96 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 6, scale: 0.97 }}
+            className="absolute bottom-1 right-[72px] z-20 w-[236px] max-w-[calc(100vw-104px)] rounded-2xl border border-emerald-100 bg-white p-3 shadow-[0_16px_42px_rgba(15,23,42,0.16)]"
+          >
+            <button type="button" onClick={() => setFeatureGuide(null)} className="absolute right-2.5 top-2.5 rounded-lg p-1 text-text-muted hover:bg-surface-2" aria-label="关闭用法提示">
+              <X size={13} />
+            </button>
+            <div className="pr-6">
+              <p className="text-xs font-black text-emerald-700">{featureGuide.title}</p>
+              <p className="mt-1 text-xs leading-[1.65] text-text-secondary">{featureGuide.message}</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                const agentId = orbitIdForAgent(featureGuide.agent);
+                setFeatureGuide(null);
+                openAgent(agentId);
+              }}
+              className="mt-2 text-[11px] font-black text-emerald-700 hover:text-emerald-800"
+            >
+              问问灵小枢 →
+            </button>
+            <span className="absolute -right-2 bottom-6 h-4 w-4 rotate-45 border-r border-t border-emerald-100 bg-white" />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <AnimatePresence>
         {mode === 'expanded' && (
           <motion.div

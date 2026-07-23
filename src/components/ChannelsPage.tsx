@@ -286,9 +286,6 @@ function AdminDiagnostics({ channels }: { channels: TenantChannelStatus[] }) {
           );
         })}
       </div>
-      <p className="mt-4 text-xs text-gray-400">
-        账号 ID、Secret、Token 只在客户运维维护；这里用于快速判断客户侧看到的状态是否正确。
-      </p>
     </section>
   );
 }
@@ -419,7 +416,6 @@ function AdminOAuthConfigPanel({
         <label className="flex items-center justify-between gap-4">
           <span>
             <span className="block text-sm font-semibold text-gray-950">允许旧版手填凭证</span>
-            <span className="mt-1 block text-xs text-gray-500">仅用于顾问排障。常规交付请在“客户运维”完成。</span>
           </span>
           <input
             type="checkbox"
@@ -544,15 +540,10 @@ export default function ChannelsPage() {
   }, []);
 
   return (
-    <div className="flex h-full flex-col bg-gray-50">
+    <div className="flex h-full flex-col bg-gray-50" data-lingshu-guide="channel-connections">
       <header className="border-b border-gray-100 bg-white px-8 py-6">
         <div className="flex items-center justify-between gap-4">
-          <div>
-            <h1 className="text-xl font-semibold text-gray-950">账号连接</h1>
-            <p className="mt-1 text-sm text-gray-500">
-              客户侧只展示连接进度；App ID、Secret、Token 由灵枢团队在客户运维维护。
-            </p>
-          </div>
+          <h1 className="text-xl font-semibold text-gray-950">账号连接</h1>
           <button
             type="button"
             onClick={() => void refresh()}
@@ -578,12 +569,7 @@ export default function ChannelsPage() {
             <section className="rounded-2xl border border-emerald-100 bg-emerald-50 px-5 py-4">
               <div className="flex items-start gap-3">
                 <ShieldCheck size={20} className="mt-0.5 shrink-0 text-emerald-700" />
-                <div>
-                  <p className="text-sm font-semibold text-emerald-900">已接入 {connectedCount}/{status.channels.length} 个渠道</p>
-                  <p className="mt-1 text-sm leading-relaxed text-emerald-800">
-                    如果某个渠道显示“需要你确认一下”，只需要点击授权按钮按提示确认；其他技术配置由顾问处理。
-                  </p>
-                </div>
+                <p className="text-sm font-semibold text-emerald-900">已接入 {connectedCount}/{status.channels.length} 个渠道</p>
               </div>
             </section>
 

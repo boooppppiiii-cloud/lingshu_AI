@@ -1277,15 +1277,15 @@ function ImageBreakdownContent({ video, analysis, activeTab }: { video: TrendVid
   if (activeTab === 'overview') return (
     <div className="space-y-4">
       <section className={`rounded-2xl border p-3.5 ${isAnalyzed ? 'border-emerald-100 bg-emerald-50/60' : 'border-amber-200 bg-amber-50/70'}`}>
-        <div className="flex items-start gap-3"><div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${isAnalyzed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{isAnalyzed ? <Check size={17}/> : <Clock size={17}/>}</div><div><p className="text-xs font-black text-text-primary">{analysisState}</p><p className="mt-1 text-[10px] leading-relaxed text-text-secondary">{isAnalyzed ? `共找到 ${evidenceCount} 条可追溯证据；页面仅展示模型实际返回内容，不计算无依据的爆款分数。` : '当前记录只有抓取资料或分析字段不足，不能判断“为什么爆”。请先完成图片视觉分析。'}</p></div></div>
+        <div className="flex items-start gap-3"><div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${isAnalyzed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{isAnalyzed ? <Check size={17}/> : <Clock size={17}/>}</div><div><p className="text-xs font-black text-text-primary">{analysisState}</p><p className="mt-1 text-[10px] font-bold text-text-secondary">{isAnalyzed ? `${evidenceCount} 条证据` : '等待图片视觉分析'}</p></div></div>
       </section>
-      {!isAnalyzed ? <EmptyEvidence title="无法提取核心爆点" desc="标题、标签和抓取状态不能证明图片的爆点。完成图片视觉分析后，这里才会展示有证据的结论。"/> : <section><div className="mb-2 flex items-center justify-between"><p className="text-[11px] font-black text-text-primary">已提取证据</p><span className="text-[9px] text-text-muted">不做二次脑补</span></div><div className="space-y-2">{rawTheme && <EvidenceCard label="主题" value={rawTheme}/>} {hooks.map((item, index) => <EvidenceCard key={`hook-${index}`} label={`注意力钩子 ${index + 1}`} value={item}/>)} {sellingPoints.map((item, index) => <EvidenceCard key={`point-${index}`} label={`卖点 ${index + 1}`} value={item}/>)}</div></section>}
+      {!isAnalyzed ? <EmptyEvidence title="无法提取核心爆点" desc="标题、标签和抓取状态不能证明图片的爆点。完成图片视觉分析后，这里才会展示有证据的结论。"/> : <section><p className="mb-2 text-[11px] font-black text-text-primary">已提取证据</p><div className="space-y-2">{rawTheme && <EvidenceCard label="主题" value={rawTheme}/>} {hooks.map((item, index) => <EvidenceCard key={`hook-${index}`} label={`注意力钩子 ${index + 1}`} value={item}/>)} {sellingPoints.map((item, index) => <EvidenceCard key={`point-${index}`} label={`卖点 ${index + 1}`} value={item}/>)}</div></section>}
     </div>
   );
 
   if (activeTab === 'visual') return (
     <div className="space-y-3">
-      <div><p className="text-[11px] font-black text-text-primary">视觉证据</p><p className="mt-1 text-[10px] text-text-muted">只展示模型对原图实际识别到的画面信息</p></div>
+      <p className="text-[11px] font-black text-text-primary">视觉证据</p>
       {![rawVisuals, rawStyle, rawLighting].some(Boolean) ? <EmptyEvidence title="尚未返回视觉拆解" desc="当前分析没有主体、构图、色彩或光线证据，因此不推断视觉焦点与注意力路径。"/> : <>{rawVisuals && <EvidenceCard label="画面识别" value={rawVisuals}/>} {rawStyle && <EvidenceCard label="视觉风格" value={rawStyle}/>} {rawLighting && <EvidenceCard label="光线" value={rawLighting}/>}</>}
     </div>
   );
@@ -1299,7 +1299,7 @@ function ImageBreakdownContent({ video, analysis, activeTab }: { video: TrendVid
 
   return (
     <div className="space-y-3">
-      <div><p className="text-[11px] font-black text-text-primary">证据驱动的迭代变量</p><p className="mt-1 text-[10px] text-text-muted">只有已识别元素才能进入下一轮测试，不从品类或标题猜测方案。</p></div>
+      <p className="text-[11px] font-black text-text-primary">证据驱动的迭代变量</p>
       {!isAnalyzed ? <EmptyEvidence title="暂不能生成迭代建议" desc="当前没有足够的图片分析证据。请先完成图片视觉与文案分析，再基于实际爆点生成单变量方案。"/> : <div className="space-y-2">{rawVisuals && <EvidenceCard label="可测试视觉变量" value={rawVisuals}/>} {hooks.map((item, index) => <EvidenceCard key={`iteration-hook-${index}`} label={`可测试钩子变量 ${index + 1}`} value={item}/>)} {sellingPoints.map((item, index) => <EvidenceCard key={`iteration-point-${index}`} label={`可测试卖点变量 ${index + 1}`} value={item}/>)}</div>}
     </div>
   );
@@ -1543,7 +1543,7 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, onExactAnalysis, spec
   const hasTrustedImageAnalysis = imageEvidenceCount > 0 && video.aiAnalysis?.analysisSource !== 'metadata-fallback';
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 flex-1 flex-col" data-lingshu-guide="analysis-evidence">
       <div className="flex-shrink-0 border-b border-border bg-surface px-4 py-3">
         <div className="mb-3 flex flex-wrap items-center gap-2 text-[10px] text-text-muted">
           <span className="rounded-md border border-border bg-surface-2 px-2 py-1 font-semibold text-text-secondary">{video.contentFormat === 'image' ? 'Instagram 图文' : analysis.videoType}</span>
@@ -1783,7 +1783,7 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, onExactAnalysis, spec
       <div className="flex-shrink-0 border-t border-border bg-surface p-4 shadow-[0_-10px_24px_rgba(15,23,42,0.04)]">
         {video.contentFormat !== 'image' && <div className="mb-3 rounded-xl border border-accent/20 bg-accent/5 p-3">
           <div className="flex items-center justify-between gap-3">
-            <div><p className="text-[11px] font-black text-text-primary">{video.aiAnalysis?.analysisMode === 'exact' ? '全片精确分析版' : '全片策略分析版'}</p><p className="mt-0.5 text-[10px] leading-relaxed text-text-muted">{video.aiAnalysis?.analysisMode === 'exact' ? '已按高密度镜头与动作变化分析全片。' : '默认覆盖全片，按真实内容变化拆分，控制 Token 成本。'}</p></div>
+            <p className="text-[11px] font-black text-text-primary">{video.aiAnalysis?.analysisMode === 'exact' ? '全片精确分析版' : '全片策略分析版'}</p>
             {video.aiAnalysis?.analysisMode !== 'exact' && <button type="button" onClick={onExactAnalysis} disabled={video.aiAnalysis?.requestedAnalysisMode === 'exact'} className="shrink-0 rounded-lg border border-accent bg-white px-2.5 py-1.5 text-[10px] font-black text-accent hover:bg-accent/5 disabled:cursor-wait disabled:opacity-50">{video.aiAnalysis?.requestedAnalysisMode === 'exact' ? '精确分析生成中…' : '生成全片精确分析'}</button>}
           </div>
         </div>}
@@ -2291,7 +2291,6 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onExactAnalysis,
                               </div>
                               <div className="min-w-0 flex-1 py-0.5">
                                 <p className="text-xs font-semibold text-text-primary line-clamp-2">Seedance 输出视频</p>
-                                <p className="mt-1 text-[11px] text-text-muted">请先确认生成效果，再进入剪辑流程做字幕、封面、配乐和发布。</p>
                                 {videoVersions.length > 0 && <div className="mt-2 flex flex-wrap gap-1">
                                   {videoVersions.map(item => <button key={item.id} type="button" onClick={async () => {
                                     await studioApi.selectVideoVersion(item.id);

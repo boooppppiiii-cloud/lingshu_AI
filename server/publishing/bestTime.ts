@@ -6,7 +6,8 @@ function clamp(value: number): number {
   return Number(value.toFixed(2));
 }
 
-function targetOffsetHours(tenantId: string, platform: string): number {
+function targetOffsetHours(tenantId: string, platform: string, requestedOffset?: number): number {
+  if (Number.isFinite(requestedOffset)) return Math.max(-12, Math.min(14, Number(requestedOffset)));
   const specific = Number(process.env[`BEST_TIME_UTC_OFFSET_${tenantId}_${platform}`] || '');
   if (Number.isFinite(specific)) return specific;
   const tenant = Number(process.env[`BEST_TIME_UTC_OFFSET_${tenantId}`] || '');
@@ -19,8 +20,8 @@ function localHourFromServerHour(hour: number, offset: number): number {
   return (hour - serverOffset + offset + 24) % 24;
 }
 
-export function getBestTimeScores(tenantId: string, platform: PublishPlatform, _weekday: number): number[] {
-  const offset = targetOffsetHours(tenantId, String(platform));
+export function getBestTimeScores(tenantId: string, platform: PublishPlatform, _weekday: number, requestedOffset?: number): number[] {
+  const offset = targetOffsetHours(tenantId, String(platform), requestedOffset);
   return Array.from({ length: 24 }, (_, serverHour) => {
     const localHour = localHourFromServerHour(serverHour, offset);
     let score = 0.24;

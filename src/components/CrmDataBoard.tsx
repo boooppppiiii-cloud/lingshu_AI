@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { AlertCircle, DollarSign, Info, Loader2, PackageCheck, RefreshCw, ShoppingBag, Users } from 'lucide-react';
+import { AlertCircle, DollarSign, Loader2, PackageCheck, RefreshCw, ShoppingBag, Users } from 'lucide-react';
 import { authHeader } from '../lib/auth';
 
 type OrderStatus = '待付款' | '已付款' | '生产中' | '已发货' | '已完成' | '退款';
@@ -217,9 +217,6 @@ export default function CrmDataBoard(_props: { windowDays?: number }) {
         </>
       )}
 
-      <p className="mt-4 flex items-center gap-1.5 text-[11px] text-text-muted">
-        <Info size={12} /> 已删除 Shopify 客户、复购 cohort、客户分层、LTV:CAC、沉睡唤醒等不来自我的订单 tab 的组件。
-      </p>
     </div>
   );
 }

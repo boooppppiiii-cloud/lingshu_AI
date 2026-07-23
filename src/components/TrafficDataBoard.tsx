@@ -139,12 +139,9 @@ export default function TrafficDataBoard(_props: { windowDays?: number }) {
   ];
 
   return (
-    <div className="h-full overflow-y-auto px-6 py-5">
+    <div className="h-full overflow-y-auto px-6 py-5" data-lingshu-guide="social-performance">
       <div className="mb-4 flex items-center justify-between">
-        <div>
-          <p className="text-sm font-bold text-text-primary">社媒真实数据</p>
-          <p className="mt-1 text-xs text-text-muted">仅展示已授权账号和平台接口返回的视频数据。</p>
-        </div>
+        <p className="text-sm font-bold text-text-primary">社媒真实数据</p>
         <button type="button" onClick={() => setRefreshKey(v => v + 1)} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-semibold text-text-secondary hover:text-text-primary">
           <RefreshCw size={12} />刷新
         </button>
@@ -212,9 +209,6 @@ export default function TrafficDataBoard(_props: { windowDays?: number }) {
         </>
       )}
 
-      <p className="mt-4 flex items-center gap-1.5 text-[11px] text-text-muted">
-        <Info size={12} /> 已删除完播率、ROAS、内容基因等暂无真实来源的组件。
-      </p>
     </div>
   );
 }
