@@ -493,6 +493,20 @@ export async function getInstagramComments(mediaId: string, pageAccessToken: str
   }));
 }
 
+export async function replyToFacebookComment(commentId: string, pageAccessToken: string, graphVersion: string, message: string): Promise<{ id: string }> {
+  const res = await axios.post(`${META_GRAPH}/${graphVersion}/${commentId}/comments`, null, {
+    params: { access_token: pageAccessToken, message },
+  });
+  return { id: String(res.data?.id || '') };
+}
+
+export async function replyToInstagramComment(commentId: string, pageAccessToken: string, graphVersion: string, message: string): Promise<{ id: string }> {
+  const res = await axios.post(`${META_GRAPH}/${graphVersion}/${commentId}/replies`, null, {
+    params: { access_token: pageAccessToken, message },
+  });
+  return { id: String(res.data?.id || '') };
+}
+
 export async function publishInstagramReel(igUserId: string, pageAccessToken: string, graphVersion: string, input: SocialUploadInput): Promise<SocialUploadResult> {
   if (!input.videoUrl) {
     throw new Error('Instagram 发布需要公网可访问的视频 URL。请配置 R2_PUBLIC_URL 或传入 videoUrl。');

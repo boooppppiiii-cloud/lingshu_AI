@@ -532,6 +532,33 @@ function upsertCustomer(input: { tenantId: string; waNumber: string; name?: stri
   return next;
 }
 
+export function upsertSocialLead(input: {
+  tenantId: string;
+  platform: string;
+  externalId: string;
+  name: string;
+  comment: string;
+  score: number;
+  postId?: string;
+  postTitle?: string;
+}): StoredCustomer {
+  return upsertCustomer({
+    tenantId: input.tenantId,
+    waNumber: `social:${input.platform}:${input.externalId}`,
+    name: input.name,
+    body: input.comment,
+    patch: {
+      source: input.platform,
+      sourcePostId: input.postId,
+      sourcePostTitle: input.postTitle,
+      sourcePostPlatform: input.platform,
+      intentScore: Math.max(0, Math.min(100, input.score)),
+      handlingMode: 'ai_draft',
+      handlingReason: `来自 ${input.platform} 评论的高意向线索，待继续建联`,
+    },
+  });
+}
+
 function addInteraction(item: StoredInteraction): boolean {
   const list = interactions();
   const exists = item.metaMessageId
@@ -1150,7 +1177,7 @@ export function getWhatsAppCustomers(tenantId?: string): any[] {
       id: customer.id,
       name: customer.name,
       avatar: (customer.name[0] || 'W').toUpperCase(),
-      countryName: 'WhatsApp',
+      countryName: customer.source && customer.source !== 'whatsapp' ? customer.source : 'WhatsApp',
       email: undefined,
       language: customer.language,
       languageLocked: false,
@@ -1160,12 +1187,12 @@ export function getWhatsAppCustomers(tenantId?: string): any[] {
       sourcePostTitle: customer.sourcePostTitle,
       sourcePostPlatform: customer.sourcePostPlatform,
       softAttribution: customer.softAttribution,
-      product: 'WhatsApp 询盘',
-      outboundProduct: 'current WhatsApp inquiry',
+      product: customer.source && customer.source !== 'whatsapp' ? '社媒评论商机' : 'WhatsApp 询盘',
+      outboundProduct: customer.source && customer.source !== 'whatsapp' ? 'social comment lead' : 'current WhatsApp inquiry',
       estimatedValue: '$0',
       stage: customer.stage,
       intentScore: customer.intentScore,
-      intentSignals: ['真实 WhatsApp 消息', customer.blockedAutoReplyReason ? '自动回复已拦截' : '待持续评分'],
+      intentSignals: [customer.source && customer.source !== 'whatsapp' ? '真实社媒评论' : '真实 WhatsApp 消息', customer.blockedAutoReplyReason ? '自动回复已拦截' : '待持续评分'],
       handlingMode: customer.handlingMode,
       handlingReason: customer.handlingReason,
       aiAutoCount: customer.aiAutoCount,
@@ -1180,7 +1207,7 @@ export function getWhatsAppCustomers(tenantId?: string): any[] {
       lastActive: '刚刚',
       localTime: new Date(customer.lastActiveAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       orders: [],
-      tags: ['真实WhatsApp', customer.handlingMode === 'ai_auto' ? 'AI接待' : '待处理'],
+      tags: [customer.source && customer.source !== 'whatsapp' ? '社媒商机' : '真实WhatsApp', customer.handlingMode === 'ai_auto' ? 'AI接待' : '待处理'],
       summary: customer.handlingReason,
       nextStep: customer.pendingDraft || '继续跟进客户最新消息。',
       timeline,

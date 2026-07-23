@@ -6,7 +6,7 @@ import {
   Mic, Download, Loader2, Sparkles, Wand2, Copy, RefreshCw, Clock,
   Upload, X, Plus, List, Save, FolderOpen, Trash2, Pause, ChevronDown, Heart, ExternalLink, Languages,
 } from 'lucide-react';
-import { studioApi, getDesktopRender, type StudioProject, type VariationBatch, type Material, type MaterialSegment, type BgmTrack, type CoverStyle, type SubCue, type TtsStyleOptions, type StudioAudioCapabilities, type FbPosterResult, type StoryboardQualityResult, type VideoGenerationVersion } from '../lib/studioApi';
+import { studioApi, getDesktopRender, type StudioProject, type VariationBatch, type Material, type MaterialSegment, type BgmTrack, type CoverStyle, type SubCue, type TtsStyleOptions, type StudioAudioCapabilities, type FbPosterResult, type LeadContentPackageResult, type StoryboardQualityResult, type VideoGenerationVersion } from '../lib/studioApi';
 import type { Page } from '../App';
 import { completeDemoStep } from '../lib/demoProgress';
 import { authHeader } from '../lib/auth';
@@ -654,7 +654,7 @@ const MODES: ModeCard[] = [
   { id: 'product',  icon: Sparkles,title: '产品信息生成',   desc: '输入商品信息，一键生成视频素材脚本和画面 brief' },
 ] as const;
 const POSTER_MODES: ModeCard[] = [
-  { id: 'clone',    icon: Wand2,   title: '爆款图文迭代', desc: '抓取参考海报，复用其信息架构、视觉风格和转化话术' },
+  { id: 'clone',    icon: Wand2,   title: '对标图文套用', desc: '基于完整轮播证据保留通用布局与信息层级，用企业资料替换竞品内容' },
   { id: 'material', icon: Film,    title: '素材库选择',   desc: '选择产品实拍、工厂图和证书素材，生成高质感 B2B 海报' },
   { id: 'product',  icon: Sparkles,title: '产品信息生成', desc: '从企业中心产品资料出发，自动生成海报文案和配图 brief' },
 ] as const;
@@ -814,8 +814,90 @@ interface VideoKickoff {
     thumbnail?: string;
     duration?: number;
     sourceUrl?: string;
-    aiAnalysis?: { materialUrl?: string; materialPoster?: string };
+    aiAnalysis?: {
+      materialUrl?: string;
+      materialPoster?: string;
+      imageEvidence?: {
+        version?: number;
+        status?: string;
+        observedFacts?: Array<Record<string, unknown>>;
+        carouselFlow?: Array<Record<string, unknown>>;
+        copyEvidence?: Record<string, unknown>;
+        reusableModules?: Array<Record<string, unknown>>;
+        uncertainties?: string[];
+      };
+    };
   };
+}
+
+const LEAD_PACKAGE_ROLE_LABELS: Record<string, string> = {
+  buyer_attention: '第 1 组 · 吸引目标买家',
+  capability_explanation: '第 2 组 · 解释合作能力',
+  supplier_trust: '第 3 组 · 建立供应商信任',
+};
+
+function LeadContentPackagePreview({ value, imageUrl }: { value: LeadContentPackageResult; imageUrl?: string }) {
+  return (
+    <div className="mt-4 space-y-3">
+      <div className="rounded-xl border border-emerald-200 bg-emerald-50 p-3">
+        <div className="flex items-center justify-between gap-3">
+          <p className="text-xs font-bold text-emerald-900">三组获客内容包</p>
+          <button type="button" onClick={() => navigator.clipboard?.writeText(JSON.stringify(value, null, 2))} className="text-xs font-bold text-emerald-700">复制全部</button>
+        </div>
+        <p className="mt-1 text-xs leading-relaxed text-emerald-800">{value.strategySummary || '按买家注意、合作能力、供应商信任依次发布，形成连续承接。'}</p>
+      </div>
+      {imageUrl && (
+        <div className="overflow-hidden rounded-xl border border-border bg-white">
+          <div className="border-b border-border px-3 py-2 text-[11px] font-bold text-text-secondary">第 1 组首图预览</div>
+          <img src={imageUrl} alt="获客内容包首图预览" className="max-h-[520px] w-full object-contain" />
+        </div>
+      )}
+      <div className="grid gap-3 xl:grid-cols-3">
+        {value.items.map((item, itemIndex) => (
+          <article key={`${item.role}-${itemIndex}`} className="rounded-xl border border-border bg-surface-2 p-3">
+            <p className="text-[10px] font-bold text-accent">{LEAD_PACKAGE_ROLE_LABELS[item.role] || item.role}</p>
+            <h4 className="mt-1 text-sm font-bold text-text-primary">{item.title}</h4>
+            <p className="mt-1 text-[11px] leading-relaxed text-text-muted">目标：{item.objective}</p>
+            <div className="mt-3 space-y-2">
+              {item.slides.map((slide, slideIndex) => (
+                <div key={`${slide.index}-${slideIndex}`} className="rounded-lg border border-border/70 bg-white p-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-[10px] font-black text-accent">{slide.index || slideIndex + 1}</span>
+                    <span className="text-[9px] text-text-muted">{slide.assetRole}</span>
+                  </div>
+                  <p className="mt-1 text-[11px] font-bold text-text-primary">{slide.headline}</p>
+                  <p className="mt-1 text-[10px] leading-relaxed text-text-secondary">{slide.body}</p>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3 border-t border-border pt-3 text-[10px] leading-relaxed text-text-secondary">
+              <p><span className="font-bold text-text-primary">CTA：</span>{item.cta}</p>
+              <p className="mt-1"><span className="font-bold text-text-primary">私信开场：</span>{item.dmOpening}</p>
+            </div>
+          </article>
+        ))}
+      </div>
+      {value.referenceModulesUsed.length > 0 && (
+        <div className="rounded-xl border border-border bg-surface-2 p-3">
+          <p className="text-xs font-bold text-text-primary">从对标图文保留的通用元素</p>
+          <div className="mt-2 grid gap-2 md:grid-cols-2">
+            {value.referenceModulesUsed.map((module, index) => (
+              <div key={`${module.module}-${index}`} className="rounded-lg bg-white p-2 text-[10px] leading-relaxed text-text-secondary">
+                <p className="font-bold text-text-primary">{module.module}</p>
+                <p className="mt-1">证据：{module.evidence}</p>
+                <p className="mt-1 text-text-muted">套用：{module.application}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {value.fieldsToConfirm.length > 0 && (
+        <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-800">
+          生成图片或发布前需补充确认：{value.fieldsToConfirm.join('、')}
+        </div>
+      )}
+    </div>
+  );
 }
 
 function BenchmarkVideoPreview({ kickoff }: { kickoff: VideoKickoff | null }) {
@@ -823,6 +905,7 @@ function BenchmarkVideoPreview({ kickoff }: { kickoff: VideoKickoff | null }) {
   const [playbackUrl, setPlaybackUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const video = kickoff?.video;
+  const isImageReference = video?.contentFormat === 'image';
   const poster = video?.thumbnail || video?.aiAnalysis?.materialPoster || kickoff?.generatedVideo?.poster || '';
   const rawUrl = video?.videoUrl || video?.aiAnalysis?.materialUrl || kickoff?.generatedVideo?.url || '';
   const apiUrl = rawUrl.endsWith('/media') ? `${rawUrl}-url` : rawUrl;
@@ -862,28 +945,35 @@ function BenchmarkVideoPreview({ kickoff }: { kickoff: VideoKickoff | null }) {
     <aside className="sticky top-0 overflow-hidden rounded-2xl border border-border bg-surface shadow-sm">
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
         <div className="min-w-0">
-          <p className="text-sm font-black text-text-primary">对标视频</p>
-          <p className="mt-0.5 truncate text-[10px] text-text-muted">{video?.platform || '尚未载入'} · 悬浮播放</p>
+          <p className="text-sm font-black text-text-primary">{isImageReference ? '对标图文' : '对标视频'}</p>
+          <p className="mt-0.5 truncate text-[10px] text-text-muted">{video?.platform || '尚未载入'} · {isImageReference ? '完整轮播证据' : '悬浮播放'}</p>
         </div>
         {video?.sourceUrl && <a href={video.sourceUrl} target="_blank" rel="noreferrer" className="flex items-center gap-1 text-[10px] font-bold text-accent">原站 <ExternalLink size={11} /></a>}
       </div>
       {video ? (
         <div className="p-4">
-          <div className="group relative mx-auto aspect-[9/16] max-h-[600px] overflow-hidden rounded-xl bg-black" onMouseEnter={() => void play()} onMouseLeave={pause}>
-            <video ref={videoRef} src={playbackUrl || undefined} poster={poster || undefined} muted playsInline loop preload="metadata" className="h-full w-full object-cover" />
-            <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/15 transition group-hover:bg-transparent">
-              {!playbackUrl && <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur"><Play size={18} fill="currentColor" /></span>}
+          {isImageReference ? (
+            <div className="relative mx-auto aspect-[4/5] max-h-[600px] overflow-hidden rounded-xl bg-surface-2">
+              {poster ? <img src={poster} alt="竞品图文首图" className="h-full w-full object-contain" /> : <div className="flex h-full items-center justify-center text-text-muted"><ImageIcon size={28} className="opacity-35" /></div>}
+              <span className="absolute left-2 top-2 rounded-md bg-black/55 px-2 py-1 text-[9px] font-bold text-white backdrop-blur">首图参考</span>
             </div>
-            {loading && <span className="absolute right-2 top-2 rounded-md bg-black/55 px-2 py-1 text-[9px] text-white">加载中…</span>}
-          </div>
+          ) : (
+            <div className="group relative mx-auto aspect-[9/16] max-h-[600px] overflow-hidden rounded-xl bg-black" onMouseEnter={() => void play()} onMouseLeave={pause}>
+              <video ref={videoRef} src={playbackUrl || undefined} poster={poster || undefined} muted playsInline loop preload="metadata" className="h-full w-full object-cover" />
+              <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/15 transition group-hover:bg-transparent">
+                {!playbackUrl && <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur"><Play size={18} fill="currentColor" /></span>}
+              </div>
+              {loading && <span className="absolute right-2 top-2 rounded-md bg-black/55 px-2 py-1 text-[9px] text-white">加载中…</span>}
+            </div>
+          )}
           <p className="mt-3 line-clamp-2 text-xs font-bold leading-relaxed text-text-primary">{video.title || kickoff?.referenceAnalysis?.title || '未命名对标视频'}</p>
-          <p className="mt-1 text-[10px] text-text-muted">{video.duration ? `${video.duration}s · ` : ''}鼠标移入预览，移出后自动暂停</p>
+          <p className="mt-1 text-[10px] text-text-muted">{isImageReference ? `${video.aiAnalysis?.imageEvidence?.observedFacts?.length || 0} 张逐图证据已带入，只复用可见布局与信息模块` : `${video.duration ? `${video.duration}s · ` : ''}鼠标移入预览，移出后自动暂停`}</p>
         </div>
       ) : (
         <div className="flex min-h-[360px] flex-col items-center justify-center px-8 text-center">
           <Film size={28} className="text-text-muted opacity-35" />
-          <p className="mt-3 text-xs font-bold text-text-secondary">尚未载入对标视频</p>
-          <p className="mt-1 text-[10px] leading-relaxed text-text-muted">从灵感大屏选择视频并进入 AI 智能素材后，将在这里显示。</p>
+          <p className="mt-3 text-xs font-bold text-text-secondary">尚未载入对标内容</p>
+          <p className="mt-1 text-[10px] leading-relaxed text-text-muted">从灵感大屏选择视频或图文并进入 AI 智能素材后，将在这里显示。</p>
         </div>
       )}
     </aside>
@@ -1569,7 +1659,8 @@ function parseTimestampedVoiceover(value: string): Array<{ time: string; text: s
 function formatVoiceoverWithTimestamps(value: string): string {
   const parsed = parseTimestampedVoiceover(value).filter(item => !isNonSpeechSfx(item.text));
   if (parsed.length) return parsed.map(item => `${item.time} ${item.text}`).join('\n');
-  return cleanVoiceoverLine(value);
+  const fallback = cleanVoiceoverLine(value);
+  return isNonSpeechSfx(fallback) ? '' : fallback;
 }
 
 function stripCloneAnalysisSummary(value: string): string {
@@ -1677,6 +1768,7 @@ function isNonSpeechSfx(text: string): boolean {
     .trim()
     .toLowerCase();
   if (!normalized) return true;
+  if (/^(无|暂无|无口播|无台词|无对白|没有口播|没有台词|none|n\/a|no voiceover|no dialogue)$/i.test(normalized)) return true;
   if (/^(噗|噗噗|砰|砰砰|咚|咚咚|哒|哒哒|啪|啪啪|嗒|嗒嗒|咔|咔哒|咔嚓|咯吱|嘎吱|吱呀|叮|叮咚|嘀|滴滴|唰|嗖|嗡|嗡嗡|轰|轰隆|沙沙|刷刷)$/i.test(normalized)) return true;
   if (/^(whoosh|swoosh|pop|popop|bang|boom|ding|beep|click|clack|creak|crack|snap|buzz|whirr|rustle)$/i.test(normalized)) return true;
   if (normalized.length <= 4 && /^([\u54c8\u563f\u5566\u5662\u7830\u549a\u53ee\u6ef4\u54d2\u55d2\u556a\u54d7\u55d2\u5530\u55e1\u5431\u5494\u55d2])\1+$/.test(normalized)) return true;
@@ -2300,6 +2392,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   const [pendingRealCloneGeneration, setPendingRealCloneGeneration] = useState(false);
   const [posterLoading, setPosterLoading] = useState(false);
   const [posterDraft, setPosterDraft] = useState<FbPosterResult | null>(null);
+  const [leadContentPackage, setLeadContentPackage] = useState<LeadContentPackageResult | null>(null);
   const [posterJsonText, setPosterJsonText] = useState('');
   const [posterImageUrl, setPosterImageUrl] = useState('');
 
@@ -2674,9 +2767,9 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         setContentMode('poster');
         setMode('clone');
         setPlatform(kickoff.video?.platform === 'instagram' ? 'instagram' : 'facebook');
-        setRatio('1:1');
+        setRatio('4:5');
         setActiveFolder('hot');
-        setProjectTitle(kickoff.video?.title ? `爆款图文迭代 · ${kickoff.video.title}` : 'AI 图文复刻');
+        setProjectTitle(kickoff.video?.title ? `竞品图文获客内容包 · ${kickoff.video.title}` : '竞品图文获客内容包');
         const kickoffOption = kickoff.productInfo ? productOptionFromInfo(kickoff.productInfo) : null;
         if (kickoffOption) {
           setProductOptions(current => current.some(item => item.id === kickoffOption.id)
@@ -2685,7 +2778,9 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
           setSelectedProductIds([kickoffOption.id]);
         }
         if (kickoff.productInfo) setProductInfo(kickoff.productInfo);
-        setModeNotice('已带入爆款图文参考。下一步会先拆解标题区、产品主视觉、背景氛围、信息栏、认证徽章、流程图和 CTA，再用本地素材逐模块替换。');
+        setModeNotice(kickoff.video?.aiAnalysis?.imageEvidence?.observedFacts?.length
+          ? '已带入完整轮播证据。系统将只保留可观察的布局、信息层级和表达方式，用企业中心产品与真实能力生成三组连续获客内容。'
+          : '这条图文还没有完整轮播证据，请返回灵感大屏点击“重新分析完整轮播”后再生成。');
         setStepIdx(1);
         autoGen.current = true;
         return;
@@ -4041,17 +4136,114 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   };
 
   const generatePosterBrief = async () => {
+    const imageEvidence = videoKickoff?.video?.aiAnalysis?.imageEvidence;
+    const isEvidenceLedPackage = Boolean(
+      (videoKickoff?.source === 'inspiration_image_post' || videoKickoff?.video?.contentFormat === 'image')
+      && imageEvidence?.observedFacts?.length,
+    );
+    const isImageReferenceWithoutEvidence = Boolean(
+      (videoKickoff?.source === 'inspiration_image_post' || videoKickoff?.video?.contentFormat === 'image')
+      && !imageEvidence?.observedFacts?.length,
+    );
+    if (isImageReferenceWithoutEvidence) {
+      setModeNotice('当前记录只有标题或首图，没有完整轮播证据。请返回灵感大屏重新分析后再生成，避免凭空总结爆点。');
+      return;
+    }
     if (mode === 'product' && !activeProductLabel) {
       setModeNotice('产品信息生成需要先在第一步选择企业中心产品，再进入第二步选择配套素材。');
       return;
     }
-    if (mode === 'clone' && !selectedClips.some(item => item.folder === 'hot')) {
-      setModeNotice('爆款图文迭代需要先选择一张爆款图文参考，用于拆解模块结构、钩子、爆点和画风。');
+    if (mode === 'clone' && !isEvidenceLedPackage && !selectedClips.some(item => item.folder === 'hot')) {
+      setModeNotice('对标图文套用需要先选择一条公开图文参考，用于提取可见布局、信息模块和表达方式。');
       return;
     }
     setPosterLoading(true);
     setModeNotice('');
     try {
+      if (isEvidenceLedPackage) {
+        const result = await studioApi.leadContentPackage({
+          productInfo: activeProductInfo,
+          platform,
+          language: lang,
+          ratio,
+          referenceTitle: videoKickoff?.video?.title || '',
+          referenceEvidence: imageEvidence,
+        });
+        if (!result.ok || result.items.length < 3) throw new Error(result.error || '获客内容包生成失败');
+        const first = result.items[0]!;
+        const firstSlide = first.slides[0];
+        const poster = {
+          headline: firstSlide?.headline || first.title,
+          subheadline: firstSlide?.body || first.objective,
+          originBadge: '',
+          trustBadges: [],
+          sellingPoints: first.slides.slice(1, 4).map(slide => [slide.headline, slide.body].filter(Boolean).join('：')),
+          process: [],
+          categories: [],
+          bottomBar: [],
+          cta: first.cta,
+        };
+        const posterResult: FbPosterResult = {
+          ok: true,
+          source: 'ai',
+          poster,
+          caption: first.caption,
+          hashtags: first.hashtags,
+          commentCta: first.cta,
+          dmOpening: first.dmOpening,
+          fieldsToConfirm: result.fieldsToConfirm,
+          imagePrompt: first.imagePrompt,
+          layoutModules: result.referenceModulesUsed.map(module => ({
+            module: module.module,
+            referencePattern: module.evidence,
+            localAssetRole: '企业中心对应产品/工厂/证书/包装素材',
+            replacementInstruction: module.application,
+          })),
+        };
+        setLeadContentPackage(result);
+        setPosterDraft(posterResult);
+        setPosterJsonText(JSON.stringify(result, null, 2));
+        const tags = first.hashtags.map(tag => `#${String(tag).replace(/^#/, '')}`).join(' ');
+        setCaption([first.caption, tags].filter(Boolean).join(' '));
+        setPosterImageUrl('');
+
+        const ownReferenceIds = selectedClips
+          .filter(item => item.folder !== 'hot' && item.type !== 'audio')
+          .slice(0, 4)
+          .map(item => item.id);
+        if (ownReferenceIds.length > 0) {
+          setModeNotice('三组内容方案已生成，正在用企业素材生成第 1 组首图预览…');
+          try {
+            const rendered = await studioApi.fbPosterRender({
+              poster,
+              caption: first.caption,
+              imagePrompt: [
+                first.imagePrompt,
+                'Generate only the first cover slide of this carousel.',
+                firstSlide ? `Cover role: ${firstSlide.role}; headline: ${firstSlide.headline}; body: ${firstSlide.body}; required enterprise asset role: ${firstSlide.assetRole}.` : '',
+                'The supplied reference images are owned enterprise assets. Do not reproduce any competitor product, logo, packaging, contact details, or text.',
+              ].filter(Boolean).join('\n'),
+              ratio,
+              materialIds: ownReferenceIds,
+            });
+            if (!rendered.ok || !rendered.url) throw new Error(rendered.error || '首图生成失败');
+            setPosterImageUrl(rendered.url);
+            if (rendered.material?.id) setSelected(prev => [...new Set([...prev, rendered.material!.id])]);
+            await refreshMaterials();
+            setModeNotice(result.fieldsToConfirm.length
+              ? `已生成三组获客内容和第 1 组首图；发布前请确认：${result.fieldsToConfirm.join('、')}`
+              : '已生成三组连续获客内容和第 1 组首图预览。');
+          } catch (imageErr: any) {
+            setModeNotice(`三组获客内容已生成，但首图生成失败：${imageErr?.message || '请稍后重试'}`);
+          }
+        } else {
+          setModeNotice(result.fieldsToConfirm.length
+            ? `三组获客内容已生成。请先选择企业产品/工厂素材再生成图片；发布前还需确认：${result.fieldsToConfirm.join('、')}`
+            : '三组获客内容已生成。为避免把竞品产品带入成图，请先选择企业中心产品/工厂素材，再生成图片。');
+        }
+        return;
+      }
+      setLeadContentPackage(null);
       const selectedMaterials = selectedClips.slice(0, 8).map(item => ({
         id: item.id,
         name: item.name,
@@ -4229,6 +4421,9 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     setBgms(list as Bgm[]);
   };
   useEffect(() => { void refreshBgm(); }, []);
+  useEffect(() => {
+    if (step === 'bgm') void refreshBgm();
+  }, [step]);
   useEffect(() => {
     try {
       localStorage.setItem('ow_favorite_bgms', JSON.stringify(favoriteBgms));
@@ -4978,9 +5173,11 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                 <div className="rounded-2xl border border-border bg-surface p-4">
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <p className="text-sm font-bold text-text-primary">海报文案 JSON</p>
+                      <p className="text-sm font-bold text-text-primary">{videoKickoff?.video?.contentFormat === 'image' ? '企业获客图文内容包' : '海报文案 JSON'}</p>
                       <p className="mt-1 text-xs leading-relaxed text-text-muted">
-                        先生成可编辑 JSON，再进入图片生成；MOQ、认证、交期等商业承诺字段需要确认后使用。
+                        {videoKickoff?.video?.contentFormat === 'image'
+                          ? '用完整轮播的可见证据保留布局与信息层级，再以企业中心资料生成三组连续内容；缺失的商业承诺不会自动补写。'
+                          : '先生成可编辑 JSON，再进入图片生成；MOQ、认证、交期等商业承诺字段需要确认后使用。'}
                       </p>
                     </div>
                     <button
@@ -4990,7 +5187,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                       className="btn-primary shrink-0 !px-4 !py-2 !text-xs"
                     >
                       {posterLoading ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                      一次生成图文
+                      {videoKickoff?.video?.contentFormat === 'image' ? '生成获客内容包' : '一次生成图文'}
                     </button>
                   </div>
                   {modeNotice && (
@@ -5002,10 +5199,13 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                     value={posterJsonText}
                     onChange={event => setPosterJsonText(event.target.value)}
                     rows={posterJsonText ? 12 : 5}
-                    placeholder="生成后这里会出现海报文案 JSON：标题、副标题、认证徽章、流程六步、产品分类卡、底部卖点和 CTA。"
+                    placeholder={videoKickoff?.video?.contentFormat === 'image'
+                      ? '生成后这里会出现三组内容 JSON：买家注意、合作能力、供应商信任，以及每组轮播结构、配文、CTA 和私信开场。'
+                      : '生成后这里会出现海报文案 JSON：标题、副标题、认证徽章、流程六步、产品分类卡、底部卖点和 CTA。'}
                     className="mt-3 w-full rounded-xl border border-border bg-surface-2 p-3 font-mono text-xs leading-relaxed text-text-secondary outline-none focus:border-accent"
                   />
-                  {posterDraft && (
+                  {leadContentPackage && <LeadContentPackagePreview value={leadContentPackage} imageUrl={posterImageUrl} />}
+                  {posterDraft && !leadContentPackage && (
                     <div className="mt-3 grid gap-3 md:grid-cols-2">
                       {posterImageUrl && (
                         <div className="md:col-span-2 overflow-hidden rounded-xl border border-border bg-surface-2">
@@ -5046,15 +5246,17 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       case 'poster':
         return (
           <div className="max-w-4xl">
-            <SectionTitle title="图文生成" desc="一次生成新的海报/爆款图，并按 Facebook 或 Instagram 自动适配配文和承接话术" />
+            <SectionTitle title="图文生成" desc={videoKickoff?.video?.contentFormat === 'image' ? '依据竞品完整轮播证据与企业中心资料，生成三组连续获客内容' : '一次生成新的海报，并按 Facebook 或 Instagram 自动适配配文和承接话术'} />
             <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
               <div className="rounded-2xl border border-border bg-surface p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
-                    <p className="text-sm font-bold text-text-primary">一键生成新海报/爆款图</p>
+                    <p className="text-sm font-bold text-text-primary">{videoKickoff?.video?.contentFormat === 'image' ? '生成三组获客图文内容包' : '一键生成新海报'}</p>
                     <p className="mt-1 text-xs leading-relaxed text-text-muted">
-                      {mode === 'clone'
-                        ? `系统会先拆解对标图文的开头钩子、爆点、模块结构和画风，再用本地产品/工厂/证书/场景素材逐模块替换，并生成 ${platform === 'instagram' ? 'Instagram' : 'Facebook'} 配文。`
+                      {videoKickoff?.video?.contentFormat === 'image'
+                        ? `系统会依据对标图文中可观察的布局、轮播功能和文案证据，分别生成“吸引买家—解释能力—建立信任”三组 ${platform === 'instagram' ? 'Instagram' : 'Facebook'} 内容；竞品品牌、产品和商业承诺不会进入成稿。`
+                        : mode === 'clone'
+                        ? `系统会先拆解对标图文的模块结构和画面表达，再用本地产品/工厂/证书/场景素材逐模块替换，并生成 ${platform === 'instagram' ? 'Instagram' : 'Facebook'} 配文。`
                         : `系统会基于已选产品和素材生成新海报，并同步生成 ${platform === 'instagram' ? 'Instagram' : 'Facebook'} 配文、评论 CTA 和私信开场。`}
                     </p>
                   </div>
@@ -5065,7 +5267,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                     className="btn-primary shrink-0 !px-4 !py-2 !text-xs"
                   >
                     {posterLoading ? <Loader2 size={12} className="animate-spin" /> : <Sparkles size={12} />}
-                    一次生成图文
+                    {videoKickoff?.video?.contentFormat === 'image' ? '生成获客内容包' : '一次生成图文'}
                   </button>
                 </div>
                 {modeNotice && (
@@ -5077,10 +5279,13 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                   value={posterJsonText}
                   onChange={event => setPosterJsonText(event.target.value)}
                   rows={posterJsonText ? 12 : 6}
-                  placeholder="生成后这里会出现海报文案 JSON：标题、副标题、认证徽章、流程六步、产品分类卡、底部卖点和 CTA。"
+                  placeholder={videoKickoff?.video?.contentFormat === 'image'
+                    ? '生成后这里会出现三组内容 JSON：买家注意、合作能力、供应商信任，以及每组轮播结构、配文、CTA 和私信开场。'
+                    : '生成后这里会出现海报文案 JSON：标题、副标题、认证徽章、流程六步、产品分类卡、底部卖点和 CTA。'}
                   className="mt-3 w-full rounded-xl border border-border bg-surface-2 p-3 font-mono text-xs leading-relaxed text-text-secondary outline-none focus:border-accent"
                 />
-                {posterDraft && (
+                {leadContentPackage && <LeadContentPackagePreview value={leadContentPackage} imageUrl={posterImageUrl} />}
+                {posterDraft && !leadContentPackage && (
                   <div className="mt-3 grid gap-3 md:grid-cols-2">
                     {posterImageUrl && (
                       <div className="md:col-span-2 overflow-hidden rounded-xl border border-border bg-surface-2">
@@ -6037,6 +6242,24 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                 <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-700">
                   当前为旧版草稿，未保存对标逐镜分析；仍可点击生成，系统会先生成可编辑的标准分镜兜底稿。
                 </p>
+              )}
+              {modeNotice && (
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] font-semibold leading-relaxed text-amber-800"
+                >
+                  <span className="min-w-0 flex-1">{modeNotice}</span>
+                  {referenceAnalysisIncomplete && (
+                    <button
+                      type="button"
+                      onClick={() => window.dispatchEvent(new CustomEvent('lingshu:navigate', { detail: { page: 'traffic', view: 'materials' } }))}
+                      className="shrink-0 rounded-lg border border-amber-300 bg-white px-3 py-1.5 text-[10px] font-black text-amber-800 hover:bg-amber-100"
+                    >
+                      返回灵感大屏补全分析
+                    </button>
+                  )}
+                </div>
               )}
               {currentModeScripts.length > 0 && (
                 <div className="mt-3 flex flex-wrap gap-2">

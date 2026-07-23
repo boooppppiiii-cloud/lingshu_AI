@@ -32,7 +32,9 @@ const GOOGLE_OAUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const YOUTUBE_OAUTH_SCOPES = [
   'https://www.googleapis.com/auth/youtube.upload',
   'https://www.googleapis.com/auth/youtube.readonly',
+  'https://www.googleapis.com/auth/youtube.force-ssl',
 ];
+
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
 export const youtubeRouter = Router();
@@ -806,7 +808,7 @@ youtubeRouter.get('/accounts/:id/comments', async (req, res) => {
       accessToken: record.accessToken,
     };
 
-    const comments = await getMyVideoComments(config, Number(maxResults));
+    const comments = await getMyVideoComments(config, Number(maxResults), record.channelId);
     res.json({
       comments,
       total: comments.length,

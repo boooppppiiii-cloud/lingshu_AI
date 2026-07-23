@@ -134,11 +134,28 @@ interface VideoAnalysisPayload {
   analysisMode?: 'strategy' | 'exact';
   requestedAnalysisMode?: 'strategy' | 'exact';
   analysisError?: string;
+  videoLevelFailureStatus?: string;
+  manualRequiredReason?: string;
   videoStorage?: string;
   analyzedAt?: string;
   caption?: string;
   imageUrls?: string[];
   imageCount?: number;
+  imageEvidence?: {
+    version: 2;
+    status: 'analyzed';
+    observedFacts: Array<{ imageIndex: number; subjects: string[]; scene: string; composition: string; colors: string[]; visibleText: string[]; confidence: number }>;
+    carouselFlow: Array<{ imageIndex: number; role: 'attention' | 'product' | 'detail' | 'proof' | 'process' | 'cta' | 'unknown'; evidence: string; confidence: number }>;
+    copyEvidence: { hooks: Array<{ text: string; source: 'caption' | 'ocr'; evidence: string }>; sellingPoints: Array<{ text: string; source: 'caption' | 'ocr'; evidence: string }>; cta: string[] };
+    reusableModules: Array<{ module: string; evidence: string; preserve: string; replace: string; confidence: number }>;
+    uncertainties: string[];
+  };
+  imageAnalysisStatus?: 'analyzed' | 'failed';
+  imageAnalysisError?: string;
+  publicMetrics?: { likes?: string; comments?: string; shares?: string; plays?: string; followers?: number; observedAt?: string };
+  publicBaseline?: { sampleSize: number; medianWeightedEngagement: number | null; currentWeightedEngagement: number | null; relativeMultiple: number | null; status: 'usable' | 'insufficient_sample'; method: string };
+  publicAdSignals?: { isAd?: boolean; isPaidPartnership?: boolean };
+  author?: string;
   crawlerOpsTaskId?: string;
   crawlerOpsStatus?: string;
   crawlerOpsReason?: string;
@@ -315,6 +332,10 @@ function isDisplayableVideoAnalysis(analysis?: VideoAnalysisPayload): boolean {
   if (analysis.analysisQuality !== 'video') return false;
   if (!analysis.gemini) return false;
   if (analysisSource === 'metadata-fallback' || geminiStatus === 'metadata_fallback' || downloadStatus === 'metadata_only') return false;
+  // Exact analysis is a completed, user-requested upgrade. Keep the card visible
+  // even when an older download attempt left a failure marker on the record.
+  // The server-side inspiration filter follows the same rule.
+  if (analysis.requestedAnalysisMode === 'exact' || analysis.analysisMode === 'exact') return true;
   return analysis.analysisQuality === 'video'
     && (!geminiStatus || geminiStatus === 'analyzed')
     && (!downloadStatus || downloadStatus === 'analyzed' || videoFetchStatus === 'direct_url' || videoFetchStatus === 'fetched');
@@ -359,6 +380,14 @@ function getAnalysis(video: TrendVideo): ScriptAnalysis | null {
       : 'Gemini 尚未返回可复用结构',
     emotion: cleanAnalysisText(gemini.mood) || (isMetadataFallback ? '基础分析' : '真实分析'),
     infoSpeed: video.duration > 90 ? '中密度' : '高密度',
+  };
+}
+
+function imageAnalysisShell(video: TrendVideo): ScriptAnalysis {
+  return {
+    videoType: '竞品公开图文', structure: [], firstTenSeconds: [],
+    scriptSummary15s: { visualStyle: '', coreEmotion: '', competitors: [] },
+    scriptDetails15s: [], baseRequirements: '', referenceHighlights: [], adaptTip: '', emotion: '', infoSpeed: '',
   };
 }
 
@@ -718,7 +747,7 @@ function matchMaterialsToFrames(details: ScriptDetail15s[], materials: Material[
       scores: matched?.scores,
       trim: matched?.trim,
       reason: status === 'pending_analysis' ? '现有视频尚未完成片段级分析，不能生成可信截取建议'
-        : matched ? `按镜头功能、动作节拍、主体、构图与运镜匹配真实片段` : '没有片段通过硬条件，请补拍、AI生成或人工选择',
+        : matched ? `按镜头功能、动作节拍、主体、构图与运镜匹配真实片段` : '没有片段通过硬条件，请补拍或人工选择',
       risks: matched?.risks ?? [],
       suggestion: shootingSuggestion(detail),
       status,
@@ -1174,6 +1203,7 @@ function pipelineState(video: TrendVideo): { title: string; desc: string; spinni
 function needsVideoEnhancement(video: TrendVideo): boolean {
   const analysis = video.aiAnalysis;
   if (!analysis?.gemini) return true;
+  if (analysis.analysisMode === 'exact' && hasCompleteGeminiAnalysis(analysis.gemini)) return false;
   const analyzedUntil = (analysis.gemini.scriptDetails15s || []).reduce((max, item) => {
     const numbers = String(item.time || '').match(/\d+(?:\.\d+)?/g)?.map(Number) || [];
     return Math.max(max, numbers[1] ?? numbers[0] ?? 0);
@@ -1244,20 +1274,14 @@ function AuthenticatedVideo({ apiUrl, poster, className, controls = false, autoP
 
 type ImageInsightTab = 'overview' | 'visual' | 'copy' | 'iterate';
 
-function ImageBreakdownContent({ video, analysis, activeTab }: { video: TrendVideo; analysis: ScriptAnalysis; activeTab: ImageInsightTab }) {
-  const gemini = video.aiAnalysis?.gemini;
-  const cleanList = (value?: string[]) => Array.isArray(value) ? value.map(cleanAnalysisText).filter(Boolean) : [];
-  const hooks = cleanList(gemini?.hooks);
-  const sellingPoints = cleanList(gemini?.sellingPoints);
-  const rawVisuals = cleanAnalysisText(gemini?.firstTenSeconds?.visuals);
-  const rawTheme = cleanAnalysisText(gemini?.theme);
-  const rawMood = cleanAnalysisText(gemini?.mood);
-  const rawStyle = cleanAnalysisText(gemini?.scriptSummary15s?.visualStyle || gemini?.globalSettings?.visualStyle);
-  const rawLighting = cleanAnalysisText(gemini?.globalSettings?.lighting);
+function ImageBreakdownContent({ video, activeTab }: { video: TrendVideo; analysis: ScriptAnalysis; activeTab: ImageInsightTab }) {
+  const evidence = video.aiAnalysis?.imageEvidence;
+  const metrics = video.aiAnalysis?.publicMetrics;
+  const baseline = video.aiAnalysis?.publicBaseline;
+  const adSignals = video.aiAnalysis?.publicAdSignals;
   const rawCaption = cleanAnalysisText(video.aiAnalysis?.caption || video.title);
-  const evidenceCount = [rawVisuals, rawTheme, rawMood, rawStyle, rawLighting, ...hooks, ...sellingPoints].filter(Boolean).length;
-  const isAnalyzed = Boolean(gemini && evidenceCount > 0 && video.aiAnalysis?.analysisSource !== 'metadata-fallback');
-  const analysisState = isAnalyzed ? '已读取图片分析结果' : '暂无可信图片分析';
+  const isAnalyzed = Boolean(evidence?.status === 'analyzed' && evidence.observedFacts.length);
+  const roleLabel: Record<string, string> = { attention: '首图停留', product: '产品展示', detail: '细节说明', proof: '信任证明', process: '流程解释', cta: '行动引导', unknown: '未确定' };
 
   const EmptyEvidence = ({ title, desc }: { title: string; desc: string }) => (
     <div className="rounded-2xl border border-dashed border-border bg-surface-2 px-5 py-8 text-center">
@@ -1276,48 +1300,51 @@ function ImageBreakdownContent({ video, analysis, activeTab }: { video: TrendVid
 
   if (activeTab === 'overview') return (
     <div className="space-y-4">
-      <section className={`rounded-2xl border p-3.5 ${isAnalyzed ? 'border-emerald-100 bg-emerald-50/60' : 'border-amber-200 bg-amber-50/70'}`}>
-        <div className="flex items-start gap-3"><div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${isAnalyzed ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{isAnalyzed ? <Check size={17}/> : <Clock size={17}/>}</div><div><p className="text-xs font-black text-text-primary">{analysisState}</p><p className="mt-1 text-[10px] font-bold text-text-secondary">{isAnalyzed ? `${evidenceCount} 条证据` : '等待图片视觉分析'}</p></div></div>
+      <section className="rounded-2xl border border-border bg-white p-3.5">
+        <div className="flex items-center justify-between"><div><p className="text-xs font-black text-text-primary">公开表现</p><p className="mt-1 text-[9px] text-text-muted">无公开值就留空，不把播放当曝光、不估算收藏与点击</p></div>{baseline?.status === 'usable' && baseline.relativeMultiple != null && <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-black text-emerald-700">账号基线 {baseline.relativeMultiple}×</span>}</div>
+        <div className="mt-3 grid grid-cols-4 gap-1.5">{[['点赞', metrics?.likes || '—'], ['评论', metrics?.comments || '—'], ['分享', metrics?.shares || '—'], ['播放', metrics?.plays || '—']].map(([label, value]) => <div key={label} className="rounded-lg bg-surface-2 px-1.5 py-2 text-center"><p className="text-sm font-black text-text-primary">{value}</p><p className="text-[9px] text-text-muted">{label}</p></div>)}</div>
+        <div className="mt-2 rounded-lg bg-surface-2 p-2 text-[9px] leading-relaxed text-text-secondary">
+          <p>账号：{video.aiAnalysis?.author || '未抓取'} · 粉丝：{metrics?.followers ? metrics.followers.toLocaleString() : '未公开/未抓取'}</p>
+          <p className="mt-1">投流信号：{adSignals?.isAd || adSignals?.isPaidPartnership ? '平台公开标记为广告/付费合作' : '未抓到公开标记（不代表未投流）'}</p>
+        </div>
+        <p className="mt-2 text-[9px] leading-relaxed text-text-muted">{baseline?.status === 'usable' ? `${baseline.sampleSize} 条同账号样本；${baseline.method}` : `同账号样本 ${baseline?.sampleSize || 0} 条，暂不足以确认相对爆款。`}</p>
       </section>
-      {!isAnalyzed ? <EmptyEvidence title="无法提取核心爆点" desc="标题、标签和抓取状态不能证明图片的爆点。完成图片视觉分析后，这里才会展示有证据的结论。"/> : <section><p className="mb-2 text-[11px] font-black text-text-primary">已提取证据</p><div className="space-y-2">{rawTheme && <EvidenceCard label="主题" value={rawTheme}/>} {hooks.map((item, index) => <EvidenceCard key={`hook-${index}`} label={`注意力钩子 ${index + 1}`} value={item}/>)} {sellingPoints.map((item, index) => <EvidenceCard key={`point-${index}`} label={`卖点 ${index + 1}`} value={item}/>)}</div></section>}
+      {!isAnalyzed ? <EmptyEvidence title="图片证据尚未提取" desc={video.aiAnalysis?.imageAnalysisError || '重新分析后，系统会逐图提取可见事实、OCR、轮播角色和可复用模块。'}/> : <section><div className="mb-2 flex items-center justify-between"><p className="text-[11px] font-black text-text-primary">可复用模块</p><span className="text-[9px] text-text-muted">{evidence!.observedFacts.length} 张图片 · 仅基于可见证据</span></div><div className="space-y-2">{evidence!.reusableModules.map((item, index) => <div key={`${item.module}-${index}`} className="rounded-xl border border-border bg-white p-3"><div className="flex items-center justify-between"><p className="text-[11px] font-black text-text-primary">{item.module}</p><span className="text-[9px] text-text-muted">置信度 {Math.round(item.confidence * 100)}%</span></div><p className="mt-1 text-[10px] text-text-secondary">证据：{item.evidence}</p><div className="mt-2 grid grid-cols-2 gap-2 text-[9px]"><p className="rounded-lg bg-emerald-50 p-2 text-emerald-800">保留结构：{item.preserve}</p><p className="rounded-lg bg-amber-50 p-2 text-amber-800">替换内容：{item.replace}</p></div></div>)}</div></section>}
     </div>
   );
 
   if (activeTab === 'visual') return (
     <div className="space-y-3">
-      <p className="text-[11px] font-black text-text-primary">视觉证据</p>
-      {![rawVisuals, rawStyle, rawLighting].some(Boolean) ? <EmptyEvidence title="尚未返回视觉拆解" desc="当前分析没有主体、构图、色彩或光线证据，因此不推断视觉焦点与注意力路径。"/> : <>{rawVisuals && <EvidenceCard label="画面识别" value={rawVisuals}/>} {rawStyle && <EvidenceCard label="视觉风格" value={rawStyle}/>} {rawLighting && <EvidenceCard label="光线" value={rawLighting}/>}</>}
+      <div><p className="text-[11px] font-black text-text-primary">逐图视觉事实</p><p className="mt-1 text-[10px] text-text-muted">主体、场景、构图、颜色和实际可读文字</p></div>
+      {!isAnalyzed ? <EmptyEvidence title="尚未返回逐图拆解" desc="当前没有可验证的图片视觉结果。"/> : evidence!.observedFacts.map(fact => { const flow = evidence!.carouselFlow.find(item => item.imageIndex === fact.imageIndex); return <div key={fact.imageIndex} className="rounded-xl border border-border bg-white p-3"><div className="flex items-center justify-between"><p className="text-[11px] font-black text-text-primary">第 {fact.imageIndex} 张</p><span className="rounded-full bg-emerald-50 px-2 py-0.5 text-[9px] font-bold text-emerald-700">{roleLabel[flow?.role || 'unknown']}</span></div><p className="mt-2 text-[10px] text-text-secondary">主体：{fact.subjects.join('、') || '未确认'}</p><p className="mt-1 text-[10px] text-text-secondary">场景：{fact.scene || '未确认'}</p><p className="mt-1 text-[10px] text-text-secondary">构图：{fact.composition || '未确认'}</p><p className="mt-1 text-[10px] text-text-secondary">颜色：{fact.colors.join('、') || '未确认'}</p>{fact.visibleText.length > 0 && <p className="mt-1 rounded-lg bg-surface-2 p-2 text-[10px] text-text-secondary">OCR：{fact.visibleText.join(' / ')}</p>}{flow?.evidence && <p className="mt-2 text-[9px] text-text-muted">轮播作用依据：{flow.evidence}</p>}</div>; })}
     </div>
   );
 
   if (activeTab === 'copy') return (
     <div className="space-y-3">
       <section className="rounded-xl border border-border bg-white p-3"><div className="flex items-center justify-between"><p className="text-[10px] font-bold text-text-muted">原始帖文</p><span className="rounded-full bg-surface-2 px-2 py-0.5 text-[9px] text-text-muted">抓取原文</span></div><p className="mt-2 text-[11px] font-bold leading-relaxed text-text-primary">{rawCaption || '未抓取到原始帖文'}</p></section>
-      {!hooks.length && !sellingPoints.length ? <EmptyEvidence title="尚未返回文案拆解" desc="仅展示原始帖文，不自动推断目标人群、痛点、承诺或句式。完成文案分析后再输出这些结论。"/> : <>{hooks.map((item, index) => <EvidenceCard key={`copy-hook-${index}`} label={`已识别钩子 ${index + 1}`} value={item}/>)}{sellingPoints.map((item, index) => <EvidenceCard key={`copy-point-${index}`} label={`已识别卖点 ${index + 1}`} value={item}/>)}</>}
+      {!evidence?.copyEvidence.hooks.length && !evidence?.copyEvidence.sellingPoints.length ? <EmptyEvidence title="没有可确认的文案模块" desc="仅展示原始帖文，不推断未出现的人群、痛点或承诺。"/> : <>{evidence?.copyEvidence.hooks.map((item, index) => <EvidenceCard key={`copy-hook-${index}`} label={`钩子 ${index + 1} · ${item.source}`} value={`${item.text}｜证据：${item.evidence}`}/>)}{evidence?.copyEvidence.sellingPoints.map((item, index) => <EvidenceCard key={`copy-point-${index}`} label={`卖点 ${index + 1} · ${item.source}`} value={`${item.text}｜证据：${item.evidence}`}/>)}</>}
     </div>
   );
 
   return (
     <div className="space-y-3">
-      <p className="text-[11px] font-black text-text-primary">证据驱动的迭代变量</p>
-      {!isAnalyzed ? <EmptyEvidence title="暂不能生成迭代建议" desc="当前没有足够的图片分析证据。请先完成图片视觉与文案分析，再基于实际爆点生成单变量方案。"/> : <div className="space-y-2">{rawVisuals && <EvidenceCard label="可测试视觉变量" value={rawVisuals}/>} {hooks.map((item, index) => <EvidenceCard key={`iteration-hook-${index}`} label={`可测试钩子变量 ${index + 1}`} value={item}/>)} {sellingPoints.map((item, index) => <EvidenceCard key={`iteration-point-${index}`} label={`可测试卖点变量 ${index + 1}`} value={item}/>)}</div>}
+      <div><p className="text-[11px] font-black text-text-primary">套用到企业获客内容</p><p className="mt-1 text-[10px] text-text-muted">生成“吸引—解释—信任”三条连续内容，而不是三张相似测试图。</p></div>
+      {!isAnalyzed ? <EmptyEvidence title="暂不能生成内容包" desc="需要先完成逐图证据提取，才能安全复用布局和信息模块。"/> : <div className="space-y-2">{[['吸引目标买家', '复用首图停留结构，替换为企业产品和买家问题。'], ['解释合作能力', '复用产品、细节和流程模块，映射企业 MOQ、定制与交付资料。'], ['建立供应商信任', '复用证明模块，只使用企业真实工厂、认证和案例。']].map(([title, desc], index) => <div key={title} className="flex gap-3 rounded-xl border border-border bg-white p-3"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-emerald-50 text-[10px] font-black text-emerald-700">{index + 1}</span><div><p className="text-[11px] font-black text-text-primary">{title}</p><p className="mt-1 text-[10px] text-text-secondary">{desc}</p></div></div>)}{evidence!.uncertainties.length > 0 && <div className="rounded-xl bg-amber-50 p-3"><p className="text-[10px] font-black text-amber-800">生成前需确认</p>{evidence!.uncertainties.map(item => <p key={item} className="mt-1 text-[9px] text-amber-700">· {item}</p>)}</div>}</div>}
     </div>
   );
 }
 
 // ── Analysis Panel ────────────────────────────────────────────────────────────
-function AnalysisPanel({ video, onGenerateScript, onRetry, onExactAnalysis, specialRecommendation }: { video: TrendVideo; onGenerateScript: (analysis?: ScriptAnalysis) => void; onRetry?: () => void; onExactAnalysis?: () => void; specialRecommendation?: AccountSpecialRecommendation | null }) {
+function AnalysisPanel({ video, onGenerateScript, onRetry, onExactAnalysis, actionNotice, specialRecommendation }: { video: TrendVideo; onGenerateScript: (analysis?: ScriptAnalysis) => void; onRetry?: () => void; onExactAnalysis?: () => void; actionNotice?: string; specialRecommendation?: AccountSpecialRecommendation | null }) {
   const [loaded, setLoaded] = useState(false);
   const [analysis, setAnalysis] = useState<ScriptAnalysis | null>(null);
   const [activeBookmark, setActiveBookmark] = useState<'reason' | 'frames' | 'script' | 'adapt' | ImageInsightTab>(video.contentFormat === 'image' ? 'overview' : 'reason');
   const [materials, setMaterials] = useState<Material[]>([]);
   const [materialLoading, setMaterialLoading] = useState(false);
-  const [generatingFrame, setGeneratingFrame] = useState('');
-  const [generatedFrameMaterials, setGeneratedFrameMaterials] = useState<Record<string, GeneratedVideo>>({});
-  const [frameVersions, setFrameVersions] = useState<Record<string, VideoGenerationVersion[]>>({});
-  const [frameErrors, setFrameErrors] = useState<Record<string, string>>({});
   const [editingAnalysis, setEditingAnalysis] = useState(false);
   const [savingAnalysis, setSavingAnalysis] = useState(false);
+  const [reanalyzingImage, setReanalyzingImage] = useState(false);
   const [analysisSaveNotice, setAnalysisSaveNotice] = useState('');
   const analysisKey = JSON.stringify(video.aiAnalysis || {});
   const updateDetail = (index: number, patch: Partial<ScriptDetail15s>) => setAnalysis(current => current ? ({ ...current, scriptDetails15s: current.scriptDetails15s.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item) }) : current);
@@ -1331,12 +1358,23 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, onExactAnalysis, spec
     } catch (error) { setAnalysisSaveNotice(error instanceof Error ? error.message : '保存失败'); }
     finally { setSavingAnalysis(false); }
   };
+  const reanalyzeImage = async () => {
+    const id = video.recordId || video.id.replace(/^crawl-/, '');
+    setReanalyzingImage(true);
+    try {
+      const response = await fetch(`/api/overseas/videos/${id}/reanalyze-image`, { method: 'POST', headers: authHeader() });
+      if (!response.ok) throw new Error((await response.json().catch(() => ({})))?.error || '图片分析失败');
+      window.location.reload();
+    } catch (error) {
+      setAnalysisSaveNotice(error instanceof Error ? error.message : '图片分析失败');
+    } finally { setReanalyzingImage(false); }
+  };
 
   useEffect(() => {
     setLoaded(false);
     setAnalysis(null);
     const t = setTimeout(() => {
-      setAnalysis(getAnalysis(video));
+      setAnalysis(video.contentFormat === 'image' ? imageAnalysisShell(video) : getAnalysis(video));
       setLoaded(true);
     }, video.aiAnalysis?.gemini ? 250 : 900);
     return () => clearTimeout(t);
@@ -1359,32 +1397,8 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, onExactAnalysis, spec
   }, [video.id]);
 
   useEffect(() => {
-    setGeneratedFrameMaterials({});
-    setFrameVersions({});
-    setFrameErrors({});
-    setGeneratingFrame('');
     setActiveBookmark(video.contentFormat === 'image' ? 'overview' : 'reason');
   }, [video.id, video.contentFormat]);
-
-  useEffect(() => {
-    if (!analysis?.scriptDetails15s?.length) return;
-    let cancelled = false;
-    void Promise.all(analysis.scriptDetails15s.map(async (detail, index) => {
-      const key = `${detail.time}-${index}`;
-      return [key, await studioApi.listVideoVersions(`inspiration:${video.id}:frame:${key}`)] as const;
-    })).then(entries => {
-      if (cancelled) return;
-      const next = Object.fromEntries(entries);
-      setFrameVersions(next);
-      const selected = Object.entries(next).reduce<Record<string, GeneratedVideo>>((acc, [key, versions]) => {
-        const item = versions.find(version => version.isSelected) || versions[0];
-        if (item) acc[key] = { id: item.materialId || item.id, title: item.title, url: item.url, poster: item.poster, duration: item.duration, createdAt: item.createdAt, source: item.source };
-        return acc;
-      }, {});
-      setGeneratedFrameMaterials(selected);
-    });
-    return () => { cancelled = true; };
-  }, [analysis, video.id]);
 
   if (!loaded) {
     return (
@@ -1438,32 +1452,7 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, onExactAnalysis, spec
     );
   }
 
-  const frameMatches = matchMaterialsToFrames(analysis.scriptDetails15s, materials).map((item, index) => {
-    const key = `${item.detail.time}-${index}`;
-    const generated = generatedFrameMaterials[key];
-    return generated ? {
-      ...item,
-      material: {
-        id: generated.id,
-        name: generated.title,
-        folder: 'seedance',
-        type: 'video' as const,
-        duration: generated.duration,
-        size: 'Seedance 2.0',
-        file: generated.url || '',
-        url: generated.url || '',
-        poster: generated.poster,
-        scope: 'own' as const,
-        createdAt: generated.createdAt,
-      },
-      score: 100,
-      scores: { function: 100, action: 100, subject: 100, composition: 90, camera: 90, duration: 100, quality: 80, enterpriseFit: 100 },
-      trim: { start: 0, end: generated.duration || 5, label: `使用全段 ${formatClipTime(generated.duration || 5)}` },
-      reason: 'Seedance 2.0 已按该分镜生成素材',
-      risks: [],
-      status: 'high' as const,
-    } : item;
-  });
+  const frameMatches = matchMaterialsToFrames(analysis.scriptDetails15s, materials);
   const matchedCount = frameMatches.filter(item => item.material).length;
 
   const confirmMatchedSegment = async (match: FrameMaterialMatch) => {
@@ -1472,81 +1461,25 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, onExactAnalysis, spec
     if (result.ok && result.material) setMaterials(current => current.map(item => item.id === result.material!.id ? result.material! : item));
   };
 
-  const generateFrameMaterial = async (match: FrameMaterialMatch, index: number) => {
-    const key = `${match.detail.time}-${index}`;
-    const groupKey = `inspiration:${video.id}:frame:${key}`;
-    const selectedVersion = frameVersions[key]?.find(item => item.isSelected);
-    setGeneratingFrame(key);
-    setFrameErrors(prev => ({ ...prev, [key]: '' }));
-    try {
-      const prompt = [
-        `分镜时间：${match.detail.time}`,
-        `镜头：${match.detail.shot}；${match.detail.camera}`,
-        `画面：${match.detail.visual}`,
-        match.detail.subtitle ? `字幕/口播：${match.detail.subtitle}` : '',
-        `拍摄要求：9:16 社媒短视频，真实产品展示，自然光，动作清晰。`,
-      ].filter(Boolean).join('\n');
-      const output = await studioApi.seedanceVideo({
-        script: prompt,
-        productInfo: match.suggestion,
-        language: 'zh',
-        ratio: video.platform === 'youtube' ? '16:9' : '9:16',
-        duration: 5,
-        resolution: '720p',
-        title: `Seedance 2.0 分镜素材 · ${match.detail.time}`,
-        generationGroupKey: groupKey,
-        generationContext: { entry: 'inspiration-frame', videoId: video.id, frameKey: key, frameTime: match.detail.time },
-        parentVersionId: selectedVersion?.id,
-      });
-      if (!output.ok || !output.url) throw new Error(output.error || 'Seedance 2.0 未返回视频素材');
-      setGeneratedFrameMaterials(prev => ({
-        ...prev,
-        [key]: {
-          id: output.material?.id || output.id || `seedance-frame-${video.id}-${index}-${Date.now()}`,
-          title: output.material?.name || output.title || `Seedance 2.0 分镜素材 · ${match.detail.time}`,
-          url: output.material?.url || output.url,
-          poster: output.material?.poster || output.poster || video.thumbnail,
-          duration: output.duration || 5,
-          createdAt: output.createdAt || new Date().toISOString(),
-          source: output.source,
-          material: output.material,
-        },
-      }));
-      setFrameVersions(prev => ({
-        ...prev,
-        [key]: output.version ? [output.version, ...(prev[key] || []).map(item => ({ ...item, isSelected: false }))] : (prev[key] || []),
-      }));
-    } catch (err: any) {
-      setFrameErrors(prev => ({ ...prev, [key]: String(err?.message || err || 'Seedance 2.0 生成失败') }));
-    } finally {
-      setGeneratingFrame('');
-    }
-  };
-
   const bookmarkTabs = video.contentFormat === 'image' ? [
-    { id: 'overview' as const, icon: <Zap size={12} />, label: '爆点总览' },
-    { id: 'visual' as const, icon: <Images size={12} />, label: '视觉拆解' },
-    { id: 'copy' as const, icon: <FileText size={12} />, label: '文案拆解' },
-    { id: 'iterate' as const, icon: <Sparkles size={12} />, label: '迭代建议' },
+    { id: 'overview' as const, icon: <Zap size={12} />, label: '表现与模块' },
+    { id: 'visual' as const, icon: <Images size={12} />, label: '逐图拆解' },
+    { id: 'copy' as const, icon: <FileText size={12} />, label: '文案证据' },
+    { id: 'iterate' as const, icon: <Sparkles size={12} />, label: '获客套用' },
   ] : [
     { id: 'reason' as const, icon: <Lightbulb size={12} />, label: '核心原因' },
     { id: 'frames' as const, icon: <Film size={12} />, label: '分镜匹配' },
     { id: 'script' as const, icon: <FileText size={12} />, label: '脚本详析' },
     { id: 'adapt' as const, icon: <Sparkles size={12} />, label: '改编建议' },
   ];
-  const imageEvidenceCount = video.contentFormat === 'image' ? [
-    cleanAnalysisText(video.aiAnalysis?.gemini?.theme),
-    cleanAnalysisText(video.aiAnalysis?.gemini?.firstTenSeconds?.visuals),
-    ...(video.aiAnalysis?.gemini?.hooks || []).map(cleanAnalysisText),
-    ...(video.aiAnalysis?.gemini?.sellingPoints || []).map(cleanAnalysisText),
-  ].filter(Boolean).length : 0;
-  const hasTrustedImageAnalysis = imageEvidenceCount > 0 && video.aiAnalysis?.analysisSource !== 'metadata-fallback';
+  const imageEvidenceCount = video.aiAnalysis?.imageEvidence?.observedFacts.length || 0;
+  const hasTrustedImageAnalysis = video.contentFormat === 'image' && video.aiAnalysis?.imageEvidence?.status === 'analyzed' && imageEvidenceCount > 0;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-lingshu-guide="analysis-evidence">
       <div className="flex-shrink-0 border-b border-border bg-surface px-4 py-3">
         <div className="mb-3 flex flex-wrap items-center gap-2 text-[10px] text-text-muted">
-          <span className="rounded-md border border-border bg-surface-2 px-2 py-1 font-semibold text-text-secondary">{video.contentFormat === 'image' ? 'Instagram 图文' : analysis.videoType}</span>
+          <span className="rounded-md border border-border bg-surface-2 px-2 py-1 font-semibold text-text-secondary">{video.contentFormat === 'image' ? `${getPlatformMeta(video.platform).label} 图文` : analysis.videoType}</span>
           {video.contentFormat === 'image' ? <><span className="flex items-center gap-1"><BarChart2 size={9} className="text-accent" />{hasTrustedImageAnalysis ? `已提取 ${imageEvidenceCount} 条证据` : '图片分析待完成'}</span><span className="flex items-center gap-1"><Images size={9} />{video.aiAnalysis?.imageCount || video.aiAnalysis?.imageUrls?.length || 1} 张图片</span></> : <><span className="flex items-center gap-1"><BarChart2 size={9} className="text-accent" />信息速度 {analysis.infoSpeed}</span><span className="flex items-center gap-1"><TrendingUp size={9} />{video.views} 播放</span><span>{analysis.emotion}</span></>}
         </div>
         <div className="grid grid-cols-4 gap-1 rounded-xl border border-border bg-surface-2 p-1">
@@ -1624,9 +1557,7 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, onExactAnalysis, spec
               <div className="space-y-2">
                 {frameMatches.map((match, i) => {
                   const key = `${match.detail.time}-${i}`;
-                  const versions = frameVersions[key] || [];
                   const hasMaterial = Boolean(match.material);
-                  const error = frameErrors[key];
                   return (
                     <div key={key} className={`rounded-xl border p-3 ${match.decision === 'copy_now' ? 'border-green-200 bg-green-50/60' : match.decision === 'drop' ? 'border-border bg-surface-2/60' : 'border-accent-100 bg-accent-50/40'}`}>
                       <div className="flex items-start justify-between gap-2">
@@ -1637,18 +1568,7 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, onExactAnalysis, spec
                           </div>
                           <p className="mt-1 text-[10px] text-text-muted">{match.detail.shot} · {match.detail.camera}</p>
                         </div>
-                        <button type="button" onClick={() => void generateFrameMaterial(match, i)} disabled={generatingFrame === key}
-                          className="shrink-0 rounded-lg bg-accent px-2 py-1 text-[9px] font-bold text-white disabled:opacity-50">
-                          {generatingFrame === key ? '生成中…' : versions.length ? '再生成一版' : 'AI 生成'}
-                        </button>
                       </div>
-                      {versions.length > 0 && <div className="mt-2 flex flex-wrap gap-1">
-                        {versions.map(item => <button key={item.id} type="button" onClick={async () => {
-                          await studioApi.selectVideoVersion(item.id);
-                          setFrameVersions(prev => ({ ...prev, [key]: (prev[key] || []).map(v => ({ ...v, isSelected: v.id === item.id })) }));
-                          setGeneratedFrameMaterials(prev => ({ ...prev, [key]: { id: item.materialId || item.id, title: item.title, url: item.url, poster: item.poster, duration: item.duration, createdAt: item.createdAt, source: item.source } }));
-                        }} className={`rounded-md border px-2 py-1 text-[9px] font-bold ${item.isSelected ? 'border-accent bg-accent/10 text-accent' : 'border-border bg-white text-text-muted'}`}>V{item.versionNumber}</button>)}
-                      </div>}
 
                       <div className="mt-2 grid grid-cols-2 gap-2">
                         <div className="rounded-lg border border-orange-100 bg-white px-2.5 py-2">
@@ -1677,7 +1597,7 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, onExactAnalysis, spec
                         <p className="mt-1 text-[10px] leading-relaxed text-text-secondary">{match.viralDna.replaceable.join('；')}</p>
                         <div className="mt-1.5 flex flex-wrap gap-1.5 text-[9px] font-bold">
                           <span className="rounded bg-white px-1.5 py-0.5 text-text-secondary">真实素材覆盖 {match.replicability.localCoverage}%</span>
-                          <span className="rounded bg-white px-1.5 py-0.5 text-text-secondary">AI可行性 {AI_FEASIBILITY_LABELS[match.replicability.aiFeasibility]}</span>
+                          <span className="rounded bg-white px-1.5 py-0.5 text-text-secondary">执行可行性 {AI_FEASIBILITY_LABELS[match.replicability.aiFeasibility]}</span>
                           <span className={`rounded bg-white px-1.5 py-0.5 ${hasMaterial ? 'text-green-700' : 'text-amber-700'}`}>{hasMaterial ? '已有候选片段' : '缺少真实片段'}</span>
                         </div>
                         {match.replicability.blockers.length > 0 && <p className="mt-1.5 text-[10px] leading-relaxed text-amber-700">阻塞：{match.replicability.blockers.join('；')}</p>}
@@ -1703,7 +1623,6 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, onExactAnalysis, spec
                       </details>
 
                       {!hasMaterial && match.replicability.recommendedExecution === 'reshoot' && <p className="mt-2 rounded-lg bg-white px-2.5 py-2 text-[10px] font-bold text-amber-700">待拍任务：{match.suggestion}</p>}
-                      {error && <p className="mt-2 text-[10px] leading-relaxed text-red-500">{error}</p>}
                     </div>
                   );
                 })}
@@ -1786,12 +1705,16 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, onExactAnalysis, spec
             <p className="text-[11px] font-black text-text-primary">{video.aiAnalysis?.analysisMode === 'exact' ? '全片精确分析版' : '全片策略分析版'}</p>
             {video.aiAnalysis?.analysisMode !== 'exact' && <button type="button" onClick={onExactAnalysis} disabled={video.aiAnalysis?.requestedAnalysisMode === 'exact'} className="shrink-0 rounded-lg border border-accent bg-white px-2.5 py-1.5 text-[10px] font-black text-accent hover:bg-accent/5 disabled:cursor-wait disabled:opacity-50">{video.aiAnalysis?.requestedAnalysisMode === 'exact' ? '精确分析生成中…' : '生成全片精确分析'}</button>}
           </div>
+          {actionNotice && <p role="status" aria-live="polite" className="mt-2 rounded-lg border border-accent/20 bg-white px-2.5 py-2 text-[10px] font-semibold leading-relaxed text-text-secondary">{actionNotice}</p>}
+          {video.aiAnalysis?.videoLevelFailureStatus && !video.aiAnalysis?.requestedAnalysisMode && <p role="status" aria-live="polite" className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[10px] font-semibold leading-relaxed text-amber-700">全片精确分析未完成，已保留原分析。可稍后重试，或换用可直接下载的公开素材。</p>}
         </div>}
+        {video.contentFormat === 'image' && !hasTrustedImageAnalysis && <button type="button" onClick={() => void reanalyzeImage()} disabled={reanalyzingImage} className="mb-2 flex w-full items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 py-2 text-xs font-black text-emerald-700 disabled:opacity-50">{reanalyzingImage ? <Loader2 size={13} className="animate-spin"/> : <Images size={13}/>}重新分析完整轮播</button>}
+        {analysisSaveNotice && video.contentFormat === 'image' && <p className="mb-2 text-center text-[10px] text-red-500">{analysisSaveNotice}</p>}
         <button onClick={() => onGenerateScript(analysis || undefined)} disabled={video.contentFormat === 'image' && !hasTrustedImageAnalysis}
           className="flex w-full items-center justify-center gap-2 rounded-2xl py-3 text-sm font-black text-white transition-all enabled:hover:scale-[1.01] enabled:active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
           style={{ background: 'linear-gradient(135deg, #16a34a, #059669)', boxShadow: '0 10px 24px rgba(22,163,74,0.26)' }}>
           <Sparkles size={16} />
-          {video.contentFormat === 'image' ? (hasTrustedImageAnalysis ? '基于证据生成 3 个新方案' : '先完成图片分析') : 'AI一键爆款迭代'}
+          {video.contentFormat === 'image' ? (hasTrustedImageAnalysis ? '套用企业资料生成获客内容包' : '先完成图片分析') : 'AI一键爆款迭代'}
           <ChevronRight size={15} />
         </button>
       </div>
@@ -1806,6 +1729,7 @@ interface ScriptPanelProps {
   onClose: () => void;
   onRetry?: () => void;
   onExactAnalysis?: () => void;
+  actionNotice?: string;
   onFavorite?: () => void;
   favoriting?: boolean;
   specialRecommendation?: AccountSpecialRecommendation | null;
@@ -1839,7 +1763,7 @@ interface GeneratedVideo {
   error?: string;
 }
 
-function ScriptPanel({ video, activePanelTab, onClose, onRetry, onExactAnalysis, onFavorite, favoriting, specialRecommendation, onNavigate, onEnterWorkflow }: ScriptPanelProps) {
+function ScriptPanel({ video, activePanelTab, onClose, onRetry, onExactAnalysis, actionNotice, onFavorite, favoriting, specialRecommendation, onNavigate, onEnterWorkflow }: ScriptPanelProps) {
   const [activeTab, setActiveTab] = useState<'analysis' | 'generate'>(activePanelTab);
   const [scriptType, setScriptType] = useState<ScriptType>('voiceover');
   const [language, setLanguage] = useState('zh');
@@ -2053,7 +1977,7 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onExactAnalysis,
       {/* Header */}
       <div className="flex items-start justify-between px-4 py-3.5 border-b border-border flex-shrink-0">
         <div className="flex-1 min-w-0 pr-3">
-          <p className="text-[10px] font-mono text-text-muted uppercase tracking-widest mb-1">{video.contentFormat === 'image' ? 'AI 图文拆解' : 'AI 脚本助手'}</p>
+          <p className="text-[10px] font-mono text-text-muted uppercase tracking-widest mb-1">{video.contentFormat === 'image' ? '竞品图文参考' : 'AI 脚本助手'}</p>
           <h3 className="text-sm font-semibold text-text-primary leading-snug line-clamp-2">{video.title}</h3>
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
@@ -2078,7 +2002,7 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onExactAnalysis,
       {/* Tabs */}
       <div className="flex items-center gap-0.5 px-4 py-2 border-b border-border flex-shrink-0">
         {([
-          { id: 'analysis' as const, icon: <BarChart2 size={12} />, label: video.contentFormat === 'image' ? '爆图分析' : '脚本分析' },
+          { id: 'analysis' as const, icon: <BarChart2 size={12} />, label: video.contentFormat === 'image' ? '竞品图文拆解' : '脚本分析' },
         ]).map(tab => (
           <button key={tab.id} onClick={() => setActiveTab(tab.id)}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
@@ -2093,7 +2017,7 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onExactAnalysis,
         {activeTab === 'analysis' ? (
           <motion.div key="analysis" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             className="flex flex-col flex-1 min-h-0 overflow-hidden">
-            <AnalysisPanel key={video.id} video={video} onGenerateScript={enterQuickCutFromAnalysis} onRetry={onRetry} onExactAnalysis={onExactAnalysis} specialRecommendation={specialRecommendation} />
+            <AnalysisPanel key={video.id} video={video} onGenerateScript={enterQuickCutFromAnalysis} onRetry={onRetry} onExactAnalysis={onExactAnalysis} actionNotice={actionNotice} specialRecommendation={specialRecommendation} />
           </motion.div>
         ) : (
           <motion.div key="generate" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
@@ -2341,10 +2265,16 @@ interface VideoCardProps {
 
 function VideoCard({ video, index, isSelected, onSelect, onWatch, onAnalyzeVideo, onFavoriteMaterial, analyzingVideo, favoritingMaterial }: VideoCardProps) {
   const meta = getPlatformMeta(video.platform);
-  const trendLabel = video.trend === 'hot' ? '🔥 热门' : video.trend === 'rising' ? '↑ 上升' : '— 平稳';
-  const trendColor = video.trend === 'hot' ? 'text-accent' : video.trend === 'rising' ? 'text-green' : 'text-text-muted';
   const crawlRule = video.aiAnalysis?.crawlRule || '关键词检索';
   const isImagePost = video.contentFormat === 'image';
+  const imageAnalyzed = video.aiAnalysis?.imageEvidence?.status === 'analyzed' && Boolean(video.aiAnalysis.imageEvidence.observedFacts?.length);
+  const imageFailed = video.aiAnalysis?.imageAnalysisStatus === 'failed' || video.status === 'failed';
+  const trendLabel = isImagePost
+    ? (imageAnalyzed ? '✓ 已完成拆解' : imageFailed ? '! 分析失败' : '… 待分析')
+    : video.trend === 'hot' ? '🔥 热门' : video.trend === 'rising' ? '↑ 上升' : '— 平稳';
+  const trendColor = isImagePost
+    ? (imageAnalyzed ? 'text-green' : imageFailed ? 'text-red-500' : 'text-text-muted')
+    : video.trend === 'hot' ? 'text-accent' : video.trend === 'rising' ? 'text-green' : 'text-text-muted';
   const crawledDate = video.crawledAt ? new Date(video.crawledAt) : null;
   const crawledLabel = crawledDate && !Number.isNaN(crawledDate.getTime())
     ? `${String(crawledDate.getMonth() + 1).padStart(2, '0')}-${String(crawledDate.getDate()).padStart(2, '0')} 入库`
@@ -2375,7 +2305,7 @@ function VideoCard({ video, index, isSelected, onSelect, onWatch, onAnalyzeVideo
           {isImagePost && <button onClick={e => { e.stopPropagation(); onSelect(); }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold"
             style={{ background: meta.bg, color: meta.color }}>
-            <Sparkles size={11} />AI复刻
+            <Sparkles size={11} />拆解图文
           </button>}
           {!isImagePost && <button onClick={e => { e.stopPropagation(); if (onAnalyzeVideo) onAnalyzeVideo(); else onSelect(); }}
             disabled={analyzingVideo}
@@ -2414,7 +2344,7 @@ function VideoCard({ video, index, isSelected, onSelect, onWatch, onAnalyzeVideo
         <p className="text-xs font-semibold text-text-primary leading-snug line-clamp-2 mb-2">{video.title}</p>
         <div className="flex items-center justify-between mb-2">
           <span className={`text-[10px] font-mono font-bold ${trendColor}`}>{trendLabel}</span>
-          <span className="flex items-center gap-1 text-[10px] text-text-muted"><Clock size={9} />{video.views}{isImagePost ? '' : ' views'}</span>
+          <span className="flex items-center gap-1 text-[10px] text-text-muted">{isImagePost ? <Images size={9} /> : <Clock size={9} />}{isImagePost ? `${video.aiAnalysis?.imageCount || video.aiAnalysis?.imageUrls?.length || 1} 张` : `${video.views} views`}</span>
         </div>
         <div className="flex flex-wrap gap-1">
           {video.tags.slice(0, 2).map(tag => <span key={tag} className="tag text-[10px]">#{tag}</span>)}
@@ -2472,7 +2402,7 @@ function VideoListItem({ video, isSelected, onSelect, onWatch, onAnalyzeVideo, o
       {isImagePost && <button onClick={e => { e.stopPropagation(); onSelect(); }}
         className="flex-shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all opacity-0 group-hover:opacity-100"
         style={{ color: 'var(--color-accent)', borderColor: 'rgba(22,163,74,0.25)', background: 'var(--color-accent-glow)' }}>
-        <Sparkles size={11} /><span>AI图文复刻</span>
+        <Sparkles size={11} /><span>拆解图文</span>
       </button>}
       {!isImagePost && <button onClick={e => { e.stopPropagation(); if (onAnalyzeVideo) onAnalyzeVideo(); else onSelect(); }}
         disabled={analyzingVideo}
@@ -2527,7 +2457,7 @@ function recordsToVideos(records: CrawlerRecord[]): TrendVideo[] {
       const trend: TrendVideo['trend'] = record.status === 'analyzed' ? 'hot' : record.status === 'failed' ? 'stable' : 'rising';
       const title = record.title || 'Untitled crawled video';
       const tags = parseRecordTags(record.tags);
-      if (!analysis.gemini) {
+      if (!analysis.gemini && analysis.contentFormat !== 'image') {
         analysis = {
           ...analysis,
           gemini: metadataFallbackAnalysis(title, record.platform, tags, views, Number(record.duration || 0)),
@@ -2768,9 +2698,26 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
 
   useEffect(() => { void refreshMaterials(); }, []);
 
-  const refreshVideos = async (nextPage = 1, append = false) => {
+  // Warm the heavier cross-tenant image index while the default video screen is
+  // already usable. This moves the only cold scan off the user's format switch;
+  // non-admin tenants simply receive a cheap 403 and continue with tenant data.
+  useEffect(() => {
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void fetch('/api/overseas/admin/inspiration-videos?page=1&perPage=20&contentFormat=image', {
+        headers: authHeader(),
+        signal: controller.signal,
+      }).catch(() => undefined);
+    }, 250);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, []);
+
+  const refreshVideos = async (nextPage = 1, append = false, quiet = false) => {
     const requestId = ++videoRequestRef.current;
-    setVideosLoading(true);
+    if (!quiet) setVideosLoading(true);
     try {
       // Keep the first paint small. Media cards are expensive and the previous 100-item
       // response also forced the admin endpoint to finish a full cross-tenant scan first.
@@ -2792,44 +2739,69 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
         const videos = recordsToVideos(result.items || []);
         setVideoPage(Number(result.page || nextPage));
         setVideoTotalPages(Math.max(1, Number(result.totalPages || nextPage)));
-        setCrawledVideos(prev => append
-          ? [...prev, ...videos.filter(v => !prev.some(old => old.id === v.id || (!!v.sourceUrl && old.sourceUrl === v.sourceUrl)))]
-          : videos);
+        setCrawledVideos(prev => {
+          const next = append
+            ? [...prev, ...videos.filter(v => !prev.some(old => old.id === v.id || (!!v.sourceUrl && old.sourceUrl === v.sourceUrl)))]
+            : videos;
+          const unchanged = prev.length === next.length && prev.every((item, index) => {
+            const candidate = next[index];
+            return candidate
+              && item.id === candidate.id
+              && item.status === candidate.status
+              && item.thumbnail === candidate.thumbnail
+              && item.crawledAt === candidate.crawledAt
+              && JSON.stringify(item.aiAnalysis || {}) === JSON.stringify(candidate.aiAnalysis || {});
+          });
+          return unchanged ? prev : next;
+        });
       };
 
       // Render tenant data as soon as it arrives; admins no longer stare at an empty
-      // screen while the slower cross-tenant aggregation is still running.
-      if (data.items) applyResult(data);
-      if (requestId === videoRequestRef.current) setVideosLoading(false);
+      // screen while the slower cross-tenant aggregation is still running. Background
+      // polling stays atomic so admin pages do not flicker between tenant/admin lists.
+      if (data.items && !quiet) applyResult(data);
+      if (requestId === videoRequestRef.current && !quiet) setVideosLoading(false);
 
       const adminResponse = await adminRequest;
       if (adminResponse.ok) {
         const adminData = await adminResponse.json().catch(() => null) as typeof data | null;
         if (adminData) applyResult(adminData);
+      } else if (data.items && quiet) {
+        applyResult(data);
       } else if (!data.items) {
         throw new Error('视频列表加载失败');
       }
     } catch {
-      if (requestId === videoRequestRef.current && !append) setCrawledVideos([]);
+      if (requestId === videoRequestRef.current && !append && !quiet) setCrawledVideos([]);
     } finally {
-      if (requestId === videoRequestRef.current) setVideosLoading(false);
+      if (requestId === videoRequestRef.current && !quiet) setVideosLoading(false);
     }
   };
 
   useEffect(() => { void refreshVideos(); }, [contentFormat]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  const hasPendingVideos = crawledVideos.some(v =>
+    v.status === 'pending' ||
+    v.aiAnalysis?.downloadStatus === 'queued' ||
+    v.aiAnalysis?.downloadStatus === 'downloading' ||
+    v.aiAnalysis?.downloadStatus === 'analyzing' ||
+    v.aiAnalysis?.downloadStatus === 'ops_queued'
+  );
+
   useEffect(() => {
-    const hasPending = crawledVideos.some(v =>
-      v.status === 'pending' ||
-      v.aiAnalysis?.downloadStatus === 'queued' ||
-      v.aiAnalysis?.downloadStatus === 'downloading' ||
-      v.aiAnalysis?.downloadStatus === 'analyzing' ||
-      v.aiAnalysis?.downloadStatus === 'ops_queued'
-    );
-    if (!hasPending) return;
-    const timer = window.setInterval(() => { void refreshVideos(1, false); }, 3500);
-    return () => window.clearInterval(timer);
-  }, [crawledVideos]);
+    if (!hasPendingVideos) return;
+    let cancelled = false;
+    let timer = 0;
+    const poll = async () => {
+      if (document.visibilityState === 'visible') await refreshVideos(1, false, true);
+      if (!cancelled) timer = window.setTimeout(() => void poll(), 8000);
+    };
+    timer = window.setTimeout(() => void poll(), 8000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [hasPendingVideos, contentFormat]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (!selectedVideo) return;
@@ -2936,12 +2908,16 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
         if (a.id.startsWith('material-') && b.id.startsWith('material-')) {
           return pinnedMaterialVideos.findIndex(item => item.id === a.id) - pinnedMaterialVideos.findIndex(item => item.id === b.id);
         }
+        if (contentFormat === 'image') {
+          const analyzedRank = Number(b.aiAnalysis?.imageEvidence?.status === 'analyzed') - Number(a.aiAnalysis?.imageEvidence?.status === 'analyzed');
+          if (analyzedRank) return analyzedRank;
+        }
         if (sortMode === 'crawlTime') {
           return timeValue(b.crawledAt) - timeValue(a.crawledAt) || heatValue(b.views) - heatValue(a.views);
         }
         return heatValue(b.views) - heatValue(a.views) || timeValue(b.crawledAt) - timeValue(a.crawledAt);
       });
-  }, [visibleVideos, lastCrawlVideoIds, platform, search, sortMode, pinnedMaterialVideos]);
+  }, [visibleVideos, lastCrawlVideoIds, platform, search, sortMode, pinnedMaterialVideos, contentFormat]);
 
   const recentThreeDayUploads = visibleVideos.filter(v => {
     const t = v.crawledAt ? new Date(v.crawledAt).getTime() : 0;
@@ -3051,6 +3027,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   };
 
   const openScriptAnalysis = (video: TrendVideo) => {
+    setMaterialMessage('');
     if (needsVideoEnhancement(video)) void analyzeVideoOnly(video);
     setScriptPanelTab('analysis');
     setSelectedVideo(video);
@@ -3181,14 +3158,36 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
         headers: { 'Content-Type': 'application/json', ...authHeader() },
         body: JSON.stringify({ analysisMode: 'exact' }),
       });
-      const data = await response.json().catch(() => ({})) as { error?: string };
+      const data = await response.json().catch(() => ({})) as { error?: string; status?: string; reused?: boolean };
       if (!response.ok) throw new Error(data.error || '全片精确分析提交失败');
-      const markQueued = (item: TrendVideo): TrendVideo => ({ ...item, aiAnalysis: { ...(item.aiAnalysis || {}), requestedAnalysisMode: 'exact' } });
+      if (data.status === 'analyzed') {
+        const markCompleted = (item: TrendVideo): TrendVideo => ({
+          ...item,
+          status: 'analyzed',
+          aiAnalysis: { ...(item.aiAnalysis || {}), analysisMode: 'exact', requestedAnalysisMode: undefined },
+        });
+        setCrawledVideos(items => items.map(item => item.id === video.id ? markCompleted(item) : item));
+        setSelectedVideo(item => item?.id === video.id ? markCompleted(item) : item);
+        setMaterialMessage(data.reused ? '现有全片拆解已达到精确密度，已升级为全片精确分析版。' : '全片精确分析已完成。');
+        return;
+      }
+      const markQueued = (item: TrendVideo): TrendVideo => ({
+        ...item,
+        status: 'pending',
+        aiAnalysis: { ...(item.aiAnalysis || {}), requestedAnalysisMode: 'exact' },
+      });
       setCrawledVideos(items => items.map(item => item.id === video.id ? markQueued(item) : item));
       setSelectedVideo(item => item?.id === video.id ? markQueued(item) : item);
-      void refreshVideos();
     } catch (error) {
-      setMaterialMessage(error instanceof Error ? error.message : '全片精确分析提交失败');
+      const message = error instanceof Error ? error.message : '全片精确分析提交失败';
+      const markFailed = (item: TrendVideo): TrendVideo => ({
+        ...item,
+        status: item.aiAnalysis?.gemini ? 'analyzed' : 'failed',
+        aiAnalysis: { ...(item.aiAnalysis || {}), requestedAnalysisMode: undefined, analysisError: message },
+      });
+      setCrawledVideos(items => items.map(item => item.id === video.id ? markFailed(item) : item));
+      setSelectedVideo(item => item?.id === video.id ? markFailed(item) : item);
+      setMaterialMessage(message);
     } finally {
       setAnalyzingVideoIds(ids => ids.filter(id => id !== video.id));
       setTimeout(() => setMaterialMessage(''), 3500);
@@ -3317,8 +3316,8 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
 
         {innerView === 'inspiration' && <div className="mb-4 grid grid-cols-3 gap-3 max-w-xl">
           {[
-            { icon: <Zap size={13} />,       label: contentFormat === 'image' ? '热门图文' : '热门视频', value: `${visibleVideos.length}`,    color: 'text-accent' },
-            { icon: <TrendingUp size={13} />, label: '上升趋势', value: `${recentThreeDayUploads}`, color: 'text-green' },
+            { icon: <Zap size={13} />,       label: contentFormat === 'image' ? '图文样本' : '热门视频', value: `${visibleVideos.length}`,    color: 'text-accent' },
+            { icon: <TrendingUp size={13} />, label: contentFormat === 'image' ? '已完成拆解' : '上升趋势', value: `${contentFormat === 'image' ? visibleVideos.filter(video => video.aiAnalysis?.imageEvidence?.status === 'analyzed').length : recentThreeDayUploads}`, color: 'text-green' },
             { icon: <Globe size={13} />,      label: '覆盖平台', value: `${new Set(visibleVideos.map(v => v.platform)).size}`,       color: 'text-accent' },
           ].map(stat => (
             <div key={stat.label} className="card p-3 flex items-center gap-2.5">
@@ -3639,6 +3638,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
             onClose={() => setSelectedVideo(null)}
             onRetry={() => void retryVideoPipeline(selectedVideo)}
             onExactAnalysis={() => void requestExactFullAnalysis(selectedVideo)}
+            actionNotice={materialMessage}
             onFavorite={() => void favoriteMaterial(selectedVideo)}
             favoriting={favoritingMaterialIds.includes(selectedVideo.id)}
             specialRecommendation={accountRecommendationByVideoId.get(selectedVideo.id)}
