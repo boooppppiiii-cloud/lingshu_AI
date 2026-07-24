@@ -710,7 +710,7 @@ export default function GlobalAssistant({
   if (suppressForRightSidebar) return null;
 
   return (
-    <div ref={assistantRootRef} data-global-assistant className="fixed bottom-5 right-5 z-[75]">
+    <div ref={assistantRootRef} data-global-assistant="root" className="fixed bottom-5 right-5 z-[75]">
       {mode === 'expanded' && (
         <button
           type="button"

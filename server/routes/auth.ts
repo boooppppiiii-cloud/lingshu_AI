@@ -213,15 +213,19 @@ function localLogin(email: string, password: string): LocalLoginResult | null {
 
   const registryEntry = readDemoAccountRegistry()[normalizedEmail];
   if (registryEntry?.password && registryEntry.password === password && registryEntry.status !== 'expired') {
-    const accountType = registryEntry.status === 'admin' ? 'admin' : 'trial';
-    const tenantId = `local_tenant_${accountType}_${localId(normalizedEmail)}`;
+    const accountType = registryEntry.status === 'admin'
+      ? 'admin'
+      : registryEntry.status === 'customer'
+        ? 'customer'
+        : 'trial';
+    const tenantId = registryEntry.tenantId || `local_tenant_${accountType}_${localId(normalizedEmail)}`;
     const record: PbUser = {
-      id: `local_user_${accountType}_${localId(normalizedEmail)}`,
+      id: registryEntry.userId || `local_user_${accountType}_${localId(normalizedEmail)}`,
       email: normalizedEmail,
       name: normalizedEmail.split('@')[0],
       tenantId,
     };
-    if (accountType === 'admin') {
+    if (accountType === 'admin' || accountType === 'customer') {
       return { token: createLocalToken(record, accountType), record, accountType, expiresAt: null };
     }
     const expiresAt = registryEntry.expiresAt || trialExpiresAt();

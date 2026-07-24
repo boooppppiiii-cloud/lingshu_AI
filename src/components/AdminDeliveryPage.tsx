@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { CheckCircle2, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Clipboard, KeyRound, Link2, Loader2, Plus, RefreshCcw, Save, ShieldCheck, X } from 'lucide-react';
 import { authHeader } from '../lib/auth';
 import AdminContentOpsAlerts from './AdminContentOpsAlerts';
+import AdminSocialAccountSetup from './AdminSocialAccountSetup';
 
 type Platform = 'meta' | 'google' | 'wecom';
 type Status = 'pending' | 'configuring' | 'waiting_customer' | 'importing_history' | 'verifying' | 'active' | 'needs_permanent_token' | 'token_expired' | 'error';
@@ -39,6 +40,11 @@ interface TenantCard {
   notes?: string;
   inviteCode?: string;
   inviteUrl?: string;
+  registrationState?: 'waiting_registration' | 'registered' | 'existing';
+  registeredEmail?: string;
+  subscriptionPlan?: string;
+  subscriptionStatus?: string;
+  accountType?: 'customer' | 'trial' | 'admin' | 'existing';
   apps: DeliveryApp[];
 }
 
@@ -624,6 +630,7 @@ function PlatformWizard({
 
 export default function AdminDeliveryPage() {
   const [tenants, setTenants] = useState<TenantCard[]>([]);
+  const [tenantView, setTenantView] = useState<'customer' | 'trial'>('customer');
   const [expandedTenantIds, setExpandedTenantIds] = useState<Set<string>>(() => new Set());
   const [knowledgeCompletion, setKnowledgeCompletion] = useState<KnowledgeCompletionState | null>(null);
   const [drafts, setDrafts] = useState<Draft>({});
@@ -874,15 +881,24 @@ export default function AdminDeliveryPage() {
     }
   };
 
+  const customerTenants = useMemo(
+    () => tenants.filter(tenant => tenant.accountType !== 'trial' && tenant.accountType !== 'admin'),
+    [tenants],
+  );
+  const trialTenants = useMemo(
+    () => tenants.filter(tenant => tenant.accountType === 'trial'),
+    [tenants],
+  );
+  const visibleTenants = tenantView === 'trial' ? trialTenants : customerTenants;
   const summary = useMemo(() => {
-    const apps = tenants.flatMap(tenant => tenant.apps);
+    const apps = visibleTenants.flatMap(tenant => tenant.apps);
     return {
       total: apps.length,
       active: apps.filter(app => app.status === 'active').length,
       risky: apps.filter(app => app.status === 'token_expired' || app.status === 'needs_permanent_token' || app.status === 'error').length,
     };
-  }, [tenants]);
-  const anyTenantExpanded = tenants.some(tenant => expandedTenantIds.has(tenant.tenantId));
+  }, [visibleTenants]);
+  const anyTenantExpanded = visibleTenants.some(tenant => expandedTenantIds.has(tenant.tenantId));
 
   const toggleTenant = (tenantId: string) => {
     setExpandedTenantIds(current => {
@@ -896,7 +912,7 @@ export default function AdminDeliveryPage() {
   const toggleAllTenants = () => {
     setExpandedTenantIds(anyTenantExpanded
       ? new Set()
-      : new Set(tenants.map(tenant => tenant.tenantId)));
+      : new Set(visibleTenants.map(tenant => tenant.tenantId)));
   };
 
   return (
@@ -908,7 +924,7 @@ export default function AdminDeliveryPage() {
         </div>
         <div className="flex items-center gap-2">
           <span className="rounded-full bg-surface-2 px-2.5 py-1 text-[11px] font-bold text-text-secondary">平台配置 {summary.total} 项 · 已交付 {summary.active} · 风险 {summary.risky}</span>
-          {tenants.length > 0 && (
+          {visibleTenants.length > 0 && (
             <button type="button" onClick={toggleAllTenants} className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-white px-3 py-2 text-xs font-bold text-text-secondary">
               {anyTenantExpanded ? <ChevronsUp size={13} /> : <ChevronsDown size={13} />}
               {anyTenantExpanded ? '收起全部' : '展开全部'}
@@ -926,22 +942,55 @@ export default function AdminDeliveryPage() {
       <div className="min-h-0 flex-1 overflow-y-auto p-5">
         {message && <p className="mb-3 rounded-xl bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">{message}</p>}
         {error && <p className="mb-3 rounded-xl bg-red-50 px-3 py-2 text-xs font-bold text-red-700">{error}</p>}
+        <AdminSocialAccountSetup />
         <div id="customer-content-ops" className="mb-4 scroll-mt-5">
           <AdminContentOpsAlerts />
         </div>
+        <section className="mb-3 rounded-2xl border border-border bg-surface-2 px-4 py-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="text-sm font-black text-text-primary">客户租户</p>
+              <p className="mt-1 text-xs leading-5 text-text-muted">
+                每张卡片代表一家客户公司的独立工作空间。客户用你生成的邀请码注册后，社媒账号、内容和客户数据都归属这里；管理员自己的账号请使用上方直连区。
+              </p>
+            </div>
+            <div className="flex items-center rounded-xl border border-border bg-white p-1">
+              <button
+                type="button"
+                onClick={() => setTenantView('customer')}
+                className={`rounded-lg px-3 py-1.5 text-[11px] font-bold ${tenantView === 'customer' ? 'bg-slate-950 text-white' : 'text-text-secondary hover:bg-surface-2'}`}
+              >
+                正式客户 {customerTenants.length}
+              </button>
+              <button
+                type="button"
+                onClick={() => setTenantView('trial')}
+                className={`rounded-lg px-3 py-1.5 text-[11px] font-bold ${tenantView === 'trial' ? 'bg-amber-500 text-white' : 'text-text-secondary hover:bg-surface-2'}`}
+              >
+                试用客户 {trialTenants.length}
+              </button>
+            </div>
+          </div>
+        </section>
         {loading ? (
           <div className="flex h-60 items-center justify-center text-text-muted"><Loader2 className="animate-spin" /></div>
-        ) : tenants.length === 0 ? (
+        ) : visibleTenants.length === 0 ? (
           <div className="rounded-2xl border border-dashed border-border bg-surface p-8 text-center">
-            <p className="text-sm font-black text-text-primary">还没有租户</p>
-            <p className="mx-auto mt-2 max-w-md text-xs leading-6 text-text-muted">先为正式客户生成一次性注册邀请码。客户注册成功后会自动出现在这里。</p>
-            <button type="button" onClick={openInviteDialog} className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-4 py-2 text-xs font-black text-white">
-              <KeyRound size={14} /> 生成注册邀请码
-            </button>
+            <p className="text-sm font-black text-text-primary">{tenantView === 'trial' ? '暂无试用客户' : '还没有正式客户'}</p>
+            {tenantView === 'trial' ? (
+              <p className="mx-auto mt-2 max-w-md text-xs leading-6 text-text-muted">试用账号会单独显示在这里，不会混入正式交付列表。</p>
+            ) : (
+              <>
+                <p className="mx-auto mt-2 max-w-md text-xs leading-6 text-text-muted">新客户可以使用邀请码注册；已有试用客户请在账号总控里直接转正。</p>
+                <button type="button" onClick={openInviteDialog} className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-4 py-2 text-xs font-black text-white">
+                  <KeyRound size={14} /> 生成注册邀请码
+                </button>
+              </>
+            )}
           </div>
         ) : (
           <div id="customer-deployment" className="grid gap-4 scroll-mt-5">
-            {tenants.map(tenant => {
+            {visibleTenants.map(tenant => {
               const expanded = expandedTenantIds.has(tenant.tenantId);
               const activeApps = tenant.apps.filter(app => app.status === 'active').length;
               const riskyApps = tenant.apps.filter(app => app.status === 'token_expired' || app.status === 'needs_permanent_token' || app.status === 'error').length;
@@ -951,6 +1000,24 @@ export default function AdminDeliveryPage() {
                     <div>
                       <div className="flex flex-wrap items-center gap-2">
                         <p className="text-sm font-black text-text-primary">{tenant.name}</p>
+                        {tenant.accountType === 'trial' && (
+                          <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-bold text-amber-700">
+                            试用空间
+                          </span>
+                        )}
+                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                          tenant.registrationState === 'waiting_registration'
+                            ? 'bg-amber-50 text-amber-700'
+                            : tenant.registrationState === 'registered'
+                              ? 'bg-emerald-50 text-emerald-700'
+                              : 'bg-slate-100 text-slate-600'
+                        }`}>
+                          {tenant.registrationState === 'waiting_registration'
+                            ? '待客户注册'
+                            : tenant.registrationState === 'registered'
+                              ? '客户已注册'
+                              : '已有客户空间'}
+                        </span>
                         <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-text-muted">
                           已交付 {activeApps}/{tenant.apps.length}
                         </span>
@@ -960,7 +1027,9 @@ export default function AdminDeliveryPage() {
                           </span>
                         )}
                       </div>
-                      <p className="mt-0.5 text-[11px] text-text-muted">Tenant ID: {tenant.tenantId}{tenant.contactName ? ` · 联系人：${tenant.contactName}` : ''}</p>
+                      <p className="mt-0.5 text-[11px] text-text-muted">
+                        独立客户空间{tenant.contactName ? ` · 联系人：${tenant.contactName}` : ''}{tenant.registeredEmail ? ` · ${tenant.registeredEmail}` : ''}
+                      </p>
                       {tenant.inviteCode && (
                         <div className="mt-2 flex flex-wrap items-center gap-2">
                           <code className="rounded-lg border border-border bg-white px-2 py-1 text-[11px] font-bold text-text-secondary">

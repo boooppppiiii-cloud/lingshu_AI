@@ -26,7 +26,7 @@ type RegistryEntry = {
   tenantId?: string;
   activatedAt?: string | null;
   expiresAt?: string | null;
-  status?: 'available' | 'trialing' | 'expired' | 'admin';
+  status?: 'available' | 'trialing' | 'expired' | 'customer' | 'admin';
 };
 
 type RecordMap = Record<string, unknown>;
@@ -72,14 +72,16 @@ async function findOne(token: string, collection: string, filter: string): Promi
 async function createTenant(token: string, entry: RegistryEntry): Promise<RecordMap> {
   const now = new Date().toISOString();
   const isAdmin = entry.status === 'admin';
+  const isCustomer = entry.status === 'customer';
   return await pbRequest<RecordMap>(token, '/api/collections/tenants/records', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       name: entry.email.split('@')[0],
-      subscriptionStatus: isAdmin ? 'active' : 'trialing',
-      subscriptionPlan: isAdmin ? 'admin' : 'trial',
-      subscriptionExpiresAt: isAdmin ? '' : (entry.expiresAt || ''),
+      subscriptionStatus: isAdmin || isCustomer ? 'active' : 'trialing',
+      subscriptionPlan: isAdmin ? 'admin' : isCustomer ? 'customer' : 'trial',
+      subscriptionExpiresAt: isAdmin || isCustomer ? '' : (entry.expiresAt || ''),
+      ...(isCustomer ? { registeredEmail: entry.email, registeredAt: entry.activatedAt || now } : {}),
       createdAt: now,
     }),
   });
@@ -87,13 +89,15 @@ async function createTenant(token: string, entry: RegistryEntry): Promise<Record
 
 async function patchTenant(token: string, tenantId: string, entry: RegistryEntry): Promise<void> {
   const isAdmin = entry.status === 'admin';
+  const isCustomer = entry.status === 'customer';
   await pbRequest<RecordMap>(token, `/api/collections/tenants/records/${tenantId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      subscriptionStatus: isAdmin ? 'active' : 'trialing',
-      subscriptionPlan: isAdmin ? 'admin' : 'trial',
-      subscriptionExpiresAt: isAdmin ? '' : (entry.expiresAt || ''),
+      subscriptionStatus: isAdmin || isCustomer ? 'active' : 'trialing',
+      subscriptionPlan: isAdmin ? 'admin' : isCustomer ? 'customer' : 'trial',
+      subscriptionExpiresAt: isAdmin || isCustomer ? '' : (entry.expiresAt || ''),
+      ...(isCustomer ? { registeredEmail: entry.email } : {}),
     }),
   });
 }

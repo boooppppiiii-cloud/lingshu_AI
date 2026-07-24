@@ -62,6 +62,9 @@ export async function getTenantSubscription(tenantId: string): Promise<Subscript
     if (registryEntry?.status === 'admin' || tenantId.startsWith('local_tenant_admin_')) {
       return { status: 'active', plan: 'admin', expiresAt: null };
     }
+    if (registryEntry?.status === 'customer') {
+      return { status: 'active', plan: 'customer', expiresAt: null };
+    }
     if (registryEntry || tenantId.startsWith('local_tenant_trial_')) {
       return { status: 'trialing', plan: 'trial', expiresAt: registryEntry?.expiresAt ?? null };
     }

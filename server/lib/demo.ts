@@ -211,9 +211,9 @@ export async function consumeDemoQuota(req: Request, res: Response, kind: DemoQu
   const id = await auth.verifyToken(req.headers.authorization);
   const sub = id?.tenantId ? await getTenantSubscription(id.tenantId) : null;
   if (isAdminSubscription(sub)) return true;
-  if (!isDemoMode() && !isTrialSubscription(sub)) return true;
+  const quotaEnforced = isDemoMode() || isTrialSubscription(sub);
 
-  if (sub?.expiresAt && isExpired(sub.expiresAt)) {
+  if (quotaEnforced && sub?.expiresAt && isExpired(sub.expiresAt)) {
     res.status(402).json({ error: 'demo_expired', demo: await buildDemoStatus(req, id?.tenantId, sub.expiresAt) });
     return false;
   }
@@ -226,7 +226,7 @@ export async function consumeDemoQuota(req: Request, res: Response, kind: DemoQu
   const tokenUsage = { ...emptyUsage(), ...(store[tokenKey]?.[day] ?? {}) };
   const limits = demoLimits();
   const used = kind === 'videoGeneration' ? totalVideoGenerationUsage(store, key) : usage[kind];
-  if (used >= limitFor(kind, limits)) {
+  if (quotaEnforced && used >= limitFor(kind, limits)) {
     res.status(429).json({ error: 'demo_quota_exceeded', quota: kind, demo: await buildDemoStatus(req, id?.tenantId, sub?.expiresAt) });
     return false;
   }
@@ -234,7 +234,7 @@ export async function consumeDemoQuota(req: Request, res: Response, kind: DemoQu
   const tokenCost = kind === 'render' ? 0 : estimateRequestTokens(req, kind);
   const usedTokensToday = tokenUsage.tokens ?? 0;
   const usedTokensTotal = totalTokenUsage(store, tokenKey);
-  if (usedTokensToday + tokenCost > limits.tokenDaily || usedTokensTotal + tokenCost > limits.tokenTotal) {
+  if (quotaEnforced && (usedTokensToday + tokenCost > limits.tokenDaily || usedTokensTotal + tokenCost > limits.tokenTotal)) {
     res.status(429).json({
       error: 'demo_token_quota_exceeded',
       quota: 'tokens',

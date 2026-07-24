@@ -20,7 +20,7 @@ export interface DemoAccountRegistryEntry {
   rotatedAt?: string | null;
   rotationPassword?: string | null;
   guidePending?: boolean;
-  status?: 'available' | 'trialing' | 'expired' | 'admin';
+  status?: 'available' | 'trialing' | 'expired' | 'customer' | 'admin';
 }
 
 type DemoAccountRegistry = Record<string, DemoAccountRegistryEntry>;
@@ -216,19 +216,47 @@ export async function requireAdminUser(req: Request): Promise<{ userId: string; 
   return { ...id, email };
 }
 
-export function demoUsageForUser(userId?: string): { todayTokens: number; totalTokens: number; aiChat: number; generation: number; render: number; videoGeneration: number } {
-  if (!userId) return { todayTokens: 0, totalTokens: 0, aiChat: 0, generation: 0, render: 0, videoGeneration: 0 };
+export interface AccountUsageSummary {
+  todayTokens: number;
+  totalTokens: number;
+  aiChat: number;
+  generation: number;
+  render: number;
+  videoGeneration: number;
+}
+
+const EMPTY_ACCOUNT_USAGE: AccountUsageSummary = {
+  todayTokens: 0,
+  totalTokens: 0,
+  aiChat: 0,
+  generation: 0,
+  render: 0,
+  videoGeneration: 0,
+};
+
+export function demoUsageForTenant(tenantId?: string, userIds: string[] = []): AccountUsageSummary {
+  if (!tenantId && !userIds.length) return { ...EMPTY_ACCOUNT_USAGE };
   const store = readJson<DemoUsageStore>(USAGE_FILE, {});
-  const days = store[`user:${userId}`] ?? {};
   const today = new Date().toISOString().slice(0, 10);
-  const todayUsage = days[today] ?? {};
-  const totalTokens = Object.values(days).reduce((sum, day) => sum + Number(day.tokens ?? 0), 0);
+  const tenantDays = tenantId ? store[`tenant:${tenantId}`] ?? {} : {};
+  const todayTenantUsage = tenantDays[today] ?? {};
+  const tokenKeys = Array.from(new Set([
+    ...userIds.filter(Boolean).map(userId => `user:${userId}`),
+    ...(!userIds.length && tenantId ? [`tenant:${tenantId}`] : []),
+  ]));
+  let todayTokens = 0;
+  let totalTokens = 0;
+  for (const key of tokenKeys) {
+    const days = store[key] ?? {};
+    todayTokens += Number(days[today]?.tokens ?? 0);
+    totalTokens += Object.values(days).reduce((sum, day) => sum + Number(day.tokens ?? 0), 0);
+  }
   return {
-    todayTokens: Number(todayUsage.tokens ?? 0),
+    todayTokens,
     totalTokens,
-    aiChat: Number(todayUsage.aiChat ?? 0),
-    generation: Number(todayUsage.generation ?? 0),
-    render: Number(todayUsage.render ?? 0),
-    videoGeneration: Number(todayUsage.videoGeneration ?? 0),
+    aiChat: Number(todayTenantUsage.aiChat ?? 0),
+    generation: Number(todayTenantUsage.generation ?? 0),
+    render: Number(todayTenantUsage.render ?? 0),
+    videoGeneration: Number(todayTenantUsage.videoGeneration ?? 0),
   };
 }

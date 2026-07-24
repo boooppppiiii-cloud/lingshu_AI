@@ -7743,7 +7743,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         </div>
 
         {/* 底部导航条 */}
-        <div className="h-14 flex items-center justify-between px-6 border-t border-border flex-shrink-0">
+        <div data-lingshu-assistant-clearance="bottom-navigation" className="h-14 flex items-center justify-between px-6 border-t border-border flex-shrink-0">
           <button onClick={prev} disabled={stepIdx === 0}
             className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-sm font-semibold text-text-secondary hover:bg-surface-2 disabled:opacity-30 disabled:hover:bg-transparent transition-colors">
             <ChevronLeft size={15} /> 上一步

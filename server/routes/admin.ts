@@ -15,9 +15,10 @@ import {
   type StoredOAuthConfig,
 } from '../lib/oauthConfig.js';
 import {
-  demoUsageForUser,
+  demoUsageForTenant,
   readDemoAccountRegistry,
   requireAdminUser,
+  upsertDemoAccountRegistry,
 } from '../lib/demoAccounts.js';
 import {
   createSupportAccessRequest,
@@ -45,7 +46,12 @@ import {
 } from '../lib/tenantPlatformApps.js';
 import { store } from '../storage/index.js';
 import axios from 'axios';
-import { createLocalInviteTenant, getLocalTenant, listLocalTenants } from '../lib/localTenants.js';
+import {
+  createLocalInviteTenant,
+  getLocalTenant,
+  listLocalTenants,
+  promoteLocalTrialTenant,
+} from '../lib/localTenants.js';
 import { decryptRegistrationPassword } from '../lib/registrationCredentials.js';
 
 export const adminRouter = Router();
@@ -319,7 +325,11 @@ async function enrichVideoAlerts(alerts: VideoAdminAlert[]) {
 
   const registry = readDemoAccountRegistry();
   for (const entry of Object.values(registry)) {
-    const type: VideoAlertAccountType = entry.status === 'admin' ? 'admin' : 'trial';
+    const type: VideoAlertAccountType = entry.status === 'admin'
+      ? 'admin'
+      : entry.status === 'customer'
+        ? 'customer'
+        : 'trial';
     const slug = localAccountId(entry.email);
     const tenantIds = new Set([
       String(entry.tenantId || ''),
@@ -457,6 +467,21 @@ function publicPendingPlatformApp(req: Parameters<typeof publicTenantPlatformApp
 function publicDeliveryTenant(req: Parameters<typeof publicTenantPlatformApp>[0], tenant: Record<string, any>, apps: Awaited<ReturnType<typeof listTenantPlatformApps>>) {
   const tenantId = String(tenant.id || tenant.tenantId || '');
   const name = String(tenant?.name || tenant?.companyName || tenant?.company || tenantId);
+  const registeredEmail = String(tenant?.registeredEmail || '').trim();
+  const subscriptionPlan = String(tenant?.subscriptionPlan || '').trim().toLowerCase();
+  const subscriptionStatus = String(tenant?.subscriptionStatus || '').trim().toLowerCase();
+  const accountType = subscriptionPlan === 'admin'
+    ? 'admin'
+    : subscriptionPlan === 'trial' || subscriptionStatus === 'trialing'
+      ? 'trial'
+      : subscriptionPlan === 'customer' || subscriptionPlan === 'delivery' || subscriptionStatus === 'pending_delivery'
+        ? 'customer'
+        : 'existing';
+  const registrationState = tenant?.registeredAt || registeredEmail
+    ? 'registered'
+    : tenant?.inviteCode
+      ? 'waiting_registration'
+      : 'existing';
   const inviteParams = new URLSearchParams({
     invite: String(tenant?.inviteCode || ''),
     company: name,
@@ -469,6 +494,11 @@ function publicDeliveryTenant(req: Parameters<typeof publicTenantPlatformApp>[0]
     notes: String(tenant?.notes || ''),
     inviteCode: String(tenant?.inviteCode || ''),
     inviteUrl: tenant?.inviteCode ? `${getPublicOrigin(req)}/register?${inviteParams.toString()}` : '',
+    registrationState,
+    registeredEmail,
+    subscriptionPlan,
+    subscriptionStatus,
+    accountType,
     apps: (['meta', 'google', 'wecom'] as TenantPlatform[]).map(platform => {
       const app = apps.find(item => item.tenant_id === tenantId && item.platform === platform);
       return app ? publicTenantPlatformApp(req, app) : publicPendingPlatformApp(req, tenantId, platform);
@@ -554,12 +584,12 @@ adminRouter.get('/demo-accounts', async (req, res) => {
   const registry = readDemoAccountRegistry();
   const trialAccounts = await Promise.all(Object.values(registry)
     .sort((a, b) => a.email.localeCompare(b.email))
-    .filter(entry => entry.status !== 'admin')
+    .filter(entry => entry.status !== 'admin' && entry.status !== 'customer')
     .map(async entry => {
       const tenant = await safePbGet('tenants', entry.tenantId);
       const expiresAt = String(tenant?.subscriptionExpiresAt ?? entry.expiresAt ?? '') || null;
       const activatedAt = entry.activatedAt ?? null;
-      const usage = demoUsageForUser(entry.userId);
+      const usage = demoUsageForTenant(entry.tenantId, entry.userId ? [entry.userId] : []);
       const day = trialDay(activatedAt);
       return {
         email: entry.email,
@@ -597,6 +627,12 @@ adminRouter.get('/demo-accounts', async (req, res) => {
     createdAt: string | null;
     registeredAt: string | null;
     expiresAt: string | null;
+    tokenUsedToday: number;
+    tokenUsedTotal: number;
+    aiChatToday: number;
+    generationToday: number;
+    renderToday: number;
+    videoGenerationToday: number;
   }> = [];
 
   try {
@@ -611,24 +647,38 @@ adminRouter.get('/demo-accounts', async (req, res) => {
         const subscriptionPlan = String(tenant.subscriptionPlan || '未设置');
         const subscriptionStatus = String(tenant.subscriptionStatus || '未设置');
         const registeredEmail = String(tenant.registeredEmail || '').trim().toLowerCase();
-        const emails = users.items
-          .filter(user => String(user.tenantId || '') === tenantId)
+        const tenantUsers = users.items.filter(user => String(user.tenantId || '') === tenantId);
+        const emails = tenantUsers
           .map(user => String(user.email || '').trim().toLowerCase())
           .filter(Boolean);
         if (registeredEmail) emails.unshift(registeredEmail);
+        const promotedTrial = Object.values(registry).find(entry => entry.tenantId === tenantId && entry.status === 'customer');
+        const usage = demoUsageForTenant(
+          tenantId,
+          Array.from(new Set([
+            ...tenantUsers.map(user => String(user.id || '')).filter(Boolean),
+            ...(promotedTrial?.userId ? [promotedTrial.userId] : []),
+          ])),
+        );
         return {
           tenantId,
           companyName: String(tenant.name || tenant.companyName || tenant.company || tenantId),
           contactName: String(tenant.contactName || tenant.contact || ''),
           industry: String(tenant.industry || ''),
           emails: Array.from(new Set(emails)),
-          password: decryptRegistrationPassword(String(tenant.registeredPasswordCipher || '')),
+          password: decryptRegistrationPassword(String(tenant.registeredPasswordCipher || '')) || promotedTrial?.password || '',
           inviteCode: String(tenant.registrationInviteCode || tenant.inviteCode || ''),
           subscriptionPlan,
           subscriptionStatus,
           createdAt: String(tenant.created || tenant.createdAt || '') || null,
           registeredAt: String(tenant.registeredAt || '') || null,
           expiresAt: String(tenant.subscriptionExpiresAt || '') || null,
+          tokenUsedToday: usage.todayTokens,
+          tokenUsedTotal: usage.totalTokens,
+          aiChatToday: usage.aiChat,
+          generationToday: usage.generation,
+          renderToday: usage.render,
+          videoGenerationToday: usage.videoGeneration,
         };
       })
       .filter(account => account.tenantId && !trialTenantIds.has(account.tenantId))
@@ -640,20 +690,35 @@ adminRouter.get('/demo-accounts', async (req, res) => {
 
   const localCustomerAccounts = listLocalTenants()
     .filter(tenant => tenant.subscriptionStatus === 'active' && tenant.subscriptionPlan === 'customer')
-    .map(tenant => ({
-      tenantId: tenant.id,
-      companyName: tenant.companyName || tenant.name,
-      contactName: tenant.contactName,
-      industry: tenant.industry,
-      emails: tenant.registeredEmail ? [tenant.registeredEmail] : [],
-      password: decryptRegistrationPassword(tenant.registeredPasswordCipher),
-      inviteCode: tenant.registrationInviteCode || tenant.inviteCode,
-      subscriptionPlan: tenant.subscriptionPlan,
-      subscriptionStatus: tenant.subscriptionStatus,
-      createdAt: tenant.createdAt || null,
-      registeredAt: tenant.registeredAt || null,
-      expiresAt: tenant.subscriptionExpiresAt,
-    }));
+    .map(tenant => {
+      const emails = tenant.registeredEmail ? [tenant.registeredEmail] : [];
+      const promotedTrial = Object.values(registry).find(entry => entry.tenantId === tenant.id && entry.status === 'customer');
+      const userIds = Array.from(new Set([
+        ...emails.map(email => `local_user_customer_${localAccountId(email)}`),
+        ...(promotedTrial?.userId ? [promotedTrial.userId] : []),
+      ]));
+      const usage = demoUsageForTenant(tenant.id, userIds);
+      return {
+        tenantId: tenant.id,
+        companyName: tenant.companyName || tenant.name,
+        contactName: tenant.contactName,
+        industry: tenant.industry,
+        emails,
+        password: decryptRegistrationPassword(tenant.registeredPasswordCipher) || promotedTrial?.password || '',
+        inviteCode: tenant.registrationInviteCode || tenant.inviteCode,
+        subscriptionPlan: tenant.subscriptionPlan,
+        subscriptionStatus: tenant.subscriptionStatus,
+        createdAt: tenant.createdAt || null,
+        registeredAt: tenant.registeredAt || null,
+        expiresAt: tenant.subscriptionExpiresAt,
+        tokenUsedToday: usage.todayTokens,
+        tokenUsedTotal: usage.totalTokens,
+        aiChatToday: usage.aiChat,
+        generationToday: usage.generation,
+        renderToday: usage.render,
+        videoGenerationToday: usage.videoGeneration,
+      };
+    });
   const existingCustomerIds = new Set(customerAccounts.map(account => account.tenantId));
   const existingCustomerEmails = new Set(customerAccounts.flatMap(account => account.emails).map(email => email.toLowerCase()));
   customerAccounts.push(...localCustomerAccounts.filter(account =>
@@ -663,6 +728,90 @@ adminRouter.get('/demo-accounts', async (req, res) => {
   customerAccounts.sort((a, b) => a.companyName.localeCompare(b.companyName));
 
   res.json({ admin: admin.email, trialAccounts, customerAccounts });
+});
+
+adminRouter.post('/trial-accounts/:tenantId/promote', async (req, res) => {
+  const admin = await requireAdminUser(req);
+  if (!admin) {
+    res.status(403).json({ error: 'admin_required' });
+    return;
+  }
+
+  const tenantId = bodyText(req.params.tenantId);
+  const registry = readDemoAccountRegistry();
+  const entry = Object.values(registry).find(item => item.tenantId === tenantId);
+  if (!tenantId || !entry || entry.status === 'admin') {
+    res.status(404).json({ error: 'trial_account_not_found' });
+    return;
+  }
+
+  const existingTenant = await safePbGet('tenants', tenantId);
+  const companyName = bodyText(req.body?.companyName)
+    || bodyText(existingTenant?.name || existingTenant?.companyName)
+    || entry.email.split('@')[0]
+    || tenantId;
+  const contactName = bodyText(req.body?.contactName || existingTenant?.contactName || existingTenant?.contact);
+  const industry = bodyText(req.body?.industry || existingTenant?.industry);
+  const currentPassword = entry.rotationPassword || entry.password;
+  const registeredAt = bodyText(existingTenant?.registeredAt || entry.activatedAt) || new Date().toISOString();
+  const patch = {
+    name: companyName,
+    companyName,
+    contactName,
+    contact: contactName,
+    industry,
+    registeredEmail: entry.email,
+    registeredAt,
+    subscriptionStatus: 'active',
+    subscriptionPlan: 'customer',
+    subscriptionExpiresAt: null,
+  };
+
+  let tenant: Record<string, any> | null = null;
+  if (existingTenant) {
+    const updated = await store.update('tenants', tenantId, patch);
+    if (updated) tenant = { ...existingTenant, ...patch };
+  }
+  if (!tenant && process.env.NODE_ENV !== 'production') {
+    tenant = promoteLocalTrialTenant({
+      tenantId,
+      companyName,
+      contactName,
+      industry,
+      email: entry.email,
+      password: currentPassword,
+      registeredAt,
+    }) as unknown as Record<string, any>;
+  }
+  if (!tenant) {
+    res.status(500).json({ error: 'trial_promotion_failed' });
+    return;
+  }
+
+  upsertDemoAccountRegistry(entry.email, {
+    status: 'customer',
+    tenantId,
+    userId: entry.userId,
+    password: currentPassword,
+    expiresAt: null,
+    rotatedAt: null,
+    rotationPassword: null,
+  });
+  await writeAuditLog({
+    tenantId,
+    actorUserId: admin.userId,
+    action: 'trial_account_promoted',
+    targetType: 'tenant',
+    targetId: tenantId,
+    metadata: { email: entry.email, companyName, source: 'trial_account' },
+  });
+  res.json({
+    ok: true,
+    tenantId,
+    email: entry.email,
+    companyName,
+    message: '试用账号已转为正式客户，原客户空间和历史数据保持不变。',
+  });
 });
 
 adminRouter.post('/support-access/session', async (req, res) => {
@@ -878,10 +1027,12 @@ adminRouter.get('/delivery/platform-apps', async (req, res) => {
 
   res.json({
     admin: admin.email,
-    tenants: Array.from(tenantIds).map(tenantId => {
-      const tenant = tenants.items.find(item => item.id === tenantId || item.tenantId === tenantId) || { id: tenantId, name: tenantId };
-      return publicDeliveryTenant(req, tenant, apps);
-    }),
+    tenants: Array.from(tenantIds)
+      .filter(tenantId => tenantId !== admin.tenantId)
+      .map(tenantId => {
+        const tenant = tenants.items.find(item => item.id === tenantId || item.tenantId === tenantId) || { id: tenantId, name: tenantId };
+        return publicDeliveryTenant(req, tenant, apps);
+      }),
   });
 });
 

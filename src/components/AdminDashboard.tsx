@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Loader2, LogIn, RefreshCcw, ShieldCheck } from 'lucide-react';
+import { Loader2, LogIn, RefreshCcw, ShieldCheck, UserCheck } from 'lucide-react';
 import {
   authApi,
   authHeader,
@@ -43,6 +43,12 @@ interface CustomerAccount {
   createdAt: string | null;
   registeredAt: string | null;
   expiresAt: string | null;
+  tokenUsedToday: number;
+  tokenUsedTotal: number;
+  aiChatToday: number;
+  generationToday: number;
+  renderToday: number;
+  videoGenerationToday: number;
 }
 
 interface StyleAdoptionTrend {
@@ -65,6 +71,8 @@ export default function AdminDashboard({ onSupportSessionStarted }: { onSupportS
   const [error, setError] = useState<string | null>(null);
   const [supportBusyTenantId, setSupportBusyTenantId] = useState<string | null>(null);
   const [supportError, setSupportError] = useState<{ tenantId: string; message: string } | null>(null);
+  const [promotingTenantId, setPromotingTenantId] = useState<string | null>(null);
+  const [notice, setNotice] = useState('');
 
   const industryAccounts = useMemo(() => customerAccounts.reduce<Array<{
     industry: string; customerCount: number; accountCount: number; customers: string[]; activeCount: number;
@@ -162,6 +170,30 @@ export default function AdminDashboard({ onSupportSessionStarted }: { onSupportS
     }
   };
 
+  const promoteTrial = async (account: AdminAccount) => {
+    if (!account.tenantId || promotingTenantId) return;
+    const confirmed = window.confirm(`将 ${account.email} 转为正式客户？原客户空间、历史内容和社媒授权都会保留。`);
+    if (!confirmed) return;
+    setPromotingTenantId(account.tenantId);
+    setError(null);
+    setNotice('');
+    try {
+      const response = await fetch(`/api/overseas/admin/trial-accounts/${encodeURIComponent(account.tenantId)}/promote`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeader() },
+        body: JSON.stringify({ companyName: account.tenantName || account.email.split('@')[0] }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || '转为正式客户失败');
+      setNotice(data.message || '已转为正式客户，原客户空间保持不变。');
+      await load({ silent: true });
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : '转为正式客户失败');
+    } finally {
+      setPromotingTenantId(null);
+    }
+  };
+
   return (
     <div className="h-full flex flex-col bg-white">
       <div className="h-12 px-5 border-b border-border flex items-center justify-between flex-shrink-0">
@@ -176,6 +208,7 @@ export default function AdminDashboard({ onSupportSessionStarted }: { onSupportS
 
       <div className="flex-1 min-h-0 overflow-auto p-5">
         {error && <p className="mb-3 text-xs text-red">{error}</p>}
+        {notice && <p className="mb-3 rounded-lg bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-700">{notice}</p>}
 
         <section className="mb-6 overflow-hidden rounded-lg border border-border bg-surface">
           <div className="flex items-center justify-between border-b border-border px-3 py-2">
@@ -203,7 +236,7 @@ export default function AdminDashboard({ onSupportSessionStarted }: { onSupportS
         <section id="admin-trial-accounts" className="scroll-mt-5">
           <div className="mb-2 flex items-center justify-between"><div><h2 className="text-sm font-semibold text-text-primary">试用账号表</h2><p className="mt-0.5 text-xs text-text-muted">备用试用账号无需注册，管理员把账号密码交给测试用户后即可直接登录。</p></div><span className="text-xs text-text-muted">{accountsLoaded ? `${trialAccounts.length} 个账号` : loading ? '读取中' : '读取失败'}</span></div>
           <div className="overflow-auto border border-border rounded-lg">
-            <table className="min-w-[1320px] w-full text-xs">
+            <table className="min-w-[1440px] w-full text-xs">
               <thead className="bg-surface-2 text-text-muted">
                 <tr className="text-left">
                   <th className="px-3 py-2 font-semibold">账号</th>
@@ -215,11 +248,12 @@ export default function AdminDashboard({ onSupportSessionStarted }: { onSupportS
                   <th className="px-3 py-2 font-semibold">Token 今日/总计</th>
                   <th className="px-3 py-2 font-semibold">今日功能次数</th>
                   <th className="px-3 py-2 font-semibold">轮换</th>
+                  <th className="px-3 py-2 font-semibold">客户状态</th>
                   <th className="px-3 py-2 font-semibold">租户后台</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {loading && !accountsLoaded && <tr><td colSpan={10} className="px-3 py-8 text-center text-text-muted">读取中...</td></tr>}
+                {loading && !accountsLoaded && <tr><td colSpan={11} className="px-3 py-8 text-center text-text-muted">读取中...</td></tr>}
                 {(!loading || accountsLoaded) && trialAccounts.map(account => {
                   const busy = supportBusyTenantId === account.tenantId;
                   return (
@@ -236,6 +270,17 @@ export default function AdminDashboard({ onSupportSessionStarted }: { onSupportS
                       <td className="px-3 py-2 whitespace-nowrap">
                         <button
                           type="button"
+                          onClick={() => void promoteTrial(account)}
+                          disabled={Boolean(promotingTenantId)}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 px-2.5 py-1.5 font-semibold text-emerald-700 hover:bg-emerald-100 disabled:opacity-50"
+                        >
+                          {promotingTenantId === account.tenantId ? <Loader2 size={12} className="animate-spin" /> : <UserCheck size={12} />}
+                          {promotingTenantId === account.tenantId ? '转正中' : '转为正式客户'}
+                        </button>
+                      </td>
+                      <td className="px-3 py-2 whitespace-nowrap">
+                        <button
+                          type="button"
                           onClick={() => void enterTenant({ tenantId: account.tenantId, tenantName: account.tenantName || account.email })}
                           disabled={busy || !account.tenantId}
                           className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-2.5 py-1.5 font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
@@ -248,7 +293,7 @@ export default function AdminDashboard({ onSupportSessionStarted }: { onSupportS
                     </tr>
                   );
                 })}
-                {accountsLoaded && !trialAccounts.length && <tr><td colSpan={10} className="px-3 py-8 text-center text-text-muted">暂无试用账号</td></tr>}
+                {accountsLoaded && !trialAccounts.length && <tr><td colSpan={11} className="px-3 py-8 text-center text-text-muted">暂无试用账号</td></tr>}
               </tbody>
             </table>
           </div>
@@ -257,7 +302,7 @@ export default function AdminDashboard({ onSupportSessionStarted }: { onSupportS
         <section id="admin-customer-accounts" className="mt-6 scroll-mt-5">
           <div className="mb-2 flex items-center justify-between"><div><h2 className="text-sm font-semibold text-text-primary">客户账号表</h2><p className="mt-0.5 text-xs text-text-muted">注册码无需预设账密；客户完成注册后，账号、初始密码和已使用邀请码会自动出现在这里。</p></div><span className="text-xs text-text-muted">{accountsLoaded ? `${customerAccounts.length} 个客户` : loading ? '读取中' : '读取失败'}</span></div>
           <div className="overflow-auto border border-border rounded-lg">
-            <table className="min-w-[1420px] w-full text-xs">
+            <table className="min-w-[1700px] w-full text-xs">
               <thead className="bg-surface-2 text-text-muted">
                 <tr className="text-left">
                   <th className="px-3 py-2 font-semibold">客户主体</th>
@@ -268,6 +313,8 @@ export default function AdminDashboard({ onSupportSessionStarted }: { onSupportS
                   <th className="px-3 py-2 font-semibold">已使用邀请码</th>
                   <th className="px-3 py-2 font-semibold">订阅方案</th>
                   <th className="px-3 py-2 font-semibold">账号状态</th>
+                  <th className="px-3 py-2 font-semibold">AI Token 今日/总计</th>
+                  <th className="px-3 py-2 font-semibold">今日功能次数</th>
                   <th className="px-3 py-2 font-semibold">注册时间</th>
                   <th className="px-3 py-2 font-semibold">到期时间</th>
                   <th className="px-3 py-2 font-semibold">租户 ID</th>
@@ -275,7 +322,7 @@ export default function AdminDashboard({ onSupportSessionStarted }: { onSupportS
                 </tr>
               </thead>
               <tbody className="divide-y divide-border">
-                {loading && !accountsLoaded && <tr><td colSpan={12} className="px-3 py-8 text-center text-text-muted">读取中...</td></tr>}
+                {loading && !accountsLoaded && <tr><td colSpan={14} className="px-3 py-8 text-center text-text-muted">读取中...</td></tr>}
                 {(!loading || accountsLoaded) && customerAccounts.map(account => {
                   const busy = supportBusyTenantId === account.tenantId;
                   const registered = account.emails.length > 0;
@@ -289,6 +336,8 @@ export default function AdminDashboard({ onSupportSessionStarted }: { onSupportS
                       <td className="px-3 py-2 font-mono text-text-secondary whitespace-nowrap">{account.inviteCode || '-'}</td>
                       <td className="px-3 py-2 text-text-secondary whitespace-nowrap">{account.subscriptionPlan}</td>
                       <td className="px-3 py-2 text-text-secondary whitespace-nowrap">{account.subscriptionStatus}</td>
+                      <td className="px-3 py-2 text-text-secondary whitespace-nowrap">{fmtTokens(account.tokenUsedToday)} / {fmtTokens(account.tokenUsedTotal)}</td>
+                      <td className="px-3 py-2 text-text-secondary whitespace-nowrap">对话 {account.aiChatToday} · 生成 {account.generationToday} · 渲染 {account.renderToday} · 视频 {account.videoGenerationToday}</td>
                       <td className="px-3 py-2 text-text-secondary whitespace-nowrap">{fmtDate(account.registeredAt || account.createdAt)}</td>
                       <td className="px-3 py-2 text-text-secondary whitespace-nowrap">{fmtDate(account.expiresAt)}</td>
                       <td className="px-3 py-2 font-mono text-text-muted whitespace-nowrap">{account.tenantId}</td>
@@ -308,7 +357,7 @@ export default function AdminDashboard({ onSupportSessionStarted }: { onSupportS
                     </tr>
                   );
                 })}
-                {accountsLoaded && !customerAccounts.length && <tr><td colSpan={12} className="px-3 py-8 text-center text-text-muted">暂无客户账号</td></tr>}
+                {accountsLoaded && !customerAccounts.length && <tr><td colSpan={14} className="px-3 py-8 text-center text-text-muted">暂无客户账号</td></tr>}
               </tbody>
             </table>
           </div>

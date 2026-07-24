@@ -92,6 +92,45 @@ export function createLocalInviteTenant(input: {
   return tenant;
 }
 
+export function promoteLocalTrialTenant(input: {
+  tenantId: string;
+  companyName: string;
+  contactName?: string;
+  industry?: string;
+  email: string;
+  password?: string;
+  registeredAt?: string;
+}): LocalTenantRecord {
+  const tenants = readLocalTenants();
+  const index = tenants.findIndex(tenant => tenant.id === input.tenantId);
+  const existing = index >= 0 ? tenants[index] : null;
+  const now = new Date().toISOString();
+  const next: LocalTenantRecord = {
+    id: input.tenantId,
+    name: input.companyName || existing?.name || input.email.split('@')[0],
+    companyName: input.companyName || existing?.companyName || input.email.split('@')[0],
+    contactName: input.contactName ?? existing?.contactName ?? '',
+    contact: input.contactName ?? existing?.contact ?? '',
+    industry: input.industry ?? existing?.industry ?? '',
+    notes: existing?.notes ?? '',
+    inviteCode: '',
+    subscriptionStatus: 'active',
+    subscriptionPlan: 'customer',
+    subscriptionExpiresAt: null,
+    createdAt: existing?.createdAt ?? input.registeredAt ?? now,
+    registeredAt: existing?.registeredAt ?? input.registeredAt ?? now,
+    registeredEmail: input.email.trim().toLowerCase(),
+    registeredPasswordCipher: input.password
+      ? encryptRegistrationPassword(input.password)
+      : existing?.registeredPasswordCipher,
+    registrationInviteCode: existing?.registrationInviteCode ?? '',
+  };
+  if (index >= 0) tenants[index] = next;
+  else tenants.unshift(next);
+  writeLocalTenants(tenants);
+  return next;
+}
+
 export function activateLocalTenantInvite(input: {
   inviteCode: string;
   email: string;

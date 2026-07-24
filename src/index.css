@@ -112,3 +112,8 @@
     border-top: 1px solid var(--color-border);
   }
 }
+
+body:has([data-lingshu-assistant-clearance="bottom-navigation"]) [data-global-assistant="root"] {
+  bottom: 5rem;
+  transition: bottom 180ms ease;
+}

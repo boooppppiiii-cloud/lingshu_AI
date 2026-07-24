@@ -2,16 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
-  ChevronDown,
-  ChevronUp,
   Clock3,
-  Copy,
   ExternalLink,
-  KeyRound,
   Loader2,
   RefreshCw,
-  Save,
-  Settings2,
   ShieldCheck,
   WifiOff,
 } from 'lucide-react';
@@ -32,50 +26,6 @@ interface TenantChannelStatus {
 interface ChannelsStatusResponse {
   isAdmin: boolean;
   channels: TenantChannelStatus[];
-}
-
-interface Channel {
-  id: string;
-  type: 'whatsapp' | 'youtube' | 'tiktok' | 'instagram' | 'facebook' | 'telegram' | 'dingtalk' | 'feishu' | 'wechat' | 'wecom' | 'shopify';
-  label: string;
-  enabled: boolean;
-  config: Record<string, string>;
-  status: 'connected' | 'disconnected' | 'error';
-  connectedAt?: string;
-  lastActivity?: string;
-  stats: { sent: number; received: number };
-}
-
-interface AdminOAuthConfig {
-  admin: string;
-  updatedAt: string | null;
-  callbacks: {
-    youtube: string;
-    instagram: string;
-    facebook: string;
-    tiktok: string;
-  };
-  values: {
-    youtubeOAuthClientId: string;
-    metaSocialAppId: string;
-    tiktokClientKey: string;
-    advancedManualConnectEnabled: boolean;
-  };
-  secretSet: {
-    youtubeOAuthClientSecret: boolean;
-    metaSocialAppSecret: boolean;
-    tiktokClientSecret: boolean;
-  };
-}
-
-interface AdminOAuthForm {
-  youtubeOAuthClientId: string;
-  youtubeOAuthClientSecret: string;
-  metaSocialAppId: string;
-  metaSocialAppSecret: string;
-  tiktokClientKey: string;
-  tiktokClientSecret: string;
-  advancedManualConnectEnabled: boolean;
 }
 
 const CHANNEL_META: Record<string, { icon: string; helper: string; accent: string }> = {
@@ -105,51 +55,6 @@ const CHANNEL_META: Record<string, { icon: string; helper: string; accent: strin
     accent: 'bg-green-50 text-green-700',
   },
 };
-
-const OAUTH_CONFIG_SECTIONS = [
-  {
-    id: 'youtube',
-    title: 'YouTube / Google',
-    idKey: 'youtubeOAuthClientId',
-    secretKey: 'youtubeOAuthClientSecret',
-    secretSetKey: 'youtubeOAuthClientSecret',
-    idLabel: 'Client ID',
-    secretLabel: 'Client Secret',
-    callbacks: ['youtube'],
-  },
-  {
-    id: 'meta',
-    title: 'Meta / WhatsApp / Instagram / Facebook',
-    idKey: 'metaSocialAppId',
-    secretKey: 'metaSocialAppSecret',
-    secretSetKey: 'metaSocialAppSecret',
-    idLabel: 'App ID',
-    secretLabel: 'App Secret',
-    callbacks: ['instagram', 'facebook'],
-  },
-  {
-    id: 'tiktok',
-    title: 'TikTok',
-    idKey: 'tiktokClientKey',
-    secretKey: 'tiktokClientSecret',
-    secretSetKey: 'tiktokClientSecret',
-    idLabel: 'Client Key',
-    secretLabel: 'Client Secret',
-    callbacks: ['tiktok'],
-  },
-] as const;
-
-function oauthFormFromConfig(config: AdminOAuthConfig): AdminOAuthForm {
-  return {
-    youtubeOAuthClientId: config.values.youtubeOAuthClientId,
-    youtubeOAuthClientSecret: '',
-    metaSocialAppId: config.values.metaSocialAppId,
-    metaSocialAppSecret: '',
-    tiktokClientKey: config.values.tiktokClientKey,
-    tiktokClientSecret: '',
-    advancedManualConnectEnabled: config.values.advancedManualConnectEnabled,
-  };
-}
 
 function statusView(channel: TenantChannelStatus) {
   if (channel.status === 'connected') {
@@ -219,8 +124,8 @@ function ChannelStatusCard({ channel, onConnected }: { channel: TenantChannelSta
         detail: { message: 'WhatsApp 已连接，灵枢会自动同步账号信息。' },
       }));
       onConnected();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'WhatsApp 授权失败');
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : 'WhatsApp 授权失败');
     } finally {
       setConnecting(false);
     }
@@ -262,6 +167,7 @@ function ChannelStatusCard({ channel, onConnected }: { channel: TenantChannelSta
     </section>
   );
 }
+
 function AdminDiagnostics({ channels }: { channels: TenantChannelStatus[] }) {
   return (
     <section className="rounded-2xl border border-gray-100 bg-white p-5 shadow-sm">
@@ -290,220 +196,10 @@ function AdminDiagnostics({ channels }: { channels: TenantChannelStatus[] }) {
   );
 }
 
-function AdminOAuthConfigPanel({
-  initialConfig,
-  onSaved,
-}: {
-  initialConfig: AdminOAuthConfig;
-  onSaved: (config: AdminOAuthConfig) => void;
-}) {
-  const [form, setForm] = useState<AdminOAuthForm>(() => oauthFormFromConfig(initialConfig));
-  const [saving, setSaving] = useState(false);
-  const [notice, setNotice] = useState('');
-  const [error, setError] = useState('');
-  const [copied, setCopied] = useState('');
-
-  useEffect(() => {
-    setForm(oauthFormFromConfig(initialConfig));
-  }, [initialConfig]);
-
-  function setField<K extends keyof AdminOAuthForm>(key: K, value: AdminOAuthForm[K]) {
-    setForm(prev => ({ ...prev, [key]: value }));
-  }
-
-  async function saveConfig() {
-    setSaving(true);
-    setNotice('');
-    setError('');
-    try {
-      const r = await fetch('/api/overseas/admin/oauth-config', {
-        method: 'PUT',
-        headers: { ...authHeader(), 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
-      });
-      const data = await r.json().catch(() => ({})) as AdminOAuthConfig & { error?: string };
-      if (!r.ok) throw new Error(data.error || '保存失败');
-      onSaved(data);
-      setNotice('已保存。客户侧仍然只显示状态，不会看到这些凭证。');
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '保存失败');
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  async function copyCallback(label: string, value: string) {
-    try {
-      await navigator.clipboard.writeText(value);
-      setCopied(label);
-      window.setTimeout(() => setCopied(''), 1500);
-    } catch {
-      setCopied('');
-    }
-  }
-
-  return (
-    <div className="space-y-5">
-      {notice && <div className="rounded-xl bg-emerald-50 px-4 py-3 text-sm text-emerald-700">{notice}</div>}
-      {error && <div className="rounded-xl bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>}
-
-      <div className="grid gap-4 xl:grid-cols-3">
-        {OAUTH_CONFIG_SECTIONS.map(section => (
-          <section key={section.id} className="rounded-2xl border border-gray-100 bg-white p-5">
-            <div className="mb-4 flex items-start gap-3">
-              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-gray-50 text-gray-700">
-                <KeyRound size={18} />
-              </div>
-              <div>
-                <h3 className="text-sm font-semibold text-gray-950">{section.title}</h3>
-                <p className="mt-1 text-xs text-gray-500">
-                  {initialConfig.secretSet[section.secretSetKey] ? '密钥已保存，留空则不修改。' : '尚未保存密钥。'}
-                </p>
-              </div>
-            </div>
-
-            <div className="space-y-3">
-              <label className="grid gap-1 text-xs font-semibold text-gray-600">
-                {section.idLabel}
-                <input
-                  type="text"
-                  value={form[section.idKey]}
-                  onChange={e => setField(section.idKey, e.target.value)}
-                  className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-normal text-gray-900 outline-none focus:border-emerald-400"
-                />
-              </label>
-              <label className="grid gap-1 text-xs font-semibold text-gray-600">
-                {section.secretLabel}
-                <input
-                  type="password"
-                  value={form[section.secretKey]}
-                  onChange={e => setField(section.secretKey, e.target.value)}
-                  placeholder={initialConfig.secretSet[section.secretSetKey] ? '已保存，留空不修改' : section.secretLabel}
-                  className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-sm font-normal text-gray-900 outline-none focus:border-emerald-400"
-                />
-              </label>
-            </div>
-
-            <div className="mt-4 space-y-2">
-              {section.callbacks.map(key => {
-                const value = initialConfig.callbacks[key];
-                const label = key === 'youtube' ? 'YouTube 回调地址' : key === 'instagram' ? 'Instagram 回调地址' : key === 'facebook' ? 'Facebook 回调地址' : 'TikTok 回调地址';
-                return (
-                  <div key={key} className="rounded-xl border border-gray-100 bg-gray-50 px-3 py-2">
-                    <div className="mb-1 flex items-center justify-between gap-2">
-                      <span className="text-[11px] font-semibold text-gray-500">{label}</span>
-                      <button
-                        type="button"
-                        onClick={() => void copyCallback(label, value)}
-                        className="inline-flex h-6 w-6 items-center justify-center rounded-md text-gray-400 hover:bg-white hover:text-gray-700"
-                        title="复制"
-                      >
-                        <Copy size={12} />
-                      </button>
-                    </div>
-                    <code className="block break-all text-[11px] text-gray-700">{value}</code>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-        ))}
-      </div>
-
-      {copied && <p className="text-xs text-emerald-700">{copied} 已复制。</p>}
-
-      <section className="rounded-2xl border border-gray-100 bg-white p-5">
-        <label className="flex items-center justify-between gap-4">
-          <span>
-            <span className="block text-sm font-semibold text-gray-950">允许旧版手填凭证</span>
-          </span>
-          <input
-            type="checkbox"
-            checked={form.advancedManualConnectEnabled}
-            onChange={e => setField('advancedManualConnectEnabled', e.target.checked)}
-            className="h-4 w-4 rounded border-gray-300 text-emerald-600"
-          />
-        </label>
-      </section>
-
-      <div className="flex justify-end">
-        <button
-          type="button"
-          onClick={() => void saveConfig()}
-          disabled={saving}
-          className="inline-flex items-center gap-2 rounded-xl bg-gray-950 px-4 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
-        >
-          {saving ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}
-          保存高级配置
-        </button>
-      </div>
-    </div>
-  );
-}
-
-function LegacyManualChannels() {
-  const [open, setOpen] = useState(false);
-  const [channels, setChannels] = useState<Channel[]>([]);
-  const [loading, setLoading] = useState(false);
-
-  async function load() {
-    setLoading(true);
-    try {
-      const r = await fetch('/api/overseas/channels', { headers: authHeader() });
-      setChannels(r.ok ? await r.json() : []);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    if (open) void load();
-  }, [open]);
-
-  return (
-    <section className="rounded-2xl border border-dashed border-gray-200 bg-white">
-      <button
-        type="button"
-        onClick={() => setOpen(prev => !prev)}
-        className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left"
-      >
-        <span className="inline-flex items-center gap-2 text-sm font-semibold text-gray-900">
-          <Settings2 size={16} />
-          旧版手填渠道
-        </span>
-        {open ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-      </button>
-      {open && (
-        <div className="border-t border-gray-100 px-5 py-4">
-          {loading ? (
-            <div className="flex items-center gap-2 text-sm text-gray-500"><Loader2 size={15} className="animate-spin" />正在读取...</div>
-          ) : channels.length ? (
-            <div className="space-y-2">
-              {channels.map(channel => (
-                <div key={channel.id} className="flex items-center justify-between rounded-xl bg-gray-50 px-4 py-3">
-                  <div>
-                    <p className="text-sm font-semibold text-gray-900">{channel.label}</p>
-                    <p className="text-xs text-gray-500">{channel.type} · {channel.status}</p>
-                  </div>
-                  <span className="text-xs text-gray-400">请优先迁移到客户运维</span>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="text-sm text-gray-500">没有旧版手填渠道。</p>
-          )}
-        </div>
-      )}
-    </section>
-  );
-}
-
 export default function ChannelsPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [status, setStatus] = useState<ChannelsStatusResponse | null>(null);
-  const [adminOAuthConfig, setAdminOAuthConfig] = useState<AdminOAuthConfig | null>(null);
-  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [error, setError] = useState('');
 
   const connectedCount = useMemo(() => status?.channels.filter(channel => channel.status === 'connected').length ?? 0, [status]);
@@ -511,19 +207,12 @@ export default function ChannelsPage() {
   async function load() {
     setError('');
     try {
-      const statusRes = await fetch('/api/overseas/channels/status', { headers: authHeader() });
-      const statusData = await statusRes.json().catch(() => ({})) as ChannelsStatusResponse & { error?: string };
-      if (!statusRes.ok) throw new Error(statusData.error || '无法读取渠道状态');
+      const statusResponse = await fetch('/api/overseas/channels/status', { headers: authHeader() });
+      const statusData = await statusResponse.json().catch(() => ({})) as ChannelsStatusResponse & { error?: string };
+      if (!statusResponse.ok) throw new Error(statusData.error || '无法读取渠道状态');
       setStatus(statusData);
-
-      if (statusData.isAdmin) {
-        const adminRes = await fetch('/api/overseas/admin/oauth-config', { headers: authHeader() });
-        setAdminOAuthConfig(adminRes.ok ? await adminRes.json() as AdminOAuthConfig : null);
-      } else {
-        setAdminOAuthConfig(null);
-      }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : '无法读取渠道状态');
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : '无法读取渠道状态');
     } finally {
       setLoading(false);
     }
@@ -577,36 +266,7 @@ export default function ChannelsPage() {
               {status.channels.map(channel => <ChannelStatusCard key={channel.id} channel={channel} onConnected={() => void refresh()} />)}
             </div>
 
-            {status.isAdmin && (
-              <>
-                <AdminDiagnostics channels={status.channels} />
-
-                <section className="rounded-2xl border border-gray-100 bg-white shadow-sm">
-                  <button
-                    type="button"
-                    onClick={() => setAdvancedOpen(prev => !prev)}
-                    className="flex w-full items-center justify-between gap-4 px-5 py-4 text-left"
-                  >
-                    <span className="inline-flex items-center gap-2 text-sm font-semibold text-gray-950">
-                      <Settings2 size={16} />
-                      高级配置
-                    </span>
-                    {advancedOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                  </button>
-                  {advancedOpen && (
-                    <div className="space-y-5 border-t border-gray-100 p-5">
-                      <div className="rounded-xl bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                        手填配置只作为顾问排障工具。正式交付请优先使用“客户运维”的租户卡片。
-                      </div>
-                      {adminOAuthConfig && (
-                        <AdminOAuthConfigPanel initialConfig={adminOAuthConfig} onSaved={setAdminOAuthConfig} />
-                      )}
-                      <LegacyManualChannels />
-                    </div>
-                  )}
-                </section>
-              </>
-            )}
+            {status.isAdmin && <AdminDiagnostics channels={status.channels} />}
           </div>
         ) : null}
       </main>
