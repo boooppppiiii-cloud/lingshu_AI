@@ -17,6 +17,7 @@ const TEMPLATES_FILE = path.join(__dirname, '../../data/demo-templates.json');
 const DATA_DIR = path.join(__dirname, '../../data');
 const ASSETS_DIR = path.join(DATA_DIR, 'enterprise-assets');
 const TENANT_ORDERS_DIR = path.join(DATA_DIR, 'tenant-orders');
+const DEV_MOCK_ORDERS_TENANT = 'local_tenant_admin_lingshu_admin_local_test';
 // 生成的 productApi 密钥单独存放，不进 data/enterprise.json（避免和会被提交/覆盖的企业资料文件混在一起）。
 const PRODUCT_API_FILE = path.join(DATA_DIR, 'product-api.json');
 
@@ -345,7 +346,13 @@ async function listStoredTenantOrders(tenantId: string): Promise<Record<string, 
 async function readOrders(tenantId: string): Promise<OrderRecord[]> {
   if (process.env.NODE_ENV !== 'production' && tenantId.startsWith('local_tenant_')) return readLocalTenantOrders(tenantId);
   const records = await listStoredTenantOrders(tenantId);
-  return records.map(storedOrder).filter(Boolean) as OrderRecord[];
+  const orders = records.map(storedOrder).filter(Boolean) as OrderRecord[];
+  // 本地评审环境的登录账号可能来自 PocketBase，也可能来自本地管理员。
+  // 当前租户尚无订单时统一展示同一份演示订单，避免 Mock 数据被某个登录态隔离。
+  if (process.env.NODE_ENV !== 'production' && orders.length === 0) {
+    return readLocalTenantOrders(DEV_MOCK_ORDERS_TENANT);
+  }
+  return orders;
 }
 
 async function upsertOrder(tenantId: string, order: OrderRecord): Promise<boolean> {

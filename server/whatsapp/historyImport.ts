@@ -406,6 +406,9 @@ export function recomputeWhatsAppCustomerStages(now = Date.now()): number {
   const list = customers();
   let changed = 0;
   const next = list.map(customer => {
+    // Business milestones are explicit CRM states and must not be downgraded
+    // merely because the WhatsApp conversation has been quiet for a while.
+    if (customer.stage === 'quoted' || customer.stage === 'won') return customer;
     const stage = stageByTimestamp(customer.lastActiveAt || now);
     if (stage === customer.stage) return customer;
     changed += 1;

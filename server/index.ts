@@ -1,4 +1,5 @@
 import path from 'path';
+import os from 'os';
 import { fileURLToPath } from 'url';
 import { execFileSync, spawn } from 'child_process';
 import dotenv from 'dotenv';
@@ -43,6 +44,9 @@ import { requireScopedAsset, syncAssetSession } from './lib/assetAccess.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
+// 跨版本共用的本机密钥配置。项目文件优先，统一配置只补齐缺失项。
+dotenv.config({ path: path.join(os.homedir(), '.config', 'lingshu-ai', '.env') });
+dotenv.config({ path: path.join(os.homedir(), '.config', 'lingshu-ai', '.env.local') });
 dotenv.config({ path: path.join(__dirname, '..', '.env.local'), override: true });
 await ensureLocalPocketBase();
 configureNetworkProxy();
