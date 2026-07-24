@@ -106,17 +106,20 @@ export function entitlementGate(): RequestHandler {
       return;
     }
 
-    const result = await auth.verifyToken(req.headers.authorization);
-    if (!result) {
+    const locals = res.locals as SubscriptionLocals;
+    const signedAssetTenantId = locals.userId === 'signed-media' ? locals.tenantId : '';
+    const result = signedAssetTenantId ? null : await auth.verifyToken(req.headers.authorization);
+    if (!result && !signedAssetTenantId) {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
 
-    const locals = res.locals as SubscriptionLocals;
-    locals.userId = result.userId;
-    locals.tenantId = result.tenantId;
+    if (result) {
+      locals.userId = result.userId;
+      locals.tenantId = result.tenantId;
+    }
 
-    const sub = await getTenantSubscription(result.tenantId);
+    const sub = await getTenantSubscription(signedAssetTenantId || result!.tenantId);
     if (!isEntitled(sub)) {
       res.status(402).json({
         error: 'subscription_required',
