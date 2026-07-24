@@ -13,7 +13,7 @@ import { authHeader } from '../lib/auth';
 
 /* ──────────────────────────────────────────────────────────────────────────
    AI 生成内容工作台 — 社媒（流量）页子模块
-   流程：选模式 → 口播脚本 → 选素材 → 配乐 → 封面 → 成片预览
+   流程：选模式 → 分镜与声音 → 选素材 → 配乐 → 封面 → 成片预览
    两栏布局：① 步骤导航  ② 操作区
 ─────────────────────────────────────────────────────────────────────────── */
 
@@ -99,7 +99,7 @@ type StepId = 'mode' | 'material' | 'script' | 'bgm' | 'cover' | 'preview' | 'po
 
 const STEPS: { id: StepId; label: string; icon: typeof LayoutGrid; hint: string }[] = [
   { id: 'mode',     label: '选模式',  icon: LayoutGrid, hint: '选择生成起点与全局参数' },
-  { id: 'script',   label: '口播脚本', icon: FileText,   hint: '提取口播、字幕与智能配音' },
+  { id: 'script',   label: '分镜与声音', icon: FileText, hint: '先确认可执行分镜，再选择口播、字幕与配音' },
   { id: 'material', label: '选素材',  icon: Film,       hint: '按脚本挑选并排序片段' },
   { id: 'bgm',      label: '配乐',     icon: Music,      hint: 'AI 推荐背景乐与音量平衡' },
   { id: 'cover',    label: '封面',     icon: ImageIcon,  hint: '生成封面候选并选定标题' },
@@ -1272,6 +1272,56 @@ function hasIncompleteReferenceAnalysis(kickoff: VideoKickoff | null): boolean {
   return sourceDuration > 0 && analyzedUntil > 0 && analyzedUntil + 1 < sourceDuration;
 }
 
+type MigrationMode = 'fidelity' | 'structure' | 'mechanism';
+
+interface MigrationRecommendation {
+  mode: MigrationMode;
+  label: string;
+  reason: string;
+  preserve: string[];
+  rebuild: string[];
+}
+
+function recommendMigration(kickoff: VideoKickoff | null, productInfo: string): MigrationRecommendation {
+  const reference = [
+    kickoff?.video?.title || '',
+    kickoff?.referenceAnalysis?.visualStyle || '',
+    ...(kickoff?.referenceAnalysis?.details || []).flatMap(item => [item.environment || '', item.visual || '', item.purpose || '']),
+  ].join(' ').toLowerCase();
+  const product = String(productInfo || '').toLowerCase();
+  const groups = [
+    /truck|lorry|卡车|货车|牵引车|底盘/,
+    /cream|serum|cosmetic|skincare|lip gloss|lipstick|唇蜜|口红|面霜|精华|美妆|护肤/,
+    /lighting|light fixture|track light|灯具|照明|轨道灯|筒灯/,
+    /package|packaging|paper bag|paper box|包装|纸袋|纸盒|礼盒/,
+    /furniture|sofa|chair|家具|沙发|椅子/,
+    /apparel|garment|fabric|dress|服装|面料|连衣裙/,
+  ];
+  const referenceGroup = groups.findIndex(group => group.test(reference));
+  const productGroup = groups.findIndex(group => group.test(product));
+  const details = kickoff?.referenceAnalysis?.details || [];
+  const preserve = [
+    details.length ? `保留 ${details.length} 段原片镜头顺序与时长比例` : '保留开场钩子与信息揭示顺序',
+    '保留可迁移的构图、切镜密度和音画节奏',
+  ];
+  if (!kickoff || !details.length) return {
+    mode: 'mechanism', label: '机制借鉴', reason: '对标视频缺少完整逐镜证据，不宜直接复刻分镜。', preserve,
+    rebuild: ['根据企业产品和现有素材重建场景、动作和证明内容'],
+  };
+  if (referenceGroup >= 0 && referenceGroup === productGroup) return {
+    mode: 'fidelity', label: '高保真复刻', reason: '对标内容与所选产品展示逻辑接近，可保留大部分分镜。', preserve,
+    rebuild: ['替换竞品品牌、型号、参数和不支持的卖点'],
+  };
+  if (referenceGroup >= 0 && productGroup >= 0 && referenceGroup !== productGroup) return {
+    mode: 'structure', label: '结构迁移', reason: '对标视频与所选产品跨品类，直接替换会产生不可执行画面。', preserve,
+    rebuild: ['产品场景、主体动作和细节证明', '所有竞品品牌、型号和原品类对象'],
+  };
+  return {
+    mode: 'structure', label: '结构迁移', reason: '可保留原片的钩子、证明顺序和节奏，画面按企业产品重建更稳妥。', preserve,
+    rebuild: ['产品场景、动作和证明内容', '竞品专属事实与话术'],
+  };
+}
+
 function cloneReferenceHighlights(kickoff: VideoKickoff): string[] {
   const ref = kickoff.referenceAnalysis;
   const out = [
@@ -1282,10 +1332,26 @@ function cloneReferenceHighlights(kickoff: VideoKickoff): string[] {
   return out.length ? out : ['复刻对标视频的开头钩子、情绪节奏、镜头关系和转化 CTA。'];
 }
 
-function adaptReferenceVisualToProduct(visual: string, product: ReturnType<typeof parseProductBrief>): string {
+function referenceProductTerms(kickoff: VideoKickoff): string[] {
+  const raw = [
+    kickoff.video?.title || '',
+    ...(kickoff.referenceAnalysis?.details || []).flatMap(item => [item.visual || '', item.subtitle || '', item.onScreenText || '']),
+  ].join('\n');
+  const stopWords = new Set(['facebook', 'instagram', 'youtube', 'tiktok', 'video', 'official', 'factory', 'product']);
+  const titleTerms = String(kickoff.video?.title || '').match(/[A-Za-z][A-Za-z0-9-]{3,}/g) || [];
+  const upperTerms = raw.match(/\b[A-Z][A-Z0-9-]{2,}\b/g) || [];
+  return [...new Set([...titleTerms, ...upperTerms]
+    .map(term => term.trim())
+    .filter(term => term.length >= 3 && !stopWords.has(term.toLowerCase())))];
+}
+
+function adaptReferenceVisualToProduct(visual: string, product: ReturnType<typeof parseProductBrief>, kickoff?: VideoKickoff): string {
   const productObject = `${compactCategory(product)}产品`;
   const productName = product.name && product.name !== productObject ? product.name : productObject;
   let next = compact(visual) || `展示${productName}的外观、细节和实际效果`;
+  for (const term of kickoff ? referenceProductTerms(kickoff) : []) {
+    next = next.replace(new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), productName);
+  }
   next = next
     .replace(/护肤美妆纸艺品（[^）]*）/g, `${productObject}纸艺品`)
     .replace(/护肤美妆纸艺品\([^)]*\)/g, `${productObject}纸艺品`)
@@ -1295,25 +1361,50 @@ function adaptReferenceVisualToProduct(visual: string, product: ReturnType<typeo
     .replace(/一双[^，。；;]*?手/g, '一双手')
     .replace(/粉色大饺子/g, `粉色${productObject}`)
     .replace(/可爱的饺子造型纸艺品/g, `可爱的${productObject}纸艺品`);
+  const productText = `${product.name} ${product.category}`.toLowerCase();
+  const incompatibleReferenceObjects = [
+    { test: /truck|lorry|卡车|货车|牵引车|底盘/gi, supported: /truck|lorry|卡车|货车|牵引车|底盘/i },
+    { test: /cream|serum|cosmetic|skincare|面霜|精华|美妆|护肤品/gi, supported: /cream|serum|cosmetic|skincare|面霜|精华|美妆|护肤/i },
+    { test: /lighting|light fixture|track light|灯具|照明|轨道灯|筒灯/gi, supported: /lighting|light|灯具|照明|轨道灯|筒灯/i },
+  ];
+  for (const group of incompatibleReferenceObjects) {
+    if (!group.supported.test(productText)) next = next.replace(group.test, productObject);
+  }
   if (!next.includes(productObject) && !next.includes(product.name)) {
     next = next.replace(/画面中出现/, `画面中出现${productName}，`);
   }
   return next;
 }
 
-function buildLocalCloneScript(kickoff: VideoKickoff, productInfo: string, languageCode: string, _variant = 0): string {
+function buildLocalCloneScript(kickoff: VideoKickoff, productInfo: string, languageCode: string, _variant = 0, migrationMode: MigrationMode = 'structure'): string {
   const product = parseProductBrief(productInfo);
   const details = kickoff.referenceAnalysis?.details?.length ? kickoff.referenceAnalysis.details : [];
   if (details.length) {
     return details.map((item, index) => {
       const time = normalizeScriptTimestamps(`[${item.time || `${index * 4}-${(index + 1) * 4}s`}]`);
-      const visual = adaptReferenceVisualToProduct(item.visual || item.note || '', product);
+      const environment = migrationMode === 'fidelity'
+        ? (item.environment || '沿用原片环境')
+        : sceneEnvironmentForProduct(product, index);
+      const structureVisuals = [
+        `${product.name}完整亮相，主体约占画面三分之二，先建立清晰产品识别`,
+        `切换到${product.name}的第二有效角度，展示外观、包装或实际使用方式`,
+        `近距离展示${product.name}的真实细节，用可见证据呈现${product.highlights}`,
+        `展示${product.name}的可选规格、外观、包装或定制组合，不添加企业资料未提供的款式`,
+        `以${product.name}的产品矩阵或品牌素材收尾，保持原片的构图密度和节奏`,
+      ];
+      const groundedVisual = migrationMode === 'fidelity'
+        ? adaptReferenceVisualToProduct(item.visual || item.note || '', product, kickoff)
+        : structureVisuals[Math.min(index, structureVisuals.length - 1)];
+      const verifiedProductCue = index === 0 && product.highlights && product.highlights !== '待补充真实卖点'
+        ? `，镜头中的品牌、型号和产品外观均以${product.name}的企业资料为准，重点呈现${product.highlights}`
+        : '';
+      const visual = `${groundedVisual}${verifiedProductCue}`;
       const voice = compact(item.dialogue);
       const subtitle = compact(item.onScreenText || item.subtitle);
       if (languageCode === 'zh') {
         return [
           time,
-          `环境：${item.environment || '沿用原片环境'}`,
+          `环境：${environment}`,
           `景别：${item.shot || '沿用原片景别'}`,
           `运镜：${item.camera || '沿用原片机位'}`,
           `画面：${visual}`,
@@ -1324,7 +1415,7 @@ function buildLocalCloneScript(kickoff: VideoKickoff, productInfo: string, langu
       }
       return [
         time,
-        `Environment: ${item.environment || 'match the reference environment'}`,
+        `Environment: ${environment}`,
         `Shot: ${item.shot || 'match the reference shot size'}`,
         `Camera: ${item.camera || 'match the reference camera'}`,
         `Visual: ${visual}`,
@@ -1346,11 +1437,11 @@ function isStandardCloneStoryboard(value: string): boolean {
   return hasAllFields && !oldSparseFormat && !hasUnnaturalVoiceover(text);
 }
 
-function ensureStandardCloneStoryboard(value: string, kickoff: VideoKickoff, productInfo: string, languageCode: string, strictProductName?: string): { script: string; normalized: boolean } {
+function ensureStandardCloneStoryboard(value: string, kickoff: VideoKickoff, productInfo: string, languageCode: string, strictProductName?: string, migrationMode: MigrationMode = 'structure'): { script: string; normalized: boolean } {
   const sanitized = sanitizeStoryboardScript(value, productInfo, strictProductName).trim();
   if (isStandardCloneStoryboard(sanitized)) return { script: sanitized, normalized: false };
   return {
-    script: sanitizeStoryboardScript(buildLocalCloneScript(kickoff, productInfo, languageCode), productInfo, strictProductName).trim(),
+    script: sanitizeStoryboardScript(buildLocalCloneScript(kickoff, productInfo, languageCode, 0, migrationMode), productInfo, strictProductName).trim(),
     normalized: true,
   };
 }
@@ -1383,13 +1474,14 @@ function ensureDistinctCloneStoryboard(input: {
   strictProductName?: string;
   existingScripts: string[];
   variantSeed: number;
+  migrationMode?: MigrationMode;
 }) {
-  let normalized = ensureStandardCloneStoryboard(input.script, input.kickoff, input.productInfo, input.languageCode, input.strictProductName);
+  let normalized = ensureStandardCloneStoryboard(input.script, input.kickoff, input.productInfo, input.languageCode, input.strictProductName, input.migrationMode);
   if (!isDuplicateCloneScript(normalized.script, input.existingScripts)) return normalized;
 
   for (let offset = 1; offset <= 6; offset += 1) {
     const variantScript = sanitizeStoryboardScript(
-      buildLocalCloneScript(input.kickoff, input.productInfo, input.languageCode, input.variantSeed + offset),
+      buildLocalCloneScript(input.kickoff, input.productInfo, input.languageCode, input.variantSeed + offset, input.migrationMode),
       input.productInfo,
       input.strictProductName,
     ).trim();
@@ -2151,6 +2243,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
 
   // 全局制作状态
   const [mode, setMode] = useState<'material' | 'clone' | 'product'>('material');
+  const [migrationMode, setMigrationMode] = useState<MigrationMode>('structure');
   const [contentMode, setContentMode] = useState<'video' | 'poster'>('video');
   const activeSteps = useMemo(() => contentMode === 'poster' ? POSTER_STEPS : STEPS, [contentMode]);
   const step = activeSteps[Math.min(stepIdx, activeSteps.length - 1)].id;
@@ -2651,6 +2744,11 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     return selectedInfo || productInfo;
   }, [productInfo, selectedProductOptions]);
   const activeProductLabel = useMemo(() => selectedProductLabel(activeProductInfo), [activeProductInfo]);
+  const migrationRecommendation = useMemo(
+    () => recommendMigration(videoKickoff, activeProductInfo),
+    [activeProductInfo, videoKickoff],
+  );
+  const cloneProductFingerprintRef = useRef('');
   const selectedBgmTrack = useMemo(() => bgms.find(track => track.id === bgm) || null, [bgm, bgms]);
   const visiblePlatforms = useMemo(
     () => contentMode === 'poster' ? PLATFORMS.filter(p => p.id === 'facebook' || p.id === 'instagram') : PLATFORMS,
@@ -2666,6 +2764,49 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     setScript(current => sanitizeStoryboardScript(current, activeProductInfo, activeProductLabel));
     setModeScripts(current => current.map(item => ({ ...item, script: sanitizeStoryboardScript(item.script, activeProductInfo, activeProductLabel) })));
   }, [activeProductInfo, activeProductLabel]);
+  useEffect(() => {
+    if (mode === 'clone') setMigrationMode(migrationRecommendation.mode);
+  }, [migrationRecommendation, mode]);
+  useEffect(() => {
+    if (mode !== 'clone' || !videoKickoff?.referenceAnalysis?.details?.length) return;
+    const referenceHasVoice = videoKickoff.referenceAnalysis.details.some(item => !isNonSpeechSfx(item.dialogue || ''));
+    setVoiceoverMode(referenceHasVoice ? 'ai' : 'none');
+  }, [mode, videoKickoff]);
+  useEffect(() => {
+    if (mode !== 'clone' || !videoKickoff?.referenceAnalysis?.details?.length || !activeProductInfo.trim() || !activeProductLabel) return;
+    const fingerprint = `${selectedProductIds.join('|')}::${migrationMode}::${activeProductInfo}`;
+    if (cloneProductFingerprintRef.current === fingerprint) return;
+    cloneProductFingerprintRef.current = fingerprint;
+    // Product identity is part of the generation version. Audio, material
+    // matches and renders derived from the previous product must not survive.
+    setVoiceDrafts({});
+    setVoiceoverAudios({});
+    setVoiceoverUrl(null);
+    setAlignedCuesByLang({});
+    setSelected([]);
+    setScriptRecommendedMaterialIds([]);
+    setStoryboardAssignments({});
+    setStoryboardSourcePlans({});
+    setClipEdits({});
+    setCover('');
+    setRendered(false);
+    setLanguageRenderOutputs({});
+    setRenderOutputPath(null);
+    setSavedToWorks(false);
+    const rebuilt = sanitizeStoryboardScript(
+      buildLocalCloneScript(videoKickoff, activeProductInfo, videoKickoff.language || lang || 'zh', 0, migrationMode),
+      activeProductInfo,
+      activeProductLabel,
+    ).trim();
+    if (!rebuilt) return;
+    const id = `clone-product-${Date.now()}`;
+    setModeScripts(current => [{ id, title: `已结合${activeProductLabel}的对标脚本`, script: rebuilt, mode: 'clone' }, ...current.filter(item => item.mode !== 'clone')]);
+    setActiveModeScriptId(id);
+    setScript(rebuilt);
+    setVoiceoverLines(formatVoiceoverWithTimestamps(rebuilt));
+    setScriptView('timestamp');
+    setModeNotice(`产品已更换为「${activeProductLabel}」：旧脚本、配音、素材匹配和成片结果已失效，已按“${migrationRecommendation.label}”重建可执行分镜。`);
+  }, [activeProductInfo, activeProductLabel, lang, migrationMode, migrationRecommendation.label, mode, selectedProductIds, videoKickoff]);
   useEffect(() => {
     if (contentMode !== 'poster') return;
     if (platform !== 'facebook' && platform !== 'instagram') {
@@ -2807,7 +2948,8 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
           setSelectedProductIds([kickoffOption.id]);
         }
         if (kickoff.productInfo && !hasIncompleteReferenceAnalysis(kickoff)) {
-          const localScript = sanitizeStoryboardScript(buildLocalCloneScript(kickoff, kickoff.productInfo, kickoff.language || lang || 'zh'), kickoff.productInfo);
+          const kickoffMigration = recommendMigration(kickoff, kickoff.productInfo).mode;
+          const localScript = sanitizeStoryboardScript(buildLocalCloneScript(kickoff, kickoff.productInfo, kickoff.language || lang || 'zh', 0, kickoffMigration), kickoff.productInfo);
           const localScriptId = `clone-local-${Date.now()}`;
           setModeScripts([{
             id: localScriptId,
@@ -3573,7 +3715,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
               provider,
               audience,
               sellingPoints,
-              tone: `${tone} · 爆款结构强约束迭代 · 第 ${variantSeed + 1} 版 · 保留原片 hook、镜头顺序、动作节奏和音画形态 · 只做最小必要的产品替换 · 禁止新增口播、字幕、CTA或采购话术`,
+              tone: `${tone} · 迁移方式：${migrationMode === 'fidelity' ? '高保真复刻' : migrationMode === 'structure' ? '结构迁移' : '机制借鉴'} · 第 ${variantSeed + 1} 版 · 保留原片 hook、证明顺序、切镜节奏和音画形态 · ${migrationMode === 'fidelity' ? '仅替换竞品事实' : '按所选产品重建场景、动作和证明内容'} · 禁止新增原片不存在的口播、字幕或 CTA`,
               referenceTitle: cloneReference.video?.title || '',
               referenceAnalysis: cloneReferenceAnalysisText(cloneReference),
               referenceHighlights: cloneReferenceHighlights(cloneReference),
@@ -3588,6 +3730,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
             strictProductName: cloneProductLabel,
             existingScripts: existingCloneScripts,
             variantSeed,
+            migrationMode,
           });
           generatedScript = normalized.script;
           if (normalized.normalized) {
@@ -3609,6 +3752,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
             strictProductName: cloneProductLabel,
             existingScripts: existingCloneScripts,
             variantSeed,
+            migrationMode,
           }).script;
           generatedByFallback = true;
           usedLocalFallback = true;
@@ -3622,6 +3766,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
             strictProductName: cloneProductLabel,
             existingScripts: existingCloneScripts,
             variantSeed,
+            migrationMode,
           }).script;
         }
         outputs.push({
@@ -3699,6 +3844,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
           strictProductName: activeProductLabel,
           existingScripts: modeScripts.filter(item => item.mode === 'clone' && item.id !== activeModeScriptId).map(item => item.script),
           variantSeed: modeScripts.filter(item => item.mode === 'clone').findIndex(item => item.id === activeModeScriptId) + 1,
+          migrationMode,
         }).script
         : sanitizeStoryboardScript(optimized, activeProductInfo, activeProductLabel);
       applyTimestampScript(sanitizedOptimized);
@@ -5158,6 +5304,49 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                   </details>
                 </div>
               </div>
+              {contentMode === 'video' && mode === 'clone' && (
+                <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <Sparkles size={14} className="text-accent" />
+                        <p className="text-sm font-black text-text-primary">AI 推荐迁移方案：{migrationRecommendation.label}</p>
+                        <span className="rounded-full bg-white px-2 py-0.5 text-[9px] font-bold text-emerald-700">已采用</span>
+                      </div>
+                      <p className="mt-1 text-xs leading-relaxed text-text-secondary">{migrationRecommendation.reason}</p>
+                    </div>
+                    <span className="shrink-0 text-[10px] font-semibold text-text-muted">诊断在后台完成，不增加操作步骤</span>
+                  </div>
+                  <div className="mt-3 grid gap-2 md:grid-cols-2">
+                    <div className="rounded-xl border border-emerald-100 bg-white/80 p-3">
+                      <p className="text-[10px] font-black text-emerald-700">保留的爆点机制</p>
+                      {migrationRecommendation.preserve.map(item => <p key={item} className="mt-1 text-[11px] leading-relaxed text-text-secondary">• {item}</p>)}
+                    </div>
+                    <div className="rounded-xl border border-amber-100 bg-white/80 p-3">
+                      <p className="text-[10px] font-black text-amber-700">按企业产品重建</p>
+                      {migrationRecommendation.rebuild.map(item => <p key={item} className="mt-1 text-[11px] leading-relaxed text-text-secondary">• {item}</p>)}
+                    </div>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {([
+                      ['fidelity', '高保真复刻'],
+                      ['structure', '结构迁移'],
+                      ['mechanism', '机制借鉴'],
+                    ] as const).map(([value, label]) => {
+                      const recommended = migrationRecommendation.mode === value;
+                      const risky = value === 'fidelity' && migrationRecommendation.mode !== 'fidelity';
+                      return (
+                        <button key={value} type="button" disabled={risky}
+                          onClick={() => setMigrationMode(value)}
+                          title={risky ? '当前对标视频与企业产品不兼容，禁止直接高保真替换' : undefined}
+                          className={`rounded-lg border px-3 py-1.5 text-[11px] font-bold transition ${migrationMode === value ? 'border-accent bg-accent text-white' : 'border-border bg-white text-text-secondary'} disabled:cursor-not-allowed disabled:opacity-40`}>
+                          {label}{recommended ? '（推荐）' : ''}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
               {false && contentMode === 'poster' && (
                 <Field label="海报风格">
                   <div className="flex flex-wrap gap-2">
@@ -6162,7 +6351,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         );
       }
 
-      /* ② 口播脚本 */
+      /* ② 分镜与声音 */
       case 'script': {
         const currentModeScripts = modeScripts
           .filter(item => item.mode === mode)
@@ -6189,14 +6378,14 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
           <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,48rem)_minmax(320px,1fr)]">
           <div className="min-w-0">
             <div className="flex items-center justify-between mb-4">
-              <SectionTitle title="口播脚本" desc="先生成预估时间戳脚本，再提取口播并生成配音；配音完成后按真实音频自动校准时间轴" noMargin />
+              <SectionTitle title="分镜与声音" desc="先确认爆点迁移后的可执行分镜，再选择保留无口播、AI 配音或上传真人音频" noMargin />
             </div>
 
             <div className="mb-4 grid gap-2 md:grid-cols-3">
               {([
-                { id: 'script' as const, number: 1, title: '生成时间戳脚本', desc: '先确定内容、分镜和预估节奏', done: hasTimestampScript },
-                { id: 'voiceover' as const, number: 2, title: '提取并确认口播', desc: '提取台词并完成多语种适配', done: hasRequestedVoiceDrafts },
-                { id: 'audio' as const, number: 3, title: '生成试听配音', desc: '按真实音频自动校准时间轴', done: voiceoverMode === 'none' ? hasRequestedVoiceDrafts : hasRequestedVoiceovers || (voiceoverMode === 'upload' && Boolean(voiceoverUrl)) },
+                { id: 'script' as const, number: 1, title: '确认可执行分镜', desc: '保留爆点结构，按企业产品重建场景与动作', done: hasTimestampScript },
+                { id: 'voiceover' as const, number: 2, title: '选择声音策略', desc: '保留无口播，或提取台词做多语适配', done: voiceoverMode === 'none' || hasRequestedVoiceDrafts },
+                { id: 'audio' as const, number: 3, title: '生成/确认声音', desc: voiceoverMode === 'none' ? '原片无口播，保留低信息噪声节奏' : '按真实音频校准时间轴', done: voiceoverMode === 'none' || hasRequestedVoiceovers || (voiceoverMode === 'upload' && Boolean(voiceoverUrl)) },
               ]).map(item => (
                 <button type="button" key={item.number} onClick={() => setScriptStageTab(item.id)}
                   className={`rounded-xl border px-3 py-3 text-left transition ${scriptStageTab === item.id ? 'border-accent bg-accent/5 shadow-sm' : item.done ? 'border-accent/20 bg-surface hover:border-accent/40' : 'border-border bg-surface-2 hover:border-border-bright'}`}>
@@ -6217,10 +6406,10 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-black text-text-primary">
-                    {mode === 'material' ? '素材库脚本生成' : mode === 'product' ? '产品脚本生成' : '爆款复刻脚本生成'}
+                    {mode === 'material' ? '素材库分镜生成' : mode === 'product' ? '产品分镜生成' : `${migrationRecommendation.label}分镜生成`}
                   </p>
                   <p className="mt-1 text-xs text-text-muted">
-                    {mode === 'product' ? '先生成带预估时间戳的脚本；配音后会按真实音频校准时间轴，并用第一条脚本同步生成 Seedance 2.0 素材。' : '先生成带预估时间戳的脚本；确认口播并生成配音后，再按真实音频自动校准时间轴。'}
+                    {mode === 'clone' ? `${migrationRecommendation.reason}系统只保留可迁移的钩子、证明顺序与节奏，产品场景和动作以企业资料为准。` : mode === 'product' ? '先生成带预估时间戳的可执行分镜；配音后再按真实音频校准时间轴。' : '按已选素材生成可执行分镜，再选择是否需要口播与配音。'}
                   </p>
                 </div>
 	                <button
@@ -6235,7 +6424,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
 	                  className="inline-flex items-center gap-1.5 rounded-xl bg-accent px-4 py-2.5 text-xs font-bold text-white disabled:opacity-60"
 	                >
                   {modeActionLoading ? <Loader2 size={13} className="animate-spin" /> : <Wand2 size={13} />}
-                  {modeActionLoading ? (modeActionStatus || '生成中…') : mode === 'clone' && script.trim() ? '重新思考生成新脚本' : '生成时间戳脚本'}
+                  {modeActionLoading ? (modeActionStatus || '生成中…') : mode === 'clone' && script.trim() ? '重新生成可执行分镜' : '生成可执行分镜'}
                 </button>
               </div>
               {mode === 'clone' && !videoKickoff?.referenceAnalysis?.details?.length && (

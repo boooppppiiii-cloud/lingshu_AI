@@ -371,12 +371,16 @@ function referenceForbiddenTerms(input: {
   for (const match of raw.matchAll(/#([A-Za-z][A-Za-z0-9_-]{2,})/g)) terms.add(match[1]!);
   for (const match of raw.matchAll(/\b[A-Z][A-Za-z0-9]*(?:[A-Z][A-Za-z0-9]*)+\b/g)) terms.add(match[0]!);
   for (const match of raw.matchAll(/\b[A-Z][a-z]+(?:[A-Z][a-zA-Z0-9]*)+\b/g)) terms.add(match[0]!);
+  // Competitor names often use a single leading capital (for example
+  // "Sinotruk"). Capture title-like Latin tokens too; common platform words
+  // are removed below so they cannot leak through a local fallback.
+  for (const match of raw.matchAll(/\b[A-Z][a-z][A-Za-z0-9-]{3,}\b/g)) terms.add(match[0]!);
   for (const term of ['CeraVe', 'TikTok', 'Instagram', 'Facebook', 'YouTube']) {
     if (raw.toLowerCase().includes(term.toLowerCase())) terms.add(term);
   }
   return Array.from(terms)
     .map(term => term.replace(/^#/, '').trim())
-    .filter(term => term.length >= 3)
+    .filter(term => term.length >= 3 && !/^(TikTok|Instagram|Facebook|YouTube|Video|Official|Factory|Product)$/i.test(term))
     .slice(0, 24);
 }
 
@@ -1068,13 +1072,24 @@ studioRouter.post('/script', async (req, res) => {
   const providerOpt = provider === 'qwen' || provider === 'gemini' ? provider : undefined;
   const selectedProductBrief = productBrief(productInfo);
   const selectedProductCategory = selectedProductBrief.category || compactBriefCategory(selectedProductBrief);
+  const cloneMigrationMode = String(tone).includes('高保真复刻')
+    ? 'fidelity'
+    : String(tone).includes('机制借鉴')
+    ? 'mechanism'
+    : 'structure';
+  const cloneMigrationPolicy = cloneMigrationMode === 'fidelity'
+    ? '当前为“高保真复刻”：产品展示逻辑兼容，可保留环境、动作、构图和镜头顺序，但必须替换竞品品牌、型号、参数与不支持的事实。'
+    : cloneMigrationMode === 'mechanism'
+    ? '当前为“机制借鉴”：只保留钩子类型、信息揭示顺序、证明位置和节奏；环境、主体动作、构图与细节证明均按企业产品和现有素材重建。'
+    : '当前为“结构迁移”：保留原片的时长比例、镜头功能、证明顺序、景别节奏与音画密度；必须按企业产品重建环境、主体动作和可见证据，禁止沿用跨品类场景和物体。';
   const cloneFusionRules = `爆款素材迭代规则（只在内部执行，不要输出规则或解释）：
+0. ${cloneMigrationPolicy}
 1. REFERENCE_ANALYSIS 是灵感大屏已经完成的原视频分析，是原片结构、音画和爆点的唯一事实来源；禁止重新分析、重新定义或套用固定营销模板。
-2. 原分析有多少段就输出多少段；逐段保留时间、顺序、时长比例、环境、景别、运镜、构图、动作、转场、配乐和节拍。不得合并、补段、重排或改成固定 5 段。
+2. 原分析有多少段就输出多少段；逐段保留时间、顺序、时长比例、镜头功能、景别节奏、配乐和节拍。环境、构图与动作是否保留必须服从第 0 条迁移方式。不得合并、补段、重排或改成固定 5 段。
 3. 爆点可能是视觉揭晓、动作、反差、细节、音效、卡点、人物反应、字幕或 CTA，不得把“采购痛点”默认当作爆点。
-4. 只做最小必要替换：把原产品对象替换为产品信息中的选定产品；没有冲突的场景、动作、镜头关系和节奏全部保留。
+4. 只做受约束的产品替换：把原产品对象、品牌和型号替换为“产品信息”中的选定产品；没有冲突的场景、动作、镜头关系和节奏全部保留。
 5. 原片没有口播就输出“台词：无”；原片没有屏幕文字就输出“字幕：无”；原片没有 CTA 就不得新增 CTA。
-6. 禁止新增采购顾虑、询盘、报价、打样、MOQ、认证、交期、包装、测试、对比、人物或剧情，除非原分析同一镜头明确存在，且产品资料支持相关事实。
+6. 不得新增人物、剧情、CTA 或镜头功能。但必须在原片现有的产品展示、细节特写、口播或字幕位中，写入选定产品名称和至少 1 个企业中心已核实事实（如规格、材质、定制能力、MOQ 或认证）；只能使用产品资料中真实存在的字段。
 7. 不得把分析中的表达意图、改编建议、未展示因果写进实际画面；只允许使用原分析记录的可见、可听内容。
 8. 缺失信息用“无”或“沿用原片”表达，禁止用想象补齐。分析缺少逐镜详情时应拒绝生成，不得降级为自由创作。
 9. 输出必须干净：只输出时间戳分镜成稿，不输出标题、前言、总结、映射表、自检、Markdown、代码围栏或分析说明。`;
@@ -1180,20 +1195,20 @@ ${cloneFusionRules}
 
 每个场景必须严格对应“对标视频脚本详析”的同一时间段，不要合并、跳段或擅自重排。使用以下固定格式，不要 markdown 符号，不要缺字段：
 [start-end s]
-环境：<照抄或贴近原详析环境>
+环境：<按迁移方式保留原环境，或重建为适合企业产品的可拍场景>
 景别：<照抄原详析景别>
 运镜：<照抄原详析运镜>
 镜头功能：<钩子/效果证明/价格反差/产品介绍/信任证明/CTA等单一主要功能>
-画面：<保留原详析动作、色彩、材质、卡点节奏和构图，只把原产品/行业对象替换成我方产品对象>
+画面：<保留该段镜头功能与卡点节奏；高保真时做产品替换，结构迁移/机制借鉴时必须按企业产品重建可执行动作与可见证据>
 配乐：<照抄或贴近原详析配乐音效>
 台词：<仅当原分析同一镜头存在口播/对白时保留或做必要产品替换，否则写“无”>
 字幕：<仅当原分析同一镜头存在屏幕文字时保留或做必要产品替换，否则写“无”>
 
 硬性规则：
-- 逐段复刻对标视频脚本详析：时间段、环境、景别、运镜、配乐、画面动作、色彩质感和卡点节奏必须尽量与原详析一致。
+- 逐段保留对标视频的时间段、镜头功能、景别节奏、配乐形态和卡点密度；环境、动作、构图和产品证据必须服从“${cloneMigrationMode}”迁移策略。
 - “可见事实”优先级高于标题、口播和表达意图。必须依据相邻密集帧定位动作边界；首帧已经存在的湿润、遮挡、手势或物体状态必须写成初始状态，不能倒推出未拍到的形成过程。
 - “表达意图”和“未展示因果”只能帮助理解创意，不得进入实际画面；禁止把推断写成已发生的动作。
-- 如果爬取视频行业和模式1产品所属行业不一致，只替换原产品/原行业对象为模式1选定产品；不要改变原详析的场地、构图、镜头节奏和创意动作。
+- 如果对标视频与选定产品跨品类，不得直接做名词替换；必须保留镜头功能和节奏，重建与企业产品相符的场景、动作、构图和证明内容。
 - 不得出现对标视频原行业、原品类、原产品功效；但可以保留无行业冲突的环境、色彩、造型、动作、音效和节奏描述。
 - 原片开头依靠什么形成 hook，就保留什么；禁止默认改成采购顾虑或销售口播。
 - 原片相邻镜头允许使用相同环境和机位；不得为了“丰富”而擅自改场景、加动作或增加剧情功能。
@@ -1201,6 +1216,7 @@ ${cloneFusionRules}
 - 画面不能写“真实使用场景”“痛点特写”这种空泛词，必须写清楚人物在什么环境里做什么动作，镜头拍到什么具体物件或结果。
 - 不要写 generic phrases like "premium quality", "high conversion", "boost sales", "worth buying"，除非绑定具体产品细节。
 - 不得复制或提及对标视频标题、原 caption、hashtag、品牌名、原品类、原产品功效。
+- 成稿必须出现选定产品名称，并至少使用 1 个“产品信息”中的已核实卖点或规格；不能只把竞品名换成泛称。
 - 不得输出分析摘要、基础要求、竞品识别、产品替换说明、成片目标或任何“对标视频”说明，只输出新的可拍分镜。
 - 缺少数据时写“无”或“沿用原片”，不得新增样品、报价或 CTA。
 - 最终只输出 storyboard 成稿。`
