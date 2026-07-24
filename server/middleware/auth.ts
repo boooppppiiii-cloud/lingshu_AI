@@ -23,7 +23,11 @@ export async function requireAuth(
   // that loads the studio first synchronizes the same token into an HttpOnly,
   // same-site asset session cookie, so proxied video/audio routes can use it.
   const result = await auth.verifyToken(req.headers.authorization) || await assetIdentity(req);
-  const signedMedia = (req.method === 'GET' || req.method === 'HEAD') && /^\/materials\/pb\/[^/]+\/(?:media|poster)$/.test(req.path)
+  // Browser media elements cannot attach an Authorization header. A signed URL
+  // is already scoped to the exact request path, tenant and expiry by HMAC, so
+  // accept a valid token for any GET/HEAD asset route instead of coupling auth
+  // to Express' mount-relative req.path shape.
+  const signedMedia = (req.method === 'GET' || req.method === 'HEAD')
     ? verifyAssetToken(req.query.assetToken, `${req.baseUrl}${req.path}`)
     : null;
   if (!result && !signedMedia) {
