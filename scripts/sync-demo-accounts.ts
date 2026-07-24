@@ -149,7 +149,13 @@ async function syncAccount(token: string, entry: RegistryEntry): Promise<{ email
 
 async function main(): Promise<void> {
   const registry = JSON.parse(fs.readFileSync(REGISTRY_FILE, 'utf8')) as Record<string, RegistryEntry>;
-  const accounts = Object.values(registry).filter((entry) => entry.email && entry.password);
+  const workbenchAdminEmail = String(process.env.WORKBENCH_ADMIN_EMAIL || '').trim().toLowerCase();
+  const workbenchAdminPassword = String(process.env.WORKBENCH_ADMIN_PASSWORD || '');
+  const accounts = Object.values(registry)
+    .filter((entry) => entry.email && entry.password)
+    .map(entry => entry.status === 'admin' && entry.email.trim().toLowerCase() === workbenchAdminEmail && workbenchAdminPassword
+      ? { ...entry, password: workbenchAdminPassword }
+      : entry);
   const token = await authToken();
 
   const nextRegistry = { ...registry };

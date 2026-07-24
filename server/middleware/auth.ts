@@ -27,8 +27,9 @@ export async function requireAuth(
   // is already scoped to the exact request path, tenant and expiry by HMAC, so
   // accept a valid token for any GET/HEAD asset route instead of coupling auth
   // to Express' mount-relative req.path shape.
+  const originalPath = new URL(req.originalUrl || req.url, 'http://local').pathname;
   const signedMedia = (req.method === 'GET' || req.method === 'HEAD')
-    ? verifyAssetToken(req.query.assetToken, `${req.baseUrl}${req.path}`)
+    ? verifyAssetToken(req.query.assetToken, originalPath)
     : null;
   if (!result && !signedMedia) {
     res.status(401).json({ error: 'Unauthorized' });
