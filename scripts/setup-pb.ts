@@ -69,6 +69,32 @@ const COLLECTIONS: { name: string; fields: Field[] }[] = [
     ],
   },
   {
+    // Shared, licensed production footage used by the AI material picker.
+    // Keep the schema in the normal bootstrap path so a fresh production
+    // PocketBase does not come up with an empty material library.
+    name: 'materials',
+    fields: [
+      { name: 'title', type: 'text', required: true },
+      { name: 'folder', type: 'text', required: true },
+      { name: 'type', type: 'text', required: true },
+      { name: 'duration', type: 'number' },
+      { name: 'width', type: 'number' },
+      { name: 'height', type: 'number' },
+      { name: 'sizeBytes', type: 'number' },
+      { name: 'sha256', type: 'text', required: true },
+      { name: 'tags', type: 'text' },
+      { name: 'industry', type: 'text' },
+      { name: 'shotFunction', type: 'text' },
+      { name: 'applicability', type: 'text' },
+      { name: 'scope', type: 'text', required: true },
+      { name: 'usage', type: 'text', required: true },
+      { name: 'sourceType', type: 'text' },
+      { name: 'sourceName', type: 'text' },
+      { name: 'videoFile', type: 'file', required: true, maxSelect: 1, maxSize: 104857600 },
+      { name: 'posterFile', type: 'file', required: true, maxSelect: 1, maxSize: 5242880 },
+    ],
+  },
+  {
     name: 'scripts',
     fields: [
       { name: 'tenantId', type: 'text' },

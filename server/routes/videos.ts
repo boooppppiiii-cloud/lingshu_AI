@@ -17,6 +17,7 @@ import type { Platform, VideoAiAnalysis, VideoStatus } from '../types/index.js';
 import { isDemoMode } from '../lib/demo.js';
 import { recordVideoAdminAlert, updateVideoAdminAlertByRecordId } from '../lib/videoAdminAlerts.js';
 import { requireAdminUser } from '../lib/demoAccounts.js';
+import { signAssetUrl } from '../lib/assetAccess.js';
 
 export const videosRouter = Router();
 videosRouter.use(requireAuth);
@@ -327,6 +328,12 @@ function publicVideoRecord<T extends Record<string, unknown>>(record: T): T {
     delete scrubbed[key];
   }
   return { ...publicRecord, aiAnalysis: JSON.stringify(scrubbed) };
+}
+
+function withSignedThumbnail<T extends Record<string, unknown>>(record: T, tenantId: string): T {
+  const thumbnailUrl = String(record.thumbnailUrl || '');
+  if (!thumbnailUrl.startsWith('/media/')) return record;
+  return { ...record, thumbnailUrl: signAssetUrl(thumbnailUrl, tenantId) } as T;
 }
 
 function compactVideoPipelineError(message: unknown, max = 900): string {
@@ -1552,10 +1559,10 @@ videosRouter.get('/', async (req, res) => {
     // A second full collection scan here doubled list latency as the inspiration
     // library grew. The first page contains the latest 20 records, which is also the
     // product definition of the public recent-account baseline.
-    res.json({ ...result, items: withImagePublicBaselines(result.items) });
+    res.json({ ...result, items: withImagePublicBaselines(result.items).map(item => withSignedThumbnail(item, tenantId)) });
     return;
   }
-  res.json(result);
+  res.json({ ...result, items: result.items.map(item => withSignedThumbnail(item, tenantId)) });
 });
 
 videosRouter.post('/:id/reanalyze-image', async (req, res) => {
