@@ -1,3 +1,4 @@
+import { randomBytes } from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -100,7 +101,7 @@ export function allowedDemoAccounts(): string[] {
 
 export function isAllowedDemoAccount(email: string): boolean {
   const allowed = allowedDemoAccounts();
-  if (!allowed.length) return true; // no whitelist configured → open to all
+  if (!allowed.length) return process.env.NODE_ENV !== 'production';
   return allowed.includes(norm(email));
 }
 
@@ -157,9 +158,8 @@ export function consumeDemoGuide(email: string): void {
   writeRegistry(registry);
 }
 
-function expiredPassword(email: string): string {
-  const local = norm(email).split('@')[0].replace(/[^a-z0-9]/g, '').slice(-6) || 'demo';
-  return `Off@${local}#${new Date().getFullYear()}`;
+function expiredPassword(): string {
+  return `Off@${randomBytes(24).toString('base64url')}#A1`;
 }
 
 export async function rotateExpiredTrialPassword(user: { id?: string; email?: string } | null, reason = 'trial_expired'): Promise<void> {
@@ -167,7 +167,7 @@ export async function rotateExpiredTrialPassword(user: { id?: string; email?: st
   const entry = readDemoAccountRegistry()[norm(user.email)];
   if (entry?.rotatedAt) return;
 
-  const password = expiredPassword(user.email);
+  const password = expiredPassword();
   const ok = await pbPatch('users', user.id, { password, passwordConfirm: password });
   if (!ok) return;
   upsertDemoAccountRegistry(user.email, {
