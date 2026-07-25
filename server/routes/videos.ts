@@ -17,7 +17,7 @@ import type { Platform, VideoAiAnalysis, VideoStatus } from '../types/index.js';
 import { isDemoMode } from '../lib/demo.js';
 import { recordVideoAdminAlert, updateVideoAdminAlertByRecordId } from '../lib/videoAdminAlerts.js';
 import { requireAdminUser } from '../lib/demoAccounts.js';
-import { signAssetUrl } from '../lib/assetAccess.js';
+import { ASSET_SESSION_COOKIE, cookieValue, signAssetUrl } from '../lib/assetAccess.js';
 
 export const videosRouter = Router();
 videosRouter.use(requireAuth);
@@ -1648,6 +1648,39 @@ videosRouter.get('/:id/media-url', async (req, res) => {
   res.json({ url });
 });
 
+/**
+ * `<img>` 发不出 Authorization 头，只能带 asset session cookie，
+ * 而 requireAdminUser 只认头部。跨租户封面对管理员可见，这里补上 cookie 回落。
+ */
+async function isAdminForAssetRequest(req: Request): Promise<boolean> {
+  if (await requireAdminUser(req)) return true;
+  const cookieToken = cookieValue(req, ASSET_SESSION_COOKIE);
+  if (!cookieToken) return false;
+  const proxied = Object.create(req, {
+    headers: { value: { ...req.headers, authorization: `Bearer ${cookieToken}` } },
+  }) as Request;
+  return Boolean(await requireAdminUser(proxied));
+}
+
+// 封面：直接从记录自己的 PocketBase 文件字段读。
+// <img> 带不了 Authorization 头，但 requireAuth 会回落到 asset session cookie。
+videosRouter.get('/:id/thumbnail', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const record = await store.getById(COL, req.params.id);
+  if (!record) { res.status(404).end(); return; }
+  if (record.tenantId !== tenantId && !await isAdminForAssetRequest(req)) { res.status(404).end(); return; }
+
+  const filename = String(record.thumbnailFile || '');
+  if (!filename) { res.status(404).end(); return; }
+  const file = await fetchFile(COL, req.params.id, filename);
+  if (!file) { res.status(404).end(); return; }
+
+  res.setHeader('Content-Type', file.contentType.startsWith('image/') ? file.contentType : 'image/jpeg');
+  res.setHeader('Cache-Control', 'private, max-age=86400');
+  res.setHeader('Content-Length', file.buf.length);
+  res.end(file.buf);
+});
+
 videosRouter.patch('/:id/analysis-corrections', async (req, res) => {
   const { tenantId, userId } = res.locals as AuthLocals;
   const record = await store.getById(COL, req.params.id);
@@ -2032,9 +2065,24 @@ function isMissingLocalThumbnail(url: string): boolean {
   return !fs.existsSync(path.join(MEDIA_DIR, path.basename(url)));
 }
 
+/** 封面在应用内的稳定地址：指向记录自己，不依赖任何本地目录。 */
+export function recordThumbnailUrl(recordId: string): string {
+  return `/api/overseas/videos/${recordId}/thumbnail`;
+}
+
+function isRecordThumbnailUrl(url: string): boolean {
+  return /^\/api\/overseas\/videos\/[^/]+\/thumbnail$/.test(url);
+}
+
+/**
+ * 抓取远端封面并存进记录自己的 PocketBase file 字段。
+ *
+ * 之前这里只写 data/media/<id>.thumb.jpg —— 那个目录属于单个代码副本，
+ * 而 PocketBase 是多个副本共用的，于是换目录跑 = 封面集体 404。
+ * 现在图片跟记录绑在一起；本地文件只作为写入失败时的兜底。
+ */
 async function cacheThumbnailLocally(recordId: string, url: string): Promise<string | null> {
   try {
-    fs.mkdirSync(MEDIA_DIR, { recursive: true });
     const resp = await fetch(url, {
       signal: AbortSignal.timeout(20_000),
       headers: {
@@ -2047,6 +2095,24 @@ async function cacheThumbnailLocally(recordId: string, url: string): Promise<str
     if (!type.startsWith('image/')) return null;
     const buf = Buffer.from(await resp.arrayBuffer());
     if (!buf.length || buf.length > 5 * 1024 * 1024) return null;
+    return await storeThumbnailBuffer(recordId, buf, type);
+  } catch {
+    return null;
+  }
+}
+
+/** 把封面字节写进 PB 文件字段；PB 不可用时退回本地目录，保证抓取链路不被卡死。 */
+async function storeThumbnailBuffer(recordId: string, buf: Buffer, contentType: string): Promise<string | null> {
+  const ext = contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg';
+  const stored = await attachFile(COL, recordId, 'thumbnailFile', {
+    name: `${recordId}.thumb.${ext}`,
+    buf,
+    contentType,
+  }).catch(() => null);
+  if (stored) return recordThumbnailUrl(recordId);
+
+  try {
+    fs.mkdirSync(MEDIA_DIR, { recursive: true });
     const file = `${recordId}.thumb.jpg`;
     fs.writeFileSync(path.join(MEDIA_DIR, file), buf);
     return `/media/${file}`;
@@ -2176,6 +2242,65 @@ export async function repairMissingCrawledThumbnails(records: unknown[], limit =
     }
   }
   return repaired;
+}
+
+// 提交全片精确分析时会写入 requestedAnalysisMode，而清掉它的只有两条路径：分析成功，
+// 或 persistManualVideoFailure 记录失败。两者都没走到时（服务重启、手动上传的分析没触发、
+// 运维任务丢失），标记就永远留在记录上——前端「精确分析生成中…」按钮是 disabled 的，
+// 用户连重试都点不了。超时后主动释放，让它退回可重试状态。
+const EXACT_ANALYSIS_STALL_MS = Math.max(
+  5 * 60_000,
+  Number(process.env.EXACT_ANALYSIS_STALL_MS || 30 * 60_000),
+);
+
+// 卡住的记录是少数，但分布在整个库里，只扫第一页会漏。全量翻页，靠节流控制开销。
+let lastStallSweepAt = 0;
+
+async function releaseStalledExactAnalysis(): Promise<number> {
+  const now = Date.now();
+  if (now - lastStallSweepAt < Math.max(60_000, Math.floor(EXACT_ANALYSIS_STALL_MS / 6))) return 0;
+  lastStallSweepAt = now;
+
+  const candidates: Record<string, unknown>[] = [];
+  let page = 1;
+  for (;;) {
+    const result = await store.list<Record<string, unknown>>(COL, { page, perPage: 500 });
+    for (const record of result.items) {
+      if (parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {}).requestedAnalysisMode === 'exact') {
+        candidates.push(record);
+      }
+    }
+    if (page >= result.totalPages || page >= 20) break;
+    page += 1;
+  }
+  if (!candidates.length) return 0;
+
+  // 运维队列里还在排队/处理中的不抢，交给 worker 继续跑完。
+  const inFlight = new Set(loadCrawlerOpsTasks()
+    .filter(task => ['queued', 'pushed', 'processing'].includes(task.status))
+    .map(task => task.recordId));
+
+  let released = 0;
+  for (const record of candidates) {
+    const recordId = String(record.id || '');
+    if (!recordId || inFlight.has(recordId)) continue;
+    const analysis = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
+    const startedAt = Date.parse(String(analysis.reanalyzeQueuedAt || record.updated || ''));
+    if (Number.isFinite(startedAt) && now - startedAt < EXACT_ANALYSIS_STALL_MS) continue;
+    await store.update(COL, recordId, {
+      aiAnalysis: JSON.stringify({
+        ...analysis,
+        requestedAnalysisMode: undefined,
+        // 超时的升级不能冒充已完成的精确分析。
+        analysisMode: analysis.analysisMode === 'exact' ? 'exact' : 'strategy',
+        videoLevelFailureStatus: analysis.videoLevelFailureStatus || '全片精确分析超时/未完成',
+        analysisError: analysis.analysisError || 'exact_analysis_stalled',
+      }),
+    });
+    released += 1;
+    console.warn(`[videos] exact analysis stalled, released for retry: ${recordId}`);
+  }
+  return released;
 }
 
 export async function backfillMissingCrawledMedia(records: unknown[]): Promise<void> {
@@ -5420,6 +5545,9 @@ function thumbnailForPlatform(platform: Platform, sourceUrl: string, rawThumbnai
 
 function normalizeThumbnailUrl(raw: string): string {
   const url = String(raw || '').trim().replace(/\\u0026/g, '&');
+  // PB 文件字段里的封面用 /api/overseas/videos/<id>/thumbnail 表示，同样是合法封面，
+  // 不认它的话修复逻辑会判定"没有封面"并无限重爬。
+  if (isRecordThumbnailUrl(url)) return url;
   if (!/^https?:\/\//i.test(url) && !url.startsWith('/media/')) return '';
   if (/\.(?:mp4|mov|webm|m3u8)(?:[?#]|$)/i.test(url)) return '';
   return url;
@@ -6414,6 +6542,11 @@ export async function runCrawlerOpsWorkerOnce(): Promise<{
   let skipped = 0;
   try {
     await enqueueOpsTasksFromRecords();
+    // 回收卡死的精确分析请求。失败不应连累队列本身，单独兜住。
+    await releaseStalledExactAnalysis().catch(error => {
+      console.warn('[videos] stalled exact-analysis sweep failed:', error instanceof Error ? error.message : error);
+      return 0;
+    });
     const candidates = pendingCrawlerOpsTasks(maxAttempts).slice(0, maxBatch);
     for (const task of candidates) {
       picked += 1;
