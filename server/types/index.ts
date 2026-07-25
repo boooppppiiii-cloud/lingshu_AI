@@ -93,6 +93,15 @@ export interface VideoAiAnalysis {
     needsReview?: boolean;
     estimatedSpeechDuration?: number;
     dialogueFits?: boolean;
+    /**
+     * 该镜头的爆款潜力判断，由模型基于实际画面给出。
+     * 缺失时前端回退到关键词启发式（历史记录没有这个字段）。
+     */
+    viralPotential?: {
+      score?: number;
+      mechanisms?: string[];
+      whyEffective?: string;
+    };
   }>;
   recommendedScriptType: 'voiceover' | 'storyboard';
 }

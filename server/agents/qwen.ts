@@ -93,7 +93,7 @@ ${modeInstruction}
 - firstTenSeconds: object，详细分析视频前 10 秒，包含中文字段 atmosphere、audioVisual、camera、visuals、voiceMusic
 - coarseStructure: array，覆盖原视频完整时长，按内容结构变化拆解；每项包含 time、label、description
 - scriptSummary15s: object，15 秒脚本详析摘要，包含 visualStyle、coreEmotion、competitors
-  - scriptDetails15s: array（字段名仅为历史兼容），必须覆盖原视频完整时长，不得在15秒处截断；按导演镜头详析；每项包含 time（start-end区间，最多两位小数）、environment、shot、camera、purpose、visual、dialogue、onScreenText、ambientSound、bgm、soundEffects、beats、persistentState、authenticity、observedFacts、inferredIntent、causalGap、omniPrompt、omniNegativePrompt、confidence、needsReview、subtitle、audio、note。observedFacts 只写可见事实；inferredIntent 明确标注推断的表达意图；causalGap 写意图中存在但视频未展示的因果动作；omniPrompt 用英文写可直接交给视频模型的逐时段动作提示，必须复现可见动作，不得擅自补 causalGap；omniNegativePrompt 用英文列出最容易生成错的动作、物理关系和 UI。主体动作/对象/运镜/营销功能改变才切镜；长镜头用 beats 记录镜头内 time/action/dialogue/onScreenText。口播、画面字幕、环境声、BGM和音效必须分开；无法确认留空，专名/价格/左右方向/ASR不确定需 needsReview=true
+  - scriptDetails15s: array（字段名仅为历史兼容），必须覆盖原视频完整时长，不得在15秒处截断；按导演镜头详析；每项包含 time（start-end区间，最多两位小数）、environment、shot、camera、purpose、visual、dialogue、onScreenText、ambientSound、bgm、soundEffects、beats、persistentState、authenticity、observedFacts、inferredIntent、causalGap、omniPrompt、omniNegativePrompt、confidence、needsReview、viralPotential（object：score 为 0-100 且必须拉开差距，锚点 85以上=强钩子或强证据、70-84=有明确记忆点、50-69=功能性过渡、50以下=信息稀薄；mechanisms 最多4项只写本镜头真实成立的机制，没有就空数组；whyEffective 一句话说明理由并引用本镜头具体画面或台词，低于50分要说明弱在哪里。禁止套用通用话术）、subtitle、audio、note。observedFacts 只写可见事实；inferredIntent 明确标注推断的表达意图；causalGap 写意图中存在但视频未展示的因果动作；omniPrompt 用英文写可直接交给视频模型的逐时段动作提示，必须复现可见动作，不得擅自补 causalGap；omniNegativePrompt 用英文列出最容易生成错的动作、物理关系和 UI。主体动作/对象/运镜/营销功能改变才切镜；长镜头用 beats 记录镜头内 time/action/dialogue/onScreenText。口播、画面字幕、环境声、BGM和音效必须分开；无法确认留空，专名/价格/左右方向/ASR不确定需 needsReview=true
 - recommendedScriptType: "voiceover" | "storyboard"`;
 
   const meta = [
@@ -131,7 +131,7 @@ ${modeInstruction}
     const repair = await client().chat.completions.create({
       model: opts.analysisMode === 'exact' ? QWEN_EXACT_VL_MODEL() : QWEN_VL_MODEL(),
       messages: [
-        { role: 'system', content: `你是视频导演分镜修复器。只输出合法JSON对象，且只能包含scriptDetails15s。首4秒是每秒3帧，必须逐相邻帧比较，不得跳过亚秒动作。每项包含time、environment、shot、camera、purpose、visual、dialogue、onScreenText、ambientSound、bgm、soundEffects、beats、persistentState、authenticity、observedFacts、inferredIntent、causalGap、omniPrompt、omniNegativePrompt、confidence、needsReview、subtitle、audio、note。observedFacts只能写实际可见内容，inferredIntent写推断含义，causalGap写未展示的因果动作；绝不能把causalGap补进visual、beats或omniPrompt。omniPrompt和omniNegativePrompt使用英文。time必须为start-end s区间；口播与屏幕字幕分离；品牌、款名、价格、左右眼不确定时needsReview=true。` },
+        { role: 'system', content: `你是视频导演分镜修复器。只输出合法JSON对象，且只能包含scriptDetails15s。首4秒是每秒3帧，必须逐相邻帧比较，不得跳过亚秒动作。每项包含time、environment、shot、camera、purpose、visual、dialogue、onScreenText、ambientSound、bgm、soundEffects、beats、persistentState、authenticity、observedFacts、inferredIntent、causalGap、omniPrompt、omniNegativePrompt、confidence、needsReview、viralPotential（object：score 为 0-100 且必须拉开差距，锚点 85以上=强钩子或强证据、70-84=有明确记忆点、50-69=功能性过渡、50以下=信息稀薄；mechanisms 最多4项只写本镜头真实成立的机制，没有就空数组；whyEffective 一句话说明理由并引用本镜头具体画面或台词，低于50分要说明弱在哪里。禁止套用通用话术）、subtitle、audio、note。observedFacts只能写实际可见内容，inferredIntent写推断含义，causalGap写未展示的因果动作；绝不能把causalGap补进visual、beats或omniPrompt。omniPrompt和omniNegativePrompt使用英文。time必须为start-end s区间；口播与屏幕字幕分离；品牌、款名、价格、左右眼不确定时needsReview=true。` },
         { role: 'user', content: content as any },
       ],
       response_format: { type: 'json_object' },
