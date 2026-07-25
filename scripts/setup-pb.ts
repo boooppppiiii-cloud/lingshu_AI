@@ -66,6 +66,9 @@ const COLLECTIONS: { name: string; fields: Field[] }[] = [
       { name: 'crawledAt', type: 'text' },
       // The raw video blob — stored on PB disk, not in the SQLite row.
       { name: 'videoFile', type: 'file', maxSelect: 1, maxSize: 104857600 },
+      // 封面同样跟着记录走。此前封面只落在各自代码副本的 data/media/ 里，
+      // 而 PocketBase 是共用的，换一份工作目录跑就会让所有 /media/*.thumb.jpg 变 404。
+      { name: 'thumbnailFile', type: 'file', maxSelect: 1, maxSize: 5242880, mimeTypes: ['image/jpeg', 'image/png', 'image/webp'] },
     ],
   },
   {
@@ -92,6 +95,12 @@ const COLLECTIONS: { name: string; fields: Field[] }[] = [
       { name: 'sourceName', type: 'text' },
       { name: 'videoFile', type: 'file', required: true, maxSelect: 1, maxSize: 104857600 },
       { name: 'posterFile', type: 'file', required: true, maxSelect: 1, maxSize: 5242880 },
+      // 分镜匹配所需：素材要先切成片段，才能与对标视频的分镜比对。
+      // 缺这三个字段时云端素材永远进不了匹配池，可复制性恒为「弱」。
+      { name: 'pinned', type: 'bool' },
+      { name: 'segmentAnalysisStatus', type: 'text' },
+      { name: 'segmentAnalysisError', type: 'text' },
+      { name: 'segments', type: 'json', maxSize: 2000000 },
     ],
   },
   {

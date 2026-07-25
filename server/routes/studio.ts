@@ -24,8 +24,10 @@ import { generatePosterImage, imageExt, type ReferenceImage } from '../lib/image
 import { getPublicOrigin } from '../lib/oauthConfig.js';
 import { releaseSeedanceBudget, reserveSeedanceBudget, type SeedanceBudgetReservation } from '../lib/seedanceBudget.js';
 import { canAppearInSharedLibrary, isReferenceOnlyMaterial, materialUsage, type MaterialUsage } from '../lib/materialPolicy.js';
-import { fetchCloudMaterial, listCloudMaterials } from '../lib/cloudMaterials.js';
+import { fetchCloudMaterial, getCloudMaterialRecord, listCloudMaterials, updateCloudMaterial } from '../lib/cloudMaterials.js';
 import { analyzeVideo } from '../agents/gemini.js';
+import { analyzeVideoFramesWithQwen } from '../agents/qwen.js';
+import { extractQwenAnalysisFrames } from './videos.js';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 import { signAssetUrl, sharedAssetRelativePath, tenantAssetDir, tenantAssetRelativePath } from '../lib/assetAccess.js';
 import { requireAdminUser } from '../lib/demoAccounts.js';
@@ -2290,8 +2292,86 @@ studioRouter.post('/materials', async (req, res) => {
 
 // POST /studio/materials/:id/analyze-segments
 // Gemini 按动作/主体/镜头功能切片；截取区间来自实际视频时间轴，不再用比例猜测。
+/**
+ * 素材片段分析的模型选择。
+ *
+ * 此前这里直接调 Gemini，绕过了 VIDEO_ANALYSIS_PROVIDER 开关——对标视频分析早已切到千问，
+ * 素材分镜却还在打 Gemini，额度耗尽后固定返回 429。改为与视频分析同一套选择逻辑：
+ * 千问吃关键帧（需先抽帧），Gemini 吃整段视频。
+ */
+async function analyzeMaterialVideo(videoPath: string, buffer: Buffer, duration: number) {
+  if (process.env.VIDEO_ANALYSIS_PROVIDER?.trim().toLowerCase() === 'qwen') {
+    const frames = await extractQwenAnalysisFrames(videoPath, 30, duration);
+    if (frames.length) {
+      return await analyzeVideoFramesWithQwen({ frames, duration, analysisMode: 'exact' });
+    }
+    console.warn('[studio] 抽帧为空，回退 Gemini 分析素材片段');
+  }
+  return await analyzeVideo({ videoBase64: buffer.toString('base64'), mimeType: 'video/mp4' });
+}
+
+/**
+ * 云端素材的片段分析。
+ *
+ * 本地路径依赖 data/materials.json 与 data/media 下的实体文件，而云端素材两者都没有，
+ * 且没有 tenantId 字段，走本地分支必然 404。这里改为：从 PocketBase 取视频 →
+ * 分析 → 片段和状态写回同一条记录，让云端素材也能进入分镜匹配池。
+ */
+async function analyzeCloudMaterialSegments(pbId: string, tenantId: string): Promise<{ status: number; body: Record<string, unknown> }> {
+  const record = await getCloudMaterialRecord(pbId);
+  if (!record) return { status: 404, body: { ok: false, error: 'Material not found' } };
+  if (String(record.type || 'video') !== 'video') {
+    return { status: 400, body: { ok: false, error: '仅视频素材支持片段分析' } };
+  }
+
+  await updateCloudMaterial(pbId, { segmentAnalysisStatus: 'analyzing', segmentAnalysisError: '' });
+  const tempDir = path.join(MEDIA_DIR, '../analysis-temp');
+  const tempPath = path.join(tempDir, `material-${pbId}.mp4`);
+  try {
+    fs.mkdirSync(tempDir, { recursive: true });
+    const media = await fetchCloudMaterial(pbId, 'videoFile');
+    if (!media?.ok) throw new Error('云端素材文件不可读');
+    const buffer = Buffer.from(await media.arrayBuffer());
+    if (!buffer.length) throw new Error('云端素材文件为空');
+    fs.writeFileSync(tempPath, buffer);
+
+    const analysis = await analyzeMaterialVideo(tempPath, buffer, Number(record.duration || 0));
+    const details = analysis.scriptDetails15s || [];
+    if (!details.length) throw new Error('模型未返回可用的片段时间轴');
+
+    // analysisDetailToSegment 只用到 id 与 duration，构造最小对象即可。
+    const material = { id: `pb-${pbId}`, duration: Number(record.duration || 0) } as Material;
+    const segments: MaterialSegment[] = [];
+    let fallbackStart = 0;
+    for (let index = 0; index < details.length; index++) {
+      const segment = analysisDetailToSegment(material, details[index]!, index, fallbackStart);
+      const posterFile = tenantAssetRelativePath(tenantId, `${material.id}.segment-${index + 1}.jpg`);
+      if (await extractPoster(tempPath, path.join(MEDIA_DIR, posterFile), Math.min(segment.end, segment.start + 0.2))) {
+        segment.poster = `/media/${posterFile}`;
+      }
+      segments.push(segment);
+      fallbackStart = segment.end;
+    }
+
+    const saved = await updateCloudMaterial(pbId, { segments, segmentAnalysisStatus: 'completed', segmentAnalysisError: '' });
+    if (!saved) throw new Error('片段写回云端失败');
+    return { status: 200, body: { ok: true, materialId: material.id, segments } };
+  } catch (error: any) {
+    const message = String(error?.message || error || '片段分析失败').slice(0, 500);
+    await updateCloudMaterial(pbId, { segmentAnalysisStatus: 'failed', segmentAnalysisError: message });
+    return { status: 500, body: { ok: false, error: message } };
+  } finally {
+    fs.rmSync(tempPath, { force: true });
+  }
+}
+
 studioRouter.post('/materials/:id/analyze-segments', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
+  if (req.params.id.startsWith('pb-')) {
+    const result = await analyzeCloudMaterialSegments(req.params.id.slice(3), tenantId);
+    res.status(result.status).json(result.body);
+    return;
+  }
   const list = loadMaterials();
   const material = list.find(item => item.id === req.params.id && item.tenantId === tenantId);
   if (!material) { res.status(404).json({ ok: false, error: 'Material not found' }); return; }
@@ -2349,12 +2429,22 @@ studioRouter.patch('/materials/:id/segments/:segmentId', (req, res) => {
   res.json({ ok: true, material, segment });
 });
 
-studioRouter.patch('/materials/:id/pin', (req, res) => {
+studioRouter.patch('/materials/:id/pin', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
+  const pinned = req.body?.pinned !== false;
+  // 云端素材同样不在 data/materials.json 里，直接写回 PocketBase。
+  if (req.params.id.startsWith('pb-')) {
+    const pbId = req.params.id.slice(3);
+    if (!await getCloudMaterialRecord(pbId)) { res.status(404).json({ ok: false, error: 'Material not found' }); return; }
+    const saved = await updateCloudMaterial(pbId, { pinned });
+    if (!saved) { res.status(500).json({ ok: false, error: '置顶写回云端失败' }); return; }
+    res.json({ ok: true, material: { id: req.params.id, pinned } });
+    return;
+  }
   const list = loadMaterials();
   const material = list.find(item => item.id === req.params.id && item.tenantId === tenantId);
   if (!material) { res.status(404).json({ ok: false, error: 'Material not found' }); return; }
-  material.pinned = req.body?.pinned !== false;
+  material.pinned = pinned;
   persistMaterials(list);
   res.json({ ok: true, material });
 });
