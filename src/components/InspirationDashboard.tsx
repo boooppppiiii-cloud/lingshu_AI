@@ -2664,6 +2664,9 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   const [innerView, setInnerView] = useState<InspirationInnerView>('inspiration');
   const [platform, setPlatform] = useState<Platform>('all');
   const [search, setSearch] = useState('');
+  // 搜索改为服务端执行：此前只在已加载的那一页做前端过滤，翻页之外的记录搜不到。
+  const searchRef = useRef('');
+  searchRef.current = search;
   const [selectedVideo, setSelectedVideo] = useState<TrendVideo | null>(null);
   const [scriptPanelTab, setScriptPanelTab] = useState<'analysis' | 'generate'>('analysis');
   const [watchVideo, setWatchVideo] = useState<TrendVideo | null>(null);
@@ -2738,7 +2741,9 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
       // Keep the first paint small. Media cards are expensive and the previous 100-item
       // response also forced the admin endpoint to finish a full cross-tenant scan first.
       const perPage = 20;
-      const query = `page=${nextPage}&perPage=${perPage}&contentFormat=${contentFormat}`;
+      const keyword = searchRef.current.trim();
+      const query = `page=${nextPage}&perPage=${perPage}&contentFormat=${contentFormat}`
+        + (keyword ? `&search=${encodeURIComponent(keyword)}` : '');
       const adminRequest = fetch(`/api/overseas/admin/inspiration-videos?${query}`, {
         headers: authHeader(),
       });
@@ -2795,6 +2800,14 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   };
 
   useEffect(() => { void refreshVideos(); }, [contentFormat]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 输入过程中不逐字请求，停顿 400ms 后再查。
+  const searchDebounceRef = useRef(false);
+  useEffect(() => {
+    if (!searchDebounceRef.current) { searchDebounceRef.current = true; return; }
+    const timer = window.setTimeout(() => { void refreshVideos(1, false, true); }, 400);
+    return () => window.clearTimeout(timer);
+  }, [search]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const hasPendingVideos = crawledVideos.some(v =>
     v.status === 'pending' ||

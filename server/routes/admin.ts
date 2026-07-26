@@ -32,7 +32,7 @@ import {
   type VideoAdminAlert,
   type VideoFailureRecord,
 } from '../lib/videoAdminAlerts.js';
-import { attachManualVideoUploadAndQueue } from './videos.js';
+import { attachManualVideoUploadAndQueue, matchesVideoSearch } from './videos.js';
 import { listStyleAdoptionTrends } from '../knowledge/styleMemory.js';
 import {
   decryptSecret,
@@ -176,6 +176,7 @@ async function listAdminInspirationVideos(input: {
   platform?: string;
   status?: string;
   contentFormat: InspirationContentFormat;
+  search?: string;
 }) {
   const records: Record<string, unknown>[] = [];
   const seenSourceUrls = new Set<string>();
@@ -202,10 +203,11 @@ async function listAdminInspirationVideos(input: {
     scanPage += 1;
   } while (scanPage <= totalPages);
 
-  const totalItems = records.length;
+  const matched = input.search?.trim() ? records.filter(record => matchesVideoSearch(record, input.search!)) : records;
+  const totalItems = matched.length;
   const start = (input.page - 1) * input.perPage;
   return {
-    items: records.slice(start, start + input.perPage).map(record => ({
+    items: matched.slice(start, start + input.perPage).map(record => ({
       ...record,
       aiAnalysis: JSON.stringify(recordAnalysis(record)),
     })),
@@ -910,6 +912,7 @@ adminRouter.get('/inspiration-videos', async (req, res) => {
     platform: platform || undefined,
     status: status || undefined,
     contentFormat,
+    search: bodyText(req.query.search) || undefined,
   });
   // Listing must stay read-only. Media repair and AI analysis used to be launched
   // here, so every dashboard refresh spawned more downloads/ffmpeg work and could

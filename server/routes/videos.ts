@@ -1380,6 +1380,7 @@ async function listPublicVideosForTenant(input: {
   platform?: string;
   status?: string;
   contentFormat?: ContentFormat;
+  search?: string;
 }): Promise<{
   items: Record<string, unknown>[];
   totalItems: number;
@@ -1410,6 +1411,19 @@ async function listPublicVideosForTenant(input: {
     return { ...result, items };
   }
   if (!testTenant) {
+    // 存储层的 where 只支持等值匹配，做不了标题子串检索；有搜索词时全量扫描后再分页。
+    if (input.search?.trim()) {
+      const scanned = await scanRecordsByContentFormat({ ...where, contentFormat: 'video' }, 'video');
+      const matched = scanned.filter(record => matchesVideoSearch(record, input.search!));
+      const start = (input.page - 1) * input.perPage;
+      return {
+        items: matched.slice(start, start + input.perPage).map(publicVideoRecord),
+        totalItems: matched.length,
+        totalPages: Math.max(1, Math.ceil(matched.length / input.perPage)),
+        page: input.page,
+        perPage: input.perPage,
+      };
+    }
     const result = await store.list<Record<string, unknown>>(COL, {
       where: { ...where, contentFormat: 'video' },
       sort: '-crawledAt',
@@ -1448,16 +1462,32 @@ async function listPublicVideosForTenant(input: {
   };
 
   await scanTenantVideos();
-  const totalItems = visible.length;
+  const searched = input.search?.trim() ? visible.filter(record => matchesVideoSearch(record, input.search!)) : visible;
+  const totalItems = searched.length;
   const totalVisiblePages = Math.max(1, Math.ceil(totalItems / input.perPage));
   const start = (input.page - 1) * input.perPage;
   return {
-    items: visible.slice(start, start + input.perPage),
+    items: searched.slice(start, start + input.perPage),
     totalItems,
     totalPages: totalVisiblePages,
     page: input.page,
     perPage: input.perPage,
   };
+}
+
+/**
+ * 列表搜索的统一匹配规则（标题 + 标签，大小写不敏感）。
+ *
+ * 搜索此前只在前端对已加载的那一页做过滤，用户以为是全局搜索，实际翻页之外的记录
+ * 一律搜不到。改为服务端匹配后，两个列表接口共用同一套规则。
+ */
+export function matchesVideoSearch(record: Record<string, unknown>, query: string): boolean {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  if (String(record.title || '').toLowerCase().includes(q)) return true;
+  const rawTags = record.tags;
+  const tags = Array.isArray(rawTags) ? rawTags : String(rawTags || '').split(/[,，\s]+/);
+  return tags.some(tag => String(tag).toLowerCase().includes(q));
 }
 
 async function scanRecordsByContentFormat(where: Record<string, string> | undefined, contentFormat: ContentFormat): Promise<Record<string, unknown>[]> {
@@ -1536,7 +1566,7 @@ function withImagePublicBaselines(items: Record<string, unknown>[], baselineUniv
 videosRouter.get('/', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
   await purgeLegacyFakeVideos();
-  const { page = '1', perPage = '20', platform, status, contentFormat: rawContentFormat = 'video' } = req.query as Record<string, string>;
+  const { page = '1', perPage = '20', platform, status, search, contentFormat: rawContentFormat = 'video' } = req.query as Record<string, string>;
   const pageNumber = Math.max(1, Number(page) || 1);
   const perPageNumber = Math.min(100, Math.max(1, Number(perPage) || 20));
   const contentFormat: ContentFormat = rawContentFormat === 'image' ? 'image' : 'video';
@@ -1546,6 +1576,7 @@ videosRouter.get('/', async (req, res) => {
     platform,
     status,
     contentFormat,
+    search,
     page: pageNumber,
     perPage: perPageNumber,
   });
