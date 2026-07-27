@@ -22,6 +22,7 @@ import {
   findLocalTenantByInvite,
   findLocalTenantByRegistrationInvite,
   getLocalTenant,
+  updateLocalTenantRegisteredPassword,
   type LocalTenantRecord,
 } from '../lib/localTenants.js';
 import { encryptRegistrationPassword } from '../lib/registrationCredentials.js';
@@ -612,6 +613,11 @@ authRouter.post('/change-password', async (req, res) => {
     const salt = randomBytes(16).toString('hex');
     accounts[index] = { ...accounts[index], salt, passwordHash: passwordHash(String(newPassword), salt).toString('hex') };
     writeLocalAccounts(accounts);
+    updateLocalTenantRegisteredPassword(local.tenantId, accounts[index].email, String(newPassword));
+    const registryEntry = Object.values(readDemoAccountRegistry()).find(entry => (
+      entry.userId === local.userId || entry.email === accounts[index].email
+    ));
+    if (registryEntry) upsertDemoAccountRegistry(registryEntry.email, { password: String(newPassword) });
     res.json({ ok: true });
     return;
   }
@@ -622,6 +628,23 @@ authRouter.post('/change-password', async (req, res) => {
   if (!verified || verified.record.id !== identity.userId) { res.status(400).json({ error: '当前密码不正确' }); return; }
   const updated = await pbPatch('users', identity.userId, { password: String(newPassword), passwordConfirm: String(passwordConfirm) });
   if (!updated) { res.status(500).json({ error: '密码更新失败，请稍后重试' }); return; }
+  const tenant = await pbGet('tenants', identity.tenantId);
+  if (
+    tenant
+    && String(tenant.registeredEmail || '').trim().toLowerCase() === user.email.trim().toLowerCase()
+  ) {
+    const synced = await pbPatch('tenants', identity.tenantId, {
+      registeredPasswordCipher: encryptRegistrationPassword(String(newPassword)),
+    });
+    if (!synced) {
+      res.status(500).json({ error: '登录密码已更新，但账号总控同步失败，请联系管理员' });
+      return;
+    }
+  }
+  const registryEntry = Object.values(readDemoAccountRegistry()).find(entry => (
+    entry.userId === identity.userId || entry.email === user.email!.trim().toLowerCase()
+  ));
+  if (registryEntry) upsertDemoAccountRegistry(registryEntry.email, { password: String(newPassword) });
   res.json({ ok: true });
 });
 

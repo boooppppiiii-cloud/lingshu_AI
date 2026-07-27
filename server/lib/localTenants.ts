@@ -53,6 +53,22 @@ export function getLocalTenant(tenantId: string): LocalTenantRecord | null {
   return readLocalTenants().find(tenant => tenant.id === tenantId) ?? null;
 }
 
+export function updateLocalTenantRegisteredPassword(tenantId: string, email: string, password: string): boolean {
+  const tenants = readLocalTenants();
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  const index = tenants.findIndex(tenant => (
+    tenant.id === tenantId
+    && String(tenant.registeredEmail || '').trim().toLowerCase() === normalizedEmail
+  ));
+  if (index < 0) return false;
+  tenants[index] = {
+    ...tenants[index],
+    registeredPasswordCipher: encryptRegistrationPassword(password),
+  };
+  writeLocalTenants(tenants);
+  return true;
+}
+
 export function findLocalTenantByInvite(inviteCode: string): LocalTenantRecord | null {
   const code = String(inviteCode || '').trim();
   if (!code) return null;
