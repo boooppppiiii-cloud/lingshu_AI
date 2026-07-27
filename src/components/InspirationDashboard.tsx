@@ -3520,7 +3520,10 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
                       {material.type === 'video' ? (
                         <>
                           {material.poster
-                            ? <img src={material.poster} alt={material.name} className="h-full w-full object-cover" loading="lazy" />
+                            // Fetch card posters immediately. These cards can stay mounted
+                            // below the fold; lazy loading used to defer the request until
+                            // after the short-lived signed URL had expired.
+                            ? <img src={material.poster} alt={material.name} className="h-full w-full object-cover" />
                             : <video src={`${material.url}#t=0.1`} muted playsInline preload="metadata" className="h-full w-full object-cover" />}
                           <button
                             type="button"

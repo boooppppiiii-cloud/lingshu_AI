@@ -2203,7 +2203,12 @@ studioRouter.get('/materials', async (req, res) => {
     .map(m => ({
       ...m,
       url: /^\/(?:media|api\/overseas\/studio\/materials\/pb)\//.test(m.url) ? signAssetUrl(m.url, tenantId) : m.url,
-      poster: m.poster && /^\/(?:media|api\/overseas\/studio\/materials\/pb)\//.test(m.poster) ? signAssetUrl(m.poster, tenantId) : m.poster,
+      // Poster responses are publicly cached for one day. Keep their exact-path
+      // signature valid for the same period so images that the browser loads
+      // after scrolling cannot expire while they are still on the page.
+      poster: m.poster && /^\/(?:media|api\/overseas\/studio\/materials\/pb)\//.test(m.poster)
+        ? signAssetUrl(m.poster, tenantId, 24 * 60 * 60 * 1000)
+        : m.poster,
       usage: materialUsage(m),
     }))
     .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.createdAt.localeCompare(a.createdAt)));
