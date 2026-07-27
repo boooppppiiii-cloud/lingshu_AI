@@ -766,6 +766,7 @@ interface EnterpriseProfileLite {
     certifications?: string;
     highlights?: string;
     items?: Array<{
+      sku?: string;
       name?: string;
       category?: string;
       priceRange?: string;
@@ -1058,6 +1059,10 @@ function productInfoRows(info: string) {
     .filter((row): row is { label: string; value: string } => Boolean(row));
 }
 
+function productOptionCategory(option: ProductOption): string {
+  return option.info.match(/所属类目[：:]\s*([^\n]+)/)?.[1]?.trim() || '未分类';
+}
+
 function ProductInfoPreview({ products }: { products: ProductOption[] }) {
   return (
     <aside className="sticky top-0 overflow-hidden rounded-2xl border border-border bg-surface shadow-sm">
@@ -1149,6 +1154,7 @@ function buildAiProductOptions(profile: EnterpriseProfileLite): ProductOption[] 
         ].map(asset => compact(asset.url)).filter(Boolean),
         info: [
           `产品名称：${name}`,
+          compact(item.sku) ? `产品SKU：${compact(item.sku)}` : '',
           category ? `所属类目：${category}` : '',
           highlights ? `产品卖点：${highlights}` : '',
           price ? `价格区间：${price}` : '',
@@ -2257,6 +2263,9 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   const [productOptions, setProductOptions] = useState<ProductOption[]>([]);
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
   const [productSelectMode, setProductSelectMode] = useState<'single' | 'multi'>('multi');
+  const [productSearch, setProductSearch] = useState('');
+  const [productCategoryFilter, setProductCategoryFilter] = useState('');
+  const [showSelectedProductsOnly, setShowSelectedProductsOnly] = useState(false);
   const [cloneCount] = useState(1);
   const [cloneOutputMode, setCloneOutputMode] = useState<'ideas' | 'languages'>('ideas');
   const [audience, setAudience] = useState('');
@@ -2739,6 +2748,18 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     () => productOptions.filter(option => selectedProductIds.includes(option.id)),
     [productOptions, selectedProductIds],
   );
+  const productCategories = useMemo(
+    () => Array.from(new Set(productOptions.map(productOptionCategory))).sort((a, b) => a.localeCompare(b, 'zh-CN')),
+    [productOptions],
+  );
+  const visibleProductOptions = useMemo(() => {
+    const query = productSearch.trim().toLocaleLowerCase();
+    return productOptions.filter(option => {
+      if (showSelectedProductsOnly && !selectedProductIds.includes(option.id)) return false;
+      if (productCategoryFilter && productOptionCategory(option) !== productCategoryFilter) return false;
+      return !query || `${option.label}\n${option.info}`.toLocaleLowerCase().includes(query);
+    });
+  }, [productCategoryFilter, productOptions, productSearch, selectedProductIds, showSelectedProductsOnly]);
   const activeProductInfo = useMemo(() => {
     const selectedInfo = formatSelectedProductInfo(selectedProductOptions);
     return selectedInfo || productInfo;
@@ -5273,8 +5294,59 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                       </span>
                       <ChevronDown size={15} className="shrink-0 text-text-muted transition group-open:rotate-180" />
                     </summary>
-                    <div className="absolute left-0 top-[calc(100%+6px)] z-30 max-h-72 w-full min-w-[320px] overflow-y-auto rounded-xl border border-border bg-surface p-2 shadow-xl">
-                      {productOptions.length > 0 ? productOptions.map(option => {
+                    <div className="absolute left-0 top-[calc(100%+6px)] z-30 w-full min-w-[420px] overflow-hidden rounded-xl border border-border bg-surface shadow-xl">
+                      <div className="space-y-2 border-b border-border bg-surface p-2.5">
+                        <div className="relative">
+                          <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
+                          <input
+                            value={productSearch}
+                            onChange={event => setProductSearch(event.target.value)}
+                            placeholder="搜索产品名、SKU 或卖点"
+                            className="h-9 w-full rounded-lg border border-border bg-white pl-8 pr-3 text-xs font-semibold text-text-primary outline-none focus:border-accent"
+                          />
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <select
+                            value={productCategoryFilter}
+                            onChange={event => setProductCategoryFilter(event.target.value)}
+                            className="h-8 min-w-0 flex-1 rounded-lg border border-border bg-white px-2 text-[11px] font-bold text-text-secondary outline-none focus:border-accent"
+                          >
+                            <option value="">全部类目</option>
+                            {productCategories.map(category => <option key={category} value={category}>{category}</option>)}
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => setShowSelectedProductsOnly(value => !value)}
+                            className={`h-8 rounded-lg border px-2.5 text-[11px] font-bold ${showSelectedProductsOnly ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-border bg-white text-text-secondary'}`}
+                          >
+                            仅看已选
+                          </button>
+                        </div>
+                        <div className="flex items-center justify-between gap-2 text-[11px]">
+                          <span className="text-text-muted">当前 {visibleProductOptions.length} 款 · 已选 {selectedProductIds.length} 款</span>
+                          <span className="flex items-center gap-1.5">
+                            <button
+                              type="button"
+                              disabled={visibleProductOptions.length === 0}
+                              onClick={() => setSelectedProductIds(current => productSelectMode === 'single'
+                                ? visibleProductOptions.slice(0, 1).map(option => option.id)
+                                : Array.from(new Set([...current, ...visibleProductOptions.map(option => option.id)])))}
+                              className="rounded-md px-2 py-1 font-bold text-emerald-700 hover:bg-emerald-50 disabled:opacity-40"
+                            >
+                              全选当前结果
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => { setSelectedProductIds([]); setProductInfo(''); }}
+                              className="rounded-md px-2 py-1 font-bold text-text-muted hover:bg-surface-2 hover:text-red"
+                            >
+                              清空
+                            </button>
+                          </span>
+                        </div>
+                      </div>
+                      <div className="max-h-72 overflow-y-auto p-2">
+                      {productOptions.length > 0 && visibleProductOptions.length > 0 ? visibleProductOptions.map(option => {
                         const active = selectedProductIds.includes(option.id);
                         return (
                           <button
@@ -5295,11 +5367,16 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                             </span>
                           </button>
                         );
-                      }) : (
+                      }) : productOptions.length === 0 ? (
                         <div className="px-2.5 py-3 text-xs leading-relaxed text-text-muted">
                           企业中心暂无产品信息，请先完成配置。
                         </div>
+                      ) : (
+                        <div className="px-2.5 py-6 text-center text-xs leading-relaxed text-text-muted">
+                          没有匹配的产品，请调整搜索词或筛选条件。
+                        </div>
                       )}
+                      </div>
                     </div>
                   </details>
                 </div>
