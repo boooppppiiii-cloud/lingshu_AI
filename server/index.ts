@@ -231,7 +231,7 @@ const privateAssetHeaders = (res: express.Response) => {
   res.setHeader('Cache-Control', 'private, no-store');
   res.setHeader('Vary', 'Cookie, Authorization');
 };
-app.use('/media/cloud-materials', cloudMaterialMediaRouter);
+app.use('/cloud-files', cloudMaterialMediaRouter);
 app.use('/media', requireScopedAsset, express.static(mediaDir, {
   setHeaders: privateAssetHeaders,
 }));
