@@ -223,6 +223,24 @@ function normalizeAnalysisTime(value: unknown): string {
   return raw;
 }
 
+type ViralPotential = NonNullable<NonNullable<VideoAiAnalysis['scriptDetails15s']>[number]['viralPotential']>;
+
+/**
+ * 爆款潜力改由模型给出。此前是前端拿中文关键词正则重算的，基础分 38 加任一命中即落进
+ * 50–74 的“良”区间，几乎所有镜头同一档，看不出差别。模型没返回时留空，前端回退启发式。
+ */
+function parseViralPotential(value: unknown): ViralPotential | undefined {
+  if (!isRecord(value)) return undefined;
+  const rawScore = Number(value.score);
+  const score = Number.isFinite(rawScore) ? Math.max(0, Math.min(100, Math.round(rawScore))) : undefined;
+  const mechanisms = Array.isArray(value.mechanisms)
+    ? value.mechanisms.map(String).map(item => item.trim()).filter(Boolean).slice(0, 4)
+    : [];
+  const whyEffective = String(value.whyEffective ?? '').trim();
+  if (score === undefined && !mechanisms.length && !whyEffective) return undefined;
+  return { score, mechanisms, whyEffective };
+}
+
 function parseScriptDetails15s(value: unknown): VideoAiAnalysis['scriptDetails15s'] | undefined {
   if (!Array.isArray(value)) return undefined;
   const rows = value.map((item) => {
@@ -248,6 +266,7 @@ function parseScriptDetails15s(value: unknown): VideoAiAnalysis['scriptDetails15
       bgm: String(item.bgm ?? '').trim(),
       soundEffects: Array.isArray(item.soundEffects) ? item.soundEffects.map(String).filter(Boolean) : [],
       beats: Array.isArray(item.beats) ? item.beats.filter(isRecord).map(beat => ({ time: normalizeAnalysisTime(beat.time), action: String(beat.action ?? '').trim(), dialogue: String(beat.dialogue ?? '').trim(), onScreenText: String(beat.onScreenText ?? '').trim() })).filter(beat => beat.action || beat.dialogue || beat.onScreenText) : [],
+      viralPotential: parseViralPotential(item.viralPotential),
       persistentState: String(item.persistentState ?? '').trim(),
       startState: String(item.startState ?? '').trim(),
       endState: String(item.endState ?? '').trim(),
@@ -333,6 +352,10 @@ ${GEMINI_ANALYSIS_DIRECTOR_CONTRACT}
   - persistentState: string，仅记录贯穿本镜头的构图、人物状态或持续声音，避免每个节拍重复
   - authenticity: string，注明必须使用真实素材或允许AI生成的真实性要求
   - confidence: number，0到1；needsReview: boolean，品牌、价格、型号、专名、左右方向或ASR不确定时必须为true
+  - viralPotential: object，本镜头的爆款潜力判断，必须基于本镜头实际画面与声音，禁止套用通用话术：
+    - score: number，0到100，必须拉开差距，不要集中在同一档。评分锚点：85以上=强钩子或强证据，观众极可能停留或转化；70-84=有明确记忆点但不够强烈；50-69=功能性过渡，可看但不驱动行为；50以下=信息稀薄或纯铺垫
+    - mechanisms: string[]，最多4项，只写本镜头真实成立的机制，如“前3秒悬念”“价格反差”“效果对比”“真人证言”；没有就返回空数组，不要凑数
+    - whyEffective: string，一句话说明为什么这个分数，必须引用本镜头的具体画面或台词作为依据；若分数低于50，直接说明弱在哪里
   - subtitle/audio: string，兼容字段，分别汇总 onScreenText 与音频信息
   - note: string，可选，只记录确定可见的信息；禁止编造品牌、@账号、原台词或无法确认的提示
 导演镜头数量随原片时长和真实镜头变化决定，不设 15 秒或固定段数上限；不要每句话都切镜，也不要把包含多个动作或功能的长段落塞进一镜。每个分镜必须覆盖环境、景别、运镜、镜头功能、画面、口播、屏幕文字和声音，并用 beats 保留镜头内节奏。

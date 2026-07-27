@@ -106,6 +106,7 @@ interface GeminiVideoAnalysis {
     persistentState?: string; startState?: string; endState?: string; transitionToNext?: string;
     backgroundPriority?: 'low' | 'medium' | 'high'; depthOfField?: 'shallow' | 'moderate' | 'deep';
     authenticity?: string; estimatedSpeechDuration?: number; dialogueFits?: boolean; confidence?: number; needsReview?: boolean;
+    viralPotential?: { score?: number; mechanisms?: string[]; whyEffective?: string };
   }>;
   recommendedScriptType?: 'voiceover' | 'storyboard';
 }
@@ -172,7 +173,7 @@ interface AccountSpecialRecommendation {
 
 interface StructureStep { time: string; label: string; desc: string }
 interface FirstTenSecondInsight { dimension: string; detail: string }
-interface ScriptDetail15s { time: string; environment: string; shot: string; camera: string; angle?: string; composition?: string; visual: string; subtitle: string; audio: string; note?: string; purpose?: string; dialogue?: string; onScreenText?: string; ambientSound?: string; bgm?: string; soundEffects?: string[]; beats?: Array<{ time?: string; action?: string; dialogue?: string; onScreenText?: string }>; persistentState?: string; startState?: string; endState?: string; transitionToNext?: string; backgroundPriority?: 'low' | 'medium' | 'high'; depthOfField?: 'shallow' | 'moderate' | 'deep'; authenticity?: string; estimatedSpeechDuration?: number; dialogueFits?: boolean; confidence?: number; needsReview?: boolean }
+interface ScriptDetail15s { time: string; environment: string; shot: string; camera: string; angle?: string; composition?: string; visual: string; subtitle: string; audio: string; note?: string; purpose?: string; dialogue?: string; onScreenText?: string; ambientSound?: string; bgm?: string; soundEffects?: string[]; beats?: Array<{ time?: string; action?: string; dialogue?: string; onScreenText?: string }>; persistentState?: string; startState?: string; endState?: string; transitionToNext?: string; backgroundPriority?: 'low' | 'medium' | 'high'; depthOfField?: 'shallow' | 'moderate' | 'deep'; authenticity?: string; estimatedSpeechDuration?: number; dialogueFits?: boolean; confidence?: number; needsReview?: boolean; viralPotential?: { score?: number; mechanisms?: string[]; whyEffective?: string } }
 interface ScriptSummary15s { visualStyle: string; coreEmotion: string; competitors: string[] }
 interface ScriptAnalysis {
   videoType: string;
@@ -439,6 +440,11 @@ function buildScriptDetails15s(gemini: GeminiVideoAnalysis, video: TrendVideo, s
       backgroundPriority: item.backgroundPriority, depthOfField: item.depthOfField, authenticity: cleanAnalysisText(item.authenticity),
       estimatedSpeechDuration: typeof item.estimatedSpeechDuration === 'number' ? item.estimatedSpeechDuration : undefined, dialogueFits: item.dialogueFits,
       confidence: typeof item.confidence === 'number' ? item.confidence : undefined, needsReview: Boolean(item.needsReview),
+      viralPotential: item.viralPotential && typeof item.viralPotential === 'object' ? {
+        score: typeof item.viralPotential.score === 'number' ? item.viralPotential.score : undefined,
+        mechanisms: Array.isArray(item.viralPotential.mechanisms) ? item.viralPotential.mechanisms.map(String).filter(Boolean) : [],
+        whyEffective: cleanAnalysisText(item.viralPotential.whyEffective),
+      } : undefined,
     };
   }).filter(Boolean) as ScriptDetail15s[];
   if (normalized.length) {
@@ -640,6 +646,16 @@ function viralDnaForFrame(detail: ScriptDetail15s): FrameMaterialMatch['viralDna
 }
 
 function viralPotentialForFrame(detail: ScriptDetail15s, dna: FrameMaterialMatch['viralDna']): FrameMaterialMatch['viralPotential'] {
+  // 模型已按本镜头实际内容给出判断时直接采用。下方关键词计分只是历史记录的兜底——
+  // 它基础分 38，命中任一关键词即落进 50-74 的“良”，几乎所有镜头同一档，分不出差别。
+  const fromModel = detail.viralPotential;
+  if (fromModel && typeof fromModel.score === 'number') {
+    return {
+      score: Math.max(0, Math.min(100, Math.round(fromModel.score))),
+      whyEffective: fromModel.whyEffective || '模型未给出说明。',
+      mechanisms: (fromModel.mechanisms || []).slice(0, 4),
+    };
+  }
   const text = `${dna.purpose} ${detail.visual} ${detail.subtitle} ${detail.onScreenText}`;
   const mechanisms: string[] = [];
   let score = 38;
@@ -2648,6 +2664,9 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   const [innerView, setInnerView] = useState<InspirationInnerView>('inspiration');
   const [platform, setPlatform] = useState<Platform>('all');
   const [search, setSearch] = useState('');
+  // 搜索改为服务端执行：此前只在已加载的那一页做前端过滤，翻页之外的记录搜不到。
+  const searchRef = useRef('');
+  searchRef.current = search;
   const [selectedVideo, setSelectedVideo] = useState<TrendVideo | null>(null);
   const [scriptPanelTab, setScriptPanelTab] = useState<'analysis' | 'generate'>('analysis');
   const [watchVideo, setWatchVideo] = useState<TrendVideo | null>(null);
@@ -2722,7 +2741,9 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
       // Keep the first paint small. Media cards are expensive and the previous 100-item
       // response also forced the admin endpoint to finish a full cross-tenant scan first.
       const perPage = 20;
-      const query = `page=${nextPage}&perPage=${perPage}&contentFormat=${contentFormat}`;
+      const keyword = searchRef.current.trim();
+      const query = `page=${nextPage}&perPage=${perPage}&contentFormat=${contentFormat}`
+        + (keyword ? `&search=${encodeURIComponent(keyword)}` : '');
       const adminRequest = fetch(`/api/overseas/admin/inspiration-videos?${query}`, {
         headers: authHeader(),
       });
@@ -2779,6 +2800,14 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   };
 
   useEffect(() => { void refreshVideos(); }, [contentFormat]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 输入过程中不逐字请求，停顿 400ms 后再查。
+  const searchDebounceRef = useRef(false);
+  useEffect(() => {
+    if (!searchDebounceRef.current) { searchDebounceRef.current = true; return; }
+    const timer = window.setTimeout(() => { void refreshVideos(1, false, true); }, 400);
+    return () => window.clearTimeout(timer);
+  }, [search]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const hasPendingVideos = crawledVideos.some(v =>
     v.status === 'pending' ||

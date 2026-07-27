@@ -28,7 +28,8 @@
     "test:tenant-sync-smoke": "tsx scripts/verify-tenant-sync.ts",
     "test": "npm run test:outbound-guard && npm run test:autonomy && npm run test:knowledge-policy && npm run test:strategy-policy && npm run test:tenant-isolation",
     "desktop": "electron desktop/main.cjs",
-    "lint": "tsc --noEmit"
+    "lint": "tsc --noEmit",
+    "migrate:thumbnails-to-pb": "tsx scripts/migrate-thumbnails-to-pb.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1070.0",

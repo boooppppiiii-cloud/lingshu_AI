@@ -24,7 +24,7 @@ export function sharedAssetRelativePath(file: string): string {
   return path.posix.join('shared', path.basename(file));
 }
 
-function cookieValue(req: Request, key: string): string {
+export function cookieValue(req: Request, key: string): string {
   const raw = String(req.headers.cookie || '');
   for (const part of raw.split(';')) {
     const [name, ...rest] = part.trim().split('=');
