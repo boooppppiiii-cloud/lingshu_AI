@@ -63,15 +63,24 @@ export async function adminFetch(
   path: string,
   options: RequestInit = {},
 ): Promise<Response> {
-  const token = await getPbAdminToken();
-  const headers: Record<string, string> = {
-    ...(options.headers as Record<string, string> ?? {}),
-    ...(token ? { Authorization: token } : {}),
+  const perform = async (): Promise<Response> => {
+    const token = await getPbAdminToken();
+    const headers: Record<string, string> = {
+      ...(options.headers as Record<string, string> ?? {}),
+      ...(token ? { Authorization: token } : {}),
+    };
+    return fetch(`${getPbUrl()}${path}`, { ...options, headers });
   };
-  const res = await fetch(`${getPbUrl()}${path}`, { ...options, headers });
-  if (res.status === 401) {
-    invalidatePbAdminToken();
-  }
+
+  let res = await perform();
+  const staleAdminToken = res.status === 401 || (
+    res.status === 403 && /superuser/i.test(await res.clone().text().catch(() => ''))
+  );
+  if (!staleAdminToken) return res;
+
+  invalidatePbAdminToken();
+  res = await perform();
+  if (res.status === 401) invalidatePbAdminToken();
   return res;
 }
 

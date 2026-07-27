@@ -285,8 +285,10 @@ function OptionSelector({ value, options, onChange, multiple = true, manualPlace
   const customTokens = tokens.filter(item => !options.includes(item));
   const [manualOpen, setManualOpen] = useState(customTokens.length > 0);
   const [manualValue, setManualValue] = useState(customTokens.join('、'));
+  const composingRef = useRef(false);
 
   useEffect(() => {
+    if (composingRef.current) return;
     const nextCustom = splitTokens(value).filter(item => !options.includes(item)).join('、');
     setManualValue(nextCustom);
     if (nextCustom) setManualOpen(true);
@@ -303,8 +305,7 @@ function OptionSelector({ value, options, onChange, multiple = true, manualPlace
     onChange(joinTokens(next));
   };
 
-  const updateManual = (nextManual: string) => {
-    setManualValue(nextManual);
+  const commitManual = (nextManual: string) => {
     if (!multiple) {
       onChange(nextManual.trim());
       return;
@@ -319,7 +320,22 @@ function OptionSelector({ value, options, onChange, multiple = true, manualPlace
         {options.map(option => <Chip key={option} active={tokens.includes(option)} onClick={() => choose(option)}>{option}</Chip>)}
         <Chip active={manualOpen} onClick={() => setManualOpen(open => !open)}>手动补充</Chip>
       </div>
-      {manualOpen && <input className={inputCls} value={manualValue} onChange={event => updateManual(event.target.value)} placeholder={manualPlaceholder} />}
+      {manualOpen && <input
+        className={inputCls}
+        value={manualValue}
+        onCompositionStart={() => { composingRef.current = true; }}
+        onCompositionEnd={event => {
+          composingRef.current = false;
+          setManualValue(event.currentTarget.value);
+          commitManual(event.currentTarget.value);
+        }}
+        onChange={event => {
+          const nextManual = event.target.value;
+          setManualValue(nextManual);
+          if (!composingRef.current) commitManual(nextManual);
+        }}
+        placeholder={manualPlaceholder}
+      />}
     </div>
   );
 }

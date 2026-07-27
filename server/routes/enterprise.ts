@@ -1714,18 +1714,28 @@ enterpriseRouter.get('/assets/:file', (req, res) => {
 
 enterpriseRouter.post('/profile', async (req, res) => {
   const { tenantId, userId } = res.locals as AuthLocals;
-  const profile = markProfileSaved(normalizeProfile(req.body as EnterpriseProfile), 'enterprise_center');
-  await writeTenantProfile(tenantId, profile, userId);
-  res.json({ ok: true, profile });
+  try {
+    const profile = markProfileSaved(normalizeProfile(req.body as EnterpriseProfile), 'enterprise_center');
+    await writeTenantProfile(tenantId, profile, userId);
+    res.json({ ok: true, profile });
+  } catch (error) {
+    console.error('[enterprise] profile save failed', error);
+    res.status(503).json({ error: 'tenant_profile_storage_unavailable', message: '企业资料暂时无法保存，请稍后重试' });
+  }
 });
 
 enterpriseRouter.patch('/profile', async (req, res) => {
   const { tenantId, userId } = res.locals as AuthLocals;
   const source = req.header('x-enterprise-save-source') === 'diagnosis' ? 'diagnosis' : 'enterprise_center';
-  const current = await readTenantProfile(tenantId);
-  const profile = markProfileSaved(mergeEnterpriseProfile(current, req.body as Partial<EnterpriseProfile>), source);
-  await writeTenantProfile(tenantId, profile, userId);
-  res.json({ ok: true, profile });
+  try {
+    const current = await readTenantProfile(tenantId);
+    const profile = markProfileSaved(mergeEnterpriseProfile(current, req.body as Partial<EnterpriseProfile>), source);
+    await writeTenantProfile(tenantId, profile, userId);
+    res.json({ ok: true, profile });
+  } catch (error) {
+    console.error('[enterprise] profile patch failed', error);
+    res.status(503).json({ error: 'tenant_profile_storage_unavailable', message: '企业资料暂时无法保存，请稍后重试' });
+  }
 });
 
 enterpriseRouter.get('/context', async (_req, res) => {
