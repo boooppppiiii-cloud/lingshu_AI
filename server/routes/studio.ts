@@ -2202,11 +2202,11 @@ studioRouter.get('/materials', async (req, res) => {
   res.json(list
     .map(m => ({
       ...m,
-      url: /^\/(?:media|api\/overseas\/studio\/materials\/pb)\//.test(m.url) ? signAssetUrl(m.url, tenantId) : m.url,
+      url: /^\/(?:media|cloud-files|api\/overseas\/studio\/materials\/pb)\//.test(m.url) ? signAssetUrl(m.url, tenantId) : m.url,
       // Poster responses are publicly cached for one day. Keep their exact-path
       // signature valid for the same period so images that the browser loads
       // after scrolling cannot expire while they are still on the page.
-      poster: m.poster && /^\/(?:media|api\/overseas\/studio\/materials\/pb)\//.test(m.poster)
+      poster: m.poster && /^\/(?:media|cloud-files|api\/overseas\/studio\/materials\/pb)\//.test(m.poster)
         ? signAssetUrl(m.poster, tenantId, 24 * 60 * 60 * 1000)
         : m.poster,
       usage: materialUsage(m),
