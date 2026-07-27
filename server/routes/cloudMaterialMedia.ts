@@ -3,6 +3,8 @@ import { Router } from 'express';
 import { requireAuth } from '../middleware/auth.js';
 import { entitlementGate } from '../middleware/subscription.js';
 import { fetchCloudMaterial } from '../lib/cloudMaterials.js';
+import { assetIdentity, verifyAssetToken } from '../lib/assetAccess.js';
+import type { AuthLocals } from '../middleware/auth.js';
 
 /**
  * Browser-safe cloud material playback.
@@ -14,10 +16,26 @@ import { fetchCloudMaterial } from '../lib/cloudMaterials.js';
  */
 export const cloudMaterialMediaRouter = Router();
 
-cloudMaterialMediaRouter.use(requireAuth);
+cloudMaterialMediaRouter.use(async (req, res, next) => {
+  const signedMatch = req.path.match(/^\/([^/]+)\/signed\/([^/]+)\/([^/]+)$/);
+  if (!signedMatch) {
+    await requireAuth(req, res, next);
+    return;
+  }
+  const identity = await assetIdentity(req);
+  const originalPath = `/cloud-files/${signedMatch[1]}/${signedMatch[3]}`;
+  const signed = identity ? null : verifyAssetToken(signedMatch[2], originalPath);
+  if (!identity && !signed) {
+    res.status(401).end();
+    return;
+  }
+  (res.locals as AuthLocals).userId = identity?.userId || 'signed-media';
+  (res.locals as AuthLocals).tenantId = identity?.tenantId || signed!.tenantId;
+  next();
+});
 cloudMaterialMediaRouter.use(entitlementGate());
 
-cloudMaterialMediaRouter.get('/:id/:kind', async (req, res) => {
+cloudMaterialMediaRouter.get(['/:id/:kind', '/:id/signed/:assetToken/:kind'], async (req, res) => {
   const field = req.params.kind === 'poster.jpg'
     ? 'posterFile'
     : req.params.kind === 'media.mp4'

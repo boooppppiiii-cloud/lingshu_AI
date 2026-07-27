@@ -29,7 +29,7 @@ import { analyzeVideo } from '../agents/gemini.js';
 import { analyzeVideoFramesWithQwen } from '../agents/qwen.js';
 import { extractQwenAnalysisFrames } from './videos.js';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
-import { signAssetUrl, sharedAssetRelativePath, tenantAssetDir, tenantAssetRelativePath } from '../lib/assetAccess.js';
+import { signAssetUrl, signPathAssetUrl, sharedAssetRelativePath, tenantAssetDir, tenantAssetRelativePath } from '../lib/assetAccess.js';
 import { requireAdminUser } from '../lib/demoAccounts.js';
 import { listPublishRecords, recommendPublish, type PublishPlatform } from '../lib/publishHistory.js';
 
@@ -2202,11 +2202,15 @@ studioRouter.get('/materials', async (req, res) => {
   res.json(list
     .map(m => ({
       ...m,
-      url: /^\/(?:media|cloud-files|api\/overseas\/studio\/materials\/pb)\//.test(m.url) ? signAssetUrl(m.url, tenantId) : m.url,
+      url: /^\/cloud-files\//.test(m.url)
+        ? signPathAssetUrl(m.url, tenantId)
+        : /^\/(?:media|api\/overseas\/studio\/materials\/pb)\//.test(m.url) ? signAssetUrl(m.url, tenantId) : m.url,
       // Poster responses are publicly cached for one day. Keep their exact-path
       // signature valid for the same period so images that the browser loads
       // after scrolling cannot expire while they are still on the page.
-      poster: m.poster && /^\/(?:media|cloud-files|api\/overseas\/studio\/materials\/pb)\//.test(m.poster)
+      poster: m.poster && /^\/cloud-files\//.test(m.poster)
+        ? signPathAssetUrl(m.poster, tenantId, 24 * 60 * 60 * 1000)
+        : m.poster && /^\/(?:media|api\/overseas\/studio\/materials\/pb)\//.test(m.poster)
         ? signAssetUrl(m.poster, tenantId, 24 * 60 * 60 * 1000)
         : m.poster,
       usage: materialUsage(m),

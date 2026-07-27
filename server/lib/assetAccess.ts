@@ -71,6 +71,15 @@ export function signAssetUrl(url: string, tenantId: string, ttlMs = 15 * 60 * 10
   return `${parsed.pathname}${parsed.search}`;
 }
 
+export function signPathAssetUrl(url: string, tenantId: string, ttlMs = 15 * 60 * 1000): string {
+  const signed = new URL(signAssetUrl(url, tenantId, ttlMs), 'http://local');
+  const token = signed.searchParams.get('assetToken');
+  if (!token) return signed.pathname;
+  const segments = signed.pathname.split('/');
+  const filename = segments.pop();
+  return `${segments.join('/')}/signed/${token}/${filename}`;
+}
+
 export function verifyAssetToken(token: unknown, pathname: string): { tenantId: string } | null {
   const [body, supplied] = String(token || '').split('.');
   if (!body || !supplied) return null;
