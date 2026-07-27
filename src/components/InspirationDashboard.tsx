@@ -1266,6 +1266,33 @@ function ThumbnailImage({
   return <img src={src} alt="" className={className} draggable={false} loading="lazy" decoding="async" onError={() => setFailed(true)} />;
 }
 
+function AuthenticatedImage({ src, alt, className }: { src: string; alt: string; className: string }) {
+  const [blobUrl, setBlobUrl] = useState('');
+  useEffect(() => {
+    const controller = new AbortController();
+    let createdUrl = '';
+    setBlobUrl('');
+    void fetch(src, { headers: authHeader(), signal: controller.signal })
+      .then(response => {
+        if (!response.ok) throw new Error(String(response.status));
+        return response.blob();
+      })
+      .then(blob => {
+        if (controller.signal.aborted) return;
+        createdUrl = URL.createObjectURL(blob);
+        setBlobUrl(createdUrl);
+      })
+      .catch(() => undefined);
+    return () => {
+      controller.abort();
+      if (createdUrl) URL.revokeObjectURL(createdUrl);
+    };
+  }, [src]);
+  return blobUrl
+    ? <img src={blobUrl} alt={alt} className={className} />
+    : <div className={`${className} animate-pulse bg-slate-200`} aria-label={alt} />;
+}
+
 function AuthenticatedVideo({ apiUrl, poster, className, controls = false, autoPlay = false, hoverPlay = false }: { apiUrl: string; poster?: string; className: string; controls?: boolean; autoPlay?: boolean; hoverPlay?: boolean }) {
   const [playbackUrl, setPlaybackUrl] = useState('');
   const [loading, setLoading] = useState(false);
@@ -3523,7 +3550,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
                             // Fetch card posters immediately. These cards can stay mounted
                             // below the fold; lazy loading used to defer the request until
                             // after the short-lived signed URL had expired.
-                            ? <img src={material.poster} alt={material.name} className="h-full w-full object-cover" />
+                            ? <AuthenticatedImage src={material.poster} alt={material.name} className="h-full w-full object-cover" />
                             : <video src={`${material.url}#t=0.1`} muted playsInline preload="metadata" className="h-full w-full object-cover" />}
                           <button
                             type="button"
