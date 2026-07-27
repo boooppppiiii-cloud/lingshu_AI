@@ -488,6 +488,21 @@ authRouter.post('/login', async (req, res) => {
   }
   let tenant = login.record.tenantId ? await pbGet('tenants', login.record.tenantId) : null;
   let subscription = login.record.tenantId ? await getTenantSubscription(login.record.tenantId) : null;
+  const loginEmail = String(login.record.email ?? email).trim().toLowerCase();
+  if (
+    tenant
+    && String(tenant.subscriptionPlan || '').toLowerCase() === 'customer'
+    && String(tenant.registeredEmail || '').trim().toLowerCase() === loginEmail
+  ) {
+    const synced = await pbPatch('tenants', String(login.record.tenantId), {
+      registeredPasswordCipher: encryptRegistrationPassword(String(password)),
+    });
+    if (!synced) console.warn(`[auth] failed to sync verified customer credential for tenant ${login.record.tenantId}`);
+    const registryEntry = Object.values(readDemoAccountRegistry()).find(entry => (
+      entry.userId === login.record.id || entry.email === loginEmail
+    ));
+    if (registryEntry) upsertDemoAccountRegistry(registryEntry.email, { password: String(password) });
+  }
   if (isTrialAccount(subscription) && login.record.tenantId && !subscription?.expiresAt) {
     const activated = await activateTrialAccount(login.record.email ?? email, login.record.id, login.record.tenantId);
     tenant = await pbGet('tenants', login.record.tenantId);
