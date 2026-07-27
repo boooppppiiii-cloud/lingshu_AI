@@ -41,6 +41,7 @@ import { backfillTrendVideoContentFormat, ensureDeliveryCollections, ensureTrend
 import { supportAccessRouter } from './routes/supportAccess.js';
 import { crawlWorkerRouter, initCrawlWorkerCloudFallback } from './routes/crawlWorker.js';
 import { requireScopedAsset, syncAssetSession } from './lib/assetAccess.js';
+import { cloudMaterialMediaRouter } from './routes/cloudMaterialMedia.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 dotenv.config({ path: path.join(__dirname, '..', '.env') });
@@ -230,6 +231,7 @@ const privateAssetHeaders = (res: express.Response) => {
   res.setHeader('Cache-Control', 'private, no-store');
   res.setHeader('Vary', 'Cookie, Authorization');
 };
+app.use('/media/cloud-materials', cloudMaterialMediaRouter);
 app.use('/media', requireScopedAsset, express.static(mediaDir, {
   setHeaders: privateAssetHeaders,
 }));
