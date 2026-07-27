@@ -515,8 +515,10 @@ async function ensureWorkbenchAdmin(token: string): Promise<void> {
     emailVisibility: true,
     name: WORKBENCH_ADMIN_NAME,
     tenantId,
-    password: WORKBENCH_ADMIN_PASSWORD,
-    passwordConfirm: WORKBENCH_ADMIN_PASSWORD,
+    ...(!currentUser?.id ? {
+      password: WORKBENCH_ADMIN_PASSWORD,
+      passwordConfirm: WORKBENCH_ADMIN_PASSWORD,
+    } : {}),
   });
   console.log(`  ✓ workbench admin ready: ${WORKBENCH_ADMIN_EMAIL}`);
 }

@@ -123,8 +123,10 @@ async function syncAccount(token: string, entry: RegistryEntry): Promise<{ email
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        password: entry.password,
-        passwordConfirm: entry.password,
+        ...(entry.status !== 'admin' ? {
+          password: entry.password,
+          passwordConfirm: entry.password,
+        } : {}),
         tenantId,
         emailVisibility: true,
       }),
