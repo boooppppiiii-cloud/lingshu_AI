@@ -2303,9 +2303,15 @@ async function analyzeMaterialVideo(videoPath: string, buffer: Buffer, duration:
   if (process.env.VIDEO_ANALYSIS_PROVIDER?.trim().toLowerCase() === 'qwen') {
     const frames = await extractQwenAnalysisFrames(videoPath, 30, duration);
     if (frames.length) {
-      return await analyzeVideoFramesWithQwen({ frames, duration, analysisMode: 'exact' });
+      const strategy = await analyzeVideoFramesWithQwen({ frames, duration, analysisMode: 'strategy' });
+      if ((strategy.scriptDetails15s || []).length) return strategy;
+      console.warn('[studio] 策略档未返回时间轴，改用精确档重试');
+      const exact = await analyzeVideoFramesWithQwen({ frames, duration, analysisMode: 'exact' });
+      if ((exact.scriptDetails15s || []).length) return exact;
+      console.warn('[studio] 千问两档均未返回时间轴，回退 Gemini');
+    } else {
+      console.warn('[studio] 抽帧为空，回退 Gemini 分析素材片段');
     }
-    console.warn('[studio] 抽帧为空，回退 Gemini 分析素材片段');
   }
   return await analyzeVideo({ videoBase64: buffer.toString('base64'), mimeType: 'video/mp4' });
 }
