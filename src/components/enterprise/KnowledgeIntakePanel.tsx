@@ -97,6 +97,7 @@ interface Props {
   compact?: boolean;
   onDone?: () => void;
   onApplied?: (profile: AppliedProfile) => void;
+  onAutosaveStatus?: (status: 'saving' | 'saved' | 'error') => void;
 }
 
 const EMPTY_COMPLETION: CompletionState = {
@@ -138,7 +139,7 @@ function CapabilityCard({ state, icon: Icon }: { state: CapabilityState; icon: t
   );
 }
 
-export default function KnowledgeIntakePanel({ mode = 'center', compact = false, onDone, onApplied }: Props) {
+export default function KnowledgeIntakePanel({ mode = 'center', compact = false, onDone, onApplied, onAutosaveStatus }: Props) {
   const [completion, setCompletion] = useState<CompletionState>(EMPTY_COMPLETION);
   const [view, setView] = useState<'overview' | 'preview' | 'interview'>('overview');
   const [preview, setPreview] = useState<KnowledgePreview | null>(null);
@@ -188,6 +189,37 @@ export default function KnowledgeIntakePanel({ mode = 'center', compact = false,
       .catch(() => null)
       .finally(() => setProfileLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (mode !== 'onboarding' || view !== 'interview' || profileLoading) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      const existingReceivers = Array.isArray(existingNotifications.receivers) ? existingNotifications.receivers : [];
+      const hasReceiverDraft = Boolean(receiver.name.trim() || receiver.target.trim());
+      const receivers = hasReceiverDraft
+        ? [{ ...receiver, name: receiver.name.trim(), target: receiver.target.trim() }, ...existingReceivers.slice(1)]
+        : existingReceivers;
+      onAutosaveStatus?.('saving');
+      void fetch('/api/overseas/enterprise/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'x-enterprise-save-source': 'diagnosis', ...authHeader() },
+        signal: controller.signal,
+        body: JSON.stringify({
+          bizRules: { ...rules, quoteMode: 'human_only' },
+          notifications: { ...existingNotifications, receivers, workHours },
+        }),
+      }).then(response => {
+        if (!response.ok) throw new Error(`profile_${response.status}`);
+        onAutosaveStatus?.('saved');
+      }).catch(error => {
+        if ((error as Error)?.name !== 'AbortError') onAutosaveStatus?.('error');
+      });
+    }, 700);
+    return () => {
+      window.clearTimeout(timer);
+      controller.abort();
+    };
+  }, [existingNotifications, mode, onAutosaveStatus, profileLoading, receiver, rules, view, workHours]);
 
   const capabilityList = useMemo(() => [
     { state: completion.capabilities.productGrounding, icon: PackageCheck },

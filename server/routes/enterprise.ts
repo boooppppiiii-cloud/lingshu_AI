@@ -104,6 +104,7 @@ export interface EnterpriseProfile {
     companyType?: string;
     mainMarkets: string;
     primaryLanguages?: string;
+    socialPlatformExperience?: string;
     founded: string;
     description: string;
   };
@@ -186,6 +187,11 @@ export interface EnterpriseProfile {
     source?: 'history' | 'products' | 'interview';
     extractedMessages?: number;
     confirmedSections?: string[];
+  };
+  dataGovernance?: {
+    aiAccessEnabled: boolean;
+    lastSavedAt?: string;
+    lastSavedSource?: 'diagnosis' | 'enterprise_center' | 'knowledge_intake' | 'system' | 'template';
   };
   knowledge: string;
 }
@@ -560,6 +566,7 @@ function normalizeProfile(profile: EnterpriseProfile): EnterpriseProfile {
     companyType: text(companyInput.companyType),
     mainMarkets: text(companyInput.mainMarkets),
     primaryLanguages: text(companyInput.primaryLanguages),
+    socialPlatformExperience: text(companyInput.socialPlatformExperience),
     founded: text(companyInput.founded),
     description: text(companyInput.description),
   };
@@ -594,6 +601,11 @@ function normalizeProfile(profile: EnterpriseProfile): EnterpriseProfile {
   const salesStyleProfile = normalizeSalesStyleProfile(profile.salesStyleProfile);
   const faq = normalizeFaq(profile.faq);
   const strategy = { ...(profile.strategy ?? {}), aiAutonomy: normalizeAutonomy(profile.strategy?.aiAutonomy) };
+  const dataGovernance = {
+    aiAccessEnabled: profile.dataGovernance?.aiAccessEnabled !== false,
+    lastSavedAt: text(profile.dataGovernance?.lastSavedAt),
+    lastSavedSource: profile.dataGovernance?.lastSavedSource,
+  };
   return {
     ...profile,
     company,
@@ -605,7 +617,39 @@ function normalizeProfile(profile: EnterpriseProfile): EnterpriseProfile {
     notifications,
     handoffRules,
     salesStyleProfile,
+    dataGovernance,
   };
+}
+
+function mergeEnterpriseProfile(current: EnterpriseProfile, patch: Partial<EnterpriseProfile>): EnterpriseProfile {
+  const merge = (base: unknown, incoming: unknown): unknown => {
+    if (!incoming || typeof incoming !== 'object' || Array.isArray(incoming)) return incoming;
+    const baseRecord = base && typeof base === 'object' && !Array.isArray(base)
+      ? base as Record<string, unknown>
+      : {};
+    return Object.fromEntries(Object.entries(incoming as Record<string, unknown>).map(([key, value]) => [
+      key,
+      value && typeof value === 'object' && !Array.isArray(value)
+        ? merge(baseRecord[key], value)
+        : value,
+    ]).concat(Object.entries(baseRecord).filter(([key]) => !(key in (incoming as Record<string, unknown>)))));
+  };
+  return normalizeProfile(merge(current, patch) as EnterpriseProfile);
+}
+
+function markProfileSaved(
+  profile: EnterpriseProfile,
+  source: NonNullable<EnterpriseProfile['dataGovernance']>['lastSavedSource'],
+): EnterpriseProfile {
+  return normalizeProfile({
+    ...profile,
+    dataGovernance: {
+      ...profile.dataGovernance,
+      aiAccessEnabled: true,
+      lastSavedAt: new Date().toISOString(),
+      lastSavedSource: source,
+    },
+  });
 }
 
 function styleField(input: unknown): { value: string; evidence: string; manual?: boolean } | undefined {
@@ -761,7 +805,7 @@ export async function updateTenantEnterpriseProfile(
   updatedBy = 'system',
 ): Promise<EnterpriseProfile> {
   const current = await readTenantProfile(tenantId);
-  const next = normalizeProfile({ ...current, ...patch } as EnterpriseProfile);
+  const next = mergeEnterpriseProfile(current, patch);
   await writeTenantProfile(tenantId, next, updatedBy);
   return next;
 }
@@ -1029,12 +1073,14 @@ function upsertProductItems(existing: NonNullable<EnterpriseProfile['products'][
 }
 
 export function buildEnterpriseContext(profile: EnterpriseProfile): string {
+  if (profile.dataGovernance?.aiAccessEnabled === false) return '';
   const parts: string[] = [];
   if (profile.company.name) parts.push(`公司名称：${profile.company.name}`);
   if (profile.company.industry) parts.push(`行业类目：${profile.company.industry}`);
   if (profile.company.companyType) parts.push(`企业类型：${profile.company.companyType}`);
   if (profile.company.mainMarkets) parts.push(`主攻市场：${profile.company.mainMarkets}`);
   if (profile.company.primaryLanguages) parts.push(`主要业务语言：${profile.company.primaryLanguages}`);
+  if (profile.company.socialPlatformExperience) parts.push(`海外平台经验：${profile.company.socialPlatformExperience}`);
   if (profile.company.description) parts.push(`公司简介：${profile.company.description}`);
   if (profile.products.categories) parts.push(`主营产品：${profile.products.categories}`);
   if (profile.products.priceRange) parts.push(`价格区间：${profile.products.priceRange}`);
@@ -1070,7 +1116,7 @@ export function buildEnterpriseContext(profile: EnterpriseProfile): string {
     parts.push(`Approved FAQ for auto reply:\n${approvedFaq.map(item => `Q: ${item.question}\nA: ${item.answer}`).join('\n')}`);
   }
   if (profile.notifications?.receivers?.length) {
-    parts.push(`Notification receivers: ${profile.notifications.receivers.map(item => `${item.name}/${item.channel}/${item.target}`).join('; ')}; workHours=${profile.notifications.workHours.start}-${profile.notifications.workHours.end}; quietOutsideHours=${profile.notifications.quietOutsideHours}; nightMode=${profile.notifications.nightMode.enabled ? 'enabled' : 'disabled'}`);
+    parts.push(`Notification receivers: ${profile.notifications.receivers.map(item => `${item.name}/${item.channel}`).join('; ')}; workHours=${profile.notifications.workHours.start}-${profile.notifications.workHours.end}; quietOutsideHours=${profile.notifications.quietOutsideHours}; nightMode=${profile.notifications.nightMode.enabled ? 'enabled' : 'disabled'}`);
   }
   if (profile.handoffRules) {
     parts.push(`Handoff rules: keywords=${profile.handoffRules.keywords.join('/')}; missStreakToDraft=${profile.handoffRules.missStreakToDraft}; negativeSentiment=${profile.handoffRules.negativeSentiment}`);
@@ -1371,7 +1417,7 @@ enterpriseRouter.post('/knowledge-intake/apply', async (req, res) => {
     : profile.knowledgeIntake?.source;
   const extractedMessages = Math.max(0, Number(body.extractedMessages || 0) || 0);
 
-  const nextProfile = normalizeProfile({
+  const nextProfile = markProfileSaved(normalizeProfile({
     ...profile,
     company: {
       ...profile.company,
@@ -1387,7 +1433,7 @@ enterpriseRouter.post('/knowledge-intake/apply', async (req, res) => {
       extractedMessages: extractedMessages || profile.knowledgeIntake?.extractedMessages || 0,
       confirmedSections,
     },
-  });
+  }), 'knowledge_intake');
   await writeTenantProfile(tenantId, nextProfile, userId);
   res.json({
     ok: true,
@@ -1668,9 +1714,18 @@ enterpriseRouter.get('/assets/:file', (req, res) => {
 
 enterpriseRouter.post('/profile', async (req, res) => {
   const { tenantId, userId } = res.locals as AuthLocals;
-  const profile = normalizeProfile(req.body as EnterpriseProfile);
+  const profile = markProfileSaved(normalizeProfile(req.body as EnterpriseProfile), 'enterprise_center');
   await writeTenantProfile(tenantId, profile, userId);
-  res.json({ ok: true });
+  res.json({ ok: true, profile });
+});
+
+enterpriseRouter.patch('/profile', async (req, res) => {
+  const { tenantId, userId } = res.locals as AuthLocals;
+  const source = req.header('x-enterprise-save-source') === 'diagnosis' ? 'diagnosis' : 'enterprise_center';
+  const current = await readTenantProfile(tenantId);
+  const profile = markProfileSaved(mergeEnterpriseProfile(current, req.body as Partial<EnterpriseProfile>), source);
+  await writeTenantProfile(tenantId, profile, userId);
+  res.json({ ok: true, profile });
 });
 
 enterpriseRouter.get('/context', async (_req, res) => {

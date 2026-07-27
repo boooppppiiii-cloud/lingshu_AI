@@ -49,7 +49,7 @@ interface EnterpriseProduct {
 }
 
 interface EnterpriseProfile {
-  company?: { name?: string; industry?: string; mainMarkets?: string; primaryLanguages?: string; description?: string };
+  company?: { name?: string; industry?: string; mainMarkets?: string; primaryLanguages?: string; socialPlatformExperience?: string; description?: string };
   products?: { categories?: string; highlights?: string; items?: EnterpriseProduct[] };
   brand?: { preferredLanguages?: string; usp?: string };
   strategy?: { focusProducts?: string; focusMarkets?: string };
@@ -104,8 +104,8 @@ async function readProfile(): Promise<EnterpriseProfile> {
 
 async function saveProfile(profile: EnterpriseProfile) {
   const response = await fetch('/api/overseas/enterprise/profile', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeader() },
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', 'x-enterprise-save-source': 'diagnosis', ...authHeader() },
     body: JSON.stringify(profile),
   });
   if (!response.ok) throw new Error(`企业资料保存失败（${response.status}）`);
@@ -170,6 +170,8 @@ export default function BusinessDiagnosisModal({ open, session, onDismissToday, 
   const [apiStatus, setApiStatus] = useState<ProductApiStatus>({ count: 0 });
   const [apiBaseline, setApiBaseline] = useState<ProductApiStatus | null>(null);
   const [apiLoading, setApiLoading] = useState(false);
+  const [diagnosisProfileReady, setDiagnosisProfileReady] = useState(false);
+  const [diagnosisSaveStatus, setDiagnosisSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
 
   const language = defaultLanguage(markets);
   const selectedCategory = category === '其他' ? customCategory.trim() : category;
@@ -194,47 +196,79 @@ export default function BusinessDiagnosisModal({ open, session, onDismissToday, 
     setPath('upload');
     setCelebrating(false);
     setCompleting(false);
-  }, [open]);
+    setDiagnosisProfileReady(false);
+    setDiagnosisSaveStatus('idle');
+    let cancelled = false;
+    void readProfile().then(profile => {
+      if (cancelled) return;
+      const savedCategory = String(profile.company?.industry || profile.products?.categories || '').trim();
+      if (savedCategory) {
+        if (CATEGORIES.includes(savedCategory as Category)) setCategory(savedCategory as Category);
+        else {
+          setCategory('其他');
+          setCustomCategory(savedCategory);
+        }
+      }
+      const savedMarkets = String(profile.company?.mainMarkets || '').split(/[、,，]/).map(item => item.trim()).filter(Boolean);
+      if (savedMarkets.length) {
+        const knownMarkets = savedMarkets.filter(item => MARKETS.includes(item as Market)) as Market[];
+        const otherMarkets = savedMarkets.filter(item => !MARKETS.includes(item as Market));
+        setMarkets(otherMarkets.length ? [...knownMarkets, '其他'] : knownMarkets);
+        setCustomMarket(otherMarkets.join('、'));
+      }
+      setCompanyName(profile.company?.name || session.tenant?.name || '');
+      if (PLATFORM_OPTIONS.includes(profile.company?.socialPlatformExperience as PlatformStatus)) {
+        setPlatform(profile.company?.socialPlatformExperience as PlatformStatus);
+      }
+    }).catch(() => null).finally(() => {
+      if (!cancelled) setDiagnosisProfileReady(true);
+    });
+    return () => { cancelled = true; };
+  }, [open, session.tenant?.name]);
 
   const applyBusinessProfile = useCallback(async (products?: EnterpriseProduct[]) => {
+    setDiagnosisSaveStatus('saving');
     const profile = await readProfile();
     const existingItems = Array.isArray(profile.products?.items) ? profile.products!.items! : [];
     const nextProducts = products ? upsertProducts(existingItems, products) : existingItems;
     const targetMarkets = selectedMarkets.join('、');
-    const profileText = [
-      companyName ? `公司：${companyName}` : '',
-      selectedCategory ? `主营品类：${selectedCategory}` : '',
-      targetMarkets ? `目标市场：${targetMarkets}` : '',
-      platform ? `海外平台经验：${platform}` : '',
-      language ? `默认创作语言：${language}` : '',
-    ].filter(Boolean).join('\n');
     const next: EnterpriseProfile = {
-      ...profile,
       company: {
-        ...profile.company,
         name: companyName || profile.company?.name || session.tenant?.name || '',
         ...(selectedCategory ? { industry: selectedCategory } : {}),
         ...(targetMarkets ? { mainMarkets: targetMarkets } : {}),
         ...(language ? { primaryLanguages: language } : {}),
+        ...(platform ? { socialPlatformExperience: platform } : {}),
       },
       products: {
-        ...profile.products,
         ...(selectedCategory ? { categories: selectedCategory } : {}),
-        items: nextProducts,
+        ...(products ? { items: nextProducts } : {}),
       },
       brand: {
-        ...profile.brand,
         ...(language ? { preferredLanguages: language } : {}),
       },
       strategy: {
-        ...profile.strategy,
         ...(targetMarkets ? { focusMarkets: targetMarkets } : {}),
         ...(selectedCategory ? { focusProducts: selectedCategory } : {}),
       },
-      knowledge: [profile.knowledge, profileText].filter(Boolean).join('\n\n'),
     };
-    await saveProfile(next);
+    try {
+      await saveProfile(next);
+      setDiagnosisSaveStatus('saved');
+    } catch (error) {
+      setDiagnosisSaveStatus('error');
+      throw error;
+    }
   }, [companyName, language, platform, selectedCategory, selectedMarkets, session.tenant?.name]);
+
+  useEffect(() => {
+    if (!open || celebrating || !diagnosisProfileReady) return;
+    if (!companyName.trim() && !selectedCategory && !selectedMarkets.length && !platform) return;
+    const timer = window.setTimeout(() => {
+      void applyBusinessProfile().catch(() => null);
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [applyBusinessProfile, celebrating, companyName, diagnosisProfileReady, open, platform, selectedCategory, selectedMarkets.length]);
 
   const completeDiagnosis = async () => {
     if (completing) return;
@@ -411,9 +445,17 @@ export default function BusinessDiagnosisModal({ open, session, onDismissToday, 
                 <h2 className="text-xl font-bold text-text-primary">5分钟让 AI 开始接待</h2>
                 <p className="mt-1 text-sm text-text-muted">先给 AI 一点真实原料，它来整理，你只负责确认。</p>
               </div>
-              <button type="button" onClick={() => setStep(3)} className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-text-muted hover:bg-surface-2" title="跳到最后一步">
-                <X size={16} />
-              </button>
+              <div className="flex items-center gap-2">
+                {diagnosisSaveStatus !== 'idle' && (
+                  <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-bold ${diagnosisSaveStatus === 'error' ? 'bg-red-50 text-red-600' : 'bg-emerald-50 text-emerald-700'}`}>
+                    {diagnosisSaveStatus === 'saving' ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />}
+                    {diagnosisSaveStatus === 'saving' ? '正在保存' : diagnosisSaveStatus === 'error' ? '同步失败' : '已同步企业中心'}
+                  </span>
+                )}
+                <button type="button" onClick={() => setStep(3)} className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-text-muted hover:bg-surface-2" title="跳到最后一步">
+                  <X size={16} />
+                </button>
+              </div>
             </header>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
@@ -620,7 +662,7 @@ export default function BusinessDiagnosisModal({ open, session, onDismissToday, 
                   <button type="button" onClick={() => setStep(2)} className="inline-flex w-fit items-center gap-2 rounded-lg border border-border bg-white px-4 py-2 text-sm font-bold text-text-secondary hover:bg-surface">
                     <ChevronLeft size={15} /> 返回产品接入
                   </button>
-                  <KnowledgeIntakePanel mode="onboarding" onDone={() => void completeDiagnosis()} />
+                  <KnowledgeIntakePanel mode="onboarding" onDone={() => void completeDiagnosis()} onAutosaveStatus={setDiagnosisSaveStatus} />
                 </div>
               )}
             </div>

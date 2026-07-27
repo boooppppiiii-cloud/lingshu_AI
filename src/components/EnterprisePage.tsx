@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion } from 'motion/react';
 import { Building2, Package, Megaphone, BookOpen, Save, CheckCircle2, Loader2, Compass, Zap, MessageSquare, RotateCcw, Plus, Upload, X, Image, Video, FileText, Copy, FileSpreadsheet, Bell, ChevronLeft, ChevronRight, Globe2, ShieldCheck, type LucideIcon } from 'lucide-react';
 import { authHeader } from '../lib/auth';
@@ -120,7 +120,7 @@ interface SalesStyleProfile {
 }
 
 interface Profile {
-  company: { name: string; industry: string; companyType?: string; mainMarkets: string; primaryLanguages?: string; founded: string; description: string };
+  company: { name: string; industry: string; companyType?: string; mainMarkets: string; primaryLanguages?: string; socialPlatformExperience?: string; founded: string; description: string };
   products: { categories: string; priceRange: string; moq: string; certifications: string; highlights: string; items?: ProductItem[] };
   brand: { tone: string; style: string; taboos: string; usp: string; preferredLanguages?: string };
   strategy?: { currentGoal?: string; focusProducts?: string; focusMarkets?: string; excludedMarkets?: string; pricingStrategy?: string; minMargin?: string; agentAutonomy?: string; aiAutonomy?: AutonomyLevel };
@@ -133,11 +133,12 @@ interface Profile {
   handoffRules?: HandoffRules;
   salesStyleProfile?: SalesStyleProfile;
   knowledgeIntake?: { lastExtractedAt?: string; source?: 'history' | 'products' | 'interview'; extractedMessages?: number; confirmedSections?: string[] };
+  dataGovernance?: { aiAccessEnabled: boolean; lastSavedAt?: string; lastSavedSource?: 'diagnosis' | 'enterprise_center' | 'knowledge_intake' | 'system' | 'template' };
   knowledge: string;
 }
 
 const DEFAULT: Profile = {
-  company: { name: '', industry: '', companyType: '', mainMarkets: '', primaryLanguages: '', founded: '', description: '' },
+  company: { name: '', industry: '', companyType: '', mainMarkets: '', primaryLanguages: '', socialPlatformExperience: '', founded: '', description: '' },
   products: {
     categories: '',
     priceRange: '',
@@ -481,7 +482,7 @@ async function uploadEnterpriseAsset(file: File): Promise<ProductAsset> {
 export default function EnterprisePage() {
   const [profile, setProfile] = useState<Profile>(DEFAULT);
   const [saving, setSaving] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [, setSaved] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [loading, setLoading] = useState(true);
   const [templates, setTemplates] = useState<DemoTemplate[]>([]);
@@ -514,6 +515,8 @@ export default function EnterprisePage() {
   const [handoffKeywordInput, setHandoffKeywordInput] = useState('');
   const [styleDistilling, setStyleDistilling] = useState(false);
   const [styleMessage, setStyleMessage] = useState('');
+  const persistedProfileRef = useRef('');
+  const hasUnsavedChanges = !loading && persistedProfileRef.current !== JSON.stringify(profile);
 
   useEffect(() => {
     Promise.all([
@@ -575,6 +578,7 @@ export default function EnterprisePage() {
           knowledge: data.knowledge ?? '',
         };
         const safeTemplates = Array.isArray(list) ? list : [];
+        persistedProfileRef.current = JSON.stringify(next);
         setProfile(next);
         setTemplates(safeTemplates);
         setTemplateId(matchTemplateId(next, safeTemplates));
@@ -655,16 +659,21 @@ export default function EnterprisePage() {
   useEffect(() => { setFaqPage(page => Math.min(page, Math.max(1, Math.ceil(faqItems.length / PAGE_SIZE)))); }, [faqItems.length]);
 
   const applyKnowledgeProfile = (updated: AppliedProfile) => {
-    setProfile(previous => ({
-      ...previous,
-      company: { ...previous.company, ...(updated.company ?? {}) } as Profile['company'],
-      bizRules: { ...(previous.bizRules ?? DEFAULT.bizRules!), ...(updated.bizRules ?? {}) } as BizRules,
-      faq: Array.isArray(updated.faq) ? updated.faq as unknown as FaqItem[] : previous.faq,
-      notifications: updated.notifications
-        ? { ...(previous.notifications ?? DEFAULT.notifications!), ...updated.notifications } as NotificationSettings
-        : previous.notifications,
-      knowledgeIntake: updated.knowledgeIntake as Profile['knowledgeIntake'] ?? previous.knowledgeIntake,
-    }));
+    setProfile(previous => {
+      const next = {
+        ...previous,
+        company: { ...previous.company, ...(updated.company ?? {}) } as Profile['company'],
+        bizRules: { ...(previous.bizRules ?? DEFAULT.bizRules!), ...(updated.bizRules ?? {}) } as BizRules,
+        faq: Array.isArray(updated.faq) ? updated.faq as unknown as FaqItem[] : previous.faq,
+        notifications: updated.notifications
+          ? { ...(previous.notifications ?? DEFAULT.notifications!), ...updated.notifications } as NotificationSettings
+          : previous.notifications,
+        knowledgeIntake: updated.knowledgeIntake as Profile['knowledgeIntake'] ?? previous.knowledgeIntake,
+      };
+      return next;
+    });
+    setSaved(true);
+    setTimeout(() => setSaved(false), 2000);
   };
 
   const openKnowledgeIntake = () => {
@@ -986,7 +995,7 @@ export default function EnterprisePage() {
     try {
       const response = await fetch('/api/overseas/enterprise/profile', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...authHeader() },
+        headers: { 'Content-Type': 'application/json', 'x-enterprise-save-source': 'enterprise_center', ...authHeader() },
         body: JSON.stringify(profile),
       });
       const result = await response.json().catch(() => ({}));
@@ -1001,6 +1010,7 @@ export default function EnterprisePage() {
       if (expectedProducts.length !== verifiedProducts.length || expectedProducts.some(item => !verifiedProductNames.has(item.name.trim()))) {
         throw new Error('产品资料保存后校验失败，请重试');
       }
+      persistedProfileRef.current = JSON.stringify(profile);
       setSaved(true);
       setTimeout(() => setSaved(false), 2500);
     } catch (error) {
@@ -1335,6 +1345,9 @@ export default function EnterprisePage() {
         <Field label="成立年份">
           <input className={inputCls} value={profile.company.founded} onChange={e => set('company')('founded', e.target.value)} placeholder="2018" />
         </Field>
+        <Field label="海外平台经验">
+          <OptionSelector value={profile.company.socialPlatformExperience ?? ''} options={['做过', '没做过', '正在准备']} multiple={false} onChange={value => set('company')('socialPlatformExperience', value)} />
+        </Field>
       </div>
       <Field label="公司简介">
         <textarea className={textareaCls} rows={4} value={profile.company.description} onChange={e => set('company')('description', e.target.value)} placeholder="介绍公司背景、主营品类、供应链优势、交付能力和海外服务经验。" />
@@ -1419,13 +1432,13 @@ export default function EnterprisePage() {
           <motion.button
             whileTap={{ scale: 0.96 }}
             onClick={handleSave}
-            disabled={saving}
-            title={saveError || undefined}
+            disabled={saving || !hasUnsavedChanges}
+            title={saveError || (hasUnsavedChanges ? '保存后，灵小枢、客服和社媒创作会使用这些资料' : '资料已保存在企业空间，并授权给 AI 使用')}
             className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-bold text-white transition-all disabled:opacity-60"
-            style={{ background: saveError ? '#dc2626' : saved ? '#16a34a' : '#0f172a' }}
+            style={{ background: saveError ? '#dc2626' : !hasUnsavedChanges ? '#16a34a' : '#0f172a' }}
           >
-            {saving ? <Loader2 size={12} className="animate-spin" /> : saveError ? <X size={12} /> : saved ? <CheckCircle2 size={12} /> : <Save size={12} />}
-            {saving ? '保存中' : saveError ? '保存失败' : saved ? '已保存' : '保存'}
+            {saving ? <Loader2 size={12} className="animate-spin" /> : saveError ? <X size={12} /> : !hasUnsavedChanges ? <CheckCircle2 size={12} /> : <Save size={12} />}
+            {saving ? '保存中' : saveError ? '保存失败' : !hasUnsavedChanges ? '已保存' : '保存'}
           </motion.button>
         </div>
       </div>
@@ -1484,12 +1497,7 @@ export default function EnterprisePage() {
             <div className="flex items-start gap-3">
               {enterpriseArea === 'facts' ? <Building2 size={15} className="mt-0.5 shrink-0 text-emerald-700" /> : <ShieldCheck size={15} className="mt-0.5 shrink-0 text-sky-700" />}
               <div className="min-w-0 flex-1">
-                <p className="text-xs font-black text-text-primary">{enterpriseArea === 'facts' ? '这里填写客观事实' : '这里设置接待行为'}</p>
-                <p className="mt-1 text-[11px] leading-relaxed text-text-muted">
-                  {enterpriseArea === 'facts'
-                    ? '只记录公司、市场、产品和素材等真实信息。填写这些不会自动扩大 AI 权限。'
-                    : '规定 AI 可以回答什么、哪些话必须等你确认，以及何时提醒销售接手。企业事实仍从另一入口读取。'}
-                </p>
+                <p className="text-xs font-black text-text-primary">{enterpriseArea === 'facts' ? '已保存资料可供 AI 使用' : '设置客服边界'}</p>
               </div>
               {enterpriseArea === 'service' && (
                 <button type="button" onClick={openKnowledgeIntake} className="shrink-0 rounded-lg border border-sky-200 bg-white px-3 py-2 text-[11px] font-black text-sky-700 hover:bg-sky-50">
@@ -1949,13 +1957,13 @@ export default function EnterprisePage() {
           <motion.button
             whileTap={{ scale: 0.96 }}
             onClick={handleSave}
-            disabled={saving}
-            title={saveError || undefined}
+            disabled={saving || !hasUnsavedChanges}
+            title={saveError || (hasUnsavedChanges ? '保存后，灵小枢、客服和社媒创作会使用这些资料' : '资料已保存在企业空间，并授权给 AI 使用')}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white transition-all disabled:opacity-60"
-            style={{ background: saveError ? '#dc2626' : saved ? '#16a34a' : '#0f172a' }}
+            style={{ background: saveError ? '#dc2626' : !hasUnsavedChanges ? '#16a34a' : '#0f172a' }}
           >
-            {saving ? <Loader2 size={12} className="animate-spin" /> : saveError ? <X size={12} /> : saved ? <CheckCircle2 size={12} /> : <Save size={12} />}
-            {saving ? '保存中' : saveError ? '保存失败' : saved ? '已保存' : '保存'}
+            {saving ? <Loader2 size={12} className="animate-spin" /> : saveError ? <X size={12} /> : !hasUnsavedChanges ? <CheckCircle2 size={12} /> : <Save size={12} />}
+            {saving ? '保存中' : saveError ? '保存失败' : !hasUnsavedChanges ? '已保存' : '保存'}
           </motion.button>
         </div>
       </div>
@@ -2129,6 +2137,10 @@ export default function EnterprisePage() {
               <Field label="主要语言">
                 <input className={inputCls} placeholder="英语、阿拉伯语、西班牙语" value={profile.company.primaryLanguages ?? ''}
                   onChange={e => set('company')('primaryLanguages', e.target.value)} />
+              </Field>
+              <Field label="海外平台经验">
+                <input className={inputCls} placeholder="做过 / 没做过 / 正在准备" value={profile.company.socialPlatformExperience ?? ''}
+                  onChange={e => set('company')('socialPlatformExperience', e.target.value)} />
               </Field>
               <Field label="成立年份">
                 <input className={inputCls} placeholder="2018" value={profile.company.founded}

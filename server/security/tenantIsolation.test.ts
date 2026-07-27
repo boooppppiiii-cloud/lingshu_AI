@@ -9,6 +9,8 @@ const enterprise = read('server/routes/enterprise.ts');
 assert.match(enterprise, /enterpriseRouter\.use\(requireAuth\)/, 'enterprise routes must require authentication');
 assert.match(enterprise, /readTenantProfile\(tenantId\)/, 'enterprise profile reads must be tenant scoped');
 assert.match(enterprise, /writeTenantProfile\(tenantId, profile, userId\)/, 'enterprise profile writes must be tenant scoped');
+assert.match(enterprise, /enterpriseRouter\.patch\('\/profile'[\s\S]*?readTenantProfile\(tenantId\)[\s\S]*?mergeEnterpriseProfile/, 'diagnosis autosave must merge into the authenticated tenant profile');
+assert.match(enterprise, /dataGovernance\?\.aiAccessEnabled === false/, 'AI context must honor enterprise data authorization');
 assert.doesNotMatch(
   enterprise.slice(enterprise.indexOf("enterpriseRouter.get('/profile'"), enterprise.indexOf('export const productApiRouter')),
   /req\.query\.tenantId|x-tenant-id/,
@@ -33,6 +35,7 @@ for (const route of ['agentChat', 'strategy', 'draftReply', 'studio']) {
 assert.doesNotMatch(read('server/routes/draftReply.ts'), /body\.tenantId/, 'draft replies must not accept a caller-selected tenant id');
 assert.match(read('server/routes/agentChat.ts'), /readTenantEnterpriseProfile\(tenantId\)/, 'agent chat must use tenant enterprise context');
 assert.match(read('server/routes/strategy.ts'), /readTenantEnterpriseProfile\(tenantId\)/, 'strategy chat must use tenant enterprise context');
+assert.match(read('server/routes/studio.ts'), /buildEnterpriseContext\(await readTenantEnterpriseProfile\(tenantId\)\)/, 'social generation must use tenant enterprise context');
 assert.match(read('server/knowledge/retrieve.ts'), /await readTenantEnterpriseProfile\(tenantId\)/, 'knowledge retrieval must use the authenticated tenant profile');
 const strategyRetrieval = read('server/knowledge/strategyRetrieve.ts');
 assert.match(strategyRetrieval, /where: \{ tenant_id: tenantId, status: 'active' \}/, 'strategy memory retrieval must be tenant scoped');
