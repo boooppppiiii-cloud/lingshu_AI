@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { motion } from 'motion/react';
-import { Building2, Loader2, Lock, Mail, Ticket } from 'lucide-react';
+import { Building2, Eye, EyeOff, Loader2, Lock, Mail, Ticket } from 'lucide-react';
 import { authApi, setToken, type AuthSession } from '../lib/auth';
 
 const initialInviteCode = () => new URLSearchParams(window.location.search).get('invite')?.trim() || '';
@@ -12,10 +12,12 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (s: AuthSession) =>
   const [mode, setMode] = useState<'login' | 'register'>(() => linkedInviteCode ? 'register' : 'login');
   const [loginEmail, setLoginEmail] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
   const [registrationCompany, setRegistrationCompany] = useState(linkedCompanyName);
   const [registrationCompanyLocked, setRegistrationCompanyLocked] = useState(Boolean(linkedCompanyName));
   const [registrationEmail, setRegistrationEmail] = useState('');
   const [registrationPassword, setRegistrationPassword] = useState('');
+  const [showRegistrationPassword, setShowRegistrationPassword] = useState(false);
   const [registrationFieldsUnlocked, setRegistrationFieldsUnlocked] = useState(false);
   const [inviteCode, setInviteCode] = useState(initialInviteCode);
   const [loading, setLoading] = useState(false);
@@ -54,7 +56,8 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (s: AuthSession) =>
   const submit = async () => {
     setError(null);
     const email = mode === 'register' ? registrationEmail.trim() : loginEmail.trim();
-    const password = mode === 'register' ? registrationPassword : loginPassword;
+    const password = mode === 'register' ? registrationPassword : loginPassword.trim();
+    if (mode === 'login' && password !== loginPassword) setLoginPassword(password);
     if (!email || !password) { setError('请填写邮箱和密码'); return; }
     if (password.length < 8) { setError('密码至少 8 位'); return; }
     if (mode === 'register' && !inviteCode.trim()) { setError('请输入管理员提供的邀请码'); return; }
@@ -163,7 +166,7 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (s: AuthSession) =>
                 <div className="relative">
                   <Lock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
                   <input
-                    type="password"
+                    type={showRegistrationPassword ? 'text' : 'password'}
                     name="customer-registration-new-password"
                     autoComplete="new-password"
                     data-1p-ignore="true"
@@ -173,8 +176,11 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (s: AuthSession) =>
                     onFocus={() => setRegistrationFieldsUnlocked(true)}
                     onChange={event => setRegistrationPassword(event.target.value)}
                     placeholder="请客户设置登录密码（至少 8 位）"
-                    className={inputCls}
+                    className={`${inputCls} !pr-10`}
                   />
+                  <button type="button" onClick={() => setShowRegistrationPassword(value => !value)} aria-label={showRegistrationPassword ? '隐藏密码' : '显示密码'} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary">
+                    {showRegistrationPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
                 </div>
                 <div className="relative">
                   <Ticket size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
@@ -220,14 +226,17 @@ export default function AuthScreen({ onAuthed }: { onAuthed: (s: AuthSession) =>
                 <div className="relative">
                   <Lock size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
                   <input
-                    type="password"
+                    type={showLoginPassword ? 'text' : 'password'}
                     name="password"
                     autoComplete="current-password"
                     value={loginPassword}
                     onChange={event => setLoginPassword(event.target.value)}
                     placeholder="密码"
-                    className={inputCls}
+                    className={`${inputCls} !pr-10`}
                   />
+                  <button type="button" onClick={() => setShowLoginPassword(value => !value)} aria-label={showLoginPassword ? '隐藏密码' : '显示密码'} className="absolute right-3 top-1/2 -translate-y-1/2 text-text-muted hover:text-text-primary">
+                    {showLoginPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                  </button>
                 </div>
               </div>
               {error && <p className="text-xs text-red mt-3">{error}</p>}
