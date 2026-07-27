@@ -494,14 +494,20 @@ authRouter.post('/login', async (req, res) => {
     && String(tenant.subscriptionPlan || '').toLowerCase() === 'customer'
     && String(tenant.registeredEmail || '').trim().toLowerCase() === loginEmail
   ) {
-    const synced = await pbPatch('tenants', String(login.record.tenantId), {
-      registeredPasswordCipher: encryptRegistrationPassword(String(password)),
-    });
-    if (!synced) console.warn(`[auth] failed to sync verified customer credential for tenant ${login.record.tenantId}`);
-    const registryEntry = Object.values(readDemoAccountRegistry()).find(entry => (
-      entry.userId === login.record.id || entry.email === loginEmail
-    ));
-    if (registryEntry) upsertDemoAccountRegistry(registryEntry.email, { password: String(password) });
+    void (async () => {
+      try {
+        const synced = await pbPatch('tenants', String(login.record.tenantId), {
+          registeredPasswordCipher: encryptRegistrationPassword(String(password)),
+        });
+        if (!synced) console.warn(`[auth] failed to sync verified customer credential for tenant ${login.record.tenantId}`);
+        const registryEntry = Object.values(readDemoAccountRegistry()).find(entry => (
+          entry.userId === login.record.id || entry.email === loginEmail
+        ));
+        if (registryEntry) upsertDemoAccountRegistry(registryEntry.email, { password: String(password) });
+      } catch (error) {
+        console.warn('[auth] verified customer credential sync failed:', error instanceof Error ? error.message : error);
+      }
+    })();
   }
   if (isTrialAccount(subscription) && login.record.tenantId && !subscription?.expiresAt) {
     const activated = await activateTrialAccount(login.record.email ?? email, login.record.id, login.record.tenantId);
