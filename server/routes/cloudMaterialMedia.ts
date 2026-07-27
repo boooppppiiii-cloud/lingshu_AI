@@ -18,9 +18,9 @@ cloudMaterialMediaRouter.use(requireAuth);
 cloudMaterialMediaRouter.use(entitlementGate());
 
 cloudMaterialMediaRouter.get('/:id/:kind', async (req, res) => {
-  const field = req.params.kind === 'poster'
+  const field = req.params.kind === 'poster.jpg'
     ? 'posterFile'
-    : req.params.kind === 'media'
+    : req.params.kind === 'media.mp4'
       ? 'videoFile'
       : null;
   if (!field) {
