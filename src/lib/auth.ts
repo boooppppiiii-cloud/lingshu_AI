@@ -45,6 +45,15 @@ export interface AuthSession {
   };
 }
 
+export interface EmployeeAccount { id: string; email: string; name: string; isCurrent: boolean; created: string }
+
+async function authenticatedJson<T>(path: string, options?: RequestInit): Promise<T> {
+  const r = await fetch(`/api/overseas/auth/${path}`, { ...options, headers: { ...authHeader(), ...(options?.body ? { 'Content-Type': 'application/json' } : {}), ...(options?.headers ?? {}) } });
+  const j = await r.json().catch(() => ({})) as T & { error?: string };
+  if (!r.ok) throw new Error(j.error || '请求失败');
+  return j;
+}
+
 export function startSupportSession(token: string): void {
   const current = getToken();
   if (current && !localStorage.getItem(SUPPORT_ORIGINAL_TOKEN_KEY)) {
@@ -124,6 +133,12 @@ export const authApi = {
     if (!getToken()) return;
     await fetch('/api/overseas/auth/guide-seen', { method: 'POST', headers: authHeader() }).catch(() => {});
   },
+  changePassword: async (currentPassword: string, newPassword: string, passwordConfirm: string): Promise<void> => {
+    await authenticatedJson('change-password', { method: 'POST', body: JSON.stringify({ currentPassword, newPassword, passwordConfirm }) });
+  },
+  employees: async (): Promise<EmployeeAccount[]> => (await authenticatedJson<{ employees: EmployeeAccount[] }>('employees')).employees,
+  addEmployee: async (input: { email: string; name: string; password: string }): Promise<EmployeeAccount> => (await authenticatedJson<{ employee: EmployeeAccount }>('employees', { method: 'POST', body: JSON.stringify(input) })).employee,
+  deleteEmployee: async (employeeId: string): Promise<void> => { await authenticatedJson(`employees/${encodeURIComponent(employeeId)}`, { method: 'DELETE' }); },
   logout: () => {
     void fetch('/api/overseas/auth/logout', { method: 'POST', headers: authHeader() }).catch(() => {});
     clearToken();

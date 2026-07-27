@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
-import { getPbUrl, getPbAdminToken, pbCreate, pbGet, pbListStrict, pbPatch } from '../storage/pb.js';
+import { getPbUrl, getPbAdminToken, pbCreate, pbDelete, pbGet, pbList, pbListStrict, pbPatch } from '../storage/pb.js';
 import { auth } from '../storage/index.js';
 import { getTenantSubscription } from '../middleware/subscription.js';
 import { buildDemoStatus, isExpired } from '../lib/demo.js';
@@ -593,6 +593,85 @@ authRouter.get('/me', async (req, res) => {
       guideScope: subscription.expiresAt ? `${id.userId}:${subscription.expiresAt}` : undefined,
     },
   });
+});
+
+authRouter.post('/change-password', async (req, res) => {
+  const identity = await auth.verifyToken(req.headers.authorization);
+  if (!identity || identity.supportAccess) { res.status(401).json({ error: '登录已失效，请重新登录' }); return; }
+  const { currentPassword, newPassword, passwordConfirm } = req.body ?? {};
+  if (!currentPassword || !newPassword || !passwordConfirm) { res.status(400).json({ error: '请完整填写当前密码和新密码' }); return; }
+  if (String(newPassword).length < 8) { res.status(400).json({ error: '新密码至少需要 8 位' }); return; }
+  if (newPassword !== passwordConfirm) { res.status(400).json({ error: '两次输入的新密码不一致' }); return; }
+  if (currentPassword === newPassword) { res.status(400).json({ error: '新密码不能与当前密码相同' }); return; }
+
+  const local = parseLocalToken(req.headers.authorization);
+  if (local) {
+    const accounts = readLocalAccounts();
+    const index = accounts.findIndex(account => account.userId === local.userId && account.tenantId === local.tenantId);
+    if (index < 0 || !localPasswordMatches(accounts[index], String(currentPassword))) { res.status(400).json({ error: '当前密码不正确' }); return; }
+    const salt = randomBytes(16).toString('hex');
+    accounts[index] = { ...accounts[index], salt, passwordHash: passwordHash(String(newPassword), salt).toString('hex') };
+    writeLocalAccounts(accounts);
+    res.json({ ok: true });
+    return;
+  }
+
+  const user = await pbGet('users', identity.userId) as unknown as PbUser | null;
+  if (!user?.email) { res.status(404).json({ error: '未找到当前账号' }); return; }
+  const verified = await pbLogin(user.email, String(currentPassword));
+  if (!verified || verified.record.id !== identity.userId) { res.status(400).json({ error: '当前密码不正确' }); return; }
+  const updated = await pbPatch('users', identity.userId, { password: String(newPassword), passwordConfirm: String(passwordConfirm) });
+  if (!updated) { res.status(500).json({ error: '密码更新失败，请稍后重试' }); return; }
+  res.json({ ok: true });
+});
+
+authRouter.get('/employees', async (req, res) => {
+  const identity = await auth.verifyToken(req.headers.authorization);
+  if (!identity || identity.supportAccess) { res.status(401).json({ error: '登录已失效，请重新登录' }); return; }
+  const local = parseLocalToken(req.headers.authorization);
+  if (local) {
+    const employees = readLocalAccounts().filter(account => account.tenantId === identity.tenantId).map(account => ({ id: account.userId, email: account.email, name: account.name, isCurrent: account.userId === identity.userId, created: account.createdAt }));
+    res.json({ employees }); return;
+  }
+  const result = await pbList<PbUser & Record<string, unknown>>('users', { filter: `tenantId = "${identity.tenantId.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`, sort: 'created', perPage: 100 });
+  res.json({ employees: result.items.map(item => ({ id: item.id, email: item.email ?? '', name: item.name ?? '', isCurrent: item.id === identity.userId, created: String(item.created ?? '') })) });
+});
+
+authRouter.post('/employees', async (req, res) => {
+  const identity = await auth.verifyToken(req.headers.authorization);
+  if (!identity || identity.supportAccess) { res.status(401).json({ error: '登录已失效，请重新登录' }); return; }
+  const email = String(req.body?.email ?? '').trim().toLowerCase();
+  const name = String(req.body?.name ?? '').trim();
+  const password = String(req.body?.password ?? '');
+  if (!email || !email.includes('@')) { res.status(400).json({ error: '请输入有效的员工邮箱' }); return; }
+  if (password.length < 8) { res.status(400).json({ error: '初始密码至少需要 8 位' }); return; }
+  if (parseLocalToken(req.headers.authorization)) {
+    const accounts = readLocalAccounts();
+    if (accounts.some(account => account.email === email)) { res.status(400).json({ error: '该邮箱已被使用' }); return; }
+    const salt = randomBytes(16).toString('hex');
+    const employee: LocalAccount = { userId: `local_user_${localId(email)}`, tenantId: identity.tenantId, email, name: name || email.split('@')[0], accountType: 'customer', salt, passwordHash: passwordHash(password, salt).toString('hex'), createdAt: new Date().toISOString() };
+    accounts.push(employee); writeLocalAccounts(accounts);
+    res.status(201).json({ employee: { id: employee.userId, email, name: employee.name, isCurrent: false, created: employee.createdAt } }); return;
+  }
+  const created = await pbCreate('users', { email, name, password, passwordConfirm: password, tenantId: identity.tenantId, emailVisibility: true });
+  if (!created) { res.status(400).json({ error: '员工添加失败，邮箱可能已被使用' }); return; }
+  res.status(201).json({ employee: { id: created.id, email, name, isCurrent: false, created: created.created ?? '' } });
+});
+
+authRouter.delete('/employees/:employeeId', async (req, res) => {
+  const identity = await auth.verifyToken(req.headers.authorization);
+  if (!identity || identity.supportAccess) { res.status(401).json({ error: '登录已失效，请重新登录' }); return; }
+  if (req.params.employeeId === identity.userId) { res.status(400).json({ error: '不能删除当前登录账号' }); return; }
+  if (parseLocalToken(req.headers.authorization)) {
+    const accounts = readLocalAccounts();
+    const target = accounts.find(account => account.userId === req.params.employeeId && account.tenantId === identity.tenantId);
+    if (!target) { res.status(404).json({ error: '未找到该员工' }); return; }
+    writeLocalAccounts(accounts.filter(account => account !== target)); res.json({ ok: true }); return;
+  }
+  const employee = await pbGet('users', req.params.employeeId);
+  if (!employee || employee.tenantId !== identity.tenantId) { res.status(404).json({ error: '未找到该员工' }); return; }
+  if (!await pbDelete('users', req.params.employeeId)) { res.status(500).json({ error: '删除员工失败' }); return; }
+  res.json({ ok: true });
 });
 
 authRouter.post('/guide-seen', async (req, res) => {

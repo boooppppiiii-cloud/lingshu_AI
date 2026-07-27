@@ -3,12 +3,13 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   Home, Share2, Users, LayoutGrid,
   Building2, PlugZap, Clock,
-  ChevronRight, LogOut, Loader2, RefreshCcw, X, ShieldCheck, BookOpen, ListTree, PanelLeftClose, PanelLeftOpen,
+  ChevronRight, LogOut, Loader2, RefreshCcw, X, ShieldCheck, BookOpen, ListTree, PanelLeftClose, PanelLeftOpen, Coins, Settings,
 } from 'lucide-react';
 import type { Page, ConversationContext, Conversation, AgentAction } from '../App';
 import { authApi, exitSupportSession, type AuthSession } from '../lib/auth';
 import RightPanel from './RightPanel';
 import DemoGuide from './DemoGuide';
+import AccountSettingsModal from './AccountSettingsModal';
 
 interface NavSection {
   items: { id: Page; label: string; icon: ReactNode }[];
@@ -177,6 +178,8 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
   const [quotaLoading, setQuotaLoading] = useState(false);
   const [quotaUpdatedAt, setQuotaUpdatedAt] = useState<number | null>(null);
   const [liveSession, setLiveSession] = useState<AuthSession | null>(null);
+  const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const [accountSettingsOpen, setAccountSettingsOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     if (typeof window !== 'undefined' && window.matchMedia('(max-width: 760px)').matches) return true;
     try { return localStorage.getItem('lingshu:sidebar-collapsed') === 'true'; } catch { return false; }
@@ -199,15 +202,15 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
   }, [sessionIdentityScope]);
   useEffect(() => {
     try { localStorage.setItem('lingshu:sidebar-collapsed', String(sidebarCollapsed)); } catch { /* storage can be unavailable */ }
-    if (sidebarCollapsed) setQuotaOpen(false);
+    if (sidebarCollapsed) { setQuotaOpen(false); setAccountMenuOpen(false); }
   }, [sidebarCollapsed]);
   useEffect(() => {
-    if (!quotaOpen) return;
+    if (!quotaOpen && !accountMenuOpen) return;
     const onPointerDown = (event: PointerEvent) => {
-      if (!quotaAreaRef.current?.contains(event.target as Node)) setQuotaOpen(false);
+      if (!quotaAreaRef.current?.contains(event.target as Node)) { setQuotaOpen(false); setAccountMenuOpen(false); }
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') setQuotaOpen(false);
+      if (event.key === 'Escape') { setQuotaOpen(false); setAccountMenuOpen(false); }
     };
     document.addEventListener('pointerdown', onPointerDown);
     document.addEventListener('keydown', onKeyDown);
@@ -215,7 +218,7 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
       document.removeEventListener('pointerdown', onPointerDown);
       document.removeEventListener('keydown', onKeyDown);
     };
-  }, [quotaOpen]);
+  }, [quotaOpen, accountMenuOpen]);
   const secondaryItems = isAdminSession(activeSession)
     ? [
       ...SECONDARY_NAV.items,
@@ -256,6 +259,7 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
     }
   };
   const openQuota = () => {
+    setAccountMenuOpen(false);
     setQuotaOpen(true);
     void refreshQuota();
   };
@@ -478,32 +482,44 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
               </motion.div>
             )}
           </AnimatePresence>
+          <AnimatePresence>
+            {accountMenuOpen && (
+              <motion.div initial={{ opacity: 0, y: 8, scale: .98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: 8, scale: .98 }} className="absolute bottom-[68px] left-3 z-50 w-[260px] rounded-2xl border border-border bg-white p-3 shadow-xl">
+                <div className="flex items-center gap-3 border-b border-border px-2 pb-3">
+                  <span className="flex h-10 w-10 items-center justify-center rounded-full text-sm font-bold text-white" style={{ background: 'linear-gradient(135deg, #4ade80, #16a34a)' }}>{initial}</span>
+                  <div className="min-w-0"><p className="truncate text-sm font-bold text-text-primary">{activeSession?.user?.name || tenantName}</p><p className="truncate text-[10px] text-text-muted">{activeSession?.user?.email}</p></div>
+                </div>
+                <div className="pt-2">
+                  <button onClick={openQuota} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-text-secondary hover:bg-surface-2"><Coins size={17} /><span className="flex-1 text-left">积分管理</span><ChevronRight size={14} className="text-text-muted" /></button>
+                  <button onClick={() => { setAccountMenuOpen(false); setAccountSettingsOpen(true); }} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-text-secondary hover:bg-surface-2"><Settings size={17} /><span className="flex-1 text-left">账号设置</span><ChevronRight size={14} className="text-text-muted" /></button>
+                  {onLogout && <button onClick={onLogout} className="flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-semibold text-text-secondary hover:bg-red-50 hover:text-red-600"><LogOut size={17} /><span className="flex-1 text-left">退出登录</span></button>}
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
           <div className={`flex items-center ${sidebarCollapsed ? 'justify-center' : 'gap-2.5'}`}>
             <button
-              onClick={openQuota}
-              title="查看 Token 使用"
-              aria-expanded={quotaOpen}
-              aria-haspopup="dialog"
+              onClick={() => { setQuotaOpen(false); setAccountMenuOpen(value => !value); }}
+              title="账号菜单"
+              aria-expanded={accountMenuOpen}
+              aria-haspopup="menu"
               className="w-7 h-7 rounded-lg flex items-center justify-center text-xs font-bold text-white flex-shrink-0"
               style={{ background: 'linear-gradient(135deg, #4ade80, #16a34a)' }}
             >
               {initial}
             </button>
-            {!sidebarCollapsed && <button onClick={openQuota} aria-expanded={quotaOpen} aria-haspopup="dialog" className="flex-1 min-w-0 text-left rounded-lg -my-1 py-1 hover:bg-black/5 transition-colors">
+            {!sidebarCollapsed && <button onClick={() => { setQuotaOpen(false); setAccountMenuOpen(value => !value); }} aria-expanded={accountMenuOpen} aria-haspopup="menu" className="flex-1 min-w-0 text-left rounded-lg -my-1 py-1 hover:bg-black/5 transition-colors">
               <p className="text-xs font-semibold text-text-primary truncate">{tenantName}</p>
               <p className="text-[10px] text-text-muted truncate">
                 {demo && isTrialAccount ? `Token 剩余 ${tokenLabel}` : (SUB_LABEL[subStatus] ?? subStatus)}
               </p>
             </button>}
-            {onLogout && !sidebarCollapsed && (
-              <button onClick={onLogout} title="退出登录"
-                className="relative p-1 rounded-md hover:bg-black/5 text-text-muted hover:text-text-primary transition-colors flex-shrink-0">
-                <LogOut size={13} />
-              </button>
-            )}
+            {!sidebarCollapsed && <ChevronRight size={14} className={`text-text-muted transition-transform ${accountMenuOpen ? '-rotate-90' : ''}`} />}
           </div>
         </div>
       </motion.aside>
+
+      <AccountSettingsModal open={accountSettingsOpen} onClose={() => setAccountSettingsOpen(false)} onLogout={onLogout} />
 
       {/* ── Main content ─────────────────────────────── */}
       <main className="flex-1 min-w-0 overflow-hidden bg-white flex flex-col">
