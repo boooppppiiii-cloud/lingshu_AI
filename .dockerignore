@@ -2,6 +2,7 @@
 .claude
 node_modules
 dist
+backups
 pb_data
 pocketbase
 pocketbase.exe
