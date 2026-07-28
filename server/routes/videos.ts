@@ -1814,6 +1814,7 @@ videosRouter.patch('/:id/reanalyze', async (req, res) => {
 
   const analysisMode = req.body?.analysisMode === 'exact' ? 'exact' : 'strategy';
   const previous = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
+  const analysisRunId = randomUUID();
   const fileId = record.videoFileId as string | undefined;
   if (analysisMode === 'exact'
     && Boolean(fileId)
@@ -1848,7 +1849,7 @@ videosRouter.patch('/:id/reanalyze', async (req, res) => {
       res.status(400).json({ error: 'No video file or public sourceUrl attached to this record' });
       return;
     }
-    const queuedRecord = { ...record, aiAnalysis: JSON.stringify({ ...previous, requestedAnalysisMode: analysisMode }) };
+    const queuedRecord = { ...record, aiAnalysis: JSON.stringify({ ...previous, requestedAnalysisMode: analysisMode, analysisRunId, analysisRunMode: analysisMode }) };
     await store.update(COL, req.params.id, { aiAnalysis: queuedRecord.aiAnalysis });
     await queueAnalyzeSource(queuedRecord);
     res.json({ status: 'pending' });
@@ -1857,7 +1858,7 @@ videosRouter.patch('/:id/reanalyze', async (req, res) => {
 
   await store.update(COL, req.params.id, {
     status: 'pending',
-    aiAnalysis: JSON.stringify({ ...previous, requestedAnalysisMode: analysisMode, analysisError: undefined, reanalyzeQueuedAt: new Date().toISOString() }),
+    aiAnalysis: JSON.stringify({ ...previous, requestedAnalysisMode: analysisMode, analysisRunId, analysisRunMode: analysisMode, analysisError: undefined, reanalyzeQueuedAt: new Date().toISOString() }),
   });
   const localPath = path.join(MEDIA_DIR, fileId);
   if (fs.existsSync(localPath)) {
@@ -1873,9 +1874,9 @@ videosRouter.patch('/:id/reanalyze', async (req, res) => {
       poster: String(previous.materialPoster || record.thumbnailUrl || '') || undefined,
       scope: 'own',
       createdAt: new Date().toISOString(),
-    }, analysisMode);
+    }, analysisMode, analysisRunId);
   } else {
-    void triggerVideoAnalysis(req.params.id, fileId, undefined, userId);
+    void triggerVideoAnalysis(req.params.id, fileId, undefined, userId, analysisRunId);
   }
 
   res.json({ status: 'pending' });
@@ -1887,6 +1888,7 @@ async function triggerVideoAnalysis(
   filename: string | undefined,
   mimeType: string | undefined,
   _userId: string,
+  expectedRunId?: string,
 ): Promise<void> {
   if (!filename) {
     await store.update(COL, recordId, { status: 'failed' });
@@ -1894,6 +1896,7 @@ async function triggerVideoAnalysis(
   }
 
   let tempPath = '';
+  let runId = expectedRunId || '';
   try {
     const record = await store.getById<Record<string, unknown>>(COL, recordId);
     const dl = await fetchFile(COL, recordId, filename);
@@ -1903,6 +1906,7 @@ async function triggerVideoAnalysis(
     tempPath = path.join(ANALYSIS_DIR, `upload-${recordId}-${Date.now()}.${mimeFromPath(filename).split('/').pop() || 'mp4'}`);
     fs.writeFileSync(tempPath, dl.buf);
     const previous = parseJsonRecord<Record<string, unknown>>(record?.aiAnalysis, {});
+    runId = runId || String(previous.analysisRunId || randomUUID());
     await store.update(COL, recordId, {
       status: 'pending' as VideoStatus,
       aiAnalysis: JSON.stringify({
@@ -1913,6 +1917,8 @@ async function triggerVideoAnalysis(
         geminiStatus: 'analyzing',
         analysisSource: 'gemini-upload-video',
         geminiStartedAt: new Date().toISOString(),
+        analysisRunId: runId,
+        analysisRunMode: previous.requestedAnalysisMode === 'exact' ? 'exact' : 'strategy',
       }),
     });
     updateVideoAdminAlertByRecordId(recordId, {
@@ -1934,6 +1940,10 @@ async function triggerVideoAnalysis(
     tempPath = '';
     const latest = await store.getById<Record<string, unknown>>(COL, recordId);
     const latestAnalysis = parseJsonRecord<Record<string, unknown>>(latest?.aiAnalysis ?? record?.aiAnalysis, {});
+    if (String(latestAnalysis.analysisRunId || '') !== runId) {
+      console.warn(`[videos] stale analysis success ignored for ${recordId}: ${runId}`);
+      return;
+    }
 
     await store.update(COL, recordId, {
       aiAnalysis: JSON.stringify({
@@ -1958,6 +1968,10 @@ async function triggerVideoAnalysis(
     if (tempPath) cleanupTempVideo(tempPath);
     const record = await store.getById<Record<string, unknown>>(COL, recordId);
     const previous = parseJsonRecord<Record<string, unknown>>(record?.aiAnalysis, {});
+    if (runId && String(previous.analysisRunId || '') !== runId) {
+      console.warn(`[videos] stale analysis failure ignored for ${recordId}: ${runId}`);
+      return;
+    }
     const compactError = compactVideoPipelineError(e instanceof Error ? e.message : e);
     await store.update(COL, recordId, {
       status: 'analyzed' as VideoStatus,
@@ -2667,7 +2681,16 @@ async function analyzeSourceVideoJobInner(input: {
   forceManualFailure?: boolean;
 }): Promise<unknown> {
   const recordId = input.record?.id ? String(input.record.id) : '';
-  const requestedMode = parseJsonRecord<Record<string, unknown>>(input.record?.aiAnalysis, {}).requestedAnalysisMode;
+  const inputAnalysis = parseJsonRecord<Record<string, unknown>>(input.record?.aiAnalysis, {});
+  const requestedMode = inputAnalysis.requestedAnalysisMode;
+  const analysisMode = requestedMode === 'exact' ? 'exact' : 'strategy';
+  const analysisRunId = String(inputAnalysis.analysisRunId || randomUUID());
+  const stillOwnsRun = async (): Promise<boolean> => {
+    if (!recordId) return true;
+    const latest = await store.getById(COL, recordId);
+    const latestAnalysis = parseJsonRecord<Record<string, unknown>>(latest?.aiAnalysis, {});
+    return !latestAnalysis.analysisRunId || String(latestAnalysis.analysisRunId) === analysisRunId;
+  };
   let tempPath = '';
   try {
     if (requestedMode !== 'exact' && input.platform === 'youtube' && !input.skipYoutubeUrlAnalysis && (input.forceManualFailure || !shouldUseQwenFirst())) {
@@ -2694,7 +2717,11 @@ async function analyzeSourceVideoJobInner(input: {
 
     if (recordId) {
       const latest = await store.getById(COL, recordId);
-      const analysis = parseJsonRecord(latest?.aiAnalysis ?? input.record?.aiAnalysis, {});
+      const analysis: Record<string, unknown> = parseJsonRecord(latest?.aiAnalysis ?? input.record?.aiAnalysis, {} as Record<string, unknown>);
+      if (analysis.analysisRunId && String(analysis.analysisRunId) !== analysisRunId && analysis.analysisRunMode === 'exact') {
+        console.warn(`[videos] stale source analysis skipped for ${recordId}: ${analysisRunId}`);
+        return analysis.gemini || null;
+      }
       await store.update(COL, recordId, {
         status: 'pending' as VideoStatus,
         aiAnalysis: JSON.stringify({
@@ -2704,6 +2731,8 @@ async function analyzeSourceVideoJobInner(input: {
           geminiStatus: 'waiting_for_video',
           analysisSource: 'gemini-temp-video',
           downloadStartedAt: new Date().toISOString(),
+          analysisRunId,
+          analysisRunMode: analysisMode,
         }),
       });
     }
@@ -2714,6 +2743,7 @@ async function analyzeSourceVideoJobInner(input: {
     // playable copy to the record.  Persist a compact preview first so a record
     // that passes video-level analysis is also guaranteed to play in-app.
     if (recordId) {
+      if (!await stillOwnsRun()) return null;
       const previewPath = await compressPocketBasePreview(downloaded.filePath);
       try {
         const pocketBaseFilename = await attachFile(COL, recordId, 'videoFile', {
@@ -2738,8 +2768,9 @@ async function analyzeSourceVideoJobInner(input: {
       }
     }
     if (recordId) {
+      if (!await stillOwnsRun()) return null;
       const latest = await store.getById(COL, recordId);
-      const analysis = parseJsonRecord(latest?.aiAnalysis ?? input.record?.aiAnalysis, {});
+      const analysis = parseJsonRecord<Record<string, unknown>>(latest?.aiAnalysis ?? input.record?.aiAnalysis, {});
       await store.update(COL, recordId, {
         status: 'pending' as VideoStatus,
         aiAnalysis: JSON.stringify({
@@ -2755,6 +2786,7 @@ async function analyzeSourceVideoJobInner(input: {
     }
 
     if (recordId) {
+      if (!await stillOwnsRun()) return null;
       const latest = await store.getById(COL, recordId);
       const analysis = parseJsonRecord(latest?.aiAnalysis ?? input.record?.aiAnalysis, {});
       await store.update(COL, recordId, {
@@ -2769,8 +2801,6 @@ async function analyzeSourceVideoJobInner(input: {
       });
     }
 
-    const requestedAnalysis = parseJsonRecord<Record<string, unknown>>(input.record?.aiAnalysis, {});
-    const analysisMode = requestedAnalysis.requestedAnalysisMode === 'exact' ? 'exact' : 'strategy';
     const videoAnalysis = await analyzeDownloadedVideoWithFallback({
       filePath: downloaded.filePath,
       mimeType: downloaded.mimeType,
@@ -2784,6 +2814,10 @@ async function analyzeSourceVideoJobInner(input: {
     });
 
     if (recordId) {
+      if (!await stillOwnsRun()) {
+        console.warn(`[videos] stale source analysis success ignored for ${recordId}: ${analysisRunId}`);
+        return videoAnalysis.analysis;
+      }
       const latest = await store.getById(COL, recordId);
       const previous = parseJsonRecord<Record<string, unknown>>(latest?.aiAnalysis ?? input.record?.aiAnalysis, {});
       await store.update(COL, recordId, {
@@ -2814,6 +2848,10 @@ async function analyzeSourceVideoJobInner(input: {
       tags: parseJsonRecord<string[]>(input.record?.tags, []),
     });
     if (recordId) {
+      if (!await stillOwnsRun()) {
+        console.warn(`[videos] stale source analysis failure ignored for ${recordId}: ${analysisRunId}`);
+        throw e;
+      }
       const failureReason = soft?.status || classifyCrawlerFailure(errorMessage);
       if (nonRetryableFetch || forceManualFailure) {
         await persistManualVideoFailure(input, errorMessage, failureReason, fallback);
@@ -3094,7 +3132,7 @@ async function tryAnalyzeYouTubeUrl(input: {
   }
 }
 
-async function analyzeDownloadedMaterial(recordId: string, filePath: string, material: Material, analysisMode: 'strategy' | 'exact' = 'strategy'): Promise<void> {
+async function analyzeDownloadedMaterial(recordId: string, filePath: string, material: Material, analysisMode: 'strategy' | 'exact' = 'strategy', expectedRunId?: string): Promise<void> {
   try {
     await store.update(COL, recordId, { status: 'pending' as VideoStatus });
     const videoAnalysis = await analyzeDownloadedVideoWithFallback({
@@ -3106,7 +3144,11 @@ async function analyzeDownloadedMaterial(recordId: string, filePath: string, mat
       analysisMode,
     });
     const latest = await store.getById(COL, recordId);
-    const previous = parseJsonRecord(latest?.aiAnalysis, {});
+    const previous: Record<string, unknown> = parseJsonRecord(latest?.aiAnalysis, {} as Record<string, unknown>);
+    if (expectedRunId && String(previous.analysisRunId || '') !== expectedRunId) {
+      console.warn(`[videos] stale material analysis success ignored for ${recordId}: ${expectedRunId}`);
+      return;
+    }
     await store.update(COL, recordId, {
       status: 'analyzed' as VideoStatus,
       aiAnalysis: JSON.stringify({
@@ -3129,6 +3171,10 @@ async function analyzeDownloadedMaterial(recordId: string, filePath: string, mat
     console.error(`[videos] Gemini material analysis failed for ${recordId}:`, e);
     const latest = await store.getById(COL, recordId);
     const previous = parseJsonRecord<Record<string, unknown>>(latest?.aiAnalysis, {});
+    if (expectedRunId && String(previous.analysisRunId || '') !== expectedRunId) {
+      console.warn(`[videos] stale material analysis failure ignored for ${recordId}: ${expectedRunId}`);
+      return;
+    }
     const platform = (latest?.platform || inferPlatformFromUrl(String(latest?.sourceUrl || ''))) as Platform;
     const fallback = metadataFallbackAnalysis({
       platform,
@@ -4535,6 +4581,13 @@ function qwenFallbackTimeoutMs(): number {
   return Math.max(3000, Number(process.env.QWEN_VIDEO_FALLBACK_TIMEOUT_MS || 12000));
 }
 
+function videoAnalysisHardTimeoutMs(): number {
+  // Bound the complete frame extraction + ASR + VL request, not only the
+  // individual OpenAI-compatible HTTP call.  Otherwise a record can remain in
+  // `analyzing` forever when one of the preparatory stages stalls.
+  return Math.max(30_000, Number(process.env.VIDEO_ANALYSIS_HARD_TIMEOUT_MS || 150_000));
+}
+
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<T>((_, reject) => {
@@ -4767,8 +4820,13 @@ export async function analyzeDownloadedVideoWithFallback(opts: {
     // frames made long-video requests time out without materially improving the
     // Eighteen frames combine a dense opening with uniform and scene-change
     // evidence across the full duration, small enough for a reliable request.
-    const exactFrameCount = 18;
-    const frames = await extractQwenAnalysisFrames(opts.filePath, opts.analysisMode === 'exact' ? exactFrameCount : 30, Number(opts.duration || 0));
+    const exactFrameCount = Math.max(12, Math.min(30, Number(process.env.VIDEO_QWEN_EXACT_FRAME_COUNT || 18)));
+    const strategyFrameCount = Math.max(12, Math.min(24, Number(process.env.VIDEO_QWEN_FRAME_COUNT || 18)));
+    const frames = await extractQwenAnalysisFrames(
+      opts.filePath,
+      opts.analysisMode === 'exact' ? exactFrameCount : strategyFrameCount,
+      Number(opts.duration || 0),
+    );
     let transcript: Awaited<ReturnType<typeof transcribeAudioWithQwen>> | undefined;
     const asrDir = path.join(ANALYSIS_DIR, `qwen-asr-${Date.now()}-${randomUUID()}`);
     try {
@@ -4801,7 +4859,12 @@ export async function analyzeDownloadedVideoWithFallback(opts: {
       }
     } catch (error) { console.warn('[videos] Qwen ASR unavailable, continuing with frames:', error instanceof Error ? error.message : error); }
     finally { try { for (const file of fs.readdirSync(asrDir)) fs.unlinkSync(path.join(asrDir, file)); fs.rmdirSync(asrDir); } catch { /* best effort */ } }
-    const qwenAnalysis = opts.analysisMode === 'exact' && Number(opts.duration || 0) > 15
+    // Exact mode always uses the chunk path, including short clips. Besides
+    // splitting long videos, that path conservatively fills a missing tail (or
+    // a zero-length model timeline) from the uniformly sampled frame evidence.
+    // This prevents a valid 6–15 second TikTok clip from failing solely because
+    // Qwen omitted time labels in an otherwise usable response.
+    const qwenAnalysis = opts.analysisMode === 'exact' || Number(opts.duration || 0) > 15
       ? await analyzeExactLongVideoChunks({ frames, title: opts.title, platform: opts.platform, duration: Number(opts.duration), views: opts.views, tags: opts.tags, transcript })
       : await analyzeVideoFramesWithQwen({
         frames,
@@ -4820,7 +4883,7 @@ export async function analyzeDownloadedVideoWithFallback(opts: {
 
   if (shouldUseQwenFirst()) {
     if (!isQwenConfigured()) throw new Error('DASHSCOPE_API_KEY is not set');
-    return runQwen();
+    return withTimeout(runQwen(), videoAnalysisHardTimeoutMs(), 'video_analysis_hard_timeout');
   }
 
   try {
@@ -4857,7 +4920,7 @@ export async function analyzeDownloadedVideoWithFallback(opts: {
     }
     if (!isQwenConfigured()) throw e;
     console.warn('[videos] Gemini video analysis failed, falling back to Qwen frames:', e instanceof Error ? e.message : e);
-    return runQwen();
+    return withTimeout(runQwen(), videoAnalysisHardTimeoutMs(), 'video_analysis_hard_timeout');
   }
 }
 
