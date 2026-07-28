@@ -43,6 +43,12 @@ for (const brand of ['youtube', 'tiktok', 'instagram', 'facebook', 'whatsapp']) 
 const assistantUi = read('src/components/GlobalAssistant.tsx');
 assert.match(assistantUi, /ENTERPRISE_GUIDE_MEMORY_ID[\s\S]*?enterpriseGuideSeen/, 'enterprise center must remember its single proactive assistant guide');
 assert.match(assistantUi, /要补资料？点我/, 'enterprise center must leave a concise click-to-open reminder after the proactive guide');
+const publishingUi = read('src/components/TrafficPage.tsx');
+assert.doesNotMatch(publishingUi, /平台发布推荐|publish-recommendations/, 'one-click publishing must not render the removed platform recommendation panel');
+assert.match(publishingUi, /applyContentToAll[\s\S]*?title: activeItem\.title[\s\S]*?description: activeItem\.description[\s\S]*?platformCopy:[\s\S]*?firstComment: activeItem\.firstComment/, 'applying content to all videos must copy the current publishing content');
+assert.match(publishingUi, /当前发布内容应用到全部[\s\S]*?平台账号选择[\s\S]*?内容编辑/, 'publishing queue, account selection, and content editing must remain separate sections');
+const studioUi = read('src/components/AiCreateStudio.tsx');
+assert.match(studioUi, /goPublishCurrentWork[\s\S]*?sourceProjectId: projectId \|\| undefined[\s\S]*?platform: platform as/, 'AI materials must carry their project and platform format into one-click publishing');
 const socialSetupGuide = read('docs/客户社媒账号配置与授权操作指南.md');
 assert.doesNotMatch(socialSetupGuide, /https:\/\/lingshu\.site\/api\//, 'production OAuth guidance must use the canonical app subdomain');
 assert.match(socialSetupGuide, /https:\/\/app\.lingshu\.site\/api\/overseas\/youtube\/oauth\/callback/, 'the canonical YouTube callback must remain documented');

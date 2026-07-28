@@ -34,6 +34,7 @@ type PublishDraft = {
   description: string;
   ratio?: string;
   sourceProjectId?: string;
+  platform?: PublishPlatform;
 };
 
 type PublishAccount = {
@@ -43,15 +44,6 @@ type PublishAccount = {
   handle?: string;
   status: 'connected' | 'error' | 'expired';
   avatarUrl?: string;
-};
-
-type PublishRecommendation = {
-  accountId: string;
-  platform: PublishPlatform;
-  status: 'recommended' | 'adjust' | 'not_recommended';
-  reasons: string[];
-  actions: string[];
-  coverage: { lingshuRecords: number; platformSyncedRecords: number; level: 'medium' | 'limited' };
 };
 
 type PlatformCopy = {
@@ -74,6 +66,7 @@ type PublishQueueItem = {
   description: string;
   ratio?: string;
   sourceProjectId?: string;
+  sourcePlatform?: PublishPlatform;
   targetAccountIds: string[];
   platformCopy: Record<string, PlatformCopy>;
   firstComment: string;
@@ -137,6 +130,16 @@ function titleFromVideoPath(videoPath: string) {
 }
 
 function createPublishItem(draft?: PublishDraft | null, targetAccountIds: string[] = []): PublishQueueItem {
+  const sourcePlatform = draft?.platform;
+  const initialCopy: Record<string, PlatformCopy> = sourcePlatform
+    ? {
+      [sourcePlatform]: sourcePlatform === 'youtube'
+        ? { title: draft?.title || '', description: draft?.description || '' }
+        : sourcePlatform === 'facebook'
+          ? { text: draft?.description || '' }
+          : { caption: draft?.description || '' },
+    }
+    : {};
   return {
     id: publishItemId(),
     videoPath: draft?.videoPath || '',
@@ -144,8 +147,9 @@ function createPublishItem(draft?: PublishDraft | null, targetAccountIds: string
     description: draft?.description || '',
     ratio: draft?.ratio,
     sourceProjectId: draft?.sourceProjectId,
+    sourcePlatform,
     targetAccountIds,
-    platformCopy: {},
+    platformCopy: initialCopy,
     firstComment: '',
     trackWaLink: true,
     deliveryMode: 'now',
@@ -333,8 +337,6 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
   const [adapting, setAdapting] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
-  const [recommendations, setRecommendations] = useState<PublishRecommendation[]>([]);
-  const [recommendationsLoading, setRecommendationsLoading] = useState(false);
   const [calendarRefreshKey, setCalendarRefreshKey] = useState(0);
   const accountTargetsSeededRef = useRef(false);
   const appliedDraftRef = useRef(JSON.stringify(draft || readStoredPublishDraft() || {}));
@@ -407,6 +409,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
       videoPath: post.videoPath || '',
       title: post.title,
       description: post.description || '',
+      sourcePlatform: post.platform in PLATFORM_META ? post.platform as PublishPlatform : undefined,
       targetAccountIds: targetAccountIds.length ? targetAccountIds : fallbackTargetIds,
       firstComment: post.firstComment || '',
       deliveryMode: 'now',
@@ -447,8 +450,17 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
       ];
       setAccounts(next);
       if (!accountTargetsSeededRef.current) {
-        const targetAccountIds = next.filter(account => account.status === 'connected').map(account => account.id);
-        setItems(prev => prev.map(item => item.targetAccountIds.length ? item : { ...item, targetAccountIds }));
+        const connected = next.filter(account => account.status === 'connected');
+        setItems(prev => prev.map(item => {
+          if (item.targetAccountIds.length) return item;
+          const matchingSource = item.sourcePlatform
+            ? connected.filter(account => account.platform === item.sourcePlatform)
+            : [];
+          return {
+            ...item,
+            targetAccountIds: (matchingSource.length ? matchingSource : connected).map(account => account.id),
+          };
+        }));
         accountTargetsSeededRef.current = true;
       }
     } catch (e) {
@@ -496,15 +508,25 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
     });
   };
 
-  const applyAccountsToAll = () => {
+  const applyContentToAll = () => {
     if (!activeItem) return;
     setItems(prev => prev.map(item => ({
       ...item,
-      targetAccountIds: [...activeItem.targetAccountIds],
+      title: activeItem.title,
+      description: activeItem.description,
+      platformCopy: Object.fromEntries(
+        Object.entries(activeItem.platformCopy).map(([platform, copy]) => [platform, {
+          ...copy,
+          tags: copy.tags ? [...copy.tags] : undefined,
+          hashtags: copy.hashtags ? [...copy.hashtags] : undefined,
+        }]),
+      ),
+      firstComment: activeItem.firstComment,
+      trackWaLink: activeItem.trackWaLink,
       status: item.status === 'publishing' ? item.status : 'draft',
       error: undefined,
     })));
-    setNotice(`已把当前账号配置应用到 ${items.length} 条视频。`);
+    setNotice(`已把当前视频的发布内容应用到 ${items.length} 条视频，素材、账号和排期保持不变。`);
   };
 
   const addPublishItem = () => {
@@ -560,6 +582,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
       title: titleFromVideoPath(videoPath),
       description: activeItem?.description || '',
       ratio: activeItem?.ratio,
+      platform: activeItem?.sourcePlatform,
     }, targetAccountIds));
     setItems(prev => {
       const onlyBlank = prev.length === 1 && !prev[0].videoPath.trim() && !prev[0].title.trim();
@@ -601,6 +624,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
           title: titleFromVideoPath(file.name),
           description: activeItem?.description || '',
           ratio: activeItem?.ratio,
+          platform: activeItem?.sourcePlatform,
         }, targetAccountIds));
       } catch (uploadError) {
         failures.push(`${file.name}: ${uploadError instanceof Error ? uploadError.message : '添加失败'}`);
@@ -795,27 +819,6 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
 
   const previewRatio = activeItem?.ratio || (selectedPlatforms.length > 0 && selectedPlatforms.every(platform => platform === 'youtube') ? '16:9' : '9:16');
 
-  useEffect(() => {
-    if (!activeItem || !selectedConnectedAccounts.length) { setRecommendations([]); return; }
-    const timer = window.setTimeout(() => {
-      setRecommendationsLoading(true);
-      fetchJson<{ recommendations: PublishRecommendation[] }>('/api/overseas/studio/publish-recommendations', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          targets: selectedConnectedAccounts.map(account => ({ accountId: account.id, platform: account.platform })),
-          videoPath: activeItem.videoPath.trim(),
-          title: activeItem.title.trim(),
-          projectId: activeItem.sourceProjectId,
-          ratio: activeItem.ratio,
-        }),
-      }).then(result => setRecommendations(result.recommendations || []))
-        .catch(() => setRecommendations([]))
-        .finally(() => setRecommendationsLoading(false));
-    }, 350);
-    return () => window.clearTimeout(timer);
-  }, [selectedConnectedAccounts.map(account => `${account.platform}:${account.id}`).join('|'), activeItem?.videoPath, activeItem?.title, activeItem?.sourceProjectId, activeItem?.ratio]);
-
   return (
     <div className="px-6 pb-5 pt-3">
       <div className="mx-auto max-w-[1600px] space-y-4">
@@ -874,6 +877,15 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                 <button type="button" onClick={addPublishItem} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold text-text-secondary hover:border-accent hover:text-accent">
                   <Plus size={13} /> 添加空白
                 </button>
+                <button
+                  type="button"
+                  onClick={applyContentToAll}
+                  disabled={!activeItem || items.length < 2}
+                  title="复制当前视频的标题、发布配文、分平台文案、首评和询盘追踪设置；不会覆盖视频文件、账号和排期"
+                  className="inline-flex items-center gap-1.5 rounded-lg border border-accent/30 bg-accent-glow px-3 py-2 text-xs font-bold text-accent hover:border-accent disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Copy size={13} /> 当前发布内容应用到全部
+                </button>
               </div>
             </div>
 
@@ -924,11 +936,13 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
             </div>
           </div>
 
-          <div data-lingshu-guide="publish-accounts" className="mt-5 border-t border-border pt-4">
+        </section>
+
+        <section data-lingshu-guide="publish-accounts" className="rounded-2xl border border-border bg-white p-5 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <h3 className="text-sm font-bold text-text-primary">当前视频发布账号</h3>
-                <p className="mt-1 text-xs text-text-muted">已选择 {selectedConnectedAccounts.length} 个账号，覆盖 {selectedPlatforms.length} 个平台</p>
+                <h3 className="text-sm font-bold text-text-primary">平台账号选择</h3>
+                <p className="mt-1 text-xs text-text-muted">当前视频已选择 {selectedConnectedAccounts.length} 个账号，覆盖 {selectedPlatforms.length} 个平台</p>
               </div>
               <div className="flex flex-wrap gap-2">
                 {Object.entries(PLATFORM_META).map(([platform, meta]) => {
@@ -941,7 +955,6 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                   );
                 })}
                 <button type="button" onClick={selectAllAccounts} className="rounded-lg border border-border px-2.5 py-1.5 text-[11px] font-bold text-text-secondary">全选</button>
-                <button type="button" onClick={applyAccountsToAll} className="rounded-lg border border-border px-2.5 py-1.5 text-[11px] font-bold text-text-secondary">应用到全部视频</button>
               </div>
             </div>
 
@@ -979,45 +992,33 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
               );
             })}
           </div>
-          </div>
         </section>
 
-        <section data-lingshu-guide="publish-recommendations" className="rounded-2xl border border-border bg-white p-5 shadow-sm">
-          <div className="flex items-start justify-between gap-3">
-            <h3 className="text-sm font-bold text-text-primary">平台发布推荐</h3>
-            {recommendationsLoading && <Loader2 size={15} className="animate-spin text-accent" />}
-          </div>
-          <div className="mt-4 grid gap-3 md:grid-cols-2">
-            {selectedConnectedAccounts.map(account => {
-              const item = recommendations.find(candidate => candidate.accountId === account.id);
-              const meta = PLATFORM_META[account.platform];
-              const status = item?.status || 'recommended';
-              const style = status === 'recommended' ? 'border-green-200 bg-green-50/70' : status === 'adjust' ? 'border-amber-200 bg-amber-50/70' : 'border-red-200 bg-red-50/70';
-              const label = status === 'recommended' ? '推荐发布' : status === 'adjust' ? '调整后发布' : '不建议本次发布';
-              return <div key={account.id} className={`rounded-xl border p-3 ${style}`}>
-                <div className="flex items-center justify-between gap-2"><p className="inline-flex items-center gap-1.5 text-xs font-black text-text-primary"><SocialPlatformIcon platform={account.platform} size={14} /> {meta.label} · {account.handle || account.title}</p><span className="text-[10px] font-black">{label}</span></div>
-                <div className="mt-2 space-y-1">{(item?.reasons || ['正在检查当前版本…']).map(reason => <p key={reason} className="text-[11px] text-text-secondary">• {reason}</p>)}</div>
-                {item?.actions?.length ? <p className="mt-2 text-[10px] font-bold text-text-secondary">建议：{item.actions.join('；')}</p> : null}
-                <p className="mt-2 border-t border-black/5 pt-2 text-[10px] text-text-muted">历史覆盖：灵枢 {item?.coverage.lingshuRecords || 0} 条 · 平台同步 {item?.coverage.platformSyncedRecords || 0} 条</p>
-              </div>;
-            })}
-          </div>
-        </section>
         <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
           <section className="space-y-5">
             <div className="rounded-2xl border border-border bg-white p-5 shadow-sm">
-              <h3 className="text-sm font-bold text-text-primary">发布内容</h3>
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h3 className="text-sm font-bold text-text-primary">内容编辑</h3>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {activeItem?.sourcePlatform && (
+                    <span className="inline-flex items-center gap-1 rounded-full bg-accent-glow px-2.5 py-1 text-[10px] font-bold text-accent">
+                      <SocialPlatformIcon platform={activeItem.sourcePlatform} size={13} /> AI智能素材 · {PLATFORM_META[activeItem.sourcePlatform].label}
+                    </span>
+                  )}
+                  <span className="rounded-full bg-surface-2 px-2.5 py-1 text-[10px] font-bold text-text-secondary">{activeItem?.ratio || previewRatio}</span>
+                </div>
+              </div>
               <div className="mt-4 space-y-3">
                 <label className="block">
-                  <span className="mb-1.5 block text-[11px] font-semibold text-text-secondary">本地视频路径</span>
+                  <span className="mb-1.5 block text-[11px] font-semibold text-text-secondary">素材文件</span>
                   <input value={activeItem?.videoPath || ''} onChange={event => activeItem && updateItem(activeItem.id, { videoPath: event.target.value, status: 'draft', error: undefined })} placeholder="/Users/.../rendered-video.mp4" className="w-full rounded-xl border border-border bg-surface px-3 py-2.5 text-sm outline-none focus:border-accent" />
                 </label>
                 <label className="block">
-                  <span className="mb-1.5 block text-[11px] font-semibold text-text-secondary">基础标题</span>
+                  <span className="mb-1.5 block text-[11px] font-semibold text-text-secondary">作品标题</span>
                   <input value={activeItem?.title || ''} onChange={event => activeItem && updateItem(activeItem.id, { title: event.target.value, status: 'draft', error: undefined })} placeholder="发布标题" className="w-full rounded-xl border border-border bg-surface px-3 py-2.5 text-sm outline-none focus:border-accent" />
                 </label>
                 <label className="block">
-                  <span className="mb-1.5 block text-[11px] font-semibold text-text-secondary">基础文案</span>
+                  <span className="mb-1.5 block text-[11px] font-semibold text-text-secondary">发布配文</span>
                   <textarea value={activeItem?.description || ''} onChange={event => activeItem && updateItem(activeItem.id, { description: event.target.value, status: 'draft', error: undefined })} rows={5} placeholder="输入卖点、脚本摘要和 hashtag" className="w-full resize-none rounded-xl border border-border bg-surface px-3 py-2.5 text-sm outline-none focus:border-accent" />
                 </label>
                 <div className="rounded-xl border border-emerald-100 bg-emerald-50/80 p-3">
@@ -1035,7 +1036,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
             <div className="rounded-2xl border border-border bg-white p-5 shadow-sm">
               <div className="flex items-center justify-between gap-3">
                 <div>
-                  <h3 className="text-sm font-bold text-text-primary">分平台改编预览</h3>
+                  <h3 className="text-sm font-bold text-text-primary">分平台发布内容</h3>
                   <p className="mt-1 text-xs text-text-muted">每个平台文案互不相同，单卡可换一版。</p>
                 </div>
                 <button type="button" onClick={() => void adaptCopy()} disabled={adapting || selectedPlatforms.length === 0} className="inline-flex items-center gap-2 rounded-lg bg-accent px-3 py-2 text-xs font-bold text-white disabled:opacity-50">

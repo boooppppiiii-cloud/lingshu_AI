@@ -2244,7 +2244,7 @@ function VariationChipEditor({
   );
 }
 
-export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate?: (p: Page) => void; onGoPublish?: (payload: { videoPath?: string; title: string; description: string; ratio: string; sourceProjectId?: string }) => void } = {}) {
+export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate?: (p: Page) => void; onGoPublish?: (payload: { videoPath?: string; title: string; description: string; ratio: string; sourceProjectId?: string; platform?: 'youtube' | 'tiktok' | 'instagram' | 'facebook' }) => void } = {}) {
   const [stepIdx, setStepIdx] = useState(0);
   const [activeStoryboardSlotId, setActiveStoryboardSlotId] = useState('');
 
@@ -4284,6 +4284,8 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       title: projectTitle.trim() || coverTitle || 'AI 快剪成片',
       description: caption.trim() || activeSpokenScript,
       ratio,
+      sourceProjectId: projectId || undefined,
+      platform: platform as 'youtube' | 'tiktok' | 'instagram' | 'facebook',
     });
   };
 

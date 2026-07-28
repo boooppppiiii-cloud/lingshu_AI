@@ -47,12 +47,7 @@ export const ASSISTANT_GUIDES: Record<string, AssistantGuide> = {
   },
   'publish-accounts': {
     title: '选择账号',
-    message: '只发这条就单选，想省事就把账号应用到全部视频。',
-    agent: 'traffic',
-  },
-  'publish-recommendations': {
-    title: '看发布建议',
-    message: '先处理“调整后发布”的内容，免得卡在平台审核。',
+    message: '这里选的是当前视频要发到哪些账号，切换队列视频后可以分别设置。',
     agent: 'traffic',
   },
   'publish-mode': {
