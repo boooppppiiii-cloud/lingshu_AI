@@ -102,6 +102,19 @@ assert.match(read('server/whatsapp/historyImport.ts'), /await readTenantEnterpri
 
 const assetAccess = read('server/lib/assetAccess.ts');
 assert.match(assetAccess, /segments\[0\] === 'tenants' && segments\[1\] === viewerTenantId/, 'private assets must enforce tenant path ownership');
+const materialAssets = read('server/storage/materialAssets.ts');
+assert.match(materialAssets, /MATERIAL_ASSET_PREFIX = 'materials\/tenants'/, 'private COS materials must use a tenant prefix');
+assert.match(materialAssets, /materialAssetTenantKey\(tenantId\)/, 'material object keys must derive their tenant segment from authenticated tenant data');
+const studio = read('server/routes/studio.ts');
+assert.match(studio, /materialAssetObjectKey\(tenantId, file\)/, 'material uploads must use an authenticated tenant COS prefix');
+assert.match(studio, /r2SignedGetUrl\(key, materialSignedUrlTtlSeconds\(\)\)/, 'private COS material reads must use short-lived signed URLs');
+assert.match(studio, /item\.id === req\.params\.id && item\.tenantId === tenantId/, 'material mutations must enforce tenant ownership');
+assert.match(studio, /where: \{ tenant_id: tenantId \}/, 'studio projects must be queried by authenticated tenant');
+assert.match(studio, /existing\.tenant_id !== tenantId/, 'studio project mutations must enforce tenant ownership');
+assert.match(studio, /item\.tenantId === tenantId/, 'variation batches must be tenant filtered');
+assert.match(studio, /tenantPrivateObjectKey\(namespace, tenantId, file\)/, 'studio private objects must use tenant-prefixed storage');
+assert.match(studio, /persistPrivateStudioAsset\('tts', tenantId/, 'TTS objects must use private storage');
+assert.match(studio, /persistPrivateStudioAsset\('voice-samples', tenantId/, 'voice samples must use private storage');
 const serverIndex = read('server/index.ts');
 for (const prefix of ['media', 'bgm', 'tts', 'voice-samples', 'covers']) {
   assert.match(serverIndex, new RegExp(`app\\.use\\('/${prefix}', requireScopedAsset`), `${prefix} assets must use scoped access`);

@@ -612,7 +612,7 @@ export const studioApi = {
   // 素材库
   listMaterials: async (): Promise<Material[]> => {
     try {
-      const r = await fetch('/api/overseas/studio/materials', { headers: authHeader() });
+      const r = await fetch('/api/overseas/studio/materials', { headers: authHeader(), cache: 'no-store' });
       if (!r.ok) throw new Error(String(r.status));
       const data = await r.json();
       return Array.isArray(data) ? (data as Material[]) : [];
@@ -620,10 +620,12 @@ export const studioApi = {
       return [];
     }
   },
-  uploadMaterial: (b: { name: string; folder?: string; type: 'video' | 'image' | 'audio'; duration?: number; width?: number; height?: number; dataBase64: string; mimeType?: string }) =>
+  uploadMaterial: (b: { name: string; folder?: string; type: 'video' | 'image' | 'audio'; duration?: number; width?: number; height?: number; dataBase64: string; mimeType?: string; sourceType?: string }) =>
     post<{ ok: boolean; material: Material }>('materials', b, { ok: false, material: null as unknown as Material }),
   analyzeMaterialSegments: (id: string) =>
     post<{ ok: boolean; material?: Material; segments?: MaterialSegment[]; error?: string }>(`materials/${id}/analyze-segments`, {}, { ok: false, error: '片段分析失败' }),
+  classifyMaterial: (id: string) =>
+    post<{ ok: boolean; material?: Material; error?: string }>(`materials/${id}/classify`, {}, { ok: false, error: '智能分类失败' }),
   updateMaterialSegment: async (materialId: string, segmentId: string, patch: Partial<MaterialSegment>) => {
     try {
       const response = await fetch(`/api/overseas/studio/materials/${materialId}/segments/${segmentId}`, {

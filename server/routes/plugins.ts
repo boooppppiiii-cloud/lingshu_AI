@@ -3,7 +3,7 @@ import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { testShopify } from '../integrations/shopify.js';
-import { isDemoMode } from '../lib/demo.js';
+import { callLLM } from '../agents/llm.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA = path.join(__dirname, '../../data/plugins.json');
@@ -32,23 +32,12 @@ const PLUGIN_CATALOG: Omit<Plugin, 'status' | 'config' | 'installedAt'>[] = [
   { id: 'facebook', pluginKey: 'facebook', name: 'Facebook', nameZh: 'Facebook', category: 'social', description: '连接 Facebook Page，读取主页视频和评论，并支持将 AI 生成内容发布到主页', icon: '👍' },
 ];
 
-const FALLBACK_RATES = {
-  provider: 'fallback',
-  base: 'USD',
-  date: new Date().toISOString().slice(0, 10),
-  rates: { CNY: 6.8, SAR: 3.75, AED: 3.67, VND: 26200, MYR: 4.1, IDR: 16200 },
-};
-
-async function fetchExchangeRates(): Promise<typeof FALLBACK_RATES & { source: 'live' | 'fallback' }> {
-  try {
-    const r = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
-    if (!r.ok) throw new Error(`exchange rate api ${r.status}`);
-    const data = await r.json() as typeof FALLBACK_RATES;
-    if (!data?.rates?.CNY || !data?.rates?.SAR || !data?.rates?.AED) throw new Error('invalid exchange rate payload');
-    return { ...data, source: 'live' };
-  } catch {
-    return { ...FALLBACK_RATES, date: new Date().toISOString().slice(0, 10), source: 'fallback' };
-  }
+async function fetchExchangeRates() {
+  const r = await fetch('https://api.exchangerate-api.com/v4/latest/USD');
+  if (!r.ok) throw new Error(`exchange rate api ${r.status}`);
+  const data = await r.json() as { provider?: string; base?: string; date?: string; rates?: Record<string, number> };
+  if (!data?.rates?.CNY || !data.rates.SAR || !data.rates.AED) throw new Error('invalid exchange rate payload');
+  return { ...data, rates: data.rates, source: 'live' as const };
 }
 
 function load(): Plugin[] {
@@ -61,9 +50,6 @@ function save(plugins: Plugin[]) {
 function mergeWithCatalog(installed: Plugin[]): (Plugin & { installed: boolean })[] {
   return PLUGIN_CATALOG.map(cat => {
     const inst = installed.find(p => p.pluginKey === cat.pluginKey);
-    if (!inst && cat.category === 'social') {
-      return { ...cat, status: 'installed' as const, config: {}, installedAt: new Date().toISOString(), installed: true };
-    }
     return inst
       ? { ...inst, installed: true }
       : { ...cat, status: 'not_installed' as const, config: {}, installed: false };
@@ -103,17 +89,6 @@ pluginsRouter.post('/:key/test', async (req: Request, res: Response) => {
   const plugin = load().find(p => p.pluginKey === req.params.key);
   if (!plugin) { res.status(404).json({ error: 'not installed' }); return; }
 
-  if (isDemoMode()) {
-    updateStatus(plugin.id, 'installed');
-    res.json({
-      ok: true,
-      source: 'demo',
-      message: '插件连接测试通过。',
-      sample: { connectedAccount: `${plugin.nameZh || plugin.name} Demo Account`, syncedAt: new Date().toISOString() },
-    });
-    return;
-  }
-
   try {
     switch (plugin.pluginKey) {
       case 'shopify': {
@@ -134,13 +109,21 @@ pluginsRouter.post('/:key/test', async (req: Request, res: Response) => {
         break;
       }
       case 'translate':
+        await callLLM('Reply with OK only.', { backend: 'qwen', systemPrompt: 'This is a connectivity check.' });
         updateStatus(plugin.id, 'installed');
-        res.json({ ok: true, message: '内置翻译引擎已就绪' });
+        res.json({ ok: true, source: 'qwen', message: '千问翻译引擎连接成功' });
         break;
-      case 'google_translate':
+      case 'google_translate': {
+        const apiKey = plugin.config.apiKey;
+        if (!apiKey) throw new Error('请先配置 Google Cloud Translation API Key');
+        const response = await fetch(`https://translation.googleapis.com/language/translate/v2?key=${encodeURIComponent(apiKey)}`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ q: 'hello', target: 'zh' }),
+        });
+        if (!response.ok) throw new Error(`Google Translate API ${response.status}`);
         updateStatus(plugin.id, 'installed');
-        res.json({ ok: true, message: 'Google 翻译 Demo 连接已就绪' });
+        res.json({ ok: true, source: 'google', message: 'Google 翻译连接成功' });
         break;
+      }
       default:
         res.json({ ok: false, message: '该插件需要配置 API Key 后测试' });
     }
@@ -158,5 +141,22 @@ function updateStatus(id: string, status: Plugin['status']) {
 
 // Exchange rate shortcut
 pluginsRouter.get('/exchangerate/rates', async (_req, res) => {
-  res.json(await fetchExchangeRates());
+  try { res.json(await fetchExchangeRates()); }
+  catch (error) { res.status(502).json({ error: error instanceof Error ? error.message : '汇率服务不可用' }); }
+});
+
+pluginsRouter.post('/translate/run', async (req, res) => {
+  const text = String(req.body?.text || '').trim();
+  const source = String(req.body?.source || 'auto');
+  const target = String(req.body?.target || '').trim();
+  if (!text || !target) { res.status(400).json({ error: 'text and target required' }); return; }
+  try {
+    const translatedText = await callLLM(text, {
+      backend: 'qwen',
+      systemPrompt: `Translate from ${source} to ${target}. Return only the translation, without explanation or quotation marks. Preserve names, numbers and formatting.`,
+    });
+    res.json({ ok: true, source: 'qwen', translatedText: translatedText.trim() });
+  } catch (error) {
+    res.status(502).json({ error: error instanceof Error ? error.message : '翻译服务不可用' });
+  }
 });

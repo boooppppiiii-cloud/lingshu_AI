@@ -92,48 +92,6 @@ const defaultActionItems = [
   },
 ];
 
-const MOCK_TREND = [
-  { label: '06-13', exposure: 28600, inquiries: 4 },
-  { label: '06-20', exposure: 34200, inquiries: 6 },
-  { label: '06-27', exposure: 39800, inquiries: 7 },
-  { label: '07-04', exposure: 41600, inquiries: 8 },
-  { label: '07-11', exposure: 52200, inquiries: 10 },
-  { label: '07-18', exposure: 57700, inquiries: 12 },
-  { label: '07-24', exposure: 72300, inquiries: 15 },
-];
-
-const MOCK_CHANNELS = [
-  { channel: 'Facebook', inquiries: 18, converted: 6 },
-  { channel: 'Instagram', inquiries: 13, converted: 4 },
-  { channel: 'WhatsApp', inquiries: 9, converted: 3 },
-  { channel: 'TikTok', inquiries: 5, converted: 1 },
-  { channel: 'YouTube', inquiries: 2, converted: 0 },
-];
-
-const MOCK_ACTIONS = [
-  {
-    title: '优先跟进 3 个高意向报价客户',
-    desc: 'Emma、Ahmed 和 Daniel 已进入报价或规格确认阶段，今天完成价格、MOQ 与样品确认。',
-    basis: '依据：高意向客户 9 个，其中 3 个需要人工确认后才能继续推进。',
-    agent: 'conversion' as const,
-    task: '基于当前高意向客户与对话记录，整理今天必须人工确认的报价、MOQ、认证和样品事项。',
-  },
-  {
-    title: '复用 Facebook 高转化内容结构',
-    desc: 'Facebook 贡献 38% 的询盘和 43% 的已转化客户，下一批内容优先复用产品证明与工厂可信度结构。',
-    basis: '依据：近 30 天渠道询盘与转化贡献对比。',
-    agent: 'traffic' as const,
-    task: '根据首页渠道贡献数据，整理 Facebook 高转化内容的可复用结构并生成下一批选题。',
-  },
-  {
-    title: '唤醒 2 个沉默客户',
-    desc: 'Olivia 与 Lucas 分别因预算和 MOQ 停滞，用低 MOQ、新品与混批方案做差异化唤醒。',
-    basis: '依据：我的客户中沉默 30/60 天客户与最近异议。',
-    agent: 'retention' as const,
-    task: '为沉默客户分别生成基于其真实异议的唤醒策略，不发送泛化促销话术。',
-  },
-];
-
 const titleLevel2 = 'text-base font-bold';
 const sectionTitle = 'flex items-center gap-2 text-base font-bold text-text-primary';
 const sectionIcon = 'flex h-6 w-6 items-center justify-center rounded-lg bg-green-50 text-green-700';
@@ -155,7 +113,6 @@ export default function StrategyDataBoard({
   const [orders, setOrders] = useState<OrderRecord[]>([]);
   const { customers } = useCustomers();
   const windowDays = 30;
-  const useMockOverview = !exposure.ready && orders.length === 0;
 
   const Active = (TABS.find(t => t.id === tab) ?? TABS[0]).Comp;
   const selectedMetrics = new Set(selectedMetricByTab[tab]);
@@ -195,17 +152,17 @@ export default function StrategyDataBoard({
   }, []);
 
   const chainMetrics = useMemo(() => {
-    const inquiryCount = useMockOverview ? 47 : effectiveInquiries.length;
-    const conversionRate = useMockOverview ? 14.9 : inquiryCount ? convertedInquiries.length / inquiryCount * 100 : 0;
+    const inquiryCount = effectiveInquiries.length;
+    const conversionRate = inquiryCount ? convertedInquiries.length / inquiryCount * 100 : 0;
     return [
       {
         id: 'exposure' as const,
         icon: <Zap size={15} className="text-green-600" />,
         label: '视频曝光',
-        value: exposure.ready ? compact(exposure.value) : useMockOverview ? '28.6万' : '/',
-        desc: exposure.ready ? '来自已授权社媒账号返回的视频播放量。' : '近 30 天内容曝光，演示数据。',
-        source: exposure.ready ? '来源：社媒账号接口' : '演示数据 · 近30天',
-        trend: '+31.6%',
+        value: exposure.ready ? compact(exposure.value) : '/',
+        desc: exposure.ready ? '来自已授权社媒账号返回的视频播放量。' : '尚未接入可读取曝光量的社媒账号。',
+        source: exposure.ready ? '来源：社媒账号接口' : '暂无真实数据',
+        trend: '',
       },
       {
         id: 'inquiry' as const,
@@ -214,7 +171,7 @@ export default function StrategyDataBoard({
         value: String(inquiryCount),
         desc: '按我的客户 tab 中 WhatsApp 且意向分 >= 70 的客户计算。',
         source: '来源：我的客户 / WhatsApp',
-        trend: '+17.5%',
+        trend: '',
       },
       {
         id: 'conversion' as const,
@@ -225,21 +182,40 @@ export default function StrategyDataBoard({
           ? `按已报价/成交 WhatsApp 询盘计算，并参考 ${validOrders.length} 个有效订单。`
           : '按已报价/成交 WhatsApp 询盘计算；订单未打通时不额外推断。',
         source: '来源：我的客户 + 我的订单',
-        trend: '+3.2pp',
+        trend: '',
       },
       {
         id: 'followup' as const,
         icon: <Target size={15} className="text-green-600" />,
         label: '客户待跟进',
-        value: String(useMockOverview ? 12 : needsFollowup.length),
+        value: String(needsFollowup.length),
         desc: '按 WhatsApp 客户中需人工处理或有待办原因的记录计算。',
         source: '来源：我的客户 / WhatsApp',
-        trend: '-4',
+        trend: '',
       },
     ];
-  }, [convertedInquiries.length, effectiveInquiries.length, exposure, needsFollowup.length, useMockOverview, validOrders.length]);
+  }, [convertedInquiries.length, effectiveInquiries.length, exposure, needsFollowup.length, validOrders.length]);
 
-  const actionItems = useMockOverview ? MOCK_ACTIONS : defaultActionItems;
+  const channelData = useMemo(() => {
+    const grouped = new Map<string, { channel: string; inquiries: number; converted: number }>();
+    for (const customer of customers) {
+      const channel = customer.source || 'unknown';
+      const item = grouped.get(channel) || { channel, inquiries: 0, converted: 0 };
+      item.inquiries += 1;
+      if (customer.stage === 'quoted' || customer.stage === 'won' || customer.orders.length > 0) item.converted += 1;
+      grouped.set(channel, item);
+    }
+    return [...grouped.values()];
+  }, [customers]);
+
+  const funnelData = [
+    ['内容曝光', exposure.ready ? compact(exposure.value) : '/', exposure.ready ? '社媒账号接口' : '未接入'],
+    ['有效询盘', String(effectiveInquiries.length), '真实客户'],
+    ['进入报价', String(convertedInquiries.length), '真实客户'],
+    ['有效订单', String(validOrders.length), '真实订单'],
+  ];
+
+  const actionItems = defaultActionItems;
 
   return (
     <div className="h-full flex flex-col" data-lingshu-guide="strategy-dashboard">
@@ -266,7 +242,7 @@ export default function StrategyDataBoard({
                 <h2 className="text-base font-black text-text-primary">近 30 天获客经营总览</h2>
                 <p className="mt-1 text-[11px] text-text-muted">从内容曝光到成交推进，先看趋势，再看渠道和待办。</p>
               </div>
-              {useMockOverview && <span className="rounded-full border border-amber-200 bg-amber-50 px-2.5 py-1 text-[10px] font-bold text-amber-700">演示数据</span>}
+              <span className="rounded-full border border-green-200 bg-green-50 px-2.5 py-1 text-[10px] font-bold text-green-700">真实数据</span>
             </div>
             <div className="grid gap-2.5 md:grid-cols-4">
               {chainMetrics.map(item => {
@@ -286,7 +262,7 @@ export default function StrategyDataBoard({
                   </div>
                   <p className={`mt-2.5 ${metricValueText}`}>{item.value}</p>
                   <div className="mt-2 flex items-center justify-between gap-2">
-                    <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-green-700"><ArrowUpRight size={10} />{item.trend}</span>
+                    {item.trend ? <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-green-700"><ArrowUpRight size={10} />{item.trend}</span> : <span />}
                     <span className="truncate text-[9px] text-text-muted">{item.source}</span>
                   </div>
                 </div>
@@ -298,32 +274,16 @@ export default function StrategyDataBoard({
               <section className="rounded-2xl border border-border bg-white p-4">
                 <div className="mb-3 flex items-start justify-between gap-3">
                   <div><p className={bodyTitle}>获客趋势</p><p className="mt-1 text-[10px] text-text-muted">曝光持续增长时，询盘是否同步增长</p></div>
-                  <span className="rounded-lg bg-green-50 px-2 py-1 text-[10px] font-bold text-green-700">询盘效率 1.64 / 万曝光</span>
+                  <span className="rounded-lg bg-green-50 px-2 py-1 text-[10px] font-bold text-green-700">询盘效率 {exposure.ready && exposure.value > 0 ? `${(effectiveInquiries.length / exposure.value * 10000).toFixed(2)} / 万曝光` : '暂无真实数据'}</span>
                 </div>
-                <div className="h-[220px] w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={MOCK_TREND} margin={{ top: 8, right: 6, left: -16, bottom: 0 }}>
-                      <defs>
-                        <linearGradient id="exposureFill" x1="0" y1="0" x2="0" y2="1"><stop offset="5%" stopColor="#16a34a" stopOpacity={0.28}/><stop offset="95%" stopColor="#16a34a" stopOpacity={0.02}/></linearGradient>
-                      </defs>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" vertical={false}/>
-                      <XAxis dataKey="label" tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false}/>
-                      <YAxis yAxisId="left" tickFormatter={value => `${Math.round(Number(value) / 1000)}k`} tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false}/>
-                      <YAxis yAxisId="right" orientation="right" domain={[0, 18]} tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false}/>
-                      <Tooltip formatter={(value, name) => [name === 'exposure' ? compact(Number(value)) : value, name === 'exposure' ? '曝光' : '询盘']} labelStyle={{ fontSize: 11 }} contentStyle={{ borderRadius: 12, borderColor: '#dcfce7', fontSize: 11 }}/>
-                      <Area yAxisId="left" type="monotone" dataKey="exposure" stroke="#16a34a" strokeWidth={2.5} fill="url(#exposureFill)"/>
-                      <Area yAxisId="right" type="monotone" dataKey="inquiries" stroke="#0f766e" strokeWidth={2} fill="transparent"/>
-                    </AreaChart>
-                  </ResponsiveContainer>
-                </div>
-                <div className="mt-1 flex items-center gap-4 text-[10px] text-text-muted"><span><i className="mr-1 inline-block h-2 w-2 rounded-full bg-green-600"/>曝光</span><span><i className="mr-1 inline-block h-2 w-2 rounded-full bg-teal-700"/>询盘</span></div>
+                <div className="flex h-[220px] items-center justify-center rounded-xl bg-surface-2 px-6 text-center text-xs text-text-muted">当前接口仅返回累计曝光，没有按日历史序列。接入平台 insights 时间序列后，这里将展示真实趋势。</div>
               </section>
 
               <section className="rounded-2xl border border-border bg-white p-4">
                 <div className="mb-3"><p className={bodyTitle}>渠道询盘贡献</p><p className="mt-1 text-[10px] text-text-muted">对比询盘量与已转化数量，避免只看流量</p></div>
                 <div className="h-[220px] w-full">
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={MOCK_CHANNELS} layout="vertical" margin={{ top: 0, right: 8, left: 8, bottom: 0 }}>
+                    <BarChart data={channelData} layout="vertical" margin={{ top: 0, right: 8, left: 8, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" horizontal={false}/>
                       <XAxis type="number" tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false}/>
                       <YAxis type="category" dataKey="channel" width={62} tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false}/>
@@ -339,7 +299,7 @@ export default function StrategyDataBoard({
             <section className="mt-3 rounded-2xl border border-border bg-surface-2 p-4">
               <div className="flex items-center gap-2"><span className={sectionIcon}><CircleDollarSign size={14}/></span><p className={bodyTitle}>获客转化漏斗</p><span className="ml-auto text-[10px] text-text-muted">近30天</span></div>
               <div className="mt-3 grid grid-cols-4 gap-2">
-                {[['内容曝光','28.6万','100%'],['有效询盘','47','1.64/万曝光'],['进入报价','18','38.3%'],['已成交','7','14.9%']].map(([label,value,rate],index)=><div key={label} className="relative rounded-xl border border-border bg-white p-3"><p className="text-[10px] font-semibold text-text-muted">{label}</p><p className="mt-1 text-xl font-black text-text-primary">{value}</p><p className="mt-1 text-[9px] font-bold text-green-700">{rate}</p>{index<3&&<ArrowRight size={13} className="absolute -right-2.5 top-1/2 z-10 -translate-y-1/2 rounded-full bg-white text-text-muted"/>}</div>)}
+                {funnelData.map(([label,value,rate],index)=><div key={label} className="relative rounded-xl border border-border bg-white p-3"><p className="text-[10px] font-semibold text-text-muted">{label}</p><p className="mt-1 text-xl font-black text-text-primary">{value}</p><p className="mt-1 text-[9px] font-bold text-green-700">{rate}</p>{index<3&&<ArrowRight size={13} className="absolute -right-2.5 top-1/2 z-10 -translate-y-1/2 rounded-full bg-white text-text-muted"/>}</div>)}
               </div>
             </section>
 

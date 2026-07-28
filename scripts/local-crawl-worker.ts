@@ -79,6 +79,9 @@ async function runJob(job: CrawlJob): Promise<void> {
       accountUrl: job.accountUrl || '',
       accountName: job.accountName || '',
       limit: job.limit || 10,
+      // A local worker processes exactly the requested amount. Failed analysis
+      // must not recursively fan out into replacement downloads.
+      disableBackfill: true,
     });
     await completeJob(job.id, {
       ok: true,

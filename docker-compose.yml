@@ -10,6 +10,10 @@ services:
       NODE_ENV: production
       PORT: 8788
       PB_URL: http://pocketbase:8090
+      # Historical analysis/backfill stays paused during controlled one-record
+      # channel acceptance tests. Manual scheduled-task runs are unaffected.
+      CRAWLER_OPS_WORKER_ENABLED: "0"
+      PB_VIDEO_BACKFILL_ENABLED: "false"
     volumes:
       - ./data:/app/data
     depends_on:
@@ -37,6 +41,10 @@ services:
       - ./pb_migrations:/pb/pb_migrations:ro
     expose:
       - "8090"
+    # PocketBase remains private to the host. The Mac crawl worker reaches it
+    # only through an authenticated SSH local-forward tunnel.
+    ports:
+      - "127.0.0.1:8090:8090"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8090/api/health"]
       interval: 10s

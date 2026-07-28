@@ -312,9 +312,7 @@ function minutesOfDay(value: string): number {
 }
 
 function currentDate(): Date {
-  const raw = process.env.LINGSHU_MOCK_NOW || process.env.NIGHT_MODE_MOCK_NOW || '';
-  const parsed = raw ? new Date(raw) : null;
-  return parsed && !Number.isNaN(parsed.getTime()) ? parsed : new Date();
+  return new Date();
 }
 
 function isWithinWorkHours(workHours: { start: string; end: string }, now = new Date()): boolean {

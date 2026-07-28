@@ -7,9 +7,9 @@ import { spawn } from 'child_process';
 import cron, { type ScheduledTask as CronJob } from 'node-cron';
 import { callLLMChatStream } from '../agents/llm.js';
 import { buildEnterpriseContext, readTenantEnterpriseProfile } from './enterprise.js';
-import { isDemoMode } from '../lib/demo.js';
 import { store } from '../storage/index.js';
-import { crawlVideosForTenant, getVideoPipelineStats } from './videos.js';
+import { crawlImagePostsForTenant, crawlVideosForTenant, getVideoPipelineStats } from './videos.js';
+import { createCrawlWorkerJob } from './crawlWorker.js';
 import type { Platform } from '../types/index.js';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 
@@ -21,7 +21,7 @@ export interface ScheduledTask {
   id: string;
   name: string;
   category: 'daily' | 'monitor' | 'report' | 'automation';
-  taskType: 'trend_report' | 'weekly_review' | 'crm_wakeup' | 'exchange_rate' | 'holiday_push' | 'video_keyword_crawl' | 'custom';
+  taskType: 'trend_report' | 'weekly_review' | 'crm_wakeup' | 'exchange_rate' | 'holiday_push' | 'video_keyword_crawl' | 'image_post_crawl' | 'competitor_account_crawl' | 'custom';
   cronExpr: string;      // e.g. "0 8 * * *"
   cronLabel: string;     // e.g. "每天 08:00"
   enabled: boolean;
@@ -178,7 +178,7 @@ function taskReportActions(taskType: string): TaskReportAction[] {
       { label: '将适配市场和语言写回企业中心学习记录', agentLabel: '首页' },
     ];
   }
-  if (taskType === 'video_keyword_crawl') {
+  if (['video_keyword_crawl', 'image_post_crawl', 'competitor_account_crawl'].includes(taskType)) {
     return [
       { label: '查看新入库视频并筛选可复用素材', agentLabel: '我的社媒' },
       { label: '选择高互动视频生成克隆脚本', agentLabel: '我的社媒' },
@@ -219,6 +219,137 @@ function formatTaskTime(value?: string): string {
   return value ? new Date(value).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' }) : '暂无';
 }
 
+interface WeeklyVideoReport {
+  rangeLabel: string;
+  startAt: string;
+  endAt: string;
+  newVideos: number;
+  completed: number;
+  exactCompleted: number;
+  analyzing: number;
+  queued: number;
+  basicOnly: number;
+  failed: number;
+  byPlatform: Array<{ platform: string; newVideos: number; completed: number; processing: number; basicOnly: number; failed: number }>;
+}
+
+export function beijingWeekWindow(nowMs = Date.now()): { startMs: number; endMs: number; rangeLabel: string } {
+  const offsetMs = 8 * 60 * 60 * 1000;
+  const beijingNow = new Date(nowMs + offsetMs);
+  const daysSinceMonday = (beijingNow.getUTCDay() + 6) % 7;
+  const startMs = Date.UTC(
+    beijingNow.getUTCFullYear(),
+    beijingNow.getUTCMonth(),
+    beijingNow.getUTCDate() - daysSinceMonday,
+  ) - offsetMs;
+  const label = (value: number, withTime = false) => new Date(value).toLocaleString('zh-CN', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    ...(withTime ? { hour: '2-digit', minute: '2-digit', hour12: false } : {}),
+  });
+  return {
+    startMs,
+    endMs: nowMs,
+    rangeLabel: `${label(startMs)} 00:00 至 ${label(nowMs, true)}（北京时间，本周一开始）`,
+  };
+}
+
+function schedulerVideoAnalysis(record: Record<string, unknown>): Record<string, unknown> {
+  try {
+    const value = record.aiAnalysis;
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>;
+    const parsed = JSON.parse(String(value || '{}')) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+async function weeklyVideoReport(task: ScheduledTask, tenantId: string): Promise<WeeklyVideoReport> {
+  const window = beijingWeekWindow();
+  const configuredPlatforms = new Set(splitTextList(task.config.platforms).map(item => item.toLowerCase()));
+  const records: Record<string, unknown>[] = [];
+  let page = 1;
+  let totalPages = 1;
+  do {
+    const result = await store.list<Record<string, unknown>>('trend_videos', {
+      where: { tenantId, contentFormat: 'video' },
+      sort: '-crawledAt',
+      page,
+      perPage: 100,
+    });
+    records.push(...result.items);
+    totalPages = Math.max(1, result.totalPages || 1);
+    page += 1;
+  } while (page <= totalPages && page <= 50);
+
+  const seen = new Set<string>();
+  const weekly = records.filter(record => {
+    const platform = String(record.platform || '').toLowerCase();
+    if (configuredPlatforms.size && !configuredPlatforms.has(platform)) return false;
+    const crawledAt = Date.parse(String(record.crawledAt || ''));
+    if (!Number.isFinite(crawledAt) || crawledAt < window.startMs || crawledAt > window.endMs) return false;
+    const sourceKey = String(record.sourceUrl || record.id || '').trim();
+    if (sourceKey && seen.has(sourceKey)) return false;
+    if (sourceKey) seen.add(sourceKey);
+    return true;
+  });
+
+  const platformStats = new Map<string, { newVideos: number; completed: number; processing: number; basicOnly: number; failed: number }>();
+  let completed = 0;
+  let exactCompleted = 0;
+  let analyzing = 0;
+  let queued = 0;
+  let basicOnly = 0;
+  let failed = 0;
+
+  for (const record of weekly) {
+    const analysis = schedulerVideoAnalysis(record);
+    const platform = String(record.platform || 'unknown').toLowerCase();
+    const row = platformStats.get(platform) || { newVideos: 0, completed: 0, processing: 0, basicOnly: 0, failed: 0 };
+    row.newVideos += 1;
+    const recordStatus = String(record.status || '');
+    const downloadStatus = String(analysis.downloadStatus || '');
+    const geminiStatus = String(analysis.geminiStatus || '');
+    const isFailed = recordStatus === 'failed'
+      || ['failed', 'manual_required'].includes(downloadStatus)
+      || ['video_failed', 'ops_failed'].includes(geminiStatus);
+    const isCompleted = !isFailed
+      && analysis.analysisQuality === 'video'
+      && Boolean(analysis.gemini)
+      && (!geminiStatus || geminiStatus === 'analyzed');
+    const isAnalyzing = !isFailed && !isCompleted && ['downloading', 'analyzing'].includes(downloadStatus);
+    const isQueued = !isFailed && !isCompleted && !isAnalyzing
+      && ['queued', 'download_retrying', 'ops_queued'].includes(downloadStatus);
+
+    if (isFailed) { failed += 1; row.failed += 1; }
+    else if (isCompleted) {
+      completed += 1;
+      row.completed += 1;
+      if (analysis.analysisMode === 'exact') exactCompleted += 1;
+    } else if (isAnalyzing) { analyzing += 1; row.processing += 1; }
+    else if (isQueued) { queued += 1; row.processing += 1; }
+    else { basicOnly += 1; row.basicOnly += 1; }
+    platformStats.set(platform, row);
+  }
+
+  return {
+    rangeLabel: window.rangeLabel,
+    startAt: new Date(window.startMs).toISOString(),
+    endAt: new Date(window.endMs).toISOString(),
+    newVideos: weekly.length,
+    completed,
+    exactCompleted,
+    analyzing,
+    queued,
+    basicOnly,
+    failed,
+    byPlatform: [...platformStats.entries()].map(([platform, values]) => ({ platform, ...values })),
+  };
+}
+
 function renderTaskReportPdf(payload: Record<string, unknown>): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const output = path.join(os.tmpdir(), `lingshu-task-report-${Date.now()}-${Math.random().toString(16).slice(2)}.pdf`);
@@ -245,6 +376,7 @@ function renderTaskReportPdf(payload: Record<string, unknown>): Promise<Buffer> 
 
 // Active cron jobs registry
 const activeJobs = new Map<string, CronJob>();
+const runningTaskIds = new Set<string>();
 
 async function executeTrendReport(task: ScheduledTask): Promise<string> {
   const enterpriseCtx = await getEnterpriseCtx(task);
@@ -489,16 +621,45 @@ async function executeVideoKeywordCrawl(task: ScheduledTask): Promise<string> {
   let imported = 0;
   let returned = 0;
   let existing = 0;
+  let succeeded = 0;
+  let failed = 0;
 
   for (const keyword of keywords) {
     for (const platform of platforms) {
       try {
-        const result = await crawlVideosForTenant({ tenantId, platform, keyword, limit, dateFrom, dateTo });
+        if (platform === 'youtube' && task.config.localWorker !== '0') {
+          const job = await createCrawlWorkerJob({
+            tenantId,
+            requestedBy: `scheduler:${task.id}`,
+            platform,
+            mode: 'keyword',
+            keyword,
+            limit,
+          });
+          if (!job) throw new Error('Mac 本地采集任务创建失败');
+          succeeded += 1;
+          lines.push(`${platform} / ${keyword}: 已提交 Mac 登录态采集队列（1 个任务）`);
+          continue;
+        }
+        const result = await crawlVideosForTenant({
+          tenantId,
+          platform,
+          keyword,
+          limit,
+          dateFrom,
+          dateTo,
+          disableBackfill: task.config.smokeTest === '1',
+        });
+        if (result.items.length === 0 && result.imported === 0 && /未找到|无可用|失败|blocked|degraded/i.test(result.message)) {
+          throw new Error(result.message);
+        }
         imported += result.imported;
         returned += result.items.length;
         existing += result.returnedExisting;
-        lines.push(`${platform} / ${keyword}: 返回 ${result.items.length} 条，新增 ${result.imported} 条，库内已有 ${result.returnedExisting} 条`);
+        succeeded += 1;
+        lines.push(`${platform} / ${keyword}: 当前可见 ${result.items.length} 条，新增候选 ${result.imported} 条，库内已有 ${result.returnedExisting} 条`);
       } catch (e) {
+        failed += 1;
         lines.push(`${platform} / ${keyword}: 执行失败 - ${e instanceof Error ? e.message : String(e)}`);
       }
     }
@@ -506,29 +667,111 @@ async function executeVideoKeywordCrawl(task: ScheduledTask): Promise<string> {
 
   return [
     `【视频关键词自动采集】${dateFrom} 至 ${dateTo}`,
+    `执行状态：${succeeded > 0 ? '执行成功' : '执行失败'}${failed > 0 ? `（成功 ${succeeded} 组，失败 ${failed} 组）` : ''}`,
+    `本次结论：${succeeded === 0 ? '采集请求均未完成，请根据分组错误处理后重试' : returned + imported + existing > 0 ? '已完成检索并取得可入库或待处理内容' : '已完成检索，本次时间窗口内暂无符合条件的新内容'}`,
     `平台：${platforms.join(', ')}；关键词：${keywords.join('、')}；每组数量：${limit}`,
-    `汇总：返回 ${returned} 条，新增 ${imported} 条，库内已有 ${existing} 条`,
+    `汇总：当前可见 ${returned} 条，新增候选 ${imported} 条，库内已有 ${existing} 条`,
     ...lines,
+  ].join('\n');
+}
+
+async function executeImagePostCrawl(task: ScheduledTask): Promise<string> {
+  const tenantId = await resolveSchedulerTenantId(task);
+  const platform = resolveCrawlerPlatform(task.config.platforms, 'instagram') as Platform;
+  const keywords = splitConfigList(task.config.keywords || task.config.keyword, ['skincare']);
+  const limit = Math.max(1, Math.min(10, Number(task.config.limit || 5) || 5));
+  const lines: string[] = [];
+  let imported = 0;
+  let succeeded = 0;
+  let failed = 0;
+  for (const keyword of keywords) {
+    try {
+      const result = await crawlImagePostsForTenant({ tenantId, platform, keyword, limit });
+      if (result.items.length === 0 && result.imported === 0 && /未找到|无可用|失败|blocked|degraded/i.test(result.message)) {
+        throw new Error(result.message);
+      }
+      imported += result.imported;
+      succeeded += 1;
+      lines.push(`${platform} / ${keyword}: ${result.message}`);
+    } catch (e) {
+      failed += 1;
+      lines.push(`${platform} / ${keyword}: 执行失败 - ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  return [
+    `【图文自动采集】平台：${platform}；每组数量：${limit}`,
+    `执行状态：${succeeded > 0 ? '执行成功' : '执行失败'}${failed > 0 ? `（成功 ${succeeded} 组，失败 ${failed} 组）` : ''}`,
+    `本次结论：${succeeded === 0 ? '采集请求均未完成，请根据分组错误处理后重试' : imported > 0 ? `已新增 ${imported} 条图文内容` : '已完成检索，本次暂无符合条件的新图文'}`,
+    `汇总：新增 ${imported} 条`, ...lines,
+  ].join('\n');
+}
+
+async function executeCompetitorAccountCrawl(task: ScheduledTask): Promise<string> {
+  const tenantId = await resolveSchedulerTenantId(task);
+  const platform = resolveCrawlerPlatform(task.config.platforms) as Platform;
+  const limit = Math.max(1, Math.min(30, Number(task.config.limit || 10) || 10));
+  const accounts = await store.list<Record<string, unknown>>('competitor_accounts', {
+    where: { tenantId, platform }, page: 1, perPage: 200, sort: '-createdAt',
+  });
+  if (!accounts.items.length) return `【${platform} 对标账号自动采集】\n执行状态：等待账号配置\n本次结论：该平台尚未保存对标账号，添加账号主页后即可执行采集。`;
+  const lines: string[] = [];
+  let imported = 0;
+  let succeeded = 0;
+  let failed = 0;
+  for (const account of accounts.items) {
+    const accountUrl = String(account.accountUrl || '');
+    const accountName = String(account.accountName || account.handle || accountUrl);
+    try {
+      if (platform === 'youtube' && task.config.localWorker !== '0') {
+        const job = await createCrawlWorkerJob({
+          tenantId,
+          requestedBy: `scheduler:${task.id}`,
+          platform,
+          mode: 'account',
+          accountUrl,
+          accountName,
+          limit,
+        });
+        if (!job) throw new Error('Mac 本地采集任务创建失败');
+        succeeded += 1;
+        lines.push(`${accountName}: 已提交 Mac 登录态采集队列（1 个任务）`);
+        continue;
+      }
+      const result = await crawlVideosForTenant({
+        tenantId,
+        platform,
+        mode: 'account',
+        accountUrl,
+        accountName,
+        limit,
+        cloudFallback: true,
+        disableBackfill: task.config.smokeTest === '1',
+      });
+      if (result.items.length === 0 && result.imported === 0 && /未找到|无可用|失败|blocked|degraded/i.test(result.message)) {
+        throw new Error(result.message);
+      }
+      imported += result.imported;
+      succeeded += 1;
+      await store.update('competitor_accounts', String(account.id), { lastCrawledAt: new Date().toISOString(), lastCrawlCount: result.imported });
+      lines.push(`${accountName}: 返回 ${result.items.length} 条，新增 ${result.imported} 条`);
+    } catch (e) {
+      failed += 1;
+      lines.push(`${accountName}: 执行失败 - ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  return [
+    `【${platform} 对标账号自动采集】账号 ${accounts.items.length} 个；每账号最多 ${limit} 条`,
+    `执行状态：${succeeded > 0 ? '执行成功' : '执行失败'}${failed > 0 ? `（成功 ${succeeded} 个账号，失败 ${failed} 个账号）` : ''}`,
+    `本次结论：${succeeded === 0 ? '账号采集请求均未完成，请根据账号错误处理后重试' : imported > 0 ? `已新增 ${imported} 条对标内容` : '已完成账号检索，本次暂无新增内容'}`,
+    `汇总：新增 ${imported} 条`, ...lines,
   ].join('\n');
 }
 
 async function executeTask(task: ScheduledTask): Promise<string> {
   if (task.taskType === 'video_keyword_crawl') return executeVideoKeywordCrawl(task);
+  if (task.taskType === 'image_post_crawl') return executeImagePostCrawl(task);
+  if (task.taskType === 'competitor_account_crawl') return executeCompetitorAccountCrawl(task);
   if (task.taskType === 'holiday_push') return executeHolidayPush(task);
-  if (isDemoMode()) {
-    switch (task.taskType) {
-      case 'trend_report':
-        return '【Demo 趋势简报】今日建议围绕占位行业模板补充 3 条短视频选题：痛点开场、工厂实力背书、客户案例转化。真实平台数据接入后，这里会替换为 TikTok/Instagram/Shopify 数据分析。';
-      case 'weekly_review':
-        return '【Demo 周报】本周模拟数据：流量增长 18%，询盘转化率 12%，老客唤醒 6 人。建议下周优先完善真实商品库与渠道授权。';
-      case 'exchange_rate':
-        return '【汇率日报】USD/CNY 7.20 | USD/AED 3.67 | USD/SAR 3.75。启用实时汇率源后将自动刷新。';
-      case 'crm_wakeup':
-        return '【Demo 老客唤醒】您好，我们根据您的历史采购偏好准备了新品方案。若您方便，我可以发一份最新目录和报价给您参考。';
-      default:
-        return '【Demo 任务】已模拟执行成功，真实推送由渠道集成模块接入。';
-    }
-  }
   switch (task.taskType) {
     case 'trend_report':  return executeTrendReport(task);
     case 'weekly_review': return executeWeeklyReview(task);
@@ -538,22 +781,62 @@ async function executeTask(task: ScheduledTask): Promise<string> {
   }
 }
 
+async function executeAndPersistTask(task: ScheduledTask, trigger: 'cron' | 'catch-up' | 'manual'): Promise<string> {
+  if (runningTaskIds.has(task.id)) return '任务正在执行，请稍后查看结果。';
+  runningTaskIds.add(task.id);
+  try {
+    const result = await executeTask(task).catch(e => `执行失败: ${e instanceof Error ? e.message : String(e)}`);
+    const tasks = load();
+    const idx = tasks.findIndex(item => item.id === task.id && item.tenantId === task.tenantId);
+    if (idx !== -1) {
+      tasks[idx].lastRun = new Date().toISOString();
+      tasks[idx].lastResult = result;
+      save(tasks);
+    }
+    console.log(`[scheduler] ${trigger} task "${task.name}" done:`, result.slice(0, 100));
+    return result;
+  } finally {
+    runningTaskIds.delete(task.id);
+  }
+}
+
+function latestMissedRun(task: ScheduledTask, now = new Date()): Date | null {
+  const parts = task.cronExpr.trim().split(/\s+/);
+  if (parts.length !== 5 || parts[2] !== '*' || parts[3] !== '*') return null;
+  const minute = Number(parts[0]);
+  const hour = Number(parts[1]);
+  if (!Number.isInteger(minute) || minute < 0 || minute > 59 || !Number.isInteger(hour) || hour < 0 || hour > 23) return null;
+  const weekdays = parts[4] === '*'
+    ? null
+    : new Set(parts[4].split(',').map(Number).filter(day => Number.isInteger(day) && day >= 0 && day <= 7).map(day => day === 7 ? 0 : day));
+  if (parts[4] !== '*' && !weekdays?.size) return null;
+
+  const beijingNow = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  const year = beijingNow.getUTCFullYear();
+  const month = beijingNow.getUTCMonth();
+  const day = beijingNow.getUTCDate();
+  for (let offset = 0; offset <= 7; offset += 1) {
+    const calendarDay = new Date(Date.UTC(year, month, day - offset));
+    if (weekdays && !weekdays.has(calendarDay.getUTCDay())) continue;
+    const scheduledAt = new Date(Date.UTC(
+      calendarDay.getUTCFullYear(), calendarDay.getUTCMonth(), calendarDay.getUTCDate(), hour - 8, minute,
+    ));
+    if (scheduledAt.getTime() > now.getTime()) continue;
+    const previousRun = task.lastRun ? Date.parse(task.lastRun) : 0;
+    const createdAt = Date.parse(task.createdAt) || 0;
+    if (scheduledAt.getTime() > previousRun && scheduledAt.getTime() >= createdAt) return scheduledAt;
+    return null;
+  }
+  return null;
+}
+
 function scheduleTask(task: ScheduledTask) {
   if (activeJobs.has(task.id)) { activeJobs.get(task.id)!.stop(); activeJobs.delete(task.id); }
   if (!task.enabled) return;
   if (!cron.validate(task.cronExpr)) return;
 
   const job = cron.schedule(task.cronExpr, async () => {
-    const tasks = load();
-    const idx = tasks.findIndex(t => t.id === task.id);
-    const result = await executeTask(task).catch(e => `执行失败: ${e.message}`);
-    if (idx !== -1) {
-      tasks[idx].lastRun = new Date().toISOString();
-      tasks[idx].lastResult = result;
-      save(tasks);
-    }
-    // TODO: send result to configured channel
-    console.log(`[scheduler] task "${task.name}" done:`, result.slice(0, 100));
+    await executeAndPersistTask(task, 'cron');
   }, { timezone: 'Asia/Shanghai' });
   activeJobs.set(task.id, job);
 }
@@ -562,6 +845,12 @@ function scheduleTask(task: ScheduledTask) {
 export async function initScheduler() {
   const tasks = (await hydrateTasksFromPocketBase()).filter(t => t.enabled && t.tenantId);
   tasks.forEach(scheduleTask);
+  for (const task of tasks) {
+    const missedAt = latestMissedRun(task);
+    if (!missedAt) continue;
+    console.log(`[scheduler] catching up "${task.name}" missed at ${missedAt.toISOString()}`);
+    void executeAndPersistTask(task, 'catch-up');
+  }
   console.log('[scheduler] initialized with', tasks.length, 'active tasks');
 }
 
@@ -575,7 +864,7 @@ schedulerRouter.get('/', (_req, res) => {
 
 schedulerRouter.get('/video-stats', async (_req, res) => {
   const { tenantId } = res.locals as AuthLocals;
-  const tasks = tenantTasks(tenantId).filter(task => task.taskType === 'video_keyword_crawl');
+  const tasks = tenantTasks(tenantId).filter(task => ['video_keyword_crawl', 'image_post_crawl', 'competitor_account_crawl'].includes(task.taskType));
   let stats: Record<string, unknown>;
   try {
     stats = await getVideoPipelineStats(tenantId);
@@ -593,13 +882,20 @@ schedulerRouter.get('/:id/export-pdf', async (req: Request, res: Response) => {
   const { tenantId } = res.locals as AuthLocals;
   const task = findTenantTask(req.params.id, tenantId);
   if (!task) { res.status(404).json({ error: 'not found' }); return; }
+  if (!task.lastRun || !task.lastResult) { res.status(409).json({ error: 'task_has_no_result' }); return; }
   try {
-    const resultText = task.lastResult || '暂无执行结果，请先执行任务后再导出。';
+    const isVideoReport = ['video_keyword_crawl', 'competitor_account_crawl'].includes(task.taskType);
+    const weekly = isVideoReport ? await weeklyVideoReport(task, tenantId) : null;
+    const resultText = weekly
+      ? `【本周新增视频】\n统计范围：${weekly.rangeLabel}\n新增视频：${weekly.newVideos} 条\n【分析情况】\n已完成策略分析：${weekly.completed} 条（其中全片精确分析 ${weekly.exactCompleted} 条）\n分析中：${weekly.analyzing} 条；排队中：${weekly.queued} 条\n仅基础分析：${weekly.basicOnly} 条；分析失败：${weekly.failed} 条`
+      : task.lastResult;
     const pdf = await renderTaskReportPdf({
       title: `${task.name}报告`,
       taskName: task.name,
       cronLabel: task.cronLabel,
       lastRunLabel: formatTaskTime(task.lastRun),
+      weekRangeLabel: weekly?.rangeLabel,
+      weeklyStats: weekly,
       resultText,
       actions: taskReportActions(task.taskType),
     });
@@ -616,7 +912,9 @@ schedulerRouter.get('/:id/export-pdf', async (req: Request, res: Response) => {
 schedulerRouter.post('/', (req: Request, res: Response) => {
   const { tenantId } = res.locals as AuthLocals;
   const tasks = load();
-  const isVideoCrawler = req.body.taskType === 'video_keyword_crawl';
+  const isCrawler = ['video_keyword_crawl', 'image_post_crawl', 'competitor_account_crawl'].includes(req.body.taskType);
+  const requestedCronExpr = String(req.body.cronExpr ?? (isCrawler ? '0 1 * * *' : '0 8 * * *'));
+  if (!cron.validate(requestedCronExpr)) { res.status(400).json({ error: '无效的任务启动时间' }); return; }
   const crawlerPlatform = resolveCrawlerPlatform(req.body.config?.platforms);
   const crawlerConfig = normalizeCrawlerConfig({ ...(req.body.config ?? {}), tenantId }, crawlerPlatform);
   const task: ScheduledTask = {
@@ -624,11 +922,11 @@ schedulerRouter.post('/', (req: Request, res: Response) => {
     name: req.body.name,
     category: req.body.category ?? 'daily',
     taskType: req.body.taskType ?? 'custom',
-    cronExpr: isVideoCrawler ? '0 1 * * *' : (req.body.cronExpr ?? '0 8 * * *'),
-    cronLabel: isVideoCrawler ? '每天 01:00（北京时间）' : (req.body.cronLabel ?? '每天 08:00'),
+    cronExpr: requestedCronExpr,
+    cronLabel: req.body.cronLabel ?? (isCrawler ? '每天 01:00（北京时间）' : '每天 08:00'),
     enabled: req.body.enabled ?? true,
     channelId: req.body.channelId,
-    config: isVideoCrawler ? crawlerConfig : (req.body.config ?? {}),
+    config: isCrawler ? crawlerConfig : (req.body.config ?? {}),
     tenantId,
     createdAt: new Date().toISOString(),
   };
@@ -645,16 +943,19 @@ schedulerRouter.put('/:id', (req: Request, res: Response) => {
   if (idx === -1) { res.status(404).json({ error: 'not found' }); return; }
   const current = tasks[idx];
   const nextTaskType = req.body.taskType ?? current.taskType;
-  const nextConfig = nextTaskType === 'video_keyword_crawl'
+  const requestedCronExpr = String(req.body.cronExpr ?? current.cronExpr);
+  if (!cron.validate(requestedCronExpr)) { res.status(400).json({ error: '无效的任务启动时间' }); return; }
+  const nextIsCrawler = ['video_keyword_crawl', 'image_post_crawl', 'competitor_account_crawl'].includes(nextTaskType);
+  const nextConfig = nextIsCrawler
     ? normalizeCrawlerConfig({ ...current.config, ...(req.body.config ?? {}) }, current.config.platforms || 'youtube')
     : (req.body.config ?? current.config);
   tasks[idx] = {
     ...current,
     ...req.body,
     tenantId,
-    cronExpr: nextTaskType === 'video_keyword_crawl' ? '0 1 * * *' : (req.body.cronExpr ?? current.cronExpr),
-    cronLabel: nextTaskType === 'video_keyword_crawl' ? '每天 01:00（北京时间）' : (req.body.cronLabel ?? current.cronLabel),
-    config: nextTaskType === 'video_keyword_crawl' ? { ...nextConfig, tenantId } : nextConfig,
+    cronExpr: requestedCronExpr,
+    cronLabel: req.body.cronLabel ?? current.cronLabel,
+    config: nextIsCrawler ? { ...nextConfig, tenantId } : nextConfig,
   };
   save(tasks);
   scheduleTask(tasks[idx]);
@@ -676,10 +977,7 @@ schedulerRouter.post('/:id/run', async (req: Request, res: Response) => {
   const { tenantId } = res.locals as AuthLocals;
   const task = findTenantTask(req.params.id, tenantId);
   if (!task) { res.status(404).json({ error: 'not found' }); return; }
-  const result = await executeTask(task).catch(e => `执行失败: ${e.message}`);
-  const tasks = load();
-  const idx = tasks.findIndex(t => t.id === req.params.id && t.tenantId === tenantId);
-  if (idx !== -1) { tasks[idx].lastRun = new Date().toISOString(); tasks[idx].lastResult = result; save(tasks); }
+  const result = await executeAndPersistTask(task, 'manual');
   res.json({ ok: true, result });
 });
 

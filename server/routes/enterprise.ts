@@ -4,7 +4,6 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { randomBytes, randomUUID } from 'crypto';
 import type { Request } from 'express';
-import { resetDemoUsage } from '../lib/demo.js';
 import { auth, store } from '../storage/index.js';
 import type { AutonomyLevel } from '../autonomy/actionRules.js';
 import { callLLM } from '../agents/llm.js';
@@ -20,11 +19,9 @@ import {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_FILE = path.join(__dirname, '../../data/enterprise.json');
-const TEMPLATES_FILE = path.join(__dirname, '../../data/demo-templates.json');
 const DATA_DIR = path.join(__dirname, '../../data');
 const ASSETS_DIR = path.join(DATA_DIR, 'enterprise-assets');
 const TENANT_ORDERS_DIR = path.join(DATA_DIR, 'tenant-orders');
-const DEV_MOCK_ORDERS_TENANT = 'local_tenant_admin_lingshu_admin_local_test';
 // 生成的 productApi 密钥单独存放，不进 data/enterprise.json（避免和会被提交/覆盖的企业资料文件混在一起）。
 const PRODUCT_API_FILE = path.join(DATA_DIR, 'product-api.json');
 
@@ -291,21 +288,6 @@ function readProfile(): EnterpriseProfile {
   }
 }
 
-interface DemoTemplate {
-  id: string;
-  name: string;
-  description: string;
-  profile: EnterpriseProfile;
-}
-
-function readTemplates(): DemoTemplate[] {
-  try {
-    return JSON.parse(fs.readFileSync(TEMPLATES_FILE, 'utf8')) as DemoTemplate[];
-  } catch {
-    return [];
-  }
-}
-
 function writeJson(file: string, value: unknown): void {
   fs.writeFileSync(path.join(DATA_DIR, file), JSON.stringify(value, null, 2), 'utf8');
 }
@@ -360,11 +342,6 @@ async function readOrders(tenantId: string): Promise<OrderRecord[]> {
   if (process.env.NODE_ENV !== 'production' && tenantId.startsWith('local_tenant_')) return readLocalTenantOrders(tenantId);
   const records = await listStoredTenantOrders(tenantId);
   const orders = records.map(storedOrder).filter(Boolean) as OrderRecord[];
-  // 本地评审环境的登录账号可能来自 PocketBase，也可能来自本地管理员。
-  // 当前租户尚无订单时统一展示同一份演示订单，避免 Mock 数据被某个登录态隔离。
-  if (process.env.NODE_ENV !== 'production' && orders.length === 0) {
-    return readLocalTenantOrders(DEV_MOCK_ORDERS_TENANT);
-  }
   return orders;
 }
 
@@ -1802,39 +1779,6 @@ enterpriseRouter.get('/context', async (_req, res) => {
   const { tenantId } = res.locals as AuthLocals;
   const profile = await readTenantProfile(tenantId);
   res.json({ context: buildEnterpriseContext(profile) });
-});
-
-enterpriseRouter.get('/demo/templates', (_req, res) => {
-  res.json(readTemplates().map(({ id, name, description, profile }) => ({ id, name, description, profile })));
-});
-
-enterpriseRouter.post('/demo/templates/:id/apply', async (req, res) => {
-  const { tenantId, userId } = res.locals as AuthLocals;
-  const template = readTemplates().find(t => t.id === req.params.id);
-  if (!template) { res.status(404).json({ error: 'template not found' }); return; }
-  const profile = normalizeProfile(template.profile);
-  await writeTenantProfile(tenantId, profile, userId);
-  res.json({ ok: true, profile });
-});
-
-enterpriseRouter.post('/demo/reset', async (_req, res) => {
-  const { tenantId, userId } = res.locals as AuthLocals;
-  const profile = normalizeProfile({
-    company: { name: '', industry: '', companyType: '', mainMarkets: '', primaryLanguages: '', founded: '', description: '' },
-    products: { categories: '', priceRange: '', moq: '', certifications: '', highlights: '', items: [] },
-    brand: { tone: '', style: '', taboos: '', usp: '', preferredLanguages: '' },
-    strategy: { currentGoal: '', focusProducts: '', focusMarkets: '', excludedMarkets: '', pricingStrategy: '', minMargin: '', agentAutonomy: '', aiAutonomy: 'draft' },
-    customers: { targetProfiles: '', highValueSignals: '', lowQualitySignals: '', commonQuestions: '', followupStyle: '' },
-      operations: { leadTime: '', customization: '', logistics: '', paymentTerms: '', riskNotes: '' },
-      agentLearning: { provenAngles: '', weakAngles: '', pendingAssumptions: '', userCorrections: '' },
-      bizRules: { ...DEFAULT_BIZ_RULES },
-      faq: [],
-      notifications: { ...DEFAULT_NOTIFICATIONS, workHours: { ...DEFAULT_NOTIFICATIONS.workHours } },
-      knowledge: '',
-    });
-  await writeTenantProfile(tenantId, profile, userId);
-  resetDemoUsage();
-  res.json({ ok: true, profile });
 });
 
 export const productApiRouter = Router();

@@ -167,6 +167,8 @@ def build_pdf(payload, output_path):
         [Paragraph("<b>执行频率</b>", styles["Small"]), Paragraph(escape(payload.get("cronLabel") or "-"), styles["Body"])],
         [Paragraph("<b>上次执行</b>", styles["Small"]), Paragraph(escape(payload.get("lastRunLabel") or "-"), styles["Body"])],
     ]
+    if payload.get("weekRangeLabel"):
+        meta.append([Paragraph("<b>报告范围</b>", styles["Small"]), Paragraph(escape(payload.get("weekRangeLabel")), styles["Body"])])
     table = Table(meta, colWidths=[25 * mm, 132 * mm])
     table.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#F8FAFC")),
@@ -180,6 +182,65 @@ def build_pdf(payload, output_path):
     ]))
     story.append(table)
     story.append(Spacer(1, 7 * mm))
+
+    weekly = payload.get("weeklyStats") or {}
+    if weekly:
+        story.append(Paragraph("本周新增与分析概览", styles["Section"]))
+        overview = [
+            ["本周新增", weekly.get("newVideos", 0)],
+            ["策略分析完成", weekly.get("completed", 0)],
+            ["分析中", weekly.get("analyzing", 0)],
+            ["排队中", weekly.get("queued", 0)],
+            ["仅基础分析", weekly.get("basicOnly", 0)],
+            ["分析失败", weekly.get("failed", 0)],
+        ]
+        overview_rows = [[Paragraph(escape(label), styles["Small"]), Paragraph(f"<b>{value} 条</b>", styles["Body"])] for label, value in overview]
+        overview_table = Table(overview_rows, colWidths=[50 * mm, 107 * mm])
+        overview_table.setStyle(TableStyle([
+            ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#F0FDF4")),
+            ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#D1FAE5")),
+            ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E5E7EB")),
+            ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 8),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 8),
+            ("TOPPADDING", (0, 0), (-1, -1), 6),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+        ]))
+        story.append(overview_table)
+        by_platform = weekly.get("byPlatform") or []
+        if by_platform:
+            story.append(Spacer(1, 4 * mm))
+            platform_rows = [[
+                Paragraph("<b>平台</b>", styles["Small"]),
+                Paragraph("<b>新增</b>", styles["Small"]),
+                Paragraph("<b>完成</b>", styles["Small"]),
+                Paragraph("<b>处理中</b>", styles["Small"]),
+                Paragraph("<b>基础</b>", styles["Small"]),
+                Paragraph("<b>失败</b>", styles["Small"]),
+            ]]
+            for item in by_platform:
+                platform_rows.append([
+                    Paragraph(escape(item.get("platform") or "unknown"), styles["Body"]),
+                    Paragraph(str(item.get("newVideos", 0)), styles["Body"]),
+                    Paragraph(str(item.get("completed", 0)), styles["Body"]),
+                    Paragraph(str(item.get("processing", 0)), styles["Body"]),
+                    Paragraph(str(item.get("basicOnly", 0)), styles["Body"]),
+                    Paragraph(str(item.get("failed", 0)), styles["Body"]),
+                ])
+            platform_table = Table(platform_rows, colWidths=[42 * mm, 23 * mm, 23 * mm, 23 * mm, 23 * mm, 23 * mm])
+            platform_table.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F8FAFC")),
+                ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#E5E7EB")),
+                ("INNERGRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#E5E7EB")),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("ALIGN", (1, 1), (-1, -1), "CENTER"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 7),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+                ("TOPPADDING", (0, 0), (-1, -1), 6),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
+            ]))
+            story.append(platform_table)
+        story.append(Spacer(1, 6 * mm))
 
     story.append(Paragraph("主要结论", styles["Section"]))
     conclusion_rows = []
@@ -204,28 +265,35 @@ def build_pdf(payload, output_path):
     story.append(conclusion_table)
     story.append(Spacer(1, 6 * mm))
 
-    story.append(Paragraph("分点详情", styles["Section"]))
-    for section in sections:
-        story.append(Paragraph(escape(section["title"]), styles["Section"]))
-        rows = []
-        for item in section["items"]:
-            rows.append([Paragraph("-", styles["Small"]), Paragraph(escape(item), styles["Body"])])
-        detail_table = Table(rows, colWidths=[7 * mm, 150 * mm])
-        detail_table.setStyle(TableStyle([
-            ("BOX", (0, 0), (-1, -1), 0.4, colors.HexColor("#E5E7EB")),
-            ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#EEF2F7")),
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("LEFTPADDING", (0, 0), (-1, -1), 7),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 7),
-            ("TOPPADDING", (0, 0), (-1, -1), 5),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-        ]))
-        story.append(detail_table)
-        story.append(Spacer(1, 4 * mm))
+    if not weekly:
+        story.append(Paragraph("分点详情", styles["Section"]))
+        for section in sections:
+            story.append(Paragraph(escape(section["title"]), styles["Section"]))
+            rows = []
+            for item in section["items"]:
+                rows.append([Paragraph("-", styles["Small"]), Paragraph(escape(item), styles["Body"])])
+            detail_table = Table(rows, colWidths=[7 * mm, 150 * mm])
+            detail_table.setStyle(TableStyle([
+                ("BOX", (0, 0), (-1, -1), 0.4, colors.HexColor("#E5E7EB")),
+                ("INNERGRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#EEF2F7")),
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 7),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 7),
+                ("TOPPADDING", (0, 0), (-1, -1), 5),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+            ]))
+            story.append(detail_table)
+            story.append(Spacer(1, 4 * mm))
 
-    actions = payload.get("actions") or []
+    # Weekly crawl reports focus on measurable inventory and analysis progress.
+    # Generic next-step rows duplicate the dashboard and can orphan onto a mostly
+    # empty second page, so keep them only for non-weekly task reports.
+    actions = [] if weekly else (payload.get("actions") or [])
     if actions:
-        story.append(PageBreak())
+        if weekly:
+            story.append(Spacer(1, 4 * mm))
+        else:
+            story.append(PageBreak())
         story.append(Paragraph("建议下一步", styles["Section"]))
         rows = []
         for idx, action in enumerate(actions, 1):

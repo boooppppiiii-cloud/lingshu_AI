@@ -59,6 +59,31 @@ function parseJson<T>(raw: string, fallback: T): T {
   }
 }
 
+export async function classifyMaterialFramesWithQwen(opts: {
+  name: string;
+  frames: Array<{ base64: string; mimeType: string; timeLabel: string }>;
+}): Promise<{ industry: string; applicability: string; shotFunctions: string[]; tags: string[] }> {
+  const allowedIndustries = ['beauty_skincare', 'universal_manufacturing', 'apparel_textile', 'metalworking'];
+  const allowedApplicability = ['universal', 'cross_industry', 'industry_specific'];
+  const allowedFunctions = ['application', 'texture_demo', 'product_demo', 'device_demo', 'ingredient_visual', 'factory_proof', 'production', 'equipment_demo', 'factory_exterior', 'worker_operation', 'quality_control', 'packaging', 'warehouse', 'manufacturing_process', 'equipment_inspection', 'logistics_fulfillment', 'treatment_experience', 'usage_setup'];
+  const completion = await client().chat.completions.create({
+    model: QWEN_VL_MODEL(),
+    messages: [{ role: 'user', content: [
+      { type: 'text', text: `请根据文件名和8张均匀关键帧进行素材分类。文件名：${opts.name}\n只输出JSON：industry只能是${allowedIndustries.join('|')}；applicability只能是${allowedApplicability.join('|')}；shotFunctions从${allowedFunctions.join('|')}中选1-4项；tags输出2-8个简短中文可见内容标签。不要分析完整脚本。` },
+      ...opts.frames.map(frame => ({ type: 'image_url', image_url: { url: `data:${frame.mimeType};base64,${frame.base64}` } })),
+    ] as any }],
+    response_format: { type: 'json_object' },
+    max_tokens: 800,
+  });
+  const parsed = parseJson<{ industry?: string; applicability?: string; shotFunctions?: string[]; tags?: string[] }>(completion.choices[0]?.message?.content || '', {});
+  return {
+    industry: allowedIndustries.includes(String(parsed.industry)) ? String(parsed.industry) : 'universal_manufacturing',
+    applicability: allowedApplicability.includes(String(parsed.applicability)) ? String(parsed.applicability) : 'cross_industry',
+    shotFunctions: (parsed.shotFunctions || []).map(String).filter(value => allowedFunctions.includes(value)).slice(0, 4),
+    tags: (parsed.tags || []).map(String).map(value => value.trim()).filter(Boolean).slice(0, 8),
+  };
+}
+
 export async function analyzeVideoFramesWithQwen(opts: {
   frames: Array<{ base64: string; mimeType: string; timeLabel: string }>;
   title?: string;

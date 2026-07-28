@@ -906,13 +906,19 @@ function BenchmarkVideoPreview({ kickoff }: { kickoff: VideoKickoff | null }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [playbackUrl, setPlaybackUrl] = useState('');
   const [loading, setLoading] = useState(false);
+  const [playing, setPlaying] = useState(false);
+  const [playbackError, setPlaybackError] = useState('');
   const video = kickoff?.video;
   const isImageReference = video?.contentFormat === 'image';
   const poster = video?.thumbnail || video?.aiAnalysis?.materialPoster || kickoff?.generatedVideo?.poster || '';
   const rawUrl = video?.videoUrl || video?.aiAnalysis?.materialUrl || kickoff?.generatedVideo?.url || '';
   const apiUrl = rawUrl.endsWith('/media') ? `${rawUrl}-url` : rawUrl;
 
-  useEffect(() => { setPlaybackUrl(''); }, [apiUrl]);
+  useEffect(() => {
+    setPlaybackUrl('');
+    setPlaying(false);
+    setPlaybackError('');
+  }, [apiUrl]);
   const ensurePlaybackUrl = async () => {
     if (playbackUrl) return playbackUrl;
     if (!apiUrl) return '';
@@ -933,14 +939,36 @@ function BenchmarkVideoPreview({ kickoff }: { kickoff: VideoKickoff | null }) {
     }
   };
   const play = async () => {
+    setPlaybackError('');
     const url = await ensurePlaybackUrl();
-    if (!url) return;
-    window.setTimeout(() => void videoRef.current?.play().catch(() => {}), 0);
+    if (!url) {
+      setPlaybackError('视频文件暂不可用，可点击右上角“原站”查看');
+      return;
+    }
+    const element = videoRef.current;
+    if (!element) return;
+    // 首次点击时 React 可能尚未把新解析出的地址提交到 DOM，直接赋值
+    // 可避免有封面、有 URL，但第一次点击始终无法播放。
+    if (element.getAttribute('src') !== url) {
+      element.src = url;
+      element.load();
+    }
+    try {
+      await element.play();
+      setPlaying(true);
+    } catch {
+      setPlaying(false);
+      setPlaybackError('视频加载或解码失败，可点击右上角“原站”查看');
+    }
   };
   const pause = () => {
     if (!videoRef.current) return;
     videoRef.current.pause();
-    videoRef.current.currentTime = 0;
+    setPlaying(false);
+  };
+  const togglePlayback = () => {
+    if (videoRef.current && !videoRef.current.paused) pause();
+    else void play();
   };
 
   return (
@@ -960,16 +988,17 @@ function BenchmarkVideoPreview({ kickoff }: { kickoff: VideoKickoff | null }) {
               <span className="absolute left-2 top-2 rounded-md bg-black/55 px-2 py-1 text-[9px] font-bold text-white backdrop-blur">首图参考</span>
             </div>
           ) : (
-            <div className="group relative mx-auto aspect-[9/16] max-h-[600px] overflow-hidden rounded-xl bg-black" onMouseEnter={() => void play()} onMouseLeave={pause}>
-              <video ref={videoRef} src={playbackUrl || undefined} poster={poster || undefined} muted playsInline loop preload="metadata" className="h-full w-full object-cover" />
+            <div className="group relative mx-auto aspect-[9/16] max-h-[600px] cursor-pointer overflow-hidden rounded-xl bg-black" onClick={togglePlayback}>
+              <video ref={videoRef} src={playbackUrl || undefined} poster={poster || undefined} muted playsInline loop preload="metadata" className="h-full w-full object-cover" onPlay={() => setPlaying(true)} onPause={() => setPlaying(false)} onError={() => { setPlaying(false); setPlaybackError('视频加载或解码失败，可点击右上角“原站”查看'); }} />
               <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/15 transition group-hover:bg-transparent">
-                {!playbackUrl && <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur"><Play size={18} fill="currentColor" /></span>}
+                {!playing && <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/55 text-white backdrop-blur"><Play size={18} fill="currentColor" /></span>}
               </div>
               {loading && <span className="absolute right-2 top-2 rounded-md bg-black/55 px-2 py-1 text-[9px] text-white">加载中…</span>}
+              {playbackError && <span className="absolute inset-x-2 bottom-2 rounded-md bg-black/70 px-2 py-1.5 text-center text-[9px] leading-4 text-white">{playbackError}</span>}
             </div>
           )}
           <p className="mt-3 line-clamp-2 text-xs font-bold leading-relaxed text-text-primary">{video.title || kickoff?.referenceAnalysis?.title || '未命名对标视频'}</p>
-          <p className="mt-1 text-[10px] text-text-muted">{isImageReference ? `${video.aiAnalysis?.imageEvidence?.observedFacts?.length || 0} 张逐图证据已带入，只复用可见布局与信息模块` : `${video.duration ? `${video.duration}s · ` : ''}鼠标移入预览，移出后自动暂停`}</p>
+          <p className="mt-1 text-[10px] text-text-muted">{isImageReference ? `${video.aiAnalysis?.imageEvidence?.observedFacts?.length || 0} 张逐图证据已带入，只复用可见布局与信息模块` : `${video.duration ? `${video.duration}s · ` : ''}点击视频播放或暂停`}</p>
         </div>
       ) : (
         <div className="flex min-h-[360px] flex-col items-center justify-center px-8 text-center">
@@ -1383,25 +1412,51 @@ function adaptReferenceVisualToProduct(visual: string, product: ReturnType<typeo
   return next;
 }
 
-function buildLocalCloneScript(kickoff: VideoKickoff, productInfo: string, languageCode: string, _variant = 0, migrationMode: MigrationMode = 'structure'): string {
+function buildLocalCloneScript(kickoff: VideoKickoff, productInfo: string, languageCode: string, variant = 0, migrationMode: MigrationMode = 'structure'): string {
   const product = parseProductBrief(productInfo);
   const details = kickoff.referenceAnalysis?.details?.length ? kickoff.referenceAnalysis.details : [];
+  const variantPlans = [
+    {
+      environments: ['干净桌面产品主视觉区', '近距离样品展示台', '细节检验工作台', '规格与包装陈列区', '品牌产品矩阵背景'],
+      visuals: [
+        `${product.name}正面完整亮相，主体约占画面三分之二，用清晰轮廓建立产品识别`,
+        `手持${product.name}缓慢转到侧面，展示外观、结构与包装关系`,
+        `镜头贴近${product.name}关键细节，以可见纹理或结构证明${product.highlights}`,
+        `把${product.name}的规格、包装或可定制部分并列摆放，逐项给出视觉对照`,
+        `${product.name}与品牌资料同框收尾，保持画面整洁并强化产品记忆`,
+      ],
+    },
+    {
+      environments: ['真实使用准备区', '产品操作演示台', '结果对照区', '样品确认区', '整套交付展示区'],
+      visuals: [
+        `先呈现${product.name}即将投入使用的状态，以动作悬念形成开场`,
+        `双手完成一次${product.name}可实际拍摄的操作，突出使用路径而非静态陈列`,
+        `把操作前后或两个有效角度放在同一画面比较，用结果证明${product.highlights}`,
+        `依次展示${product.name}样品、包装和可确认规格，让采购信息可被看见`,
+        `将${product.name}成套排开并回到完成态，以完整交付感结束`,
+      ],
+    },
+    {
+      environments: ['质检台近景区', '结构拆解展示区', '材质细节灯光区', '包装核验区', '工厂资料背景区'],
+      visuals: [
+        `以${product.name}局部极近景开场，随后拉开到完整产品，制造细节揭晓`,
+        `沿${product.name}结构顺序逐处移动镜头，展示组成、接口或工艺关系`,
+        `用侧光拍出${product.name}材质和边缘细节，把${product.highlights}转成可见证据`,
+        `手动翻转${product.name}及其包装标签，核验外观、规格和定制位置`,
+        `产品、包装与企业资料形成前中后景，定格在${product.name}完整正面`,
+      ],
+    },
+  ];
+  const plan = variantPlans[Math.abs(Math.trunc(variant)) % variantPlans.length];
   if (details.length) {
     return details.map((item, index) => {
       const time = normalizeScriptTimestamps(`[${item.time || `${index * 4}-${(index + 1) * 4}s`}]`);
       const environment = migrationMode === 'fidelity'
         ? (item.environment || '沿用原片环境')
-        : sceneEnvironmentForProduct(product, index);
-      const structureVisuals = [
-        `${product.name}完整亮相，主体约占画面三分之二，先建立清晰产品识别`,
-        `切换到${product.name}的第二有效角度，展示外观、包装或实际使用方式`,
-        `近距离展示${product.name}的真实细节，用可见证据呈现${product.highlights}`,
-        `展示${product.name}的可选规格、外观、包装或定制组合，不添加企业资料未提供的款式`,
-        `以${product.name}的产品矩阵或品牌素材收尾，保持原片的构图密度和节奏`,
-      ];
+        : (plan.environments[Math.min(index, plan.environments.length - 1)] || sceneEnvironmentForProduct(product, index));
       const groundedVisual = migrationMode === 'fidelity'
         ? adaptReferenceVisualToProduct(item.visual || item.note || '', product, kickoff)
-        : structureVisuals[Math.min(index, structureVisuals.length - 1)];
+        : plan.visuals[Math.min(index, plan.visuals.length - 1)];
       const verifiedProductCue = index === 0 && product.highlights && product.highlights !== '待补充真实卖点'
         ? `，镜头中的品牌、型号和产品外观均以${product.name}的企业资料为准，重点呈现${product.highlights}`
         : '';
@@ -1554,6 +1609,15 @@ function buildLocalProductScript(productInfo: string, languageCode: string, tota
     `人物说：“${item.voice}”`,
     `字幕：${item.subtitle}`,
   ].join('\n')).join('\n\n');
+}
+
+function publicScriptFailureReason(value: unknown): string {
+  const message = String(value || '');
+  if (/429|RESOURCE_EXHAUSTED|prepayment credits|quota|billing/i.test(message)) return '上游模型额度不足，已自动切换为安全兜底稿';
+  if (/401|403|api.?key|unauthorized|permission/i.test(message)) return '上游模型授权暂不可用，已自动切换为安全兜底稿';
+  if (/timeout|timed out|超时|503|502|504|UNAVAILABLE/i.test(message)) return '上游模型暂时繁忙，已自动切换为安全兜底稿';
+  if (/\{\s*"?(?:error|code|message)"?|https?:\/\//i.test(message)) return '上游模型生成失败，已自动切换为安全兜底稿';
+  return message || '模型生成失败，已自动切换为安全兜底稿';
 }
 
 function buildLocalMaterialScript(materialsList: Clip[], selectedIds: string[], productInfo: string, totalDuration = 20): string {
@@ -3542,7 +3606,6 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       const count = Math.max(1, Math.min(5, cloneCount));
       let usedLocalFallback = false;
       const fallbackDetails: string[] = [];
-      let videoGenerationError = '';
       for (let i = 0; i < count; i += 1) {
         let nextScript = '';
         let generatedByFallback = false;
@@ -3556,7 +3619,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
               duration,
               scriptType: 'storyboard',
               generationMode: 'product',
-              provider,
+              provider: 'qwen',
               audience,
               sellingPoints,
               tone: `${tone} · 产品方案 ${i + 1}`,
@@ -3568,14 +3631,14 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
           if (response.source === 'fallback') {
             generatedByFallback = true;
             usedLocalFallback = true;
-            fallbackDetails.push(...(response.validationIssues?.length ? response.validationIssues : [response.fallbackReason || 'AI脚本未通过检查']));
+            fallbackDetails.push(...(response.validationIssues?.length ? response.validationIssues.map(publicScriptFailureReason) : [publicScriptFailureReason(response.fallbackReason || 'AI脚本未通过检查')]));
           }
         } catch (err: any) {
           const message = String(err?.message || '');
           if (message.includes('Demo') || message.includes('试用') || message.includes('额度') || message.includes('到期')) throw err;
           generatedByFallback = true;
           usedLocalFallback = true;
-          fallbackDetails.push(message || '模型调用失败');
+          fallbackDetails.push(publicScriptFailureReason(message));
           nextScript = sanitizeStoryboardScript(buildLocalProductScript(product, 'zh', duration), product, activeProductLabel).trim();
         }
         outputs.push({
@@ -3596,51 +3659,10 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       setScriptView('timestamp');
       if (outputs[0]) setActiveModeScriptId(outputs[0].id);
       setModeScripts(outputs);
-      try {
-        const generated = await studioApi.seedanceVideo({
-          script: firstScript,
-          productInfo: product,
-          language: 'zh',
-          ratio,
-          duration,
-          title: `产品生成素材 · ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`,
-          generationGroupKey: `studio:${projectId || generationSessionId.current}:product`,
-          generationContext: { entry: 'studio-product', projectId, mode: 'product' },
-          parentVersionId: productVideoVersions.find(item => item.isSelected)?.id,
-        });
-        if (!generated.ok || (!generated.material && !generated.url)) {
-          throw new Error(generated.error || 'Seedance 2.0 生成素材失败');
-        }
-        const clip = generated.material
-          ? materialToClip(generated.material)
-          : {
-              id: generated.id || `product-seedance-${Date.now()}`,
-              name: generated.title || '产品生成素材',
-              folder: 'upload',
-              type: 'video' as const,
-              duration: generated.duration || duration,
-              size: 'Seedance 2.0',
-              url: generated.url,
-              poster: generated.poster,
-              scope: 'own' as const,
-              sourceType: 'ai-seedance',
-            };
-        setMaterials(prev => {
-          const rest = prev.filter(item => item.id !== clip.id && (!clip.url || item.url !== clip.url));
-          return [clip, ...rest];
-        });
-        setSelected([clip.id]);
-        if (generated.version) setProductVideoVersions(current => [generated.version!, ...current.map(item => ({ ...item, isSelected: false }))]);
-        setActiveFolder(clip.folder || 'upload');
-      } catch (error: any) {
-        videoGenerationError = String(error?.message || 'Seedance 2.0 生成素材失败');
-      }
       setProjectTitle(projectTitle === '未命名草稿' ? '产品生成 · AI智能素材' : projectTitle);
       setModeNotice(usedLocalFallback
-        ? `AI脚本未通过检查，已打开按产品类目生成的安全兜底稿：${Array.from(new Set(fallbackDetails)).slice(0, 3).join('；') || '模型或产品资料不足'}。${videoGenerationError ? ` 视频素材生成失败：${videoGenerationError}` : ''}`
-        : videoGenerationError
-          ? `产品脚本已生成；Seedance 2.0 素材生成失败：${videoGenerationError}。可先确认脚本或稍后重试。`
-          : '已生成产品脚本和 Seedance 2.0 素材，已自动选中进入后续快剪流程。');
+        ? `AI脚本未通过检查，已打开按产品类目生成的安全兜底稿：${Array.from(new Set(fallbackDetails)).slice(0, 3).join('；') || '模型或产品资料不足'}。`
+        : '产品脚本已生成。确认脚本后，可继续选择配音和素材；不会自动生成视频。');
       autoGen.current = true;
     } catch (err: any) {
       setModeNotice(err?.message || '产品生成失败，请稍后重试。');
@@ -6505,7 +6527,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
 	                  className="inline-flex items-center gap-1.5 rounded-xl bg-accent px-4 py-2.5 text-xs font-bold text-white disabled:opacity-60"
 	                >
                   {modeActionLoading ? <Loader2 size={13} className="animate-spin" /> : <Wand2 size={13} />}
-                  {modeActionLoading ? (modeActionStatus || '生成中…') : mode === 'clone' && script.trim() ? '重新生成可执行分镜' : '生成可执行分镜'}
+                  {modeActionLoading ? (modeActionStatus || '脚本生成中…') : mode === 'clone' && script.trim() ? '重新生成可执行分镜' : '生成可执行分镜'}
                 </button>
               </div>
               {mode === 'clone' && !videoKickoff?.referenceAnalysis?.details?.length && (

@@ -30,6 +30,19 @@ type Field = { name: string; type: string; required?: boolean; [k: string]: unkn
 /** Collection definitions, derived from what the route handlers write/read. */
 const COLLECTIONS: { name: string; fields: Field[] }[] = [
   {
+    name: 'studio_projects',
+    fields: [
+      { name: 'tenant_id', type: 'text', required: true },
+      { name: 'legacy_id', type: 'text' },
+      { name: 'title', type: 'text', required: true },
+      { name: 'status', type: 'text', required: true },
+      { name: 'spec', type: 'json', maxSize: 2000000 },
+      { name: 'thumb_seed', type: 'text' },
+      { name: 'created_at', type: 'text' },
+      { name: 'updated_at', type: 'text' },
+    ],
+  },
+  {
     // 租户（按公司订阅）；subscription.ts 读这几个字段
     name: 'tenants',
     fields: [
@@ -280,6 +293,30 @@ const COLLECTIONS: { name: string; fields: Field[] }[] = [
       { name: 'last_run', type: 'text' },
       { name: 'last_result', type: 'text' },
       { name: 'created_at', type: 'text', required: true },
+    ],
+  },
+  {
+    // Mac 登录态采集队列。云端只保存任务，Mac worker 经 SSH 隧道把
+    // 抓取/下载/分析结果直接写回同一个 PocketBase。
+    name: 'crawl_jobs',
+    fields: [
+      { name: 'tenantId', type: 'text', required: true },
+      { name: 'requestedBy', type: 'text' },
+      { name: 'platform', type: 'text', required: true },
+      { name: 'mode', type: 'text', required: true },
+      { name: 'keyword', type: 'text' },
+      { name: 'accountUrl', type: 'text' },
+      { name: 'accountName', type: 'text' },
+      { name: 'limit', type: 'number' },
+      { name: 'status', type: 'text', required: true },
+      { name: 'workerId', type: 'text' },
+      { name: 'attempts', type: 'number' },
+      { name: 'resultJson', type: 'text', max: 2000000 },
+      { name: 'error', type: 'text', max: 2000000 },
+      { name: 'createdAt', type: 'text' },
+      { name: 'updatedAt', type: 'text' },
+      { name: 'leasedUntil', type: 'text' },
+      { name: 'finishedAt', type: 'text' },
     ],
   },
   {
