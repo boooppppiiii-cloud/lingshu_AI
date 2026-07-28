@@ -7,7 +7,6 @@ import { getBotInfo, sendTelegramMessage } from '../integrations/telegram.js';
 import { testDingTalk } from '../integrations/dingtalk.js';
 import { testFeishu } from '../integrations/feishu.js';
 import { getShopInfo, testShopify } from '../integrations/shopify.js';
-import { isDemoMode } from '../lib/demo.js';
 import { handleMetaWebhook } from '../whatsapp/historyImport.js';
 import { sendTenantWhatsAppText } from '../whatsapp/send.js';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
@@ -141,19 +140,6 @@ channelsRouter.post('/:id/test', async (req: Request, res: Response) => {
   if (!channel) { res.status(404).json({ error: 'not found' }); return; }
   const cfg = channel.config;
 
-  if (isDemoMode()) {
-    const channels = load();
-    const idx = channels.findIndex(c => c.id === req.params.id);
-    if (idx !== -1) {
-      channels[idx].status = 'connected';
-      channels[idx].connectedAt = new Date().toISOString();
-      channels[idx].enabled = true;
-      save(channels);
-    }
-    res.json({ ok: true, source: 'demo', info: { message: '连接测试通过。' } });
-    return;
-  }
-
   try {
     switch (channel.type) {
       case 'whatsapp': {
@@ -185,7 +171,8 @@ channelsRouter.post('/:id/test', async (req: Request, res: Response) => {
       case 'tiktok':
       case 'instagram':
       case 'facebook':
-        res.json({ ok: true, info: { account: cfg.accountName ?? cfg.pageName ?? channel.label } });
+        res.status(501).json({ ok: false, error: '该渠道尚未实现真实连接测试' });
+        return;
         break;
       default:
         res.json({ ok: false, error: 'unsupported' });
@@ -215,18 +202,6 @@ channelsRouter.post('/:id/send', requireAuth, async (req: Request, res: Response
   if (!channel) { res.status(404).json({ error: 'not found' }); return; }
   const { to, text } = req.body;
   const cfg = channel.config;
-
-  if (isDemoMode()) {
-    const channels = load();
-    const idx = channels.findIndex(c => c.id === req.params.id);
-    if (idx !== -1) {
-      channels[idx].stats.sent++;
-      channels[idx].lastActivity = new Date().toISOString();
-      save(channels);
-    }
-    res.json({ ok: true, source: 'demo', messageId: `demo_msg_${Date.now()}`, to, text });
-    return;
-  }
 
   try {
     switch (channel.type) {

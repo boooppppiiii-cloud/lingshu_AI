@@ -15,7 +15,6 @@ export interface LLMCallOptions {
 }
 
 function resolveBackend(opts: LLMCallOptions): LLMBackend {
-  if (opts.requireSources) return 'gemini';
   return opts.backend ?? (process.env.OVERSEAS_LLM_BACKEND as LLMBackend) ?? 'gemini';
 }
 
@@ -255,11 +254,26 @@ async function* streamQwenMessages(
   opts: LLMCallOptions,
 ): AsyncGenerator<StreamEvent> {
   const client = createQwenClient();
-  const stream = await client.chat.completions.create({ model: opts.model ?? 'qwen-plus', messages, stream: true });
+  const request = {
+    model: opts.model ?? process.env.QWEN_TEXT_MODEL ?? 'qwen-plus',
+    messages,
+    stream: true as const,
+    max_tokens: opts.deepThinking ? 8192 : 4096,
+    ...(opts.requireSources ? {
+      enable_search: true,
+      search_options: { forced_search: true, search_strategy: 'turbo' },
+    } : {}),
+  };
+  // DashScope's Node-compatible endpoint accepts web-search fields at the top level.
+  const stream = await client.chat.completions.create(request as OpenAI.Chat.ChatCompletionCreateParamsStreaming);
+  let finishReason: string | null = null;
   for await (const chunk of stream) {
     const text = chunk.choices[0]?.delta?.content;
     if (text) yield { text };
+    finishReason = chunk.choices[0]?.finish_reason ?? finishReason;
   }
+  // Let the caller's existing continuation path finish answers cut at the token limit.
+  if (finishReason === 'length') throw new Error('QWEN_MAX_TOKENS');
 }
 
 async function completeQwenMessages(
@@ -267,10 +281,16 @@ async function completeQwenMessages(
   opts: LLMCallOptions,
 ): Promise<string> {
   const client = createQwenClient();
-  const completion = await client.chat.completions.create({
-    model: opts.model ?? 'qwen-plus',
+  const request = {
+    model: opts.model ?? process.env.QWEN_TEXT_MODEL ?? 'qwen-plus',
     messages,
-  });
+    max_tokens: opts.deepThinking ? 8192 : 4096,
+    ...(opts.requireSources ? {
+      enable_search: true,
+      search_options: { forced_search: true, search_strategy: 'turbo' },
+    } : {}),
+  };
+  const completion = await client.chat.completions.create(request as OpenAI.Chat.ChatCompletionCreateParamsNonStreaming);
   return completion.choices[0]?.message?.content ?? '';
 }
 

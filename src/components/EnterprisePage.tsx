@@ -397,17 +397,8 @@ function KnowledgeCard({
   );
 }
 
-interface DemoTemplate { id: string; name: string; description: string; profile?: Profile }
 interface ProductApiInfo { apiKey: string; tenantId: string; createdAt?: string; lastIngestedAt?: string; lastProductName?: string }
 interface ProductApiStatus { count: number; lastIngestedAt?: string; lastProductName?: string }
-
-function matchTemplateId(profile: Profile, templates: DemoTemplate[]): string {
-  const matched = templates.find(t =>
-    t.profile?.company?.name === profile.company.name &&
-    t.profile?.products?.categories === profile.products.categories
-  );
-  return matched?.id ?? '';
-}
 
 function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
   return (
@@ -501,9 +492,6 @@ export default function EnterprisePage() {
   const [, setSaved] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [loading, setLoading] = useState(true);
-  const [templates, setTemplates] = useState<DemoTemplate[]>([]);
-  const [templateId, setTemplateId] = useState('');
-  const [demoBusy, setDemoBusy] = useState(false);
   const [apiInfo, setApiInfo] = useState<ProductApiInfo | null>(null);
   const [apiStatus, setApiStatus] = useState<ProductApiStatus>({ count: 0 });
   const [orderImporting, setOrderImporting] = useState(false);
@@ -537,12 +525,11 @@ export default function EnterprisePage() {
   useEffect(() => {
     Promise.all([
       fetch('/api/overseas/enterprise/profile', { headers: authHeader() }).then(r => r.ok ? r.json() : Promise.reject(new Error(`profile_${r.status}`))).catch(() => ({})),
-      fetch('/api/overseas/enterprise/demo/templates', { headers: authHeader() }).then(r => r.json()).catch(() => []),
       fetch('/api/overseas/enterprise/product-api', { headers: authHeader() }).then(r => r.json()).catch(() => null),
       fetch('/api/overseas/enterprise/product-api/status', { headers: authHeader() }).then(r => r.json()).catch(() => ({ count: 0 })),
       fetch('/api/overseas/enterprise/faq/packs', { headers: authHeader() }).then(r => r.json()).catch(() => ({ packs: [], recommendedIndustry: 'general' })),
     ])
-      .then(([data, list, productApi, productApiStatus, packData]: [Partial<Profile>, DemoTemplate[], ProductApiInfo | null, ProductApiStatus, { packs?: FaqPack[]; recommendedIndustry?: string }]) => {
+      .then(([data, productApi, productApiStatus, packData]: [Partial<Profile>, ProductApiInfo | null, ProductApiStatus, { packs?: FaqPack[]; recommendedIndustry?: string }]) => {
         const next: Profile = {
           ...DEFAULT,
           ...data,
@@ -593,11 +580,8 @@ export default function EnterprisePage() {
           },
           knowledge: data.knowledge ?? '',
         };
-        const safeTemplates = Array.isArray(list) ? list : [];
         persistedProfileRef.current = JSON.stringify(next);
         setProfile(next);
-        setTemplates(safeTemplates);
-        setTemplateId(matchTemplateId(next, safeTemplates));
         if (productApi) setApiInfo(productApi);
         setApiStatus(productApiStatus);
         const packs = Array.isArray(packData.packs) ? packData.packs : [];
@@ -1033,38 +1017,6 @@ export default function EnterprisePage() {
       setSaveError(error instanceof Error ? error.message : '保存失败，请稍后重试');
     } finally {
       setSaving(false);
-    }
-  };
-
-  const applyTemplate = async () => {
-    if (!templateId) return;
-    setDemoBusy(true);
-    try {
-      const r = await fetch(`/api/overseas/enterprise/demo/templates/${templateId}/apply`, { method: 'POST', headers: authHeader() });
-      const j = await r.json();
-      if (j.profile) {
-        const next = { ...j.profile, products: { ...DEFAULT.products, ...j.profile.products, items: normalizeProductItems({ ...DEFAULT.products, ...j.profile.products }) } };
-        setProfile(next);
-        setTemplateId(matchTemplateId(next, templates) || templateId);
-      }
-      completeDemoStep('template');
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } finally {
-      setDemoBusy(false);
-    }
-  };
-
-  const resetDemo = async () => {
-    setDemoBusy(true);
-    try {
-      const r = await fetch('/api/overseas/enterprise/demo/reset', { method: 'POST', headers: authHeader() });
-      const j = await r.json();
-      if (j.profile) setProfile({ ...j.profile, products: { ...DEFAULT.products, ...j.profile.products, items: normalizeProductItems({ ...DEFAULT.products, ...j.profile.products }) } });
-      setSaved(true);
-      setTimeout(() => setSaved(false), 2000);
-    } finally {
-      setDemoBusy(false);
     }
   };
 
@@ -1931,16 +1883,6 @@ export default function EnterprisePage() {
 
                 <div className="rounded-lg border border-border bg-surface-2/40 p-4">
                   <div className="flex flex-wrap items-center gap-2">
-                    <select className={inputCls} value={templateId} onChange={e => setTemplateId(e.target.value)}>
-                      <option value="">选择模板并加载</option>
-                      {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                    </select>
-                    <button data-demo-target="template" onClick={applyTemplate} disabled={!templateId || demoBusy} className="inline-flex items-center gap-1.5 rounded-lg bg-slate-950 px-3 py-2 text-xs font-bold text-white disabled:opacity-50">
-                      {demoBusy ? <Loader2 size={12} className="animate-spin" /> : <BookOpen size={12} />}加载模板
-                    </button>
-                    <button onClick={resetDemo} disabled={demoBusy} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-white px-3 py-2 text-xs font-bold text-text-secondary disabled:opacity-50">
-                      <RotateCcw size={12} />重置
-                    </button>
                     <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border bg-white px-3 py-2 text-xs font-bold text-text-secondary">
                       {orderImporting ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />}上传订单 CSV
                       <input type="file" accept=".csv,text/csv" className="hidden" disabled={orderImporting} onChange={e => { const file = e.target.files?.[0] || null; e.currentTarget.value = ''; void importOrderCsv(file); }} />
@@ -2070,27 +2012,6 @@ export default function EnterprisePage() {
                   <span className="text-[11px] text-text-muted">必填：客户名称、商品/SKU、GMV；建议填写来源和来源凭证。</span>
                 </div>
                 {orderImportMessage && <p className="mt-2 text-[11px] font-semibold text-green-700">{orderImportMessage}</p>}
-              </div>
-            </div>
-          </section>
-
-          <section className="card p-4">
-            <div className="flex items-center justify-between gap-3">
-              <p className="min-w-0 text-xs font-semibold text-text-primary">测试号行业模板</p>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                <select className={inputCls} value={templateId} onChange={e => setTemplateId(e.target.value)}>
-                  <option value="">选择模板并加载</option>
-                  {templates.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-                </select>
-                <button data-demo-target="template" onClick={applyTemplate} disabled={!templateId || demoBusy}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold text-white disabled:opacity-50"
-                  style={{ background: '#0f172a' }}>
-                  {demoBusy ? <Loader2 size={12} className="animate-spin" /> : <BookOpen size={12} />}加载
-                </button>
-                <button onClick={resetDemo} disabled={demoBusy}
-                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border border-border text-text-secondary hover:text-text-primary disabled:opacity-50">
-                  <RotateCcw size={12} />重置
-                </button>
               </div>
             </div>
           </section>

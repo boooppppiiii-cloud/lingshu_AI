@@ -1,5 +1,4 @@
 import { Router } from 'express';
-import { isDemoMode } from '../lib/demo.js';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 import { getTenantPlatformApp } from '../lib/tenantPlatformApps.js';
 
@@ -22,16 +21,6 @@ platformIntegrationsRouter.get('/providers', (_req, res) => {
 platformIntegrationsRouter.post('/:provider/connect', (req, res) => {
   const { provider } = req.params;
   if (!SUPPORTED.includes(provider as any)) { res.status(404).json({ error: 'unsupported_provider' }); return; }
-  if (isDemoMode()) {
-    res.json({
-      ok: true,
-      source: 'demo',
-      provider,
-      account: { id: `demo_${provider}`, name: `${provider} Demo Account` },
-      message: '账号连接测试通过。',
-    });
-    return;
-  }
   res.status(501).json({ error: 'not_implemented', provider, expectedOwner: 'platform-integrations' });
 });
 
@@ -78,34 +67,26 @@ platformIntegrationsRouter.get('/:provider/status', requireAuth, async (req, res
   }
   res.json({
     provider,
-    connected: isDemoMode(),
-    source: isDemoMode() ? 'demo' : 'stub',
-    account: isDemoMode() ? { id: `demo_${provider}`, name: `${provider} Demo Account` } : null,
+    connected: false,
+    source: 'not_connected',
+    account: null,
   });
 });
 
 platformIntegrationsRouter.post('/:provider/sync', (req, res) => {
   const { provider } = req.params;
   if (!SUPPORTED.includes(provider as any)) { res.status(404).json({ error: 'unsupported_provider' }); return; }
-  if (isDemoMode()) {
-    res.json({ ok: true, source: 'demo', provider, jobId: `demo_sync_${Date.now()}`, syncedAt: new Date().toISOString() });
-    return;
-  }
   res.status(501).json({ error: 'not_implemented', provider, expectedOwner: 'platform-integrations' });
 });
 
 platformIntegrationsRouter.post('/:provider/publish', (req, res) => {
   const { provider } = req.params;
   if (!SUPPORTED.includes(provider as any)) { res.status(404).json({ error: 'unsupported_provider' }); return; }
-  if (isDemoMode()) {
-    res.json({ ok: true, source: 'demo', provider, postId: `demo_post_${Date.now()}`, payload: req.body ?? {} });
-    return;
-  }
   res.status(501).json({ error: 'not_implemented', provider, expectedOwner: 'platform-integrations' });
 });
 
 platformIntegrationsRouter.delete('/:provider', (req, res) => {
   const { provider } = req.params;
   if (!SUPPORTED.includes(provider as any)) { res.status(404).json({ error: 'unsupported_provider' }); return; }
-  res.json({ ok: true, source: isDemoMode() ? 'demo' : 'stub', provider });
+  res.json({ ok: true, source: 'not_connected', provider });
 });

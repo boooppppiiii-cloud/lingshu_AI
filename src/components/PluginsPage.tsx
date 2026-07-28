@@ -270,22 +270,6 @@ const DEFAULT_TOOL_STATE: PluginToolState = {
   translatedText: '',
 };
 
-function mockTranslate(text: string, source: string, target: string) {
-  const clean = text.trim();
-  if (!clean) return '';
-  const targetLabel = LANGUAGE_OPTIONS.find(l => l.code === target)?.label ?? target.toUpperCase();
-  const samples: Record<string, string> = {
-    en: 'This product supports small-batch customization and can ship within 7 days.',
-    ar: 'يدعم هذا المنتج التخصيص بكميات صغيرة ويمكن شحنه خلال 7 أيام.',
-    ms: 'Produk ini menyokong penyesuaian kuantiti kecil dan boleh dihantar dalam 7 hari.',
-    id: 'Produk ini mendukung kustomisasi dalam jumlah kecil dan dapat dikirim dalam 7 hari.',
-    vi: 'Sản phẩm này hỗ trợ tùy chỉnh số lượng nhỏ và có thể giao trong vòng 7 ngày.',
-    zh: '这款产品支持小批量定制，7 天内可以发货。',
-  };
-  if (clean === DEFAULT_TOOL_STATE.text && samples[target]) return samples[target];
-  return `[${targetLabel}] ${clean}`;
-}
-
 const PLUGIN_INTERACTIONS: Record<string, PluginAction[]> = {
   shopify: [
     { label: '商品同步', desc: '读取商品、库存、价格字段，供企业中心和内容生成引用' },
@@ -870,7 +854,7 @@ export default function PluginsPage() {
     if (pluginKey === 'exchangerate' || pluginKey === 'translate' || pluginKey === 'google_translate') {
       setActiveToolKey(prev => prev === pluginKey ? null : pluginKey);
       if (pluginKey === 'translate' || pluginKey === 'google_translate') {
-        setToolState(prev => ({ ...prev, translatedText: mockTranslate(prev.text, prev.sourceLanguage, prev.targetLanguage) }));
+        await runTranslation();
       }
       return;
     }
@@ -899,24 +883,36 @@ export default function PluginsPage() {
       setToolState(prev => ({ ...prev, exchangeResult: '请输入有效金额' }));
       return;
     }
-    const fallbackRates: Record<string, number> = { USD: 1, CNY: 6.8, SAR: 3.75, AED: 3.67, VND: 26200, MYR: 4.1, IDR: 16200 };
-    let rates = fallbackRates;
     try {
       const r = await fetch('/api/overseas/plugins/exchangerate/rates');
-      const data = await r.json() as { rates?: Record<string, number> };
-      rates = { ...fallbackRates, ...(data.rates ?? {}) };
-    } catch { /* fallback rates keep demo usable */ }
-    const fromRate = rates[toolState.fromCurrency] ?? 1;
-    const toRate = rates[toolState.toCurrency] ?? 1;
-    const converted = amount / fromRate * toRate;
-    setToolState(prev => ({
-      ...prev,
-      exchangeResult: `${amount.toLocaleString()} ${currencyLabel(prev.fromCurrency)} ≈ ${converted.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${currencyLabel(prev.toCurrency)}`,
-    }));
+      const data = await r.json() as { rates?: Record<string, number>; error?: string };
+      if (!r.ok || !data.rates) throw new Error(data.error || '实时汇率服务不可用');
+      const rates: Record<string, number> = { USD: 1, ...data.rates };
+      const fromRate = rates[toolState.fromCurrency];
+      const toRate = rates[toolState.toCurrency];
+      if (!fromRate || !toRate) throw new Error('实时汇率缺少所选币种');
+      const converted = amount / fromRate * toRate;
+      setToolState(prev => ({ ...prev, exchangeResult: `${amount.toLocaleString()} ${currencyLabel(prev.fromCurrency)} ≈ ${converted.toLocaleString(undefined, { maximumFractionDigits: 2 })} ${currencyLabel(prev.toCurrency)}` }));
+    } catch (error) {
+      setToolState(prev => ({ ...prev, exchangeResult: error instanceof Error ? error.message : '实时汇率服务不可用' }));
+    }
   }
 
-  function runTranslation() {
-    setToolState(prev => ({ ...prev, translatedText: mockTranslate(prev.text, prev.sourceLanguage, prev.targetLanguage) }));
+  async function runTranslation() {
+    const current = toolState;
+    if (!current.text.trim()) return;
+    setToolState(prev => ({ ...prev, translatedText: '翻译中…' }));
+    try {
+      const r = await fetch('/api/overseas/plugins/translate/run', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: current.text, source: current.sourceLanguage, target: current.targetLanguage }),
+      });
+      const data = await r.json() as { translatedText?: string; error?: string };
+      if (!r.ok || !data.translatedText) throw new Error(data.error || '翻译服务不可用');
+      setToolState(prev => ({ ...prev, translatedText: data.translatedText || '' }));
+    } catch (error) {
+      setToolState(prev => ({ ...prev, translatedText: error instanceof Error ? error.message : '翻译服务不可用' }));
+    }
   }
 
   const visiblePlugins = plugins.filter(plugin => plugin.category !== 'social');

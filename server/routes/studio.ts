@@ -11,7 +11,7 @@ import ffmpegStatic from 'ffmpeg-static';
 import { GoogleGenAI } from '@google/genai';
 import { callLLM } from '../agents/llm.js';
 import { buildEnterpriseContext, readTenantEnterpriseProfile } from './enterprise.js';
-import { auth } from '../storage/index.js';
+import { auth, store } from '../storage/index.js';
 import {
   entitlementGate,
   getTenantSubscription,
@@ -26,12 +26,14 @@ import { releaseSeedanceBudget, reserveSeedanceBudget, type SeedanceBudgetReserv
 import { canAppearInSharedLibrary, isReferenceOnlyMaterial, materialUsage, type MaterialUsage } from '../lib/materialPolicy.js';
 import { fetchCloudMaterial, getCloudMaterialRecord, listCloudMaterials, updateCloudMaterial } from '../lib/cloudMaterials.js';
 import { analyzeVideo } from '../agents/gemini.js';
-import { analyzeVideoFramesWithQwen } from '../agents/qwen.js';
+import { analyzeVideoFramesWithQwen, classifyMaterialFramesWithQwen } from '../agents/qwen.js';
 import { extractQwenAnalysisFrames } from './videos.js';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 import { signAssetUrl, signPathAssetUrl, sharedAssetRelativePath, tenantAssetDir, tenantAssetRelativePath } from '../lib/assetAccess.js';
 import { requireAdminUser } from '../lib/demoAccounts.js';
 import { listPublishRecords, recommendPublish, type PublishPlatform } from '../lib/publishHistory.js';
+import { objectStorageEnabled, r2Delete, r2Download, r2GetObject, r2Head, r2SignedGetUrl, r2Upload } from '../storage/r2.js';
+import { materialAssetContentType, materialAssetObjectKey, materialAssetTypeAllowed, sharedObjectKey, tenantPrivateObjectKey } from '../storage/materialAssets.js';
 
 /* ──────────────────────────────────────────────────────────────────────────
    Studio 路由 —— 服务于「社媒 / AI 生成内容」混剪工作台
@@ -139,7 +141,7 @@ async function createGeneratedVideoMaterial(input: {
   if (!fs.existsSync(filePath)) return null;
   const id = randomUUID();
   const posterFile = `${id}.poster.jpg`;
-  const posterPath = path.join(GENERATED_MEDIA_DIR, posterFile);
+  const posterPath = path.join(tenantAssetDir(MEDIA_DIR, input.tenantId), posterFile);
   const material: Material = {
     id,
     name: input.title || 'Seedance 生成视频',
@@ -156,6 +158,18 @@ async function createGeneratedVideoMaterial(input: {
   };
   const posterOk = await extractPoster(filePath, posterPath, material.duration > 1 ? 1 : 0);
   if (posterOk) material.poster = generatedMediaUrl(input.tenantId, posterFile);
+  if (objectStorageEnabled()) {
+    material.objectKey = materialAssetObjectKey(input.tenantId, input.filename);
+    await r2Upload({ key: material.objectKey, body: fs.readFileSync(filePath), contentType: materialAssetContentType(input.filename) });
+    material.url = '';
+    if (posterOk) {
+      material.posterObjectKey = materialAssetObjectKey(input.tenantId, posterFile);
+      await r2Upload({ key: material.posterObjectKey, body: fs.readFileSync(posterPath), contentType: 'image/jpeg' });
+      material.poster = undefined;
+    }
+    fs.rmSync(filePath, { force: true });
+    fs.rmSync(posterPath, { force: true });
+  }
   const list = loadMaterials().filter(item => item.url !== material.url);
   list.push(material);
   persistMaterials(list);
@@ -190,6 +204,14 @@ async function createGeneratedImageMaterial(input: {
     tenantId: input.tenantId,
     createdAt: new Date().toISOString(),
   };
+  if (objectStorageEnabled()) {
+    material.objectKey = materialAssetObjectKey(input.tenantId, filename);
+    material.posterObjectKey = material.objectKey;
+    await r2Upload({ key: material.objectKey, body: input.bytes, contentType: input.mimeType });
+    material.url = '';
+    material.poster = undefined;
+    fs.rmSync(filePath, { force: true });
+  }
   const list = loadMaterials().filter(item => item.url !== material.url);
   list.push(material);
   persistMaterials(list);
@@ -910,17 +932,22 @@ studioRouter.post('/storyboard-quality-check', async (req, res) => {
     res.status(404).json({ ok: false, error: '找不到可质检的本地视频素材' });
     return;
   }
-  const filePath = path.join(MEDIA_DIR, material.file);
-  if (!fs.existsSync(filePath)) {
-    res.status(404).json({ ok: false, error: '质检视频文件不存在' });
-    return;
-  }
   const apiKey = String(process.env.GEMINI_API_KEY || '').trim();
   if (!apiKey) {
     res.status(423).json({ ok: false, error: 'GEMINI_API_KEY 未配置，无法执行视觉质检' });
     return;
   }
   fs.mkdirSync(GENERATED_MEDIA_DIR, { recursive: true });
+  const cosTempPath = material.objectKey ? path.join(GENERATED_MEDIA_DIR, `quality-source-${material.id}${path.extname(material.file) || '.mp4'}`) : '';
+  const filePath = cosTempPath || path.join(MEDIA_DIR, material.file);
+  if (material.objectKey) {
+    const downloaded = await r2Download(material.objectKey);
+    if (downloaded?.buf.length) fs.writeFileSync(filePath, downloaded.buf);
+  }
+  if (!fs.existsSync(filePath)) {
+    res.status(404).json({ ok: false, error: '质检视频文件不存在' });
+    return;
+  }
   const tempDir = fs.mkdtempSync(path.join(GENERATED_MEDIA_DIR, 'quality-'));
   try {
     const framePattern = path.join(tempDir, 'frame-%02d.jpg');
@@ -969,6 +996,7 @@ studioRouter.post('/storyboard-quality-check', async (req, res) => {
       for (const name of fs.readdirSync(tempDir)) fs.unlinkSync(path.join(tempDir, name));
       fs.rmdirSync(tempDir);
     } catch { /* best effort */ }
+    if (cosTempPath) fs.rmSync(cosTempPath, { force: true });
   }
 });
 
@@ -1071,7 +1099,9 @@ studioRouter.post('/script', async (req, res) => {
   const forbiddenLine = forbiddenTerms.length
     ? `Reference-only forbidden terms: ${forbiddenTerms.join(', ')}. Do not output these words, hashtags, brand names, original captions, or original product claims.`
     : 'Do not output reference-video brand names, hashtags, original captions, or original product claims.';
-  const providerOpt = provider === 'qwen' || provider === 'gemini' ? provider : undefined;
+  // 产品分镜固定走千问，避免跟随工作台的全局模型选择误切到 Gemini。
+  const effectiveProvider = generationMode === 'product' ? 'qwen' : provider;
+  const providerOpt = effectiveProvider === 'qwen' || effectiveProvider === 'gemini' ? effectiveProvider : undefined;
   const selectedProductBrief = productBrief(productInfo);
   const selectedProductCategory = selectedProductBrief.category || compactBriefCategory(selectedProductBrief);
   const cloneMigrationMode = String(tone).includes('高保真复刻')
@@ -1096,34 +1126,48 @@ studioRouter.post('/script', async (req, res) => {
 8. 缺失信息用“无”或“沿用原片”表达，禁止用想象补齐。分析缺少逐镜详情时应拒绝生成，不得降级为自由创作。
 9. 输出必须干净：只输出时间戳分镜成稿，不输出标题、前言、总结、映射表、自检、Markdown、代码围栏或分析说明。`;
 
-  const productScriptRules = `你是在为我方产品重新创作一条能让观众停留、相信并采取行动的社媒带货/外贸留资视频，不是在朗读产品资料。
+  const productDuration = Math.max(10, Number(duration) || 20);
+  const productBoundaries = [0, .18, .4, .62, .82, 1].map(value => +(value * productDuration).toFixed(1));
+  const productTimeline = productBoundaries.slice(0, -1).map((start, index) => {
+    const end = productBoundaries[index + 1];
+    const maxChars = Math.max(4, Math.floor(Math.max(0.5, end - start - 0.5) * 4));
+    return `第${index + 1}段：[${start}-${end}s]，中文台词最多${maxChars}字（不含标点）`;
+  }).join('\n');
+  const productScriptRules = `你是严谨的商业短视频分镜导演。请为我方产品创作一条真实、可拍、音画时长成立的社媒带货/外贸留资视频，不是在朗读产品资料。
 
-输出必须满足：
-1. 每段包含：时间 / 画面 / 人物说 / 字幕。
-2. 人物说必须是镜头里真人能直接说出口的话，不得包含“镜头、画面、字幕、参考节奏、展示卖点”等制作指令。
+以下约束是输出协议，不是建议；任何一项不满足都视为无效脚本：
+1. 必须恰好输出5段，严格使用下方给定时间段，不得改时间、重叠、留空或额外增加段落：
+${productTimeline}
+2. 每段必须依次包含且只包含：时间、环境、景别、运镜、镜头功能、画面、配乐、台词、字幕。不得缺字段，不得输出标题、解释、自检、Markdown或代码围栏。
+3. 台词必须是镜头中真人能直接说出口的话，不得包含“镜头、画面、字幕、参考节奏、展示卖点”等制作指令；必须严格低于对应段落字数上限，宁可短句或写“无”，不可超时。
 3. 每段画面必须是具体可拍动作，必须包含手部动作、产品动作、对比测试、包装/定制展示或使用场景之一。
 4. 第一段必须是痛点、对比、测试或结果 hook，不能用“这款产品适合……”平铺开场。
 5. 先判断转化目标：面向消费者时使用“场景痛点 → 使用动作 → 可见结果 → 购买理由”；面向采购商时使用“采购顾虑 → 实物证据 → 定制/交付能力 → 低门槛询盘”。不要混写两套话术。
 6. 至少包含两个已核实的商业信息，但优先放在短字幕和画面资料卡里；口播只说买家最关心的好处，不朗读 MOQ、认证和参数清单。
 7. 结尾 CTA 只要求一个低门槛动作，例如“发我数量和目标市场”“留言拿报价”“发包装需求看样”，不要一次索要五六项资料。
 8. 参考视频只允许借用节奏、镜头顺序和信息密度；不得输出参考视频标题、原 caption、原品牌、原 hashtag、原品类、原场景词或原产品功效。
-9. 不得编造未提供的数据；缺失时只在画面说明或字幕写“可按需求确认”，不要让主播把这句系统式措辞反复说出口。
+9. 产品事实采用封闭世界规则：只有“产品信息”逐字出现的名称、数字、单位、周期、价格、MOQ、材质、规格、认证、功效和定制项才允许写入。除时间戳外，禁止创造产品资料中没有的任何数字（例如3天、12天、提升30%）；缺失信息直接省略，不得猜测。
 10. 不得输出制作说明，不得解释规则，只输出成稿。
 11. 原始卖点如果包含夸张绝对化表达，必须降级成可验证表述，例如“不易撕裂”“抗拉表现可打样测试”“承重可按需求确认”，不得写“不破、不裂、纹丝不动、吹不烂”等绝对承诺。
 12. 只能使用下方“产品信息”里列出的选定产品。不得改成企业中心其它产品，不得写“企业产品组合/主推产品/this product”，不得使用对标视频原产品。
 13. 多选产品时，脚本必须围绕这些选定产品组合呈现，至少在画面或字幕中覆盖每个选定产品的名称或明确细节，不得擅自新增未选择产品。
 14. ${forbiddenLine}
-15. 中文口播按每秒约4-5字并预留0.5秒停顿；每段台词必须能在对应时间段自然说完。优先短句、反问、口语停顿，避免“先看、再确认、逐项确认、可按需求确认”连续出现。
+15. 中文口播按每秒4字计算并预留0.5秒停顿；输出前必须在内部逐段计算字数，超出上限就缩短。优先短句、反问、口语停顿，避免“先看、再确认、逐项确认、可按需求确认”连续出现。
 16. 优先使用产品资料中已经提供的容量、材质、充电方式、规格和定制项；把参数翻译成使用利益或采购价值，但不得用跨品类的点亮、色温、安装、护肤功效等动作替代真实产品细节。
 17. 五段情绪应有推进：意外/顾虑 → 看见亮点 → 证据加深 → 品牌想象 → 立即行动。相邻两段不能用相同句式开头。
 
-固定格式：
-[0-2s]
-画面：<具体可拍动作>
-人物说：“<真人口播，只说给买家听的话>”
-字幕：<短字幕>
+固定格式（每段完整重复，不得省略）：
+[start-end s]
+环境：<具体地点与可见陈设>
+景别：<远景/全景/中景/中近景/近景/特写之一>
+运镜：<固定/推进/拉远/横移/跟拍/环绕之一，并说明动作>
+镜头功能：<单一功能>
+画面：<主体+动作+可见结果，不能写抽象意图>
+配乐：<音乐或音效及其节奏>
+台词：<字数不超过本段上限；没有必要则写“无”>
+字幕：<短字幕；不能引入产品资料以外的新事实>
 
-请生成 5 段左右，总时长约 ${duration} 秒，语言为${lang}。`;
+最终输出前在内部检查但不要输出检查过程：字段完整；时间连续；台词不超时；所有产品数字均可在产品信息中逐字找到；没有编造效果与承诺。语言为${lang}。`;
 
   const materialScriptRules = `你是在把“已选素材库片段”剪成一条有销售情绪的社媒带货/外贸留资视频。素材约束留在画面说明中，人物口播必须始终面向潜在买家，不能说后台审核语言。
 
@@ -1270,12 +1314,18 @@ Requirements:
         || !/台词[：:]/.test(script));
     const genericCloneStoryboard = generationMode === 'clone'
       && /真实使用场景|痛点特写|买家最关心的结果|采购这类|先看真实使用效果|把「[^」]+」放到真实使用场景/.test(script);
+    const productStoryboardFields = ['环境', '景别', '运镜', '镜头功能', '画面', '配乐', '台词', '字幕'];
+    const productStoryboardBlocks = script.split(/(?=^\[[^\]]+\]\s*$)/m).filter(block => /^\[[^\]]+\]/.test(block.trim()));
+    const incompleteProductStoryboard = generationMode === 'product'
+      && (productStoryboardBlocks.length !== 5
+        || productStoryboardBlocks.some(block => productStoryboardFields.some(field => !new RegExp(`^${field}[：:]`, 'm').test(block))));
     const unsafeScript = missingProduct
       || missingSelectedProduct
       || /参考节奏|Reference video|对标视频|基础要求|分析摘要|竞品识别|产品替换|参考爆款|成片目标|指定画风|核心情绪|行业锁定|结构迁移|不迁移行业|不继承原视频|企业产品组合|主推产品|<具体|不得|必须满足/.test(script)
       || /不破|不裂|纹丝不动|吹不烂|保证|最快|最低价|全网|no tear|won'?t tear|never breaks?|unbreakable/i.test(script)
       || unsupportedNumberClaims.length > 0
       || incompleteCloneStoryboard
+      || incompleteProductStoryboard
       || genericCloneStoryboard
       || hasRepetitiveStoryboard(script)
       || hasUnnaturalVoiceover(script)
@@ -1292,6 +1342,7 @@ Requirements:
       missingSelectedProduct ? `脚本未完整覆盖选定产品名称：${selectedNames.join('、')}` : '',
       unsupportedNumberClaims.length ? `出现产品资料未提供的数字：${unsupportedNumberClaims.join('、')}` : '',
       incompleteCloneStoryboard ? '爆款分镜缺少环境、景别、运镜、配乐或台词字段' : '',
+      incompleteProductStoryboard ? '产品分镜必须为5段，且每段完整包含环境、景别、运镜、镜头功能、画面、配乐、台词和字幕' : '',
       genericCloneStoryboard ? '爆款分镜包含不可执行的泛化镜头描述' : '',
       hasRepetitiveStoryboard(script) ? '分镜或口播内容重复度过高' : '',
       hasUnnaturalVoiceover(script) ? '口播过长或堆叠过多技术名词' : '',
@@ -1314,6 +1365,15 @@ Requirements:
       validationIssues: shouldFallback ? validationIssues : [],
     });
   } catch (error) {
+    const rawError = String(error instanceof Error ? error.message : error);
+    console.warn('[studio] script generation fell back:', rawError.slice(0, 500));
+    const publicFailureReason = /429|RESOURCE_EXHAUSTED|prepayment credits|quota|billing/i.test(rawError)
+      ? '上游模型额度不足，已自动切换为安全兜底稿'
+      : /401|403|api.?key|unauthorized|permission/i.test(rawError)
+        ? '上游模型授权暂不可用，已自动切换为安全兜底稿'
+        : /timeout|timed out|超时|503|502|504|UNAVAILABLE/i.test(rawError)
+          ? '上游模型暂时繁忙，已自动切换为安全兜底稿'
+          : '上游模型生成失败，已自动切换为安全兜底稿';
     res.json({
       ok: true,
       source: 'fallback',
@@ -1322,8 +1382,8 @@ Requirements:
         : generationMode === 'material'
         ? fallbackMaterialStoryboard(normalizedMaterialInfos, Number(duration) || 20, productInfo)
         : scriptType === 'storyboard' ? fallbackStoryboard(duration, productInfo) : fallbackScript(productInfo, duration),
-      fallbackReason: '模型调用失败，已使用本地安全兜底脚本',
-      validationIssues: [String(error instanceof Error ? error.message : error).slice(0, 240)],
+      fallbackReason: publicFailureReason,
+      validationIssues: [publicFailureReason],
     });
   }
 });
@@ -1541,7 +1601,7 @@ studioRouter.post('/fb-poster/render', async (req, res) => {
   } = req.body ?? {};
   const normalizedPoster = normalizePosterBrief(poster || {});
   const headline = normalizedPoster.headline || 'AI 图文海报';
-  const references = resolveReferenceImages(materialIds, tenantId);
+  const references = await resolveReferenceImages(materialIds, tenantId);
   const prompt = [
     String(imagePrompt || '').trim(),
     'Generate one finished high-end B2B OEM/ODM social media poster image.',
@@ -1964,9 +2024,9 @@ studioRouter.post('/render/open-output', async (req, res) => {
   }
 });
 
-/* ── 素材库（本地磁盘存储，无需 R2）───────────────────────────────────────
-   文件存 data/media/，索引存 data/materials.json，由 index.ts 静态托管 /media/*。
-   渲染时 buildManifest 按名称把选中素材映射到这里的真实 URL。
+/* ── 素材库───────────────────────────────────────────────────────────────
+   配置对象存储时，租户素材写入私有 COS 的 materials/tenants/<tenant>/ 前缀；
+   未配置时保留 data/media 本地回退。索引仍存 data/materials.json。
 ─────────────────────────────────────────────────────────────────────────── */
 
 const MEDIA_DIR = path.join(__dirname, '../../data/media');
@@ -2038,12 +2098,18 @@ interface Material {
   file: string;     // data/media 下的文件名
   url: string;      // /media/<file>
   poster?: string;  // 封面用的帧画面：视频抽首帧，图片即自身
+  objectKey?: string;
+  posterObjectKey?: string;
   scope: 'shared' | 'own'; // shared=公共库（运营预置），own=用户自己上传
   tenantId?: string;
   usage?: MaterialUsage;   // editable=可剪辑；reference_only=仅供对标分析，禁止进入公共下载库
   sourceType?: string;
   sourceUrl?: string;
   pinned?: boolean;
+  industry?: string;
+  shotFunction?: string;
+  applicability?: string;
+  tags?: string;
   segmentAnalysisStatus?: 'pending' | 'analyzing' | 'completed' | 'failed';
   segmentAnalysisError?: string;
   segments?: MaterialSegment[];
@@ -2075,6 +2141,7 @@ interface MaterialSegment {
   confidence: number;
   needsReview: boolean;
   manualConfirmed?: boolean;
+  posterObjectKey?: string;
 }
 
 const ffmpegBin = ffmpegStatic as unknown as string | null;
@@ -2109,6 +2176,36 @@ function humanSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function materialSignedUrlTtlSeconds(): number {
+  const configured = Number(process.env.MATERIAL_SIGNED_URL_TTL_SECONDS || 900);
+  return Number.isFinite(configured) ? Math.max(60, Math.min(3600, configured)) : 900;
+}
+
+async function signedMaterialObjectUrl(key?: string): Promise<string | undefined> {
+  return key && objectStorageEnabled() ? r2SignedGetUrl(key, materialSignedUrlTtlSeconds()) : undefined;
+}
+
+async function materialResponse(material: Material, tenantId: string): Promise<Material> {
+  const url = material.objectKey
+    ? await signedMaterialObjectUrl(material.objectKey)
+    : /^\/cloud-files\//.test(material.url)
+      ? signPathAssetUrl(material.url, tenantId)
+      : /^\/(?:media|api\/overseas\/studio\/materials\/pb)\//.test(material.url) ? signAssetUrl(material.url, tenantId) : material.url;
+  const poster = material.posterObjectKey
+    ? await signedMaterialObjectUrl(material.posterObjectKey)
+    : material.poster && /^\/cloud-files\//.test(material.poster)
+      ? signPathAssetUrl(material.poster, tenantId, 24 * 60 * 60 * 1000)
+      : material.poster && /^\/(?:media|api\/overseas\/studio\/materials\/pb)\//.test(material.poster)
+        ? signAssetUrl(material.poster, tenantId, 24 * 60 * 60 * 1000)
+        : material.poster;
+  const segments = await Promise.all((material.segments || []).map(async segment => ({
+    ...segment,
+    poster: segment.posterObjectKey ? await signedMaterialObjectUrl(segment.posterObjectKey) : segment.poster,
+    posterObjectKey: undefined,
+  })));
+  return { ...material, url: url || material.url, poster, segments, objectKey: undefined, posterObjectKey: undefined };
 }
 
 // Video generation history. A groupKey identifies one logical output slot
@@ -2199,23 +2296,13 @@ studioRouter.get('/materials', async (req, res) => {
   else if (scope === 'own') list = list.filter(m => (m.scope ?? 'own') === 'own');
   if (purpose === 'reference') list = list.filter(isReferenceOnlyMaterial);
   else if (purpose !== 'all') list = list.filter(m => !isReferenceOnlyMaterial(m));
-  res.json(list
-    .map(m => ({
-      ...m,
-      url: /^\/cloud-files\//.test(m.url)
-        ? signPathAssetUrl(m.url, tenantId)
-        : /^\/(?:media|api\/overseas\/studio\/materials\/pb)\//.test(m.url) ? signAssetUrl(m.url, tenantId) : m.url,
-      // Poster responses are publicly cached for one day. Keep their exact-path
-      // signature valid for the same period so images that the browser loads
-      // after scrolling cannot expire while they are still on the page.
-      poster: m.poster && /^\/cloud-files\//.test(m.poster)
-        ? signPathAssetUrl(m.poster, tenantId, 24 * 60 * 60 * 1000)
-        : m.poster && /^\/(?:media|api\/overseas\/studio\/materials\/pb)\//.test(m.poster)
-        ? signAssetUrl(m.poster, tenantId, 24 * 60 * 60 * 1000)
-        : m.poster,
-      usage: materialUsage(m),
-    }))
-    .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)) || b.createdAt.localeCompare(a.createdAt)));
+  const sorted = list.sort((a, b) => (Date.parse(String(b.createdAt || '')) || 0) - (Date.parse(String(a.createdAt || '')) || 0));
+  const response = await Promise.all(sorted.map(async m => ({
+    ...(await materialResponse(m, tenantId)),
+    usage: materialUsage(m),
+  })));
+  res.setHeader('Cache-Control', 'private, no-store, max-age=0');
+  res.json(response);
 });
 
 studioRouter.get('/materials/pb/:id/:kind', async (req, res) => {
@@ -2255,18 +2342,57 @@ studioRouter.post('/materials', async (req, res) => {
   const file = `${id}.${ext}`;
   const buf = Buffer.from(String(dataBase64).replace(/^data:[^,]+,/, ''), 'base64');
   const relativeFile = tenantAssetRelativePath(tenantId, file);
-  fs.writeFileSync(path.join(MEDIA_DIR, relativeFile), buf);
+  const contentType = materialAssetContentType(file, String(mimeType || ''));
+  if (!materialAssetTypeAllowed(contentType)) { res.status(415).json({ ok: false, error: 'unsupported material type' }); return; }
+  if (!buf.length || buf.length > 110 * 1024 * 1024) { res.status(413).json({ ok: false, error: 'material must be between 1 byte and 110 MB' }); return; }
+  const useObjectStorage = objectStorageEnabled();
+  const objectKey = useObjectStorage ? materialAssetObjectKey(tenantId, file) : undefined;
+  const tempDir = path.join(MEDIA_DIR, '../material-upload-temp');
+  const tempFile = path.join(tempDir, file);
+  if (useObjectStorage) {
+    fs.mkdirSync(tempDir, { recursive: true });
+    fs.writeFileSync(tempFile, buf);
+  } else {
+    fs.writeFileSync(path.join(MEDIA_DIR, relativeFile), buf);
+  }
 
   // 封面用帧画面：视频抽首帧（≈1s 处，太短则取 0），图片用自身，音频无
   let poster: string | undefined;
+  let posterObjectKey: string | undefined;
+  let posterBuffer: Buffer | undefined;
   if (type === 'image') {
-    poster = `/media/${relativeFile}`;
+    poster = useObjectStorage ? undefined : `/media/${relativeFile}`;
+    posterObjectKey = objectKey;
   } else if (type === 'video') {
     const posterFile = `${id}.poster.jpg`;
     const relativePoster = tenantAssetRelativePath(tenantId, posterFile);
+    const posterPath = useObjectStorage ? path.join(tempDir, posterFile) : path.join(MEDIA_DIR, relativePoster);
     const at = (Number(duration) || 0) > 1 ? 1 : 0;
-    const ok = await extractPoster(path.join(MEDIA_DIR, relativeFile), path.join(MEDIA_DIR, relativePoster), at);
-    if (ok) poster = `/media/${relativePoster}`;
+    const ok = await extractPoster(useObjectStorage ? tempFile : path.join(MEDIA_DIR, relativeFile), posterPath, at);
+    if (ok) {
+      if (useObjectStorage) {
+        posterObjectKey = materialAssetObjectKey(tenantId, posterFile);
+        posterBuffer = fs.readFileSync(posterPath);
+        fs.rmSync(posterPath, { force: true });
+      } else poster = `/media/${relativePoster}`;
+    }
+  }
+
+  try {
+    if (objectKey) await r2Upload({ key: objectKey, body: buf, contentType });
+    if (posterObjectKey && posterObjectKey !== objectKey && posterBuffer) {
+      await r2Upload({ key: posterObjectKey, body: posterBuffer, contentType: 'image/jpeg' });
+      if (!await r2Head(posterObjectKey)) throw new Error('material poster upload verification failed');
+    }
+  } catch (error) {
+    if (posterObjectKey && posterObjectKey !== objectKey) await r2Delete(posterObjectKey).catch(() => undefined);
+    if (objectKey) await r2Delete(objectKey).catch(() => undefined);
+    fs.rmSync(tempFile, { force: true });
+    console.error('[materials] COS upload failed', error instanceof Error ? error.message : error);
+    res.status(503).json({ ok: false, error: 'material storage unavailable' });
+    return;
+  } finally {
+    if (useObjectStorage) fs.rmSync(tempFile, { force: true });
   }
 
   const requestedUsage: MaterialUsage = usage === 'reference_only' || sourceType === 'youtube' || /youtube\.com|youtu\.be/i.test(String(sourceUrl || ''))
@@ -2283,8 +2409,10 @@ studioRouter.post('/materials', async (req, res) => {
     aspectRatio: Number(width) > 0 && Number(height) > 0 ? +(Number(width) / Number(height)).toFixed(4) : undefined,
     size: humanSize(buf.length),
     file: relativeFile,
-    url: `/media/${relativeFile}`,
+    url: useObjectStorage ? '' : `/media/${relativeFile}`,
     poster,
+    objectKey,
+    posterObjectKey,
     // Reference material must never be promoted into the shared download library.
     scope: 'own',
     tenantId,
@@ -2296,7 +2424,7 @@ studioRouter.post('/materials', async (req, res) => {
   const list = loadMaterials();
   list.push(material);
   persistMaterials(list);
-  res.status(201).json({ ok: true, material });
+  res.status(201).json({ ok: true, material: await materialResponse(material, tenantId) });
 });
 
 // POST /studio/materials/:id/analyze-segments
@@ -2391,8 +2519,19 @@ studioRouter.post('/materials/:id/analyze-segments', async (req, res) => {
   const material = list.find(item => item.id === req.params.id && item.tenantId === tenantId);
   if (!material) { res.status(404).json({ ok: false, error: 'Material not found' }); return; }
   if (material.type !== 'video') { res.status(400).json({ ok: false, error: '仅视频素材支持片段分析' }); return; }
-  const mediaPath = path.join(MEDIA_DIR, material.file);
-  if (!fs.existsSync(mediaPath)) { res.status(404).json({ ok: false, error: '素材文件不存在' }); return; }
+  const tempDir = path.join(MEDIA_DIR, '../analysis-temp');
+  fs.mkdirSync(tempDir, { recursive: true });
+  const mediaPath = material.objectKey ? path.join(tempDir, `tenant-material-${material.id}${path.extname(material.file) || '.mp4'}`) : path.join(MEDIA_DIR, material.file);
+  let mediaBuffer: Buffer;
+  if (material.objectKey) {
+    const downloaded = await r2Download(material.objectKey);
+    if (!downloaded?.buf.length) { res.status(404).json({ ok: false, error: 'COS 素材文件不存在' }); return; }
+    mediaBuffer = downloaded.buf;
+    fs.writeFileSync(mediaPath, mediaBuffer);
+  } else {
+    if (!fs.existsSync(mediaPath)) { res.status(404).json({ ok: false, error: '素材文件不存在' }); return; }
+    mediaBuffer = fs.readFileSync(mediaPath);
+  }
 
   material.segmentAnalysisStatus = 'analyzing';
   material.segmentAnalysisError = undefined;
@@ -2400,30 +2539,88 @@ studioRouter.post('/materials/:id/analyze-segments', async (req, res) => {
   try {
     const extension = path.extname(material.file).slice(1).toLowerCase();
     const mimeType = extension === 'mov' ? 'video/quicktime' : extension === 'webm' ? 'video/webm' : 'video/mp4';
-    const analysis = await analyzeVideo({ videoBase64: fs.readFileSync(mediaPath).toString('base64'), mimeType });
+    const analysis = await analyzeMaterialVideo(mediaPath, mediaBuffer, material.duration);
     const details = analysis.scriptDetails15s || [];
     if (!details.length) throw new Error('模型未返回可用的片段时间轴');
     const segments: MaterialSegment[] = [];
     let fallbackStart = 0;
     for (let index = 0; index < details.length; index++) {
       const segment = analysisDetailToSegment(material, details[index]!, index, fallbackStart);
-      const posterFile = tenantAssetRelativePath(tenantId, `${material.id}.segment-${index + 1}.jpg`);
-      if (await extractPoster(mediaPath, path.join(MEDIA_DIR, posterFile), Math.min(segment.end, segment.start + 0.2))) {
-        segment.poster = `/media/${posterFile}`;
+      const posterName = `${material.id}.segment-${index + 1}.jpg`;
+      const posterFile = tenantAssetRelativePath(tenantId, posterName);
+      const posterPath = material.objectKey ? path.join(tempDir, posterName) : path.join(MEDIA_DIR, posterFile);
+      if (await extractPoster(mediaPath, posterPath, Math.min(segment.end, segment.start + 0.2))) {
+        if (material.objectKey) {
+          segment.posterObjectKey = materialAssetObjectKey(tenantId, posterName);
+          await r2Upload({ key: segment.posterObjectKey, body: fs.readFileSync(posterPath), contentType: 'image/jpeg' });
+          fs.rmSync(posterPath, { force: true });
+        } else segment.poster = `/media/${posterFile}`;
       }
       segments.push(segment);
       fallbackStart = segment.end;
     }
     material.segments = segments;
+    const classificationText = `${material.name} ${JSON.stringify(analysis)} ${segments.map(segment => `${segment.subject.join(' ')} ${segment.action} ${segment.shot}`).join(' ')}`.toLowerCase();
+    material.industry = /护肤|面膜|精华|面霜|防晒|洗发|沐浴|美容|skin|serum|cream|shampoo|beauty/.test(classificationText)
+      ? 'beauty_skincare'
+      : /服装|面料|纺织|衣服|apparel|textile|fabric/.test(classificationText)
+        ? 'apparel_textile'
+        : /金属|五金|机加工|焊接|metal|welding|machining/.test(classificationText)
+          ? 'metalworking'
+          : 'universal_manufacturing';
+    material.applicability = material.industry === 'universal_manufacturing' ? 'cross_industry' : 'industry_specific';
+    material.shotFunction = [...new Set(segments.flatMap(segment => segment.recommendedFunctions || []))].slice(0, 5).join(',');
+    material.tags = [...new Set(segments.flatMap(segment => [...segment.subject, segment.action, segment.shot]).map(value => String(value || '').trim()).filter(Boolean))].slice(0, 10).join(',');
     material.segmentAnalysisStatus = 'completed';
     material.segmentAnalysisError = undefined;
     persistMaterials(list);
-    res.json({ ok: true, material, segments });
+    const responseMaterial = await materialResponse(material, tenantId);
+    res.json({ ok: true, material: responseMaterial, segments: responseMaterial.segments });
   } catch (error: any) {
     material.segmentAnalysisStatus = 'failed';
     material.segmentAnalysisError = String(error?.message || error || '片段分析失败').slice(0, 500);
     persistMaterials(list);
     res.status(500).json({ ok: false, error: material.segmentAnalysisError });
+  } finally {
+    if (material.objectKey) fs.rmSync(mediaPath, { force: true });
+  }
+});
+
+studioRouter.post('/materials/:id/classify', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const list = loadMaterials();
+  const material = list.find(item => item.id === req.params.id && item.tenantId === tenantId);
+  if (!material) { res.status(404).json({ ok: false, error: 'Material not found' }); return; }
+  if (material.type !== 'video') { res.status(400).json({ ok: false, error: '仅视频素材支持智能分类' }); return; }
+  const tempDir = path.join(MEDIA_DIR, '../analysis-temp');
+  fs.mkdirSync(tempDir, { recursive: true });
+  const mediaPath = material.objectKey ? path.join(tempDir, `classify-${material.id}${path.extname(material.file) || '.mp4'}`) : path.join(MEDIA_DIR, material.file);
+  material.segmentAnalysisStatus = 'analyzing';
+  material.segmentAnalysisError = undefined;
+  persistMaterials(list);
+  try {
+    if (material.objectKey) {
+      const downloaded = await r2Download(material.objectKey);
+      if (!downloaded?.buf.length) throw new Error('COS 素材文件不存在');
+      fs.writeFileSync(mediaPath, downloaded.buf);
+    }
+    const frames = await extractQwenAnalysisFrames(mediaPath, 8, material.duration);
+    const classified = await classifyMaterialFramesWithQwen({ name: material.name, frames });
+    material.industry = classified.industry;
+    material.applicability = classified.applicability;
+    material.shotFunction = classified.shotFunctions.join(',');
+    material.tags = classified.tags.join(',');
+    material.segmentAnalysisStatus = 'completed';
+    material.segmentAnalysisError = undefined;
+    persistMaterials(list);
+    res.json({ ok: true, material: await materialResponse(material, tenantId) });
+  } catch (error) {
+    material.segmentAnalysisStatus = 'failed';
+    material.segmentAnalysisError = String(error instanceof Error ? error.message : error).slice(0, 500);
+    persistMaterials(list);
+    res.status(500).json({ ok: false, error: material.segmentAnalysisError });
+  } finally {
+    if (material.objectKey) fs.rmSync(mediaPath, { force: true });
   }
 });
 
@@ -2465,14 +2662,19 @@ studioRouter.patch('/materials/:id/pin', async (req, res) => {
 });
 
 // DELETE /studio/materials/:id
-studioRouter.delete('/materials/:id', (req, res) => {
+studioRouter.delete('/materials/:id', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
   const list = loadMaterials();
   const m = list.find(x => x.id === req.params.id && x.tenantId === tenantId);
   if (!m) { res.status(404).json({ ok: false, error: 'Material not found' }); return; }
-  try { fs.unlinkSync(path.join(MEDIA_DIR, m.file)); } catch { /* file may be gone */ }
+  if (m.objectKey) await r2Delete(m.objectKey).catch(error => console.error('[materials] COS delete failed', error));
+  else try { fs.unlinkSync(path.join(MEDIA_DIR, m.file)); } catch { /* file may be gone */ }
+  if (m.posterObjectKey && m.posterObjectKey !== m.objectKey) await r2Delete(m.posterObjectKey).catch(error => console.error('[materials] COS poster delete failed', error));
   if (m.poster && m.poster !== m.url) { try { fs.unlinkSync(path.join(MEDIA_DIR, m.poster.replace(/^\/media\//, ''))); } catch { /* ignore */ } }
-  for (const segment of m.segments || []) if (segment.poster) { try { fs.unlinkSync(path.join(MEDIA_DIR, segment.poster.replace(/^\/media\//, ''))); } catch { /* ignore */ } }
+  for (const segment of m.segments || []) {
+    if (segment.posterObjectKey) await r2Delete(segment.posterObjectKey).catch(error => console.error('[materials] COS segment poster delete failed', error));
+    else if (segment.poster) try { fs.unlinkSync(path.join(MEDIA_DIR, segment.poster.replace(/^\/media\//, ''))); } catch { /* ignore */ }
+  }
   persistMaterials(list.filter(x => x.id !== req.params.id));
   res.json({ ok: true });
 });
@@ -2616,6 +2818,7 @@ function inlineFrame(bgImageUrl?: string): string | undefined {
 
 // POST /studio/cover  Body: { title, ratio?, accent?, bgImageUrl?, color?, size?, position?, align? } → { ok, url }
 studioRouter.post('/cover', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   if (!await consumeDemoQuota(req, res, 'generation')) return;
   const { title = '', ratio = '9:16', accent = '#d97706', bgImageUrl, color, size, position, verticalPosition, align, font, weight, artPreset } = req.body ?? {};
   try {
@@ -2626,8 +2829,9 @@ studioRouter.post('/cover', async (req, res) => {
         res.status(400).json({ ok: false, error: 'cover_frame_required' });
         return;
       }
-	    fs.writeFileSync(path.join(scopedStudioAssetDir(COVERS_ROOT), file), buildCoverSvg({ title, ratio, accent, bgImageUrl: dataUri, color, size, position, verticalPosition, align, font, weight, artPreset }), 'utf8');
-    res.json({ ok: true, url: scopedStudioAssetUrl('covers', file), hasFrame: !!dataUri });
+		    const filePath = path.join(scopedStudioAssetDir(COVERS_ROOT), file);
+		    fs.writeFileSync(filePath, buildCoverSvg({ title, ratio, accent, bgImageUrl: dataUri, color, size, position, verticalPosition, align, font, weight, artPreset }), 'utf8');
+	    res.json({ ok: true, url: await persistPrivateStudioAsset('covers', tenantId, filePath, 'image/svg+xml'), hasFrame: !!dataUri });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: String(e?.message ?? e) });
   }
@@ -2640,6 +2844,32 @@ studioRouter.post('/cover', async (req, res) => {
 
 const TTS_ROOT = path.join(__dirname, '../../data/tts');
 const VOICE_SAMPLES_ROOT = path.join(__dirname, '../../data/voice-samples');
+
+function privateStudioAssetUrl(namespace: string, tenantId: string, file: string): string {
+  return signAssetUrl(`/api/overseas/studio/private-assets/${namespace}/${path.basename(file)}`, tenantId);
+}
+
+async function persistPrivateStudioAsset(namespace: string, tenantId: string, filePath: string, contentType?: string): Promise<string> {
+  const file = path.basename(filePath);
+  if (!objectStorageEnabled()) return scopedStudioAssetUrl(namespace, file);
+  const key = tenantPrivateObjectKey(namespace, tenantId, file);
+  await r2Upload({ key, body: fs.readFileSync(filePath), contentType: materialAssetContentType(file, contentType || '') });
+  return privateStudioAssetUrl(namespace, tenantId, file);
+}
+
+studioRouter.get('/private-assets/:namespace/:file', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const namespace = String(req.params.namespace || '');
+  if (!['tts', 'voice-samples', 'covers', 'exports'].includes(namespace)) { res.status(404).end(); return; }
+  const object = await r2GetObject(tenantPrivateObjectKey(namespace, tenantId, req.params.file), req.headers.range);
+  if (!object) { res.status(404).end(); return; }
+  res.setHeader('Content-Type', object.contentType);
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  if (object.contentLength !== undefined) res.setHeader('Content-Length', String(object.contentLength));
+  if (object.contentRange) { res.status(206); res.setHeader('Content-Range', object.contentRange); }
+  for await (const chunk of object.body) res.write(chunk);
+  res.end();
+});
 interface StoredVoiceSample { voiceId: string; name: string; file: string; duration: number; createdAt: string }
 function voiceSampleIndexFile(): string { return path.join(scopedStudioAssetDir(VOICE_SAMPLES_ROOT), 'voice-samples.json'); }
 function readVoiceSampleIndex(): StoredVoiceSample[] {
@@ -3045,11 +3275,42 @@ async function minimaxFetchJson(pathname: string, body: Record<string, unknown>,
 function minimaxSpeechText(text: string, style: TtsStyleOptions): string {
   const clean = String(text || '').replace(/<#\d+(?:\.\d+)?#>/g, '').trim();
   if (style.pauseStyle === 'few') return clean;
-  const sentencePause = style.pauseStyle === 'dramatic' ? '0.42' : '0.24';
-  const clausePause = style.pauseStyle === 'dramatic' ? '0.22' : '0.12';
+  // Slightly varied pauses sound less metronomic than applying one fixed gap
+  // after every comma/full stop. The sequence is deterministic so regenerating
+  // the same copy remains predictable.
+  const sentencePauses = style.pauseStyle === 'dramatic'
+    ? [0.34, 0.46, 0.39, 0.52]
+    : [0.18, 0.27, 0.22, 0.31];
+  const clausePauses = style.pauseStyle === 'dramatic'
+    ? [0.16, 0.24, 0.19]
+    : [0.07, 0.13, 0.09];
+  let sentenceIndex = 0;
+  let clauseIndex = 0;
   return clean
-    .replace(/([。！？!?；;])(?=\S)/g, `$1<#${sentencePause}#>`)
-    .replace(/([，,：:])(?=\S)/g, `$1<#${clausePause}#>`);
+    .replace(/([。！？!?；;])(?=\s*\S)/g, punctuation => {
+      const pause = sentencePauses[sentenceIndex++ % sentencePauses.length];
+      return `${punctuation}<#${pause.toFixed(2)}#>`;
+    })
+    .replace(/([，,：:])(?=\s*\S)/g, punctuation => {
+      const pause = clausePauses[clauseIndex++ % clausePauses.length];
+      return `${punctuation}<#${pause.toFixed(2)}#>`;
+    });
+}
+
+function minimaxVoiceModify(style: TtsStyleOptions): { pitch: number; intensity: number; timbre: number } {
+  const preset = style.preset || 'authentic_review';
+  const presetShape: Record<TtsPreset, { pitch: number; timbre: number }> = {
+    tiktok_excited: { pitch: 2, timbre: 2 },
+    authentic_review: { pitch: 0, timbre: 1 },
+    professional_b2b: { pitch: -1, timbre: -2 },
+    warm_story: { pitch: -1, timbre: 3 },
+    urgent_cta: { pitch: 1, timbre: -1 },
+  };
+  // Keep modification restrained: large values make speech processed rather
+  // than expressive. This makes the UI emotion control affect MiniMax while
+  // preserving the selected speaker's identity.
+  const intensity = Math.max(-8, Math.min(14, Math.round(((style.emotionIntensity ?? 65) - 50) * 0.35)));
+  return { ...presetShape[preset], intensity };
 }
 
 function minimaxPronunciationDict(style: TtsStyleOptions): { tone: string[] } | undefined {
@@ -3104,6 +3365,7 @@ async function generateMinimaxTts(text: string, voiceId: string, language: strin
       vol: volume,
       pitch,
     },
+    voice_modify: minimaxVoiceModify(style),
     audio_setting: {
       sample_rate: sampleRate,
       bitrate,
@@ -3434,8 +3696,8 @@ function proportionalCues(text: string, duration: number): AlignedCue[] {
 }
 
 function localTtsFile(url?: string): { bytes: Buffer; mimeType: string } | null {
-  if (!url?.startsWith('/tts/')) return null;
-  const filePath = path.join(scopedStudioAssetDir(TTS_ROOT), path.basename(url));
+  if (!url || (!url.startsWith('/tts/') && !url.includes('/private-assets/tts/'))) return null;
+  const filePath = path.join(scopedStudioAssetDir(TTS_ROOT), path.basename(new URL(url, 'http://local').pathname));
   if (!fs.existsSync(filePath)) return null;
   const ext = path.extname(filePath).toLowerCase();
   const mimeType = ext === '.mp3' ? 'audio/mpeg'
@@ -3575,7 +3837,13 @@ async function generateFittedTts(spoken: string, voice: string, language: string
     // Short audio must not be expanded with invented selling points. Slow it
     // down and let the TTS model add pauses. Only overlong copy is rewritten.
     if (result.duration > target) finalText = await rewriteVoiceoverToDuration(finalText, language, result.duration, target);
-    const adjustedSpeed = Math.max(0.75, Math.min(1.35, (style.speed || 1) * (result.duration / target) * (finalText.length / Math.max(1, spoken.length))));
+    const requestedSpeed = style.speed || 1;
+    const fittedSpeed = requestedSpeed * (result.duration / target) * (finalText.length / Math.max(1, spoken.length));
+    // Wide time-stretching is one of the strongest sources of robotic speech.
+    // Rewrite overlong copy first, then keep automatic fitting within ±8% of
+    // the user's chosen delivery speed. Remaining mismatch is handled by edit
+    // timing instead of distorting the voice.
+    const adjustedSpeed = Math.max(0.75, Math.min(1.35, Math.max(requestedSpeed * 0.92, Math.min(requestedSpeed * 1.08, fittedSpeed))));
     result = await generateTtsAudio(finalText, voice, language, { ...style, speed: adjustedSpeed });
     console.log(`[studio] TTS fitted source=${result.source} duration=${result.duration || 0}s adjusted=${adjustedSpeed.toFixed(2)}x`);
     adjusted = finalText !== spoken || Math.abs(adjustedSpeed - (style.speed || 1)) > 0.02;
@@ -3584,15 +3852,24 @@ async function generateFittedTts(spoken: string, voice: string, language: string
   return { ...result, text: finalText, adjusted, targetDuration: target || undefined, cues, alignmentSource: result.alignmentSource || 'proportional' as const };
 }
 
+async function persistTtsResult<T extends { url?: string }>(result: T, tenantId: string): Promise<T> {
+  if (!result.url || !objectStorageEnabled()) return result;
+  const file = path.basename(new URL(result.url, 'http://local').pathname);
+  const filePath = path.join(tenantAssetDir(TTS_ROOT, tenantId), file);
+  if (!fs.existsSync(filePath)) return result;
+  return { ...result, url: await persistPrivateStudioAsset('tts', tenantId, filePath) };
+}
+
 // POST /studio/tts  Body: { script?, text?, voice?, language? } → { ok, url, duration }
 studioRouter.post('/tts', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   if (!await consumeDemoQuota(req, res, 'generation')) return;
   const { script = '', text = '', voice = 'v1', language = 'zh', style = {} } = req.body ?? {};
   const spoken = (text || spokenText(script)).trim();
   if (!spoken) { res.status(400).json({ ok: false, error: 'no spoken text' }); return; }
 
   try {
-    const output = await generateFittedTts(spoken, voice, language, style);
+    const output = await persistTtsResult(await generateFittedTts(spoken, voice, language, style), tenantId);
     const payload = JSON.stringify(output);
     res.statusCode = 200;
     res.setHeader('Content-Type', 'application/json; charset=utf-8');
@@ -3610,7 +3887,7 @@ studioRouter.post('/tts/align', async (req, res) => {
   const text = String(req.body?.text || '').trim();
   const url = String(req.body?.url || '').trim();
   const duration = Math.max(0.2, Math.min(180, Number(req.body?.duration) || 0));
-  if (!text || !url.startsWith('/tts/') || !duration) {
+  if (!text || (!url.startsWith('/tts/') && !url.includes('/private-assets/tts/')) || !duration) {
     res.status(400).json({ ok: false, error: 'text, local tts url and duration required', cues: [] });
     return;
   }
@@ -3672,6 +3949,7 @@ studioRouter.post('/tts/transcribe', async (req, res) => {
 
 // POST /studio/tts/batch  Body: { voice?, items: [{ code, text }] } → 批量生成，多语种只扣一次生成额度
 studioRouter.post('/tts/batch', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   if (!await consumeDemoQuota(req, res, 'generation')) return;
   const { voice = 'v1', items = [], style = {} } = req.body ?? {};
   const input = Array.isArray(items) ? items.slice(0, 8) : [];
@@ -3686,21 +3964,23 @@ studioRouter.post('/tts/batch', async (req, res) => {
       audios[code] = { ok: false, source: 'empty', error: 'no spoken text' };
       continue;
     }
-    audios[code] = await generateFittedTts(spoken.slice(0, 1500), voice, language, style);
+    audios[code] = await persistTtsResult(await generateFittedTts(spoken.slice(0, 1500), voice, language, style), tenantId);
   }
   res.json({ ok: Object.values(audios).some(item => item.ok && item.url), audios });
 });
 
 studioRouter.get('/voice-samples', (_req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   const items = readVoiceSampleIndex().map(item => ({
     ...item,
-    url: scopedStudioAssetUrl('voice-samples', item.file),
+    url: objectStorageEnabled() ? privateStudioAssetUrl('voice-samples', tenantId, item.file) : scopedStudioAssetUrl('voice-samples', item.file),
   })).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   res.json(items);
 });
 
 // POST /studio/voice-samples Body: { name, dataBase64, mimeType?, duration? } → 新增真人音色样本
 studioRouter.post('/voice-samples', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   if (!await consumeDemoQuota(req, res, 'generation')) return;
   const { name = 'voice-sample.wav', dataBase64, mimeType, duration = 0, replacesVoiceId = '' } = req.body ?? {};
   if (!dataBase64) { res.status(400).json({ ok: false, error: 'dataBase64 required' }); return; }
@@ -3728,7 +4008,9 @@ studioRouter.post('/voice-samples', async (req, res) => {
     }
     const id = randomUUID();
     const file = `${id}.${ext}`;
-    fs.writeFileSync(path.join(scopedStudioAssetDir(VOICE_SAMPLES_ROOT), file), bytes);
+    const samplePath = path.join(scopedStudioAssetDir(VOICE_SAMPLES_ROOT), file);
+    fs.writeFileSync(samplePath, bytes);
+    const storedUrl = await persistPrivateStudioAsset('voice-samples', tenantId, samplePath, type);
     const replacedId = String(replacesVoiceId || '');
     if (replacedId.startsWith('custom:')) {
       const previousPath = voiceSamplePathFromId(replacedId);
@@ -3756,7 +4038,7 @@ studioRouter.post('/voice-samples', async (req, res) => {
       id,
       voiceId,
       name: voiceName,
-      url: scopedStudioAssetUrl('voice-samples', file),
+      url: storedUrl,
       duration: seconds,
       synthesisReady: capabilities.customVoice.synthesis,
       engine: capabilities.customVoice.engines.minimax ? 'minimax' : capabilities.customVoice.engines.xtts ? 'xtts' : undefined,
@@ -3769,6 +4051,7 @@ studioRouter.post('/voice-samples', async (req, res) => {
 
 // POST /studio/voiceover  Body: { name, dataBase64, mimeType?, duration? } → 上传本地口播音频
 studioRouter.post('/voiceover', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   const { name = 'voiceover.wav', dataBase64, mimeType, duration = 0 } = req.body ?? {};
   if (!dataBase64) { res.status(400).json({ ok: false, error: 'dataBase64 required' }); return; }
   try { fs.mkdirSync(scopedStudioAssetDir(TTS_ROOT), { recursive: true }); } catch { /* ignore */ }
@@ -3778,8 +4061,9 @@ studioRouter.post('/voiceover', async (req, res) => {
     const ext = (extFromMime || extFromName || 'wav').replace(/[^\w]+/g, '').slice(0, 8) || 'wav';
     const file = `${randomUUID()}.${ext}`;
     const buf = Buffer.from(String(dataBase64).replace(/^data:[^,]+,/, ''), 'base64');
-    fs.writeFileSync(path.join(scopedStudioAssetDir(TTS_ROOT), file), buf);
-    res.json({ ok: true, url: scopedStudioAssetUrl('tts', file), duration: Number(duration) || 0 });
+    const filePath = path.join(scopedStudioAssetDir(TTS_ROOT), file);
+    fs.writeFileSync(filePath, buf);
+    res.json({ ok: true, url: await persistPrivateStudioAsset('tts', tenantId, filePath, String(mimeType || '')), duration: Number(duration) || 0 });
   } catch (e: any) {
     res.status(500).json({ ok: false, error: String(e?.message || e).slice(0, 200) });
   }
@@ -3805,6 +4089,7 @@ interface BgmTrack {
   scope?: 'shared' | 'tenant';
   uploadedBy?: string;
   createdAt: string;
+  objectKey?: string;
 }
 
 function loadBgm(): BgmTrack[] {
@@ -3840,12 +4125,13 @@ function withRecommendedBgmNames(list: BgmTrack[]): BgmTrack[] {
 }
 
 // GET /studio/bgm → BgmTrack[]（仅用户上传音乐）
-studioRouter.get('/bgm', (_req, res) => {
+studioRouter.get('/bgm', async (_req, res) => {
   const { tenantId } = res.locals as AuthLocals;
-  res.json(withRecommendedBgmNames(userBgms(tenantId)).map(track => ({
+  res.json(await Promise.all(withRecommendedBgmNames(userBgms(tenantId)).map(async track => ({
     ...track,
-    url: track.url ? signAssetUrl(track.url, tenantId) : track.url,
-  })));
+    url: track.objectKey ? await r2SignedGetUrl(track.objectKey, materialSignedUrlTtlSeconds()) : track.url ? signAssetUrl(track.url, tenantId) : track.url,
+    objectKey: undefined,
+  }))));
 });
 
 // POST /studio/bgm  Body: { name, mood?, duration?, dataBase64, mimeType? } → 上传真实音乐
@@ -3860,7 +4146,9 @@ studioRouter.post('/bgm', async (req, res) => {
   const ext = (mimeType as string | undefined)?.split('/')[1]?.replace('mpeg', 'mp3') || 'mp3';
   const file = `${id}.${ext}`;
   const buf = Buffer.from(String(dataBase64).replace(/^data:[^,]+,/, ''), 'base64');
-  fs.writeFileSync(path.join(assetDir, file), buf);
+  const objectKey = objectStorageEnabled() ? (admin ? sharedObjectKey('bgm', file) : tenantPrivateObjectKey('bgm', tenantId, file)) : undefined;
+  if (objectKey) await r2Upload({ key: objectKey, body: buf, contentType: materialAssetContentType(file, String(mimeType || '')) });
+  else fs.writeFileSync(path.join(assetDir, file), buf);
   const list = loadBgm();
   const tenantTracks = userBgms(tenantId);
   const track: BgmTrack = {
@@ -3869,7 +4157,8 @@ studioRouter.post('/bgm', async (req, res) => {
     mood,
     duration: Number(duration) || 0,
     file,
-    url: admin ? `/bgm/${sharedAssetRelativePath(file)}` : scopedStudioAssetUrl('bgm', file),
+    url: objectKey ? '' : admin ? `/bgm/${sharedAssetRelativePath(file)}` : scopedStudioAssetUrl('bgm', file),
+    objectKey,
     tenantId: admin ? undefined : tenantId,
     scope: admin ? 'shared' : 'tenant',
     uploadedBy: admin ? '灵枢管理员上传' : '客户上传',
@@ -3894,7 +4183,8 @@ studioRouter.delete('/bgm/:id', async (req, res) => {
     : !t.tenantId
       ? path.join(BGM_ROOT, t.file)
       : path.join(scopedStudioAssetDir(BGM_ROOT), t.file);
-  try { fs.unlinkSync(assetPath); } catch { /* ignore */ }
+  if (t.objectKey) await r2Delete(t.objectKey).catch(() => undefined);
+  else try { fs.unlinkSync(assetPath); } catch { /* ignore */ }
   persistBgm(list.filter(x => x.id !== req.params.id));
   res.json({ ok: true });
 });
@@ -3915,6 +4205,12 @@ interface StudioProject {
   updatedAt: string;
 }
 
+type StoredStudioProject = StudioProject & { tenant_id: string };
+
+function projectFromRecord(record: any): StudioProject {
+  return { id: String(record.id), title: String(record.title || '未命名草稿'), status: record.status || 'draft', spec: record.spec || {}, thumbSeed: record.thumb_seed || undefined, createdAt: String(record.created_at || record.created || ''), updatedAt: String(record.updated_at || record.updated || '') };
+}
+
 function loadProjects(): StudioProject[] {
   try {
     return JSON.parse(fs.readFileSync(PROJECTS_FILE, 'utf8')) as StudioProject[];
@@ -3927,22 +4223,23 @@ function persistProjects(list: StudioProject[]): void {
 }
 
 // GET /studio/projects → 列表（更新时间倒序）
-studioRouter.get('/projects', (_req, res) => {
-  res.json(loadProjects().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)));
+studioRouter.get('/projects', async (_req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const result = await store.list<StoredStudioProject>('studio_projects', { where: { tenant_id: tenantId }, sort: '-updated_at', perPage: 500 });
+  res.json(result.items.map(projectFromRecord));
 });
 
 // POST /studio/projects  Body: { id?, title?, status?, spec, thumbSeed? } → 新建或更新
-studioRouter.post('/projects', (req, res) => {
+studioRouter.post('/projects', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   const { id, title, status = 'draft', spec = {}, thumbSeed } = req.body ?? {};
-  const list = loadProjects();
   const now = new Date().toISOString();
 
   if (id) {
-    const idx = list.findIndex(p => p.id === id);
-    if (idx >= 0) {
-      list[idx] = { ...list[idx], title: title ?? list[idx].title, status, spec, thumbSeed, updatedAt: now };
-      persistProjects(list);
-      res.json({ ok: true, project: list[idx] });
+    const existing = await store.getById<any>('studio_projects', String(id));
+    if (existing?.tenant_id === tenantId) {
+      await store.update('studio_projects', String(id), { title: title ?? existing.title, status, spec, thumb_seed: thumbSeed || '', updated_at: now });
+      res.json({ ok: true, project: projectFromRecord({ ...existing, title: title ?? existing.title, status, spec, thumb_seed: thumbSeed, updated_at: now }) });
       return;
     }
   }
@@ -3956,24 +4253,25 @@ studioRouter.post('/projects', (req, res) => {
     createdAt: now,
     updatedAt: now,
   };
-  list.push(project);
-  persistProjects(list);
-  res.status(201).json({ ok: true, project });
+  const created = await store.create<any>('studio_projects', { tenant_id: tenantId, title: project.title, status, spec, thumb_seed: thumbSeed || '', created_at: now, updated_at: now });
+  if (!created) { res.status(503).json({ ok: false, error: 'project storage unavailable' }); return; }
+  res.status(201).json({ ok: true, project: projectFromRecord(created) });
 });
 
 // GET /studio/projects/:id → 单个（用于再编辑）
-studioRouter.get('/projects/:id', (req, res) => {
-  const p = loadProjects().find(x => x.id === req.params.id);
-  if (!p) { res.status(404).json({ ok: false, error: 'Project not found' }); return; }
-  res.json(p);
+studioRouter.get('/projects/:id', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const p = await store.getById<any>('studio_projects', req.params.id);
+  if (!p || p.tenant_id !== tenantId) { res.status(404).json({ ok: false, error: 'Project not found' }); return; }
+  res.json(projectFromRecord(p));
 });
 
 // DELETE /studio/projects/:id
-studioRouter.delete('/projects/:id', (req, res) => {
-  const list = loadProjects();
-  const next = list.filter(p => p.id !== req.params.id);
-  if (next.length === list.length) { res.status(404).json({ ok: false, error: 'Project not found' }); return; }
-  persistProjects(next);
+studioRouter.delete('/projects/:id', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const existing = await store.getById<any>('studio_projects', req.params.id);
+  if (!existing || existing.tenant_id !== tenantId) { res.status(404).json({ ok: false, error: 'Project not found' }); return; }
+  await store.delete('studio_projects', req.params.id);
   res.json({ ok: true });
 });
 
@@ -3981,12 +4279,13 @@ studioRouter.delete('/projects/:id', (req, res) => {
 const BATCHES_FILE = path.join(__dirname, '../../data/studio-variation-batches.json');
 type BatchItemStatus = 'pending' | 'running' | 'quality_check' | 'review' | 'approved' | 'rejected' | 'failed';
 interface VariationBatchItem { id: string; variables: Record<string, string>; status: BatchItemStatus; outputProjectId?: string; qualityScore?: number; note?: string; updatedAt: string }
-interface VariationBatch { id: string; title: string; templateProjectId?: string; status: 'queued' | 'running' | 'review' | 'completed' | 'paused'; estimatedCostCny: number; plan?: Record<string, unknown>; createdAt: string; updatedAt: string; items: VariationBatchItem[] }
+interface VariationBatch { id: string; tenantId: string; title: string; templateProjectId?: string; status: 'queued' | 'running' | 'review' | 'completed' | 'paused'; estimatedCostCny: number; plan?: Record<string, unknown>; createdAt: string; updatedAt: string; items: VariationBatchItem[] }
 function loadVariationBatches(): VariationBatch[] { try { return JSON.parse(fs.readFileSync(BATCHES_FILE, 'utf8')) as VariationBatch[]; } catch { return []; } }
 function persistVariationBatches(list: VariationBatch[]): void { fs.mkdirSync(path.dirname(BATCHES_FILE), { recursive: true }); fs.writeFileSync(BATCHES_FILE, JSON.stringify(list, null, 2), 'utf8'); }
 
-studioRouter.get('/variation-batches', (_req, res) => res.json(loadVariationBatches().sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))));
+studioRouter.get('/variation-batches', (_req, res) => { const { tenantId } = res.locals as AuthLocals; res.json(loadVariationBatches().filter(item => item.tenantId === tenantId).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))); });
 studioRouter.post('/variation-batches', (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
   const body = req.body ?? {};
   const dimensions = body.dimensions && typeof body.dimensions === 'object' ? body.dimensions as Record<string, unknown> : {};
   const values = (key: string) => Array.isArray(dimensions[key]) && (dimensions[key] as unknown[]).length ? (dimensions[key] as unknown[]).map(String) : ['默认'];
@@ -3998,17 +4297,17 @@ studioRouter.post('/variation-batches', (req, res) => {
     if (items.length >= limit) break outer;
   }
   const duration = Math.max(1, Number(body.duration) || 20);
-  const batch: VariationBatch = { id: randomUUID(), title: String(body.title || '未命名裂变批次'), templateProjectId: body.templateProjectId ? String(body.templateProjectId) : undefined, status: 'queued', estimatedCostCny: Math.ceil(items.length * duration * 1.5 * 100) / 100, plan: body.plan && typeof body.plan === 'object' ? body.plan as Record<string, unknown> : { duration, maxItems: limit, dimensions }, createdAt: now, updatedAt: now, items };
+  const batch: VariationBatch = { id: randomUUID(), tenantId, title: String(body.title || '未命名裂变批次'), templateProjectId: body.templateProjectId ? String(body.templateProjectId) : undefined, status: 'queued', estimatedCostCny: Math.ceil(items.length * duration * 1.5 * 100) / 100, plan: body.plan && typeof body.plan === 'object' ? body.plan as Record<string, unknown> : { duration, maxItems: limit, dimensions }, createdAt: now, updatedAt: now, items };
   const list = loadVariationBatches(); list.push(batch); persistVariationBatches(list); res.status(201).json({ ok: true, batch });
 });
 studioRouter.patch('/variation-batches/:batchId', (req, res) => {
-  const list = loadVariationBatches(); const batch = list.find(item => item.id === req.params.batchId);
+  const { tenantId } = res.locals as AuthLocals; const list = loadVariationBatches(); const batch = list.find(item => item.id === req.params.batchId && item.tenantId === tenantId);
   if (!batch) { res.status(404).json({ ok: false, error: 'Batch not found' }); return; }
   if (['queued', 'running', 'review', 'completed', 'paused'].includes(String(req.body?.status))) batch.status = req.body.status;
   batch.updatedAt = new Date().toISOString(); persistVariationBatches(list); res.json({ ok: true, batch });
 });
 studioRouter.patch('/variation-batches/:batchId/items/:itemId', (req, res) => {
-  const list = loadVariationBatches(); const batch = list.find(entry => entry.id === req.params.batchId); const item = batch?.items.find(entry => entry.id === req.params.itemId);
+  const { tenantId } = res.locals as AuthLocals; const list = loadVariationBatches(); const batch = list.find(entry => entry.id === req.params.batchId && entry.tenantId === tenantId); const item = batch?.items.find(entry => entry.id === req.params.itemId);
   if (!batch || !item) { res.status(404).json({ ok: false, error: 'Batch item not found' }); return; }
   const allowed: BatchItemStatus[] = ['pending', 'running', 'quality_check', 'review', 'approved', 'rejected', 'failed'];
   if (allowed.includes(req.body?.status)) item.status = req.body.status;
@@ -4020,7 +4319,7 @@ studioRouter.patch('/variation-batches/:batchId/items/:itemId', (req, res) => {
   persistVariationBatches(list); res.json({ ok: true, batch, item });
 });
 studioRouter.post('/variation-batches/:batchId/claim-next', (req, res) => {
-  const list = loadVariationBatches(); const batch = list.find(entry => entry.id === req.params.batchId);
+  const { tenantId } = res.locals as AuthLocals; const list = loadVariationBatches(); const batch = list.find(entry => entry.id === req.params.batchId && entry.tenantId === tenantId);
   if (!batch) { res.status(404).json({ ok: false, error: 'Batch not found' }); return; }
   if (batch.status === 'paused' || batch.status === 'completed') { res.json({ ok: true, item: null, batch }); return; }
   const staleBefore = Date.now() - 30 * 60 * 1000;
@@ -4029,7 +4328,7 @@ studioRouter.post('/variation-batches/:batchId/claim-next', (req, res) => {
   item.status = 'running'; item.updatedAt = new Date().toISOString(); batch.status = 'running'; batch.updatedAt = item.updatedAt; persistVariationBatches(list); res.json({ ok: true, item, batch });
 });
 studioRouter.post('/variation-batches/:batchId/retry-failed', (req, res) => {
-  const list = loadVariationBatches(); const batch = list.find(entry => entry.id === req.params.batchId);
+  const { tenantId } = res.locals as AuthLocals; const list = loadVariationBatches(); const batch = list.find(entry => entry.id === req.params.batchId && entry.tenantId === tenantId);
   if (!batch) { res.status(404).json({ ok: false, error: 'Batch not found' }); return; }
   let count = 0; const now = new Date().toISOString(); batch.items.forEach(item => { if (item.status === 'failed' || item.status === 'rejected') { item.status = 'pending'; item.updatedAt = now; count += 1; } });
   if (count) batch.status = 'queued'; batch.updatedAt = now; persistVariationBatches(list); res.json({ ok: true, retried: count, batch });
@@ -4397,13 +4696,26 @@ function materialLocalFile(material: Material): string | null {
   return path.join(MEDIA_DIR, raw);
 }
 
-function resolveReferenceImages(materialIds: unknown, tenantId: string): ReferenceImage[] {
+async function resolveReferenceImages(materialIds: unknown, tenantId: string): Promise<ReferenceImage[]> {
   const ids = new Set(Array.isArray(materialIds) ? materialIds.map(String) : []);
   if (!ids.size) return [];
   const refs: ReferenceImage[] = [];
   for (const material of loadMaterials()) {
     if (!ids.has(material.id)) continue;
     if (material.scope !== 'shared' && material.tenantId !== tenantId) continue;
+    if (material.objectKey) {
+      try {
+        const key = material.type === 'image' ? material.objectKey : material.posterObjectKey;
+        if (!key) continue;
+        const downloaded = await r2Download(key);
+        if (!downloaded?.buf.length) continue;
+        refs.push({ mimeType: downloaded.contentType, base64: downloaded.buf.toString('base64') });
+      } catch {
+        continue;
+      }
+      if (refs.length >= 4) break;
+      continue;
+    }
     const filePath = materialLocalFile(material);
     if (!filePath || !fs.existsSync(filePath)) continue;
     try {

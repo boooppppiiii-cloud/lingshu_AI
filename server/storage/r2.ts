@@ -5,6 +5,7 @@ import {
   DeleteObjectCommand,
   HeadObjectCommand,
 } from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 
 function getR2Client(): S3Client {
   const accountId = process.env.R2_ACCOUNT_ID?.trim();
@@ -138,6 +139,16 @@ export async function r2Head(key: string): Promise<{ size: number; contentType: 
 export async function r2Delete(key: string): Promise<void> {
   const client = getR2Client();
   await client.send(new DeleteObjectCommand({ Bucket: getBucket(), Key: key }));
+}
+
+/** Create a short-lived direct download URL for a private object. */
+export async function r2SignedGetUrl(key: string, expiresIn = 900): Promise<string> {
+  const seconds = Math.max(60, Math.min(3600, Math.round(expiresIn)));
+  return getSignedUrl(
+    getR2Client(),
+    new GetObjectCommand({ Bucket: getBucket(), Key: key }),
+    { expiresIn: seconds },
+  );
 }
 
 /** Build public URL for a known R2 key */

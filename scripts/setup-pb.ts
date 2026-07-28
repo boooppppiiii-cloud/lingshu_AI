@@ -30,6 +30,19 @@ type Field = { name: string; type: string; required?: boolean; [k: string]: unkn
 /** Collection definitions, derived from what the route handlers write/read. */
 const COLLECTIONS: { name: string; fields: Field[] }[] = [
   {
+    name: 'studio_projects',
+    fields: [
+      { name: 'tenant_id', type: 'text', required: true },
+      { name: 'legacy_id', type: 'text' },
+      { name: 'title', type: 'text', required: true },
+      { name: 'status', type: 'text', required: true },
+      { name: 'spec', type: 'json', maxSize: 2000000 },
+      { name: 'thumb_seed', type: 'text' },
+      { name: 'created_at', type: 'text' },
+      { name: 'updated_at', type: 'text' },
+    ],
+  },
+  {
     // 租户（按公司订阅）；subscription.ts 读这几个字段
     name: 'tenants',
     fields: [

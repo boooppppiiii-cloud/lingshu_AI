@@ -267,7 +267,7 @@ export default function AgentWorkspace() {
         })}
       </div>
       <div className="mt-6 grid grid-cols-3 gap-3">
-        {[{ icon: Users, label: '今日协作任务', value: '16', color: '#4f46e5' }, { icon: BarChart2, label: '自动化触发', value: '2', color: '#d97706' }, { icon: Sparkles, label: '待确认进化建议', value: '3', color: '#16a34a' }].map(stat => { const I = stat.icon; return (<div key={stat.label} className="card p-3 flex items-center gap-2.5"><I size={14} style={{ color: stat.color }} /><div><p className="text-base font-bold text-text-primary font-display leading-none">{stat.value}</p><p className="text-[10px] text-text-muted mt-0.5">{stat.label}</p></div></div>); })}
+        {[{ icon: Users, label: '今日协作任务', value: '—', color: '#4f46e5' }, { icon: BarChart2, label: '自动化触发', value: String(tasks.filter(task => Boolean(task.lastRun)).length), color: '#d97706' }, { icon: Sparkles, label: '待确认进化建议', value: '—', color: '#16a34a' }].map(stat => { const I = stat.icon; return (<div key={stat.label} className="card p-3 flex items-center gap-2.5"><I size={14} style={{ color: stat.color }} /><div><p className="text-base font-bold text-text-primary font-display leading-none">{stat.value}</p><p className="text-[10px] text-text-muted mt-0.5">{stat.label}</p></div></div>); })}
       </div>
     </div>
   );

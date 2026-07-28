@@ -244,6 +244,34 @@ function isPublicTestTenantVideo(record: Record<string, unknown>): boolean {
   return isVideoLevelAnalysis(analysis);
 }
 
+/**
+ * A crawl result and a finished video-level analysis are two different states.
+ * The inspiration list must expose genuine crawl results while their media is
+ * still downloading/analyzing; otherwise a successful scheduled crawl looks
+ * like it returned nothing.  Keep the stricter isPublicTestTenantVideo check
+ * for workflows that specifically require complete Gemini evidence.
+ */
+function isDisplayableTestTenantVideo(record: Record<string, unknown>): boolean {
+  const analysis = videoAnalysisOf(record);
+  if (analysis.contentFormat === 'image') return false;
+  if (String(record.status || '') === 'failed') return false;
+  const downloadStatus = String(analysis.downloadStatus || '');
+  const geminiStatus = String(analysis.geminiStatus || '');
+  // Explicit terminal failures stay out of the inspiration feed. userVisible=false
+  // alone is not terminal: the analysis queue sets it while genuine videos are
+  // queued/downloading, and those crawl results must still be shown to the user.
+  if (downloadStatus === 'manual_required' || downloadStatus === 'failed' || geminiStatus === 'video_failed') return false;
+  const sourceUrl = String(record.sourceUrl || '').trim();
+  const title = String(record.title || '').trim();
+  return /^https?:\/\//i.test(sourceUrl) && Boolean(title);
+}
+
+function compareCrawledAtDesc(a: Record<string, unknown>, b: Record<string, unknown>): number {
+  const aTime = Date.parse(String(a.crawledAt || ''));
+  const bTime = Date.parse(String(b.crawledAt || ''));
+  return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
+}
+
 function recordContentFormat(record: Record<string, unknown>): ContentFormat {
   if (record.contentFormat === 'image' || record.contentFormat === 'video') return record.contentFormat;
   const analysis = videoAnalysisOf(record);
@@ -609,7 +637,6 @@ async function createAndAnalyzeFreshBackfillVideo(input: {
       title: input.item.title,
       platform: input.item.platform,
       suppressVisibleBackfill: true,
-      forceManualFailure: true,
     });
   } catch {
     // The record itself is marked for admin review by the analysis path.
@@ -724,7 +751,7 @@ videosRouter.post('/crawl-image-posts', async (req, res) => {
   }
 });
 
-async function crawlImagePostsForTenant(input: {
+export async function crawlImagePostsForTenant(input: {
   tenantId: string;
   platform: Platform;
   keyword: string;
@@ -1166,7 +1193,6 @@ async function analyzeFreshCrawledRecordsForTestTenant(records: unknown[], targe
           title: String(record.title || 'youtube-video'),
           platform,
           suppressVisibleBackfill: true,
-          forceManualFailure: true,
         });
       } catch (e) {
         console.warn('[videos] test tenant crawl URL analysis failed:', e instanceof Error ? e.message : e);
@@ -1215,7 +1241,6 @@ async function queueTestTenantVideoLevelAnalysis(record: Record<string, unknown>
     title: String(latest.title || `${platform}-video`),
     platform,
     suppressVisibleBackfill: true,
-    forceManualFailure: true,
   }).catch((e) => {
     console.warn('[videos] test tenant async video-level analysis failed:', e instanceof Error ? e.message : e);
   });
@@ -1381,6 +1406,7 @@ async function listPublicVideosForTenant(input: {
   status?: string;
   contentFormat?: ContentFormat;
   search?: string;
+  crawlRange?: string;
 }): Promise<{
   items: Record<string, unknown>[];
   totalItems: number;
@@ -1392,6 +1418,15 @@ async function listPublicVideosForTenant(input: {
   const contentFormat = input.contentFormat || 'video';
   const testTenant = await isTestTenantId(input.tenantId);
   if (contentFormat === 'image') {
+    if (input.search?.trim() || (input.crawlRange && input.crawlRange !== 'all')) {
+      const scanned = await scanRecordsByContentFormat(where, 'image');
+      const matched = scanned
+        .filter(isPublicImageRecord)
+        .filter(record => matchesCrawlRange(record, input.crawlRange))
+        .filter(record => !input.search?.trim() || matchesVideoSearch(record, input.search));
+      const start = (input.page - 1) * input.perPage;
+      return { items: matched.slice(start, start + input.perPage).map(publicVideoRecord), totalItems: matched.length, totalPages: Math.max(1, Math.ceil(matched.length / input.perPage)), page: input.page, perPage: input.perPage };
+    }
     const result = await store.list<Record<string, unknown>>(COL, {
       where: { ...where, contentFormat: 'image' },
       sort: '-crawledAt',
@@ -1412,9 +1447,11 @@ async function listPublicVideosForTenant(input: {
   }
   if (!testTenant) {
     // 存储层的 where 只支持等值匹配，做不了标题子串检索；有搜索词时全量扫描后再分页。
-    if (input.search?.trim()) {
+    if (input.search?.trim() || (input.crawlRange && input.crawlRange !== 'all')) {
       const scanned = await scanRecordsByContentFormat({ ...where, contentFormat: 'video' }, 'video');
-      const matched = scanned.filter(record => matchesVideoSearch(record, input.search!));
+      const matched = scanned
+        .filter(record => matchesCrawlRange(record, input.crawlRange))
+        .filter(record => !input.search?.trim() || matchesVideoSearch(record, input.search));
       const start = (input.page - 1) * input.perPage;
       return {
         items: matched.slice(start, start + input.perPage).map(publicVideoRecord),
@@ -1450,7 +1487,7 @@ async function listPublicVideosForTenant(input: {
       });
       for (const record of result.items) {
         if (isAutoSeededVideo(record)) continue;
-        if (!isPublicTestTenantVideo(record)) continue;
+        if (!isDisplayableTestTenantVideo(record)) continue;
         const sourceUrl = String(record.sourceUrl || '').trim();
         if (sourceUrl && seenSourceUrls.has(sourceUrl)) continue;
         if (sourceUrl) seenSourceUrls.add(sourceUrl);
@@ -1462,7 +1499,11 @@ async function listPublicVideosForTenant(input: {
   };
 
   await scanTenantVideos();
-  const searched = input.search?.trim() ? visible.filter(record => matchesVideoSearch(record, input.search!)) : visible;
+  // PocketBase and the local fallback do not always return identical ordering.
+  // Sort after the full scan so today's crawl results consistently land first.
+  visible.sort(compareCrawledAtDesc);
+  const ranged = visible.filter(record => matchesCrawlRange(record, input.crawlRange));
+  const searched = input.search?.trim() ? ranged.filter(record => matchesVideoSearch(record, input.search!)) : ranged;
   const totalItems = searched.length;
   const totalVisiblePages = Math.max(1, Math.ceil(totalItems / input.perPage));
   const start = (input.page - 1) * input.perPage;
@@ -1488,6 +1529,19 @@ export function matchesVideoSearch(record: Record<string, unknown>, query: strin
   const rawTags = record.tags;
   const tags = Array.isArray(rawTags) ? rawTags : String(rawTags || '').split(/[,，\s]+/);
   return tags.some(tag => String(tag).toLowerCase().includes(q));
+}
+
+export function matchesCrawlRange(record: Record<string, unknown>, range?: string): boolean {
+  if (!range || range === 'all') return true;
+  const crawledAt = Date.parse(String(record.crawledAt || ''));
+  if (!Number.isFinite(crawledAt)) return false;
+  if (range === 'today') {
+    const beijingNow = new Date(Date.now() + 8 * 60 * 60 * 1000);
+    const startUtc = Date.UTC(beijingNow.getUTCFullYear(), beijingNow.getUTCMonth(), beijingNow.getUTCDate()) - 8 * 60 * 60 * 1000;
+    return crawledAt >= startUtc;
+  }
+  const days = range === '7d' ? 7 : range === '30d' ? 30 : 0;
+  return days > 0 ? crawledAt >= Date.now() - days * 24 * 60 * 60 * 1000 : true;
 }
 
 async function scanRecordsByContentFormat(where: Record<string, string> | undefined, contentFormat: ContentFormat): Promise<Record<string, unknown>[]> {
@@ -1566,10 +1620,20 @@ function withImagePublicBaselines(items: Record<string, unknown>[], baselineUniv
 videosRouter.get('/', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
   await purgeLegacyFakeVideos();
-  const { page = '1', perPage = '20', platform, status, search, contentFormat: rawContentFormat = 'video' } = req.query as Record<string, string>;
+  const { page = '1', perPage = '20', platform, status, search, crawlRange = 'all', contentFormat: rawContentFormat = 'video' } = req.query as Record<string, string>;
   const pageNumber = Math.max(1, Number(page) || 1);
   const perPageNumber = Math.min(100, Math.max(1, Number(perPage) || 20));
   const contentFormat: ContentFormat = rawContentFormat === 'image' ? 'image' : 'video';
+
+  // Inventory KPI: every crawled record owned by this tenant. This deliberately
+  // ignores page/search/status/admin aggregation; the inspiration list below may
+  // hide failed or processing records, but they still belong to the crawl total.
+  const inventory = await store.list<Record<string, unknown>>(COL, {
+    where: { tenantId, contentFormat },
+    page: 1,
+    perPage: 1,
+  });
+  const inventoryTotalItems = inventory.totalItems;
 
   const result = await listPublicVideosForTenant({
     tenantId,
@@ -1577,6 +1641,7 @@ videosRouter.get('/', async (req, res) => {
     status,
     contentFormat,
     search,
+    crawlRange,
     page: pageNumber,
     perPage: perPageNumber,
   });
@@ -1590,10 +1655,10 @@ videosRouter.get('/', async (req, res) => {
     // A second full collection scan here doubled list latency as the inspiration
     // library grew. The first page contains the latest 20 records, which is also the
     // product definition of the public recent-account baseline.
-    res.json({ ...result, items: withImagePublicBaselines(result.items).map(item => withSignedThumbnail(item, tenantId)) });
+    res.json({ ...result, inventoryTotalItems, items: withImagePublicBaselines(result.items).map(item => withSignedThumbnail(item, tenantId)) });
     return;
   }
-  res.json({ ...result, items: result.items.map(item => withSignedThumbnail(item, tenantId)) });
+  res.json({ ...result, inventoryTotalItems, items: result.items.map(item => withSignedThumbnail(item, tenantId)) });
 });
 
 videosRouter.post('/:id/reanalyze-image', async (req, res) => {
@@ -3266,8 +3331,19 @@ async function crawlInstagramWithApifyFallback(keyword: string, limit: number, d
 async function crawlInstagramApify(keyword: string, limit: number, dateFrom = '', dateTo = ''): Promise<CrawledVideo[]> {
   const token = process.env.APIFY_TOKEN?.trim();
   if (!token) throw new Error('APIFY_TOKEN is not configured');
-  const actor = process.env.APIFY_INSTAGRAM_ACTOR?.trim() || 'apify/instagram-scraper';
-  const input = buildApifyInstagramInput(keyword, limit, dateFrom, dateTo);
+  const directUrl = isPlatformUrl(keyword.trim(), 'instagram');
+  const actor = directUrl
+    ? (process.env.APIFY_INSTAGRAM_ACTOR?.trim() || 'apify/instagram-scraper')
+    : (process.env.APIFY_INSTAGRAM_SEARCH_ACTOR?.trim() || 'apify/instagram-search-scraper');
+  // Hashtag results mix image posts and Reels. Fetching exactly `limit` rows can
+  // return only images which are correctly filtered below, leaving a false zero.
+  // Oversample keyword searches, then keep the requested number of real videos.
+  const fetchLimit = directUrl
+    ? limit
+    : Math.min(50, Math.max(12, limit * 8));
+  const input = directUrl
+    ? buildApifyInstagramInput(keyword, fetchLimit, dateFrom, dateTo)
+    : { search: keyword.trim().replace(/^#/, ''), searchType: 'popular', searchLimit: fetchLimit };
   const rows = await runApifyActorDatasetItems(actor, input, Number(process.env.APIFY_TIMEOUT_MS || 240_000), 'Instagram crawl');
   return rows
     .map(item => apifyInstagramItemToCrawledVideo(item, keyword))
@@ -4732,8 +4808,7 @@ async function crawlYouTubeSearch(keyword: string, limit: number, dateFrom = '',
   try {
     return await crawlYtDlpSearch('youtube', `ytsearch${limit}:${keyword}`, keyword, limit, dateFrom, dateTo);
   } catch (e) {
-    console.warn('[videos] youtube yt-dlp search failed, using verified URL pool:', e);
-    return verifiedSeedItems('youtube', keyword).slice(0, limit);
+    throw new Error(`YouTube search failed: ${e instanceof Error ? e.message : String(e)}`);
   }
   const url = `https://www.youtube.com/results?search_query=${encodeURIComponent(keyword)}&sp=EgIQAQ%253D%253D`;
   const r = await fetch(url, {
@@ -4859,15 +4934,10 @@ async function crawlPublicSearch(platform: Platform, keyword: string, limit: num
 
 async function crawlVerifiedPublicSources(platform: Platform, keyword: string, limit: number): Promise<CrawledVideo[]> {
   if (platform === 'tiktok') {
-    try {
-      return await crawlYtDlpSearch('tiktok', pickTikTokSource(keyword), keyword, limit);
-    } catch (e) {
-      console.warn('[videos] TikTok verified source metadata failed, using verified URL pool:', e);
-      return verifiedSeedItems('tiktok', keyword).slice(0, limit);
-    }
+    return crawlYtDlpSearch('tiktok', pickTikTokSource(keyword), keyword, limit);
   }
   if (platform === 'facebook' || platform === 'instagram') {
-    return verifiedSeedItems(platform, keyword).slice(0, limit);
+    return crawlPublicSearch(platform, keyword, limit);
   }
 
   const seeds = verifiedSeedUrls(platform, keyword).slice(0, Math.max(1, limit));
@@ -4938,7 +5008,7 @@ function instagramSeedItem(url: string, keyword: string): CrawledVideo {
 async function crawlKeywordFallbackPool(platform: Platform, keyword: string, limit: number, excluded = new Set<string>(), dateFrom = '', dateTo = ''): Promise<CrawledVideo[]> {
   if (limit <= 0) return [];
   if (platform === 'tiktok') return crawlTikTokKeywordFallback(keyword, limit, excluded, dateFrom, dateTo);
-  return crawlSeedMetadataFallback(platform, keyword, limit, excluded, dateFrom, dateTo);
+  return [];
 }
 
 async function topUpCrawledItems(input: {
@@ -4991,15 +5061,6 @@ async function topUpCrawledItems(input: {
     }
   }
 
-  if (out.length < input.target) {
-    add(verifiedKeywordSeedItems(input.platform, input.keyword)
-      .filter(item => isKeywordRelevant(item, input.keyword))
-      .map(item => ({
-        ...item,
-        thumbnailUrl: item.thumbnailUrl || thumbnailForPlatform(item.platform, item.sourceUrl, ''),
-      })), 'verified-seed');
-  }
-
   return out.slice(0, Math.max(input.target, input.items.length));
 }
 
@@ -5050,8 +5111,7 @@ async function crawlTikTokKeywordFallback(keyword: string, limit: number, exclud
     }
   }
 
-  const metadataSeeds = await crawlSeedMetadataFallback('tiktok', keyword, limit - out.length, seen, dateFrom, dateTo);
-  return [...out, ...metadataSeeds].slice(0, limit);
+  return out.slice(0, limit);
 }
 
 function tiktokKeywordSources(keyword: string): string[] {
@@ -6511,7 +6571,10 @@ function enqueueCrawlerOpsTask(input: {
     task.status !== 'resolved'
   );
   if (existing) {
-    const updated = { ...existing, attempts: existing.attempts + 1, reason: input.reason, updatedAt: now };
+    // A periodic recovery scan may see the same persisted record many times.
+    // Merely rediscovering it is not another download attempt; attempts are
+    // incremented only when the worker actually picks the task.
+    const updated = { ...existing, reason: input.reason, updatedAt: now };
     persistCrawlerOpsTasks(tasks.map(task => task.id === existing.id ? updated : task));
     return updated;
   }
@@ -6540,7 +6603,10 @@ export function initCrawlerOpsWorker(): void {
       console.warn('[crawler-ops] worker tick failed:', e instanceof Error ? e.message : e);
     });
   }, intervalMs);
-  void runCrawlerOpsWorkerOnce().then(logCrawlerOpsWorkerResult).catch((e) => {
+  // No analysis job survives a process restart. Recover records persisted as
+  // downloading/analyzing immediately on the first tick instead of waiting for
+  // the normal active-job stall timeout.
+  void runCrawlerOpsWorkerOnce({ recoverInterrupted: true }).then(logCrawlerOpsWorkerResult).catch((e) => {
     console.warn('[crawler-ops] initial tick failed:', e instanceof Error ? e.message : e);
   });
   console.log(`[crawler-ops] worker enabled, interval=${intervalMs}ms`);
@@ -6551,7 +6617,7 @@ function logCrawlerOpsWorkerResult(result: { picked: number; resolved: number; r
   console.log(`[crawler-ops] picked=${result.picked} resolved=${result.resolved} retried=${result.retried} failed=${result.failed} skipped=${result.skipped}`);
 }
 
-export async function runCrawlerOpsWorkerOnce(): Promise<{
+export async function runCrawlerOpsWorkerOnce(options: { recoverInterrupted?: boolean } = {}): Promise<{
   ok: boolean;
   picked: number;
   resolved: number;
@@ -6572,7 +6638,7 @@ export async function runCrawlerOpsWorkerOnce(): Promise<{
   let failed = 0;
   let skipped = 0;
   try {
-    await enqueueOpsTasksFromRecords();
+    await enqueueOpsTasksFromRecords(options.recoverInterrupted === true);
     // 回收卡死的精确分析请求。失败不应连累队列本身，单独兜住。
     await releaseStalledExactAnalysis().catch(error => {
       console.warn('[videos] stalled exact-analysis sweep failed:', error instanceof Error ? error.message : error);
@@ -6773,24 +6839,50 @@ function pendingCrawlerOpsTasks(maxAttempts: number): CrawlerOpsTask[] {
     });
 }
 
-async function enqueueOpsTasksFromRecords(): Promise<void> {
+async function enqueueOpsTasksFromRecords(recoverInterrupted = false): Promise<void> {
   const maxScan = Math.max(50, Number(process.env.CRAWLER_OPS_SCAN_LIMIT || 300));
-  const records = await store.list<Record<string, unknown>>(COL, { page: 1, perPage: maxScan });
+  const records = await store.list<Record<string, unknown>>(COL, { sort: '-crawledAt', page: 1, perPage: maxScan });
+  const now = Date.now();
   for (const record of records.items) {
     const analysis = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
     if (analysis.analysisQuality === 'video' && analysis.requestedAnalysisMode !== 'exact') continue;
-    const shouldEnqueue = analysis.downloadStatus === 'ops_queued' || analysis.videoFetchStatus === 'ops_queued';
-    if (!shouldEnqueue) continue;
+    const downloadStatus = String(analysis.downloadStatus || '');
+    const videoFetchStatus = String(analysis.videoFetchStatus || '');
+    const shouldEnqueue = downloadStatus === 'ops_queued' || videoFetchStatus === 'ops_queued';
+    const latestProgressAt = Math.max(
+      Date.parse(String(analysis.geminiStartedAt || '')) || 0,
+      Date.parse(String(analysis.downloadStartedAt || '')) || 0,
+      Date.parse(String(analysis.analysisQueuedAt || '')) || 0,
+      Date.parse(String(record.updated || '')) || 0,
+    );
+    // Queued work previously lived only in process memory. After a restart it
+    // could remain waiting forever. Recover never-started jobs quickly, while
+    // giving active downloads/Gemini calls a generous window to finish.
+    const staleQueued = downloadStatus === 'queued'
+      && latestProgressAt > 0
+      && now - latestProgressAt >= Math.max(60_000, Number(process.env.CRAWLER_QUEUED_RECOVERY_MS || 2 * 60_000));
+    const interruptedActive = recoverInterrupted && ['downloading', 'analyzing'].includes(downloadStatus);
+    const staleActive = ['downloading', 'analyzing'].includes(downloadStatus)
+      && latestProgressAt > 0
+      && now - latestProgressAt >= Math.max(5 * 60_000, Number(process.env.CRAWLER_ACTIVE_RECOVERY_MS || 30 * 60_000));
+    if (!shouldEnqueue && !staleQueued && !staleActive && !interruptedActive) continue;
     const recordId = String(record.id || '');
     const sourceUrl = String(record.sourceUrl || '').trim();
     if (!recordId || !/^https?:\/\//i.test(sourceUrl)) continue;
-    enqueueCrawlerOpsTask({
+    const task = enqueueCrawlerOpsTask({
       recordId,
       platform: (record.platform || inferPlatformFromUrl(sourceUrl)) as Platform,
       sourceUrl,
       title: String(record.title || 'social-video'),
-      reason: String(analysis.downloadError || analysis.crawlerOpsReason || 'ops_queued'),
+      reason: String(analysis.downloadError || analysis.crawlerOpsReason || (interruptedActive ? 'recovered_after_restart' : staleQueued ? 'recovered_stale_queue' : staleActive ? 'recovered_stalled_analysis' : 'ops_queued')),
     });
+    if (interruptedActive && task.status === 'processing') {
+      updateCrawlerOpsTask(task.id, {
+        status: 'queued',
+        reason: 'recovered_after_restart',
+        updatedAt: new Date().toISOString(),
+      });
+    }
   }
 }
 

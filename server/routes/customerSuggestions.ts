@@ -1,6 +1,5 @@
 import { Router } from 'express';
 import { callLLM } from '../agents/llm.js';
-import { isDemoMode } from '../lib/demo.js';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 import { retrieveContext } from '../knowledge/retrieve.js';
 import { buildKnowledgePromptBlock } from '../knowledge/promptBlocks.js';
@@ -138,17 +137,6 @@ customerSuggestionsRouter.post('/:id/outbox', requireAuth, async (req, res) => {
   const to = String(req.body?.to || '').trim();
   if (!customerId || !body) {
     res.status(400).json({ error: 'customer_id_and_body_required' });
-    return;
-  }
-  if (isDemoMode()) {
-    res.json({
-      ok: true,
-      source: 'demo',
-      outboxId: `${mode === 'template' ? 'tpl' : 'out'}_${Date.now()}`,
-      status: 'sent',
-      sentAt: new Date().toISOString(),
-      renderedBody: body,
-    });
     return;
   }
   if (!to) {

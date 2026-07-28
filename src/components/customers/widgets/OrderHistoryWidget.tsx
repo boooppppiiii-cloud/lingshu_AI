@@ -25,7 +25,7 @@ function OrderDetail({ customer, order }: { customer: CustomerProfile; order: Or
     <div className="mt-3 rounded-xl border border-border bg-white p-3 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-xs font-black text-text-primary">灵枢演示店铺</p>
+          <p className="text-xs font-black text-text-primary">真实订单记录</p>
           <p className="mt-1 text-[11px] text-text-muted">{customer.orders.length} 笔订单 · 累计消费 {customer.orders.reduce((sum, item) => sum + Number(item.total.replace(/[^\d.]/g, '') || 0), 0).toLocaleString('en-US', { style: 'currency', currency: 'USD' })}</p>
         </div>
         <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${STATUS_STYLE[order.status]}`}>

@@ -193,9 +193,9 @@ function TrafficPanel({ conversation, onAction }: { conversation: ConversationCo
           <SectionHeader label="采集快览" />
           <div className="space-y-2">
             {[
-              { label: '今日脚本', value: '12', color: '#d97706' },
-              { label: '覆盖平台', value: '5', color: '#4f46e5' },
-              { label: '去重命中', value: '3', color: '#16a34a' },
+              { label: '今日脚本', value: '—', color: '#d97706' },
+              { label: '覆盖平台', value: '—', color: '#4f46e5' },
+              { label: '去重命中', value: '—', color: '#16a34a' },
             ].map(({ label, value, color }) => (
               <div key={label} className="flex items-center justify-between px-3 py-2 rounded-lg bg-surface-2 border border-border">
                 <span className="text-[11px] text-text-secondary">{label}</span>
@@ -286,9 +286,6 @@ function ConversionPanel({ conversation, onAction }: { conversation: Conversatio
 }
 
 function RetentionPanel({ conversation, onAction }: { conversation: ConversationContext; onAction?: AgentActionFn }) {
-  const lastMsg = [...(conversation.messages ?? [])].reverse().find(m => m.role === 'assistant');
-  const hasDormant = lastMsg?.content.includes('沉默') || lastMsg?.content.includes('未复购') || lastMsg?.content.includes('天没有');
-
   return (
     <div className="flex flex-col h-full overflow-hidden">
       <AgentHeader conversation={conversation} subtitle="老客唤醒 · 行动建议" />
@@ -297,9 +294,9 @@ function RetentionPanel({ conversation, onAction }: { conversation: Conversation
           <SectionHeader label="客户快览" />
           <div className="space-y-2">
             {[
-              { label: '老客总数', value: '632', color: '#16a34a' },
-              { label: '30天沉默', value: hasDormant ? '47' : '—', color: '#d97706' },
-              { label: '本月复购率', value: '34%', color: '#0891b2' },
+              { label: '老客总数', value: '—', color: '#16a34a' },
+              { label: '30天沉默', value: '—', color: '#d97706' },
+              { label: '本月复购率', value: '—', color: '#0891b2' },
             ].map(({ label, value, color }) => (
               <div key={label} className="flex items-center justify-between px-3 py-2 rounded-lg bg-surface-2 border border-border">
                 <span className="text-[11px] text-text-secondary">{label}</span>

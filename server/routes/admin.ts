@@ -32,7 +32,7 @@ import {
   type VideoAdminAlert,
   type VideoFailureRecord,
 } from '../lib/videoAdminAlerts.js';
-import { attachManualVideoUploadAndQueue, matchesVideoSearch } from './videos.js';
+import { attachManualVideoUploadAndQueue, matchesCrawlRange, matchesVideoSearch } from './videos.js';
 import { listStyleAdoptionTrends } from '../knowledge/styleMemory.js';
 import {
   decryptSecret,
@@ -143,11 +143,11 @@ function isAdminInspirationRecord(record: Record<string, unknown>, contentFormat
   if (
     analysis.seededFromRecordId ||
     analysis.analysisSource === 'demo-local-video' ||
-    String(analysis.crawlRule || '').includes('演示素材') ||
-    analysis.userVisible === false
+    String(analysis.crawlRule || '').includes('演示素材')
   ) return false;
 
   if (contentFormat === 'image') {
+    if (analysis.userVisible === false) return false;
     const sourceUrl = String(record.sourceUrl || '').trim();
     const thumbnailUrl = String(record.thumbnailUrl || '').trim();
     if (analysis.contentFormat !== 'image' || !sourceUrl || !thumbnailUrl) return false;
@@ -155,7 +155,17 @@ function isAdminInspirationRecord(record: Record<string, unknown>, contentFormat
     return String(record.platform || '') !== 'instagram' || /\/p\//i.test(sourceUrl);
   }
 
-  if (analysis.contentFormat === 'image' || analysis.analysisQuality !== 'video' || !analysis.gemini) return false;
+  if (analysis.contentFormat === 'image') return false;
+  // Crawling and full-video analysis are separate pipeline stages. Genuine
+  // records should appear immediately after collection, with their current
+  // pending/analyzed state, instead of disappearing until Gemini finishes.
+  const sourceUrl = String(record.sourceUrl || '').trim();
+  const title = String(record.title || '').trim();
+  if (!/^https?:\/\//i.test(sourceUrl) || !title || String(record.status || '') === 'failed') return false;
+  const pendingDownloadStatus = String(analysis.downloadStatus || '');
+  const pendingGeminiStatus = String(analysis.geminiStatus || '');
+  if (pendingDownloadStatus === 'manual_required' || pendingDownloadStatus === 'failed' || pendingGeminiStatus === 'video_failed') return false;
+  if (analysis.analysisQuality !== 'video' || !analysis.gemini) return true;
   // A precise re-analysis must not make an already valid benchmark disappear
   // while the replacement analysis is queued, or after that upgrade fails.
   // The original video-level evidence remains useful and the drawer needs the
@@ -177,6 +187,7 @@ async function listAdminInspirationVideos(input: {
   status?: string;
   contentFormat: InspirationContentFormat;
   search?: string;
+  crawlRange?: string;
 }) {
   const records: Record<string, unknown>[] = [];
   const seenSourceUrls = new Set<string>();
@@ -203,7 +214,14 @@ async function listAdminInspirationVideos(input: {
     scanPage += 1;
   } while (scanPage <= totalPages);
 
-  const matched = input.search?.trim() ? records.filter(record => matchesVideoSearch(record, input.search!)) : records;
+  records.sort((a, b) => {
+    const aTime = Date.parse(String(a.crawledAt || ''));
+    const bTime = Date.parse(String(b.crawledAt || ''));
+    return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
+  });
+
+  const ranged = records.filter(record => matchesCrawlRange(record, input.crawlRange));
+  const matched = input.search?.trim() ? ranged.filter(record => matchesVideoSearch(record, input.search!)) : ranged;
   const totalItems = matched.length;
   const start = (input.page - 1) * input.perPage;
   return {
@@ -941,6 +959,7 @@ adminRouter.get('/inspiration-videos', async (req, res) => {
     status: status || undefined,
     contentFormat,
     search: bodyText(req.query.search) || undefined,
+    crawlRange: bodyText(req.query.crawlRange) || 'all',
   });
   // Listing must stay read-only. Media repair and AI analysis used to be launched
   // here, so every dashboard refresh spawned more downloads/ffmpeg work and could

@@ -155,11 +155,6 @@ const HANDLING_COLOR: Record<HandlingMode, string> = {
   human_needed: '#dc2626',
 };
 
-const ADOPTION_STATS = [
-  { category: '价格咨询', consecutiveUnedited: 18 },
-  { category: '目录咨询', consecutiveUnedited: 9 },
-];
-
 const DEFAULT_WIDGET_ORDER: CustomerWidgetId[] = ['basicInfo', 'orderHistory', 'intentSignals', 'tags'];
 
 const WIDGET_COMPONENTS: Record<CustomerWidgetId, ComponentType<CustomerWidgetProps>> = {
@@ -1239,30 +1234,6 @@ function RulesDisclosure() {
   );
 }
 
-function AdoptionPrompt({ autonomyLevel, onToast }: { autonomyLevel: AutonomyLevel; onToast: (message: string) => void }) {
-  const stat = ADOPTION_STATS.find(item => item.consecutiveUnedited >= 15);
-  const [hidden, setHidden] = useState(() => {
-    if (!stat) return true;
-    const until = Number(localStorage.getItem(`lingshu:crm:adoption-dismiss:${stat.category}`) || 0);
-    return Date.now() < until;
-  });
-  const [enabled, setEnabled] = useState(false);
-  if (!stat || hidden || enabled || autonomyLevel !== 'draft') return null;
-  return (
-    <div className="rounded-2xl border border-sky-100 bg-sky-50 p-4">
-      <p className="text-xs leading-relaxed text-sky-800">过去两周你直接发送了 {stat.consecutiveUnedited} 条{stat.category}AI 草稿且未修改。可以把全局 AI 参与程度调到“低风险消息自动回”，让 L3 动作自动处理。</p>
-      <div className="mt-3 flex gap-2">
-        <button type="button" onClick={() => { setEnabled(true); localStorage.setItem('lingshu:enterprise:highlight-autonomy', 'auto'); window.dispatchEvent(new CustomEvent('lingshu:navigate', { detail: { page: 'enterprise' } })); onToast('已跳转到企业中心 AI 参与程度设置'); }} className="rounded-xl bg-sky-600 px-3 py-2 text-xs font-bold text-white hover:bg-sky-700">
-          去设置自动档
-        </button>
-        <button type="button" onClick={() => { localStorage.setItem(`lingshu:crm:adoption-dismiss:${stat.category}`, String(Date.now() + 30 * 24 * 60 * 60 * 1000)); setHidden(true); }} className="rounded-xl border border-sky-200 bg-white px-3 py-2 text-xs font-bold text-sky-700 hover:bg-sky-100">
-          暂不
-        </button>
-      </div>
-    </div>
-  );
-}
-
 function CustomerInfoRail({
   customer,
   autonomyLevel,
@@ -1349,7 +1320,6 @@ function CustomerInfoRail({
       </div>
       <div className="grid gap-3">
         <PrimaryActionCard customer={customer} notificationReady={notificationReady} onModeChange={onHandlingModeChange} onToast={onToast} onGenerateDraft={onGenerateDraft} onFocusReply={onFocusReply} onViewDraft={onViewDraft} onCompleteTodo={onCompleteTodo} />
-        <AdoptionPrompt autonomyLevel={autonomyLevel} onToast={onToast} />
       </div>
 
       <div className="mt-3">

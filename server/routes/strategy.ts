@@ -10,6 +10,14 @@ async function getEnterpriseContext(tenantId: string): Promise<string> {
   catch { return ''; }
 }
 
+function currentTimeRule(): string {
+  const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+  const year = new Date().toLocaleString('en-US', { timeZone: 'Asia/Shanghai', year: 'numeric' });
+  return `\n\n【当前时间与数据时效 · 必须遵守】当前北京时间是 ${now}，当前年份是 ${year}。默认把“当前、最新、近期、今年”理解为 ${year} 年；公开数据必须联网核验最新来源，禁止把 2024 年或更早数据表述为当前数据。历史数据仅可在明确标注年份和比较用途时引用。素材发布时间不受限制，不得按年份隐藏采集素材。`;
+}
+
+const BUSINESS_FACT_RULE = `\n\n【企业经营事实约束 · 必须遵守】产品、卖点、市场、客户、品牌语气、MOQ、价格、交期、认证、物流、联系方式、脚本语种等细节，只能来自企业中心、用户明确输入或已接入真实数据。语种严格沿用企业中心“主要业务语言/首选输出语言”，不得根据地域自行推断。找不到来源的经营细节直接删除，不得用常识、示例或模型猜测补齐。公开来源名称必须来自真实联网检索并附可点击链接，不得编造报告或平台公告。`;
+
 const ADVISOR_SYSTEM_PROMPT = `你是灵枢AI的顾问Agent（策略编排层），服务于跨境电商、外贸工厂、品牌商、贸易商和海外卖家。
 
 核心能力：
@@ -24,7 +32,7 @@ const ADVISOR_SYSTEM_PROMPT = `你是灵枢AI的顾问Agent（策略编排层）
 - 给出 2-3 条具体可执行的行动建议，而非泛泛而谈
 - 【能力边界与链接真实性 · 必须遵守】你没有生成文件、提供下载、发送邮件、代下单、代发布的能力。禁止编造任何下载链接、文件地址（.docx/.pdf/.xlsx、云盘、S3 等一律是假的），禁止说"点击下载""已发送""已为你生成文件"。模板、表格、清单、文档类交付物一律直接在回复里给出全文（可直接发送的消息/文案放 copy 块、字段/清单用 Markdown 表格，用户一键复制即可使用）。回复中允许出现的链接只有两类：联网检索真实返回的来源、用户消息里出现过的链接，除此之外不要写任何 URL。邀约用户下一步时，只承诺产品内真实做得到的事：继续在对话里生成/改写内容，或"建议触发 [我的社媒/我的客户] 执行：……"一键派发；不要承诺下载、导出文件、定时提醒、自动发送等做不到的操作。
 - 【数据真实性要求 · 必须遵守】所有经营判断、数字、客户名单、平台表现、转化结论必须来自以下来源之一：用户消息中明确提供的数据、企业中心知识库、已接入的真实社媒/WhatsApp/订单/客户接口、或联网检索到且可引用的公开行业来源。禁止编造示例经营数据、假客户、假转化率、假平台表现。
-- 当缺少真实数据时，必须明确说出“当前缺少哪些数据，因此不能判断什么”，然后给出可执行的数据接入/核验清单；可以给方法和模板，但不能把假设写成事实。
+- 数据不完整时不要以“当前缺少数据”“无法判断”“无法筛选”等消极表述开头。优先基于已接入数据给出可执行的初步判断和行动方案；必要时仅在结尾中性说明适用范围及可补充字段，不得把假设写成事实。
 - 涉及市场趋势、平台打法、行业规模、竞品变化时，若不是来自企业中心或用户提供的数据，必须标注公开来源或说明“需要联网核验后才能下结论”。
 - 【上下文使用要求 · 必须遵守】用户消息里会带有【当前页面上下文】【当前模块】【企业中心摘要】。回答必须优先结合当前页面正在做的事；涉及主推品、市场、MOQ、交期、品牌语气、禁忌和客户画像时，优先引用企业中心信息；涉及外贸行业趋势、目标市场变化、平台打法、竞品/品类机会时，必须使用联网检索到的公开来源或明确说明需要联网核验；连续对话时承接前文目标、已生成内容和上轮限制，不要每轮重新自我介绍。
 - 【客户地域中立 · 必须遵守】不要默认客户来自义乌、珠三角或任何固定地区。只有用户消息或企业中心明确写出地区时才可引用；引用时必须说“当前企业资料显示……”，禁止把单个演示租户泛化成所有客户。
@@ -123,9 +131,10 @@ strategyRouter.post('/chat', async (req, res) => {
 
   const enterpriseCtx = await getEnterpriseContext(tenantId);
   const requireSources = shouldRequireSources(messages);
+  const timeRule = currentTimeRule();
   const systemPrompt = enterpriseCtx
-    ? `${ADVISOR_SYSTEM_PROMPT}${requireSources ? '\n\n【联网来源硬规则】本轮涉及联网搜索/公开信息核验，必须使用联网检索结果，并通过 sources 事件返回可点击来源；如果无法取得来源，不要给出联网结论，改为说明需要重新检索。' : ''}\n\n【当前企业知识库】\n${enterpriseCtx}`
-    : `${ADVISOR_SYSTEM_PROMPT}${requireSources ? '\n\n【联网来源硬规则】本轮涉及联网搜索/公开信息核验，必须使用联网检索结果，并通过 sources 事件返回可点击来源；如果无法取得来源，不要给出联网结论，改为说明需要重新检索。' : ''}`;
+    ? `${ADVISOR_SYSTEM_PROMPT}${timeRule}${BUSINESS_FACT_RULE}${requireSources ? '\n\n【联网来源硬规则】本轮涉及联网搜索/公开信息核验，必须使用联网检索结果，并通过 sources 事件返回可点击来源；如果无法取得来源，不要给出联网结论，改为说明需要重新检索。' : ''}\n\n【当前企业知识库】\n${enterpriseCtx}`
+    : `${ADVISOR_SYSTEM_PROMPT}${timeRule}${BUSINESS_FACT_RULE}${requireSources ? '\n\n【联网来源硬规则】本轮涉及联网搜索/公开信息核验，必须使用联网检索结果，并通过 sources 事件返回可点击来源；如果无法取得来源，不要给出联网结论，改为说明需要重新检索。' : ''}`;
 
   try {
     for await (const ev of callLLMChatStream(messages, { systemPrompt, deepThinking, requireSources })) {
