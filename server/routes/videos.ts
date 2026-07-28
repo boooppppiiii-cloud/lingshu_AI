@@ -4726,9 +4726,10 @@ async function analyzeExactLongVideoChunks(input: {
   transcript?: Awaited<ReturnType<typeof transcribeAudioWithQwen>>;
 }): Promise<VideoAiAnalysis> {
   const chunkSeconds = Math.max(30, Number(process.env.VIDEO_EXACT_CHUNK_SECONDS || 45));
-  const chunks = Array.from({ length: Math.ceil(input.duration / chunkSeconds) }, (_, index) => ({
+  const inferredDuration = Math.max(input.duration, ...input.frames.map(frame => qwenFrameSeconds(frame.timeLabel) + 3), 3);
+  const chunks = Array.from({ length: Math.ceil(inferredDuration / chunkSeconds) }, (_, index) => ({
     start: index * chunkSeconds,
-    end: Math.min(input.duration, (index + 1) * chunkSeconds),
+    end: Math.min(inferredDuration, (index + 1) * chunkSeconds),
   }));
   const analyzeChunk = async (chunk: { start: number; end: number }) => {
     const localDuration = chunk.end - chunk.start;
@@ -4778,6 +4779,13 @@ async function analyzeExactLongVideoChunks(input: {
   };
   const fallbackChunk = (chunk: { start: number; end: number }): VideoAiAnalysis => ({
     theme: input.title || '长视频内容', hooks: [], sellingPoints: [], mood: '', structure: '分段分析',
+    firstTenSeconds: {
+      atmosphere: '均匀关键帧已覆盖该时段，模型结构化分析超时，保留原片氛围待复核。',
+      audioVisual: '原视频画面与音轨保持不变，不补写未确认信息。',
+      camera: '镜头运动未确认，需人工抽查原片。',
+      visuals: '仅确认该时段存在有效视频帧。',
+      voiceMusic: '音频内容未确认，需人工抽查原片。',
+    },
     recommendedScriptType: 'storyboard',
     coarseStructure: [{ time: `${chunk.start}s–${chunk.end}s`, label: '待复核区间', description: '该分段在时限内未返回，已保留全片时间线。' }],
     scriptDetails15s: [{
