@@ -195,7 +195,7 @@ export default function AdminSocialAccountSetup() {
       if (!response.ok) throw new Error(data.error || '保存平台配置失败');
       setConfig(data);
       setForm(formFromConfig(data));
-      setNotice('平台凭证已保存，现在可以直接连接管理员自己的社媒账号。');
+      setNotice('平台凭证已保存。请确认下方回调地址已原样登记到平台后台，再让客户连接账号。');
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : '保存平台配置失败');
     } finally {
@@ -252,7 +252,7 @@ export default function AdminSocialAccountSetup() {
                 <div className="mb-3 flex items-center gap-2">
                   <KeyRound size={15} className="text-emerald-600" />
                   <h3 className="text-sm font-black text-text-primary">平台应用凭证</h3>
-                  <span className="text-[11px] text-text-muted">先在对应开发者后台登记下方回调地址，再保存凭证。</span>
+                  <span className="text-[11px] text-amber-700">保存凭证后，还要把下方回调地址原样登记到平台后台；域名、https 和路径都必须完全一致。</span>
                 </div>
 
                 <div className="grid gap-3 xl:grid-cols-3">

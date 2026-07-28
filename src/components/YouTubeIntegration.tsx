@@ -133,6 +133,60 @@ function externalAccountUrl(account: { platform: string; providerAccountId: stri
   return '';
 }
 
+function prepareOAuthPopup(name: string, features: string): Window | null {
+  try {
+    const popup = window.open('', `${name}-${Date.now()}`, features);
+    if (!popup) return null;
+    try {
+      popup.document.title = '正在打开授权';
+      if (popup.document.body) {
+        popup.document.body.innerHTML = '<p style="font:14px system-ui;padding:24px;color:#475569">正在打开平台授权，请稍候…</p>';
+      }
+    } catch {
+      // The popup itself is still usable even if its loading view cannot be styled.
+    }
+    return popup;
+  } catch {
+    return null;
+  }
+}
+
+async function readOAuthStartResponse(response: Response, platformLabel: string): Promise<{ url: string }> {
+  const raw = await response.text();
+  let data: { url?: string; error?: string } = {};
+  try {
+    data = raw ? JSON.parse(raw) as { url?: string; error?: string } : {};
+  } catch {
+    // The status code below still gives the user an actionable error.
+  }
+  if (!response.ok) {
+    throw new Error(data.error || `${platformLabel} 授权服务暂时不可用（${response.status}）`);
+  }
+  if (!data.url) throw new Error(`${platformLabel} 授权地址生成失败，请刷新页面后重试。`);
+  return { url: data.url };
+}
+
+function navigateOAuthPopup(popup: Window | null, url: string) {
+  try {
+    if (popup && !popup.closed) {
+      popup.location.replace(url);
+      popup.focus();
+      return;
+    }
+  } catch {
+    // Fall back to the current tab when the browser blocks popup navigation.
+  }
+  window.location.assign(url);
+}
+
+function closeOAuthPopup(popup: Window | null) {
+  try {
+    if (popup && !popup.closed) popup.close();
+  } catch {
+    // The popup may already be cross-origin or closed.
+  }
+}
+
 function statusLabel(status: YouTubeAccount['status']) {
   if (status === 'connected') return '已连接';
   if (status === 'expired') return '授权过期';
@@ -203,6 +257,7 @@ export function YouTubeConnectionPanel({ compact = false }: { compact?: boolean 
   }, []);
 
   const startOAuth = async () => {
+    const popup = prepareOAuthPopup('youtube-oauth', 'width=580,height=720,menubar=no,toolbar=no,location=yes,status=no');
     setConnecting(true);
     setError('');
     setNotice('');
@@ -212,16 +267,10 @@ export function YouTubeConnectionPanel({ compact = false }: { compact?: boolean 
         headers: { ...authHeader(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ returnTo: `${window.location.pathname}${window.location.search}` }),
       });
-      const data = await r.json().catch(() => ({})) as { url?: string; error?: string };
-      if (!r.ok || !data.url) throw new Error(data.error || '无法打开 YouTube 授权');
-
-      const popup = window.open(data.url, 'youtube-oauth', 'width=580,height=720,menubar=no,toolbar=no,location=yes,status=no');
-      if (!popup) {
-        window.location.assign(data.url);
-        return;
-      }
-      popup.focus();
+      const data = await readOAuthStartResponse(r, 'YouTube');
+      navigateOAuthPopup(popup, data.url);
     } catch (e) {
+      closeOAuthPopup(popup);
       setConnecting(false);
       setError(e instanceof Error ? e.message : 'YouTube 授权启动失败');
     }
@@ -574,6 +623,7 @@ export function SocialConnectionPanel({ platform }: { platform: SocialPlatform }
   }, [platform]);
 
   const startOAuth = async () => {
+    const popup = prepareOAuthPopup(`${platform}-oauth`, 'width=620,height=760,menubar=no,toolbar=no,location=yes,status=no');
     setConnecting(true);
     setError('');
     setNotice('');
@@ -583,15 +633,10 @@ export function SocialConnectionPanel({ platform }: { platform: SocialPlatform }
         headers: { ...authHeader(), 'Content-Type': 'application/json' },
         body: JSON.stringify({ returnTo: `${window.location.pathname}${window.location.search}` }),
       });
-      const data = await r.json().catch(() => ({})) as { url?: string; error?: string };
-      if (!r.ok || !data.url) throw new Error(data.error || `无法打开 ${meta.label} 授权`);
-      const popup = window.open(data.url, `${platform}-oauth`, 'width=620,height=760,menubar=no,toolbar=no,location=yes,status=no');
-      if (!popup) {
-        window.location.assign(data.url);
-        return;
-      }
-      popup.focus();
+      const data = await readOAuthStartResponse(r, meta.label);
+      navigateOAuthPopup(popup, data.url);
     } catch (e) {
+      closeOAuthPopup(popup);
       setConnecting(false);
       setError(e instanceof Error ? e.message : `${meta.label} 授权启动失败`);
     }

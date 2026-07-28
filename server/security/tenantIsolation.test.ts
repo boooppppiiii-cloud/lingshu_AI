@@ -31,6 +31,13 @@ assert.match(channelStatus, /where: \{ tenantId, status: 'connected' \}/, 'conne
 const oauth = read('server/routes/whatsappOAuth.ts');
 assert.match(oauth, /if \(supportAccess\) return null/, 'support sessions must not switch to a second tenant');
 
+const oauthUi = read('src/components/YouTubeIntegration.tsx');
+assert.match(oauthUi, /const popup = prepareOAuthPopup\('youtube-oauth'[\s\S]*?await fetch\('\/api\/overseas\/youtube\/oauth\/start'/, 'YouTube must open its OAuth window before awaiting the start request');
+assert.match(oauthUi, /const popup = prepareOAuthPopup\(`\$\{platform\}-oauth`[\s\S]*?await fetch\(`\/api\/overseas\/social\/oauth\/\$\{platform\}\/start`/, 'social platforms must open their OAuth window before awaiting the start request');
+const socialSetupGuide = read('docs/客户社媒账号配置与授权操作指南.md');
+assert.doesNotMatch(socialSetupGuide, /https:\/\/lingshu\.site\/api\//, 'production OAuth guidance must use the canonical app subdomain');
+assert.match(socialSetupGuide, /https:\/\/app\.lingshu\.site\/api\/overseas\/youtube\/oauth\/callback/, 'the canonical YouTube callback must remain documented');
+
 const tenantPlatformApps = read('server/lib/tenantPlatformApps.ts');
 const publicPlatformApp = tenantPlatformApps.slice(
   tenantPlatformApps.indexOf('export function publicTenantPlatformApp'),
