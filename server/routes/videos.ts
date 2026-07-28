@@ -325,6 +325,10 @@ function videoLevelSuccessPatch(input: {
     downloadStatus: 'analyzed',
     videoFetchStatus: input.videoFetchStatus,
     geminiStatus: 'analyzed',
+    // A successful retry is terminal. Do not leave a stale timeout from an
+    // earlier run on an otherwise healthy, user-visible record.
+    analysisError: undefined,
+    downloadError: undefined,
     ...videoSuccessVisibilityPatch(),
     analyzedAt: new Date().toISOString(),
     ...(input.extra ?? {}),
