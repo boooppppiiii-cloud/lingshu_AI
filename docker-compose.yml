@@ -10,6 +10,10 @@ services:
       NODE_ENV: production
       PORT: 8788
       PB_URL: http://pocketbase:8090
+      # Historical analysis/backfill stays paused during controlled one-record
+      # channel acceptance tests. Manual scheduled-task runs are unaffected.
+      CRAWLER_OPS_WORKER_ENABLED: "0"
+      PB_VIDEO_BACKFILL_ENABLED: "false"
     volumes:
       - ./data:/app/data
     depends_on:
