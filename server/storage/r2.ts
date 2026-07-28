@@ -6,23 +6,29 @@ import {
 } from '@aws-sdk/client-s3';
 
 function getR2Client(): S3Client {
-  const accountId = process.env.R2_ACCOUNT_ID;
-  const accessKeyId = process.env.R2_ACCESS_KEY_ID;
-  const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY;
+  const accountId = process.env.R2_ACCOUNT_ID?.trim();
+  const accessKeyId = (process.env.OBJECT_STORAGE_ACCESS_KEY_ID || process.env.R2_ACCESS_KEY_ID)?.trim();
+  const secretAccessKey = (process.env.OBJECT_STORAGE_SECRET_ACCESS_KEY || process.env.R2_SECRET_ACCESS_KEY)?.trim();
+  const endpoint = process.env.OBJECT_STORAGE_ENDPOINT?.trim()
+    || (accountId ? `https://${accountId}.r2.cloudflarestorage.com` : '');
+  const region = process.env.OBJECT_STORAGE_REGION?.trim() || 'auto';
 
-  if (!accountId || !accessKeyId || !secretAccessKey) {
-    throw new Error('R2 credentials not configured (R2_ACCOUNT_ID / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY)');
+  if (!endpoint || !accessKeyId || !secretAccessKey) {
+    throw new Error(
+      'Object storage credentials not configured '
+      + '(OBJECT_STORAGE_ENDPOINT / OBJECT_STORAGE_ACCESS_KEY_ID / OBJECT_STORAGE_SECRET_ACCESS_KEY)',
+    );
   }
 
   return new S3Client({
-    region: 'auto',
-    endpoint: `https://${accountId}.r2.cloudflarestorage.com`,
+    region,
+    endpoint,
     credentials: { accessKeyId, secretAccessKey },
   });
 }
 
 function getBucket(): string {
-  return process.env.R2_BUCKET_NAME ?? 'overseas-assets';
+  return process.env.OBJECT_STORAGE_BUCKET_NAME || process.env.R2_BUCKET_NAME || 'overseas-assets';
 }
 
 /** Upload a Buffer to R2, return the public URL */
