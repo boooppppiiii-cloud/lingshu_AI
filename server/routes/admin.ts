@@ -428,7 +428,7 @@ function bodyText(value: unknown): string {
 
 function platformParam(value: unknown): TenantPlatform | null {
   const platform = bodyText(value);
-  return platform === 'meta' || platform === 'google' || platform === 'wecom' ? platform : null;
+  return platform === 'meta' || platform === 'google' || platform === 'tiktok' || platform === 'wecom' ? platform : null;
 }
 
 function graphVersion() {
@@ -460,6 +460,11 @@ function publicPendingPlatformApp(req: Parameters<typeof publicTenantPlatformApp
     wecomEncodingAesKeySet: false,
     wecomEncodingAesKeyLength: 0,
     webhookUrl: platform === 'meta' || platform === 'wecom' ? tenantWebhookUrl(req, tenantId, platform) : '',
+    oauthRedirectUri: platform === 'google'
+      ? `${getPublicOrigin(req)}/api/overseas/youtube/oauth/callback`
+      : platform === 'tiktok'
+        ? `${getPublicOrigin(req)}/api/overseas/social/oauth/tiktok/callback`
+        : '',
     tokenType: 'user_60d',
     accessTokenSet: false,
     accessTokenLength: 0,
@@ -515,7 +520,7 @@ function publicDeliveryTenant(req: Parameters<typeof publicTenantPlatformApp>[0]
     subscriptionPlan,
     subscriptionStatus,
     accountType,
-    apps: (['meta', 'google', 'wecom'] as TenantPlatform[]).map(platform => {
+    apps: (['meta', 'google', 'tiktok', 'wecom'] as TenantPlatform[]).map(platform => {
       const app = apps.find(item => item.tenant_id === tenantId && item.platform === platform);
       return app ? adminTenantPlatformApp(req, app) : publicPendingPlatformApp(req, tenantId, platform);
     }),
@@ -545,14 +550,16 @@ function missingDeliveryRequirements(platform: TenantPlatform, app: any): string
   const checklist = readChecklist(app);
   const appSecret = decryptSecret(app?.app_secret);
   const missing: string[] = [];
-  if (!bodyText(app?.app_id)) missing.push(platform === 'wecom' ? '企业微信 CorpID' : 'App ID');
-  if (!appSecret) missing.push(platform === 'wecom' ? '企业微信应用 Secret' : 'App Secret');
+  if (!bodyText(app?.app_id)) missing.push(platform === 'wecom' ? '企业微信 CorpID' : platform === 'tiktok' ? 'TikTok Client Key' : 'App ID');
+  if (!appSecret) missing.push(platform === 'wecom' ? '企业微信应用 Secret' : platform === 'tiktok' ? 'TikTok Client Secret' : 'App Secret');
   if (platform === 'meta') {
     if (!bodyText(app?.phone_number_id)) missing.push('Phone Number ID');
     if (!passedRecently(checklist, 'whatsapp_test_passed')) missing.push('WhatsApp 最近自检通过');
     if (!passedRecently(checklist, 'webhook_test_passed')) missing.push('Webhook 订阅最近自检通过');
-  } else {
+  } else if (platform === 'google') {
     if (!passedRecently(checklist, 'google_test_passed')) missing.push('Google OAuth 最近自检通过');
+  } else if (platform === 'tiktok') {
+    if (!passedRecently(checklist, 'tiktok_test_passed')) missing.push('TikTok OAuth 最近自检通过');
   }
   if (platform === 'wecom') {
     const googleTestIndex = missing.findIndex(item => item.includes('Google OAuth'));
@@ -1256,6 +1263,13 @@ adminRouter.post('/delivery/platform-apps/:tenantId/:platform/test/:kind', async
       if (!app.app_id || !appSecret) throw new Error('请先录入 Google Client ID / Secret');
       await markTestPassed('google_test_passed');
       res.json({ ok: true, message: 'Google OAuth 应用信息已保存，等待用户授权验证。' });
+      return;
+    }
+    if (kind === 'tiktok') {
+      if (platform !== 'tiktok') throw new Error('TikTok 自检仅适用于 TikTok');
+      if (!app.app_id || !appSecret) throw new Error('请先录入 TikTok Client Key / Secret');
+      await markTestPassed('tiktok_test_passed');
+      res.json({ ok: true, message: 'TikTok OAuth 应用信息已保存，等待客户授权验证。' });
       return;
     }
     if (kind === 'wecom_webhook') {

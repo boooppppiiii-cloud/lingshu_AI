@@ -40,6 +40,8 @@ assert.doesNotMatch(socialSetupGuide, /https:\/\/lingshu\.site\/api\//, 'product
 assert.match(socialSetupGuide, /https:\/\/app\.lingshu\.site\/api\/overseas\/youtube\/oauth\/callback/, 'the canonical YouTube callback must remain documented');
 
 const tenantPlatformApps = read('server/lib/tenantPlatformApps.ts');
+assert.match(tenantPlatformApps, /export type TenantPlatform = 'meta' \| 'google' \| 'tiktok' \| 'wecom'/, 'tenant platform applications must include TikTok');
+assert.match(tenantPlatformApps, /getTenantTikTokOAuthClient[\s\S]*?getTenantPlatformApp\(tenantId, 'tiktok'\)[\s\S]*?getTikTokOAuthClient\(\)/, 'TikTok OAuth must prefer tenant credentials and retain the global fallback');
 const publicPlatformApp = tenantPlatformApps.slice(
   tenantPlatformApps.indexOf('export function publicTenantPlatformApp'),
   tenantPlatformApps.indexOf('export async function upsertTenantPlatformApp'),
@@ -47,9 +49,22 @@ const publicPlatformApp = tenantPlatformApps.slice(
 assert.doesNotMatch(publicPlatformApp, /\bappSecret\s*:/, 'customer-facing platform app data must not expose plaintext app secrets');
 const adminRoutes = read('server/routes/admin.ts');
 assert.match(adminRoutes, /function adminTenantPlatformApp[\s\S]*?appSecret:\s*decryptSecret\(app\.app_secret\)/, 'admin delivery responses should expose decrypted app secrets for administrator verification');
+assert.match(adminRoutes, /\['meta', 'google', 'tiktok', 'wecom'\]/, 'admin delivery cards must include TikTok for every tenant');
+assert.match(adminRoutes, /kind === 'tiktok'[\s\S]*?tiktok_test_passed/, 'admin delivery must provide a TikTok credential check');
 for (const route of ["'/oauth-config'", "'/delivery/platform-apps'"]) {
   assert.match(adminRoutes, new RegExp(`adminRouter\\.get\\(${route}[\\s\\S]*?requireAdminUser\\(req\\)`), `${route} must require an administrator before returning credentials`);
 }
+
+const socialRoutes = read('server/routes/social.ts');
+assert.match(socialRoutes, /getTenantAwareTikTokOAuthClient/, 'customer TikTok OAuth must resolve tenant-aware credentials');
+assert.match(socialRoutes, /getTikTokClient\(tenantId\)/, 'customer TikTok OAuth must pass the authenticated tenant');
+const assistLinks = read('server/routes/assistLinks.ts');
+assert.match(assistLinks, /platform === 'meta' \|\| platform === 'google' \|\| platform === 'tiktok'/, 'assist links must accept TikTok');
+assert.match(assistLinks, /getTenantAwareTikTokOAuthClient\(tenantId\)/, 'TikTok assist links must use the tenant application');
+const deliveryUi = read('src/components/AdminDeliveryPage.tsx');
+assert.match(deliveryUi, /type Platform = 'meta' \| 'google' \| 'tiktok' \| 'wecom'/, 'admin delivery UI must include TikTok');
+assert.match(deliveryUi, /label="Client Key"[\s\S]*?label="Client Secret"[\s\S]*?app\.oauthRedirectUri/, 'admin delivery UI must expose TikTok credentials and callback');
+assert.match(read('pb_migrations/1784800000_expand_tiktok_tenant_apps.js'), /\^\(meta\|google\|tiktok\|wecom\)\$/, 'PocketBase tenant platform validation must accept TikTok');
 
 const videos = read('server/routes/videos.ts');
 assert.match(videos, /const \{ tenantId \} = res\.locals as AuthLocals/, 'video routes must resolve tenant from auth locals');

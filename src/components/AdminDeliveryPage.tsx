@@ -4,7 +4,7 @@ import { authHeader } from '../lib/auth';
 import AdminContentOpsAlerts from './AdminContentOpsAlerts';
 import AdminSocialAccountSetup from './AdminSocialAccountSetup';
 
-type Platform = 'meta' | 'google' | 'wecom';
+type Platform = 'meta' | 'google' | 'tiktok' | 'wecom';
 type Status = 'pending' | 'configuring' | 'waiting_customer' | 'importing_history' | 'verifying' | 'active' | 'needs_permanent_token' | 'token_expired' | 'error';
 
 interface DeliveryApp {
@@ -27,6 +27,7 @@ interface DeliveryApp {
   wecomEncodingAesKeySet: boolean;
   wecomEncodingAesKeyLength: number;
   webhookUrl: string;
+  oauthRedirectUri: string;
   tokenType: 'user_60d' | 'system_user_permanent';
   accessTokenSet: boolean;
   accessTokenLength: number;
@@ -89,6 +90,12 @@ const GOOGLE_STEPS = [
   { id: 'googleApp', title: '1. Google OAuth 应用', desc: '录入 Client ID / Secret。' },
   { id: 'youtube', title: '2. YouTube 授权', desc: '记录频道 ID，并提醒客户通过未验证应用提示。' },
   { id: 'acceptance', title: '3. 验收', desc: '检查 YouTube 连接能读到频道。' },
+];
+
+const TIKTOK_STEPS = [
+  { id: 'tiktokApp', title: '1. TikTok 应用', desc: '录入客户的 Client Key / Secret。' },
+  { id: 'tiktokCallback', title: '2. 回调地址', desc: '将授权回调地址填入 TikTok 开发者后台。' },
+  { id: 'acceptance', title: '3. 验收', desc: '生成协助链接，让客户完成 TikTok 授权。' },
 ];
 
 const WECOM_STEPS = [
@@ -259,6 +266,7 @@ function DeploymentProgressStrip({
 }) {
   const meta = appFor(tenant, 'meta');
   const google = appFor(tenant, 'google');
+  const tiktok = appFor(tenant, 'tiktok');
   const wecom = appFor(tenant, 'wecom');
   const businessApproved = hasCheck(meta, 'business_verification_approved');
   const businessSubmitted = hasCheck(meta, 'business_verification_submitted');
@@ -298,6 +306,12 @@ function DeploymentProgressStrip({
       label: 'YouTube 已授权',
       state: hasCheck(google, 'youtube_authorized') || hasCheck(google, 'google_test_passed') || Boolean(google?.youtubeChannelId) ? 'done' : 'todo',
       hint: '由频道 ID 或 YouTube checklist 判断',
+    },
+    {
+      key: 'tiktok',
+      label: 'TikTok 已授权',
+      state: hasCheck(tiktok, 'tiktok_authorized') || hasCheck(tiktok, 'tiktok_test_passed') ? 'done' : 'todo',
+      hint: '由 TikTok 授权与自检结果判断',
     },
     {
       key: 'wecom',
@@ -409,13 +423,13 @@ function PlatformWizard({
   saving: boolean;
 }) {
   const appKey = keyOf(app.tenantId, app.platform);
-  const [activeStep, setActiveStep] = useState(app.platform === 'meta' ? 'metaApp' : app.platform === 'google' ? 'googleApp' : 'wecomApp');
+  const [activeStep, setActiveStep] = useState(app.platform === 'meta' ? 'metaApp' : app.platform === 'google' ? 'googleApp' : app.platform === 'tiktok' ? 'tiktokApp' : 'wecomApp');
   const test = tests[appKey] ?? {};
-  const steps = app.platform === 'meta' ? META_STEPS : app.platform === 'google' ? GOOGLE_STEPS : WECOM_STEPS;
+  const steps = app.platform === 'meta' ? META_STEPS : app.platform === 'google' ? GOOGLE_STEPS : app.platform === 'tiktok' ? TIKTOK_STEPS : WECOM_STEPS;
   const update = (patch: Record<string, string | Record<string, boolean>>) => {
     setDrafts(current => ({ ...current, [appKey]: { ...current[appKey], ...patch } }));
   };
-  const platformName = app.platform === 'meta' ? 'Meta / WhatsApp' : app.platform === 'google' ? 'Google / YouTube' : '企业微信';
+  const platformName = app.platform === 'meta' ? 'Meta / WhatsApp' : app.platform === 'google' ? 'Google / YouTube' : app.platform === 'tiktok' ? 'TikTok' : '企业微信';
   const draftStatus = (drafts[appKey]?.status as Status | undefined) ?? app.status;
 
   const testItems = app.platform === 'meta'
@@ -426,6 +440,8 @@ function PlatformWizard({
     ]
     : app.platform === 'google'
       ? [['google', 'Google OAuth']]
+      : app.platform === 'tiktok'
+        ? [['tiktok', 'TikTok OAuth']]
       : [['wecom_webhook', '企业微信回调'], ['wecom', '企业微信消息']];
 
   const statusTone = draftStatus === 'active'
@@ -602,6 +618,23 @@ function PlatformWizard({
             </div>
           )}
 
+          {activeStep === 'tiktokApp' && (
+            <div className="grid gap-3">
+              <Field required label="Client Key" hint="TikTok for Developers > Manage apps" value={appValue(drafts, app, 'appId')} onChange={value => update({ appId: value })} />
+              <Field required label="Client Secret" hint="TikTok for Developers > Manage apps" value={appValue(drafts, app, 'appSecret')} placeholder="填写 Client Secret" onChange={value => update({ appSecret: value })} />
+            </div>
+          )}
+
+          {activeStep === 'tiktokCallback' && (
+            <div className="space-y-3">
+              <div className="rounded-xl border border-dashed border-border bg-surface-2 p-3">
+                <p className="mb-2 text-xs font-black text-text-primary">复制到 TikTok 开发者后台</p>
+                <CopyLine label="Redirect URI" value={app.oauthRedirectUri} />
+              </div>
+              <ChecklistButton app={app} id="tiktok_callback_registered" label="回调地址已添加并保存" drafts={drafts} setDrafts={setDrafts} />
+            </div>
+          )}
+
           {activeStep === 'acceptance' && (
             <div className="space-y-3">
               <div className="flex flex-wrap gap-2">
@@ -609,7 +642,9 @@ function PlatformWizard({
                   ? ['wa_message_received', 'wa_reply_sent', 'boss_alert_received', 'fb_comment_received']
                   : app.platform === 'google'
                     ? ['youtube_channel_read']
-                    : ['wecom_callback_verified', 'wecom_message_test_passed', 'wecom_archive_enabled']
+                    : app.platform === 'tiktok'
+                      ? ['tiktok_authorized']
+                      : ['wecom_callback_verified', 'wecom_message_test_passed', 'wecom_archive_enabled']
                 ).map(id => (
                   <ChecklistButton key={id} app={app} id={id} label={{
                     wa_message_received: '30秒内收到 WhatsApp 消息',
@@ -617,6 +652,7 @@ function PlatformWizard({
                     boss_alert_received: '老板提醒卡已收到',
                     fb_comment_received: '主页评论已进入收件箱',
                     youtube_channel_read: '能读取 YouTube 频道',
+                    tiktok_authorized: '客户已完成 TikTok 授权',
                     wecom_callback_verified: '企业微信回调验证通过',
                     wecom_message_test_passed: '企业微信消息链路已验收',
                     wecom_archive_enabled: '会话内容存档已开通',
@@ -811,6 +847,7 @@ export default function AdminDeliveryPage() {
         pages: 'pages_test_passed',
         webhook: 'webhook_test_passed',
         google: 'google_test_passed',
+        tiktok: 'tiktok_test_passed',
         wecom_webhook: 'wecom_callback_verified',
         wecom: 'wecom_message_test_passed',
       }[kind];

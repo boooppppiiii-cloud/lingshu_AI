@@ -128,3 +128,8 @@ export async function getTenantAwareGoogleOAuthClient(tenantId?: string): Promis
   const { getTenantGoogleOAuthClient } = await import('./tenantPlatformApps.js');
   return getTenantGoogleOAuthClient(tenantId);
 }
+
+export async function getTenantAwareTikTokOAuthClient(tenantId?: string): Promise<{ clientKey: string; clientSecret: string } | null> {
+  const { getTenantTikTokOAuthClient } = await import('./tenantPlatformApps.js');
+  return getTenantTikTokOAuthClient(tenantId);
+}

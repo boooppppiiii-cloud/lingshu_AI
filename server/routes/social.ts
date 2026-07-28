@@ -27,8 +27,8 @@ import {
 } from '../integrations/social.js';
 import {
   advancedManualConnectEnabled as readAdvancedManualConnectEnabled,
-  getTikTokOAuthClient,
   getTenantAwareMetaOAuthClient,
+  getTenantAwareTikTokOAuthClient,
 } from '../lib/oauthConfig.js';
 import { parseOAuthState, signOAuthState } from '../lib/tenantPlatformApps.js';
 import { recordSuccessfulPublish } from '../lib/publishHistory.js';
@@ -93,8 +93,8 @@ function graphVersion() {
   return process.env.META_GRAPH_VERSION?.trim() || 'v25.0';
 }
 
-function getTikTokClient() {
-  return getTikTokOAuthClient();
+async function getTikTokClient(tenantId?: string) {
+  return getTenantAwareTikTokOAuthClient(tenantId);
 }
 
 async function getMetaClient(tenantId?: string) {
@@ -345,7 +345,7 @@ async function saveInstagramFromMeta(input: {
 }
 
 async function connectTikTok(pending: PendingOAuthState, code: string, req: Request) {
-  const client = getTikTokClient();
+  const client = await getTikTokClient(pending.tenantId);
   if (!client) throw new Error('TikTok 一键授权暂未开启，请联系服务顾问配置平台应用和回调地址。');
   const tokens = await exchangeTikTokCode({ ...client, code, redirectUri: redirectUri(req, 'tiktok') });
   const user = await getTikTokUser(tokens.accessToken);
@@ -484,7 +484,7 @@ socialRouter.get('/oauth/:platform/status', async (req, res) => {
     return;
   }
   const { tenantId } = res.locals as AuthLocals;
-  const configured = platform === 'tiktok' ? Boolean(getTikTokClient()) : Boolean(await getMetaClient(tenantId));
+  const configured = platform === 'tiktok' ? Boolean(await getTikTokClient(tenantId)) : Boolean(await getMetaClient(tenantId));
   res.json({
     configured,
     redirectUri: redirectUri(req, platform),
@@ -500,7 +500,7 @@ socialRouter.post('/oauth/:platform/start', async (req, res) => {
     return;
   }
   const { userId, tenantId } = res.locals as AuthLocals;
-  const tiktokClient = platform === 'tiktok' ? getTikTokClient() : null;
+  const tiktokClient = platform === 'tiktok' ? await getTikTokClient(tenantId) : null;
   const metaClient = platform === 'tiktok' ? null : await getMetaClient(tenantId);
   if (platform === 'tiktok' ? !tiktokClient : !metaClient) {
     res.status(503).json({ error: `${platform} 一键授权暂未开启，请联系服务顾问配置平台应用和回调地址。` });

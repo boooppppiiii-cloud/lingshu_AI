@@ -4,11 +4,11 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { Request } from 'express';
 import { store } from '../storage/index.js';
-import { getPublicOrigin, getMetaOAuthClient, getYouTubeOAuthClient } from './oauthConfig.js';
+import { getPublicOrigin, getMetaOAuthClient, getTikTokOAuthClient, getYouTubeOAuthClient } from './oauthConfig.js';
 import { sendDingTalkText } from '../integrations/dingtalk.js';
 import { sendFeishuText } from '../integrations/feishu.js';
 
-export type TenantPlatform = 'meta' | 'google' | 'wecom';
+export type TenantPlatform = 'meta' | 'google' | 'tiktok' | 'wecom';
 export type TenantTokenType = 'user_60d' | 'system_user_permanent';
 export type TenantPlatformStatus =
   | 'pending'
@@ -64,6 +64,7 @@ export interface PublicTenantPlatformApp {
   wecomEncodingAesKeySet: boolean;
   wecomEncodingAesKeyLength: number;
   webhookUrl: string;
+  oauthRedirectUri: string;
   tokenType: TenantTokenType;
   accessTokenSet: boolean;
   accessTokenLength: number;
@@ -184,6 +185,11 @@ export function publicTenantPlatformApp(req: Request, app: TenantPlatformAppReco
     wecomEncodingAesKeySet: Boolean(wecomEncodingAesKey),
     wecomEncodingAesKeyLength: wecomEncodingAesKey.length,
     webhookUrl: app.platform === 'meta' || app.platform === 'wecom' ? tenantWebhookUrl(req, app.tenant_id, app.platform) : '',
+    oauthRedirectUri: app.platform === 'google'
+      ? `${getPublicOrigin(req)}/api/overseas/youtube/oauth/callback`
+      : app.platform === 'tiktok'
+        ? `${getPublicOrigin(req)}/api/overseas/social/oauth/tiktok/callback`
+        : '',
     tokenType: app.token_type || 'user_60d',
     accessTokenSet: Boolean(accessToken),
     accessTokenLength: accessToken.length,
@@ -273,6 +279,16 @@ export async function getTenantGoogleOAuthClient(tenantId?: string): Promise<{ c
     if (clientId && clientSecret) return { clientId, clientSecret };
   }
   return getYouTubeOAuthClient();
+}
+
+export async function getTenantTikTokOAuthClient(tenantId?: string): Promise<{ clientKey: string; clientSecret: string } | null> {
+  if (tenantId) {
+    const app = await getTenantPlatformApp(tenantId, 'tiktok');
+    const clientKey = text(app?.app_id);
+    const clientSecret = decryptSecret(app?.app_secret);
+    if (clientKey && clientSecret) return { clientKey, clientSecret };
+  }
+  return getTikTokOAuthClient();
 }
 
 export function signOAuthState(input: {

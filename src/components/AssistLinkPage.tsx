@@ -4,7 +4,7 @@ import { AlertCircle, CheckCircle2, Loader2, ShieldCheck } from 'lucide-react';
 interface AssistLinkStatus {
   token: string;
   tenantId: string;
-  platform: 'meta' | 'google';
+  platform: 'meta' | 'google' | 'tiktok';
   platformName: string;
   expiresAt: string;
   usedAt: string;

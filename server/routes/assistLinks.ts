@@ -4,6 +4,7 @@ import { requireAdminUser } from '../lib/demoAccounts.js';
 import {
   getTenantAwareGoogleOAuthClient,
   getTenantAwareMetaOAuthClient,
+  getTenantAwareTikTokOAuthClient,
 } from '../lib/oauthConfig.js';
 import { signOAuthState, type TenantPlatform } from '../lib/tenantPlatformApps.js';
 import { store } from '../storage/index.js';
@@ -23,6 +24,7 @@ interface AssistLinkRecord {
 const COL = 'assist_links';
 const GOOGLE_OAUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
 const META_AUTH_URL = 'https://www.facebook.com';
+const TIKTOK_AUTH_URL = 'https://www.tiktok.com/v2/auth/authorize/';
 const ASSIST_TTL_MS = 24 * 60 * 60 * 1000;
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const YOUTUBE_OAUTH_SCOPES = [
@@ -40,6 +42,13 @@ const META_SCOPES = [
   'instagram_content_publish',
   'instagram_manage_comments',
 ];
+const TIKTOK_SCOPES = [
+  'user.info.basic',
+  'user.info.profile',
+  'user.info.stats',
+  'video.list',
+  'video.publish',
+];
 
 function bodyText(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -47,7 +56,7 @@ function bodyText(value: unknown): string {
 
 function platformParam(value: unknown): TenantPlatform | null {
   const platform = bodyText(value);
-  return platform === 'meta' || platform === 'google' ? platform : null;
+  return platform === 'meta' || platform === 'google' || platform === 'tiktok' ? platform : null;
 }
 
 function publicOrigin(req: Request) {
@@ -63,7 +72,9 @@ function graphVersion() {
 }
 
 function platformName(platform: TenantPlatform) {
-  return platform === 'meta' ? 'Meta / Facebook / Instagram' : 'Google / YouTube';
+  if (platform === 'meta') return 'Meta / Facebook / Instagram';
+  if (platform === 'google') return 'Google / YouTube';
+  return 'TikTok';
 }
 
 function tokenExpired(record: AssistLinkRecord) {
@@ -152,7 +163,7 @@ assistLinksRouter.post('/assist-links/:token/start', async (req, res) => {
   const oauthState = signOAuthState({
     userId,
     tenantId,
-    platform: record.platform === 'google' ? 'youtube' : 'facebook',
+    platform: record.platform === 'google' ? 'youtube' : record.platform === 'tiktok' ? 'tiktok' : 'facebook',
     returnTo,
     expiresAt: Date.now() + OAUTH_STATE_TTL_MS,
   });
@@ -172,6 +183,23 @@ assistLinksRouter.post('/assist-links/:token/start', async (req, res) => {
     url.searchParams.set('access_type', 'offline');
     url.searchParams.set('include_granted_scopes', 'true');
     url.searchParams.set('prompt', 'consent');
+    url.searchParams.set('state', oauthState);
+    res.json({ url: url.toString(), platform: record.platform, platformName: platformName(record.platform) });
+    return;
+  }
+
+  if (record.platform === 'tiktok') {
+    const client = await getTenantAwareTikTokOAuthClient(tenantId);
+    if (!client) {
+      res.status(503).json({ error: 'tiktok_oauth_not_configured' });
+      return;
+    }
+    const redirectUri = `${publicOrigin(req)}/api/overseas/social/oauth/tiktok/callback`;
+    const url = new URL(TIKTOK_AUTH_URL);
+    url.searchParams.set('client_key', client.clientKey);
+    url.searchParams.set('redirect_uri', redirectUri);
+    url.searchParams.set('response_type', 'code');
+    url.searchParams.set('scope', TIKTOK_SCOPES.join(','));
     url.searchParams.set('state', oauthState);
     res.json({ url: url.toString(), platform: record.platform, platformName: platformName(record.platform) });
     return;
