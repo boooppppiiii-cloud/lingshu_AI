@@ -2575,6 +2575,24 @@ async function compressPocketBasePreview(sourcePath: string): Promise<string> {
     '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '29', '-pix_fmt', 'yuv420p',
     '-c:a', 'aac', '-b:a', '64k', '-ac', '1', '-movflags', '+faststart', '-y', outputPath,
   ], { timeout: 180_000 });
+  // PocketBase/Go rejects multipart bodies around its default 32 MiB request
+  // ceiling even when the collection file field itself allows 100 MiB. Long
+  // YouTube videos can exceed that after the normal preview encode, so cap a
+  // second-pass copy below 24 MiB to leave room for multipart overhead.
+  if (fs.statSync(outputPath).size > 24 * 1024 * 1024) {
+    const compactPath = path.join(ANALYSIS_DIR, `pb-preview-compact-${Date.now()}-${randomUUID()}.mp4`);
+    try {
+      await execFileAsync(ffmpegBin, [
+        '-hide_banner', '-loglevel', 'error', '-i', sourcePath,
+        '-vf', "scale='if(gt(iw,ih),360,-2)':'if(gt(iw,ih),-2,360)'",
+        '-c:v', 'libx264', '-preset', 'veryfast', '-b:v', '240k', '-maxrate', '320k', '-bufsize', '640k',
+        '-c:a', 'aac', '-b:a', '48k', '-ac', '1', '-movflags', '+faststart', '-y', compactPath,
+      ], { timeout: 240_000 });
+      fs.renameSync(compactPath, outputPath);
+    } finally {
+      try { if (fs.existsSync(compactPath)) fs.unlinkSync(compactPath); } catch { /* best effort */ }
+    }
+  }
   return outputPath;
 }
 
