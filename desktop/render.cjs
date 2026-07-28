@@ -30,8 +30,18 @@ function resolution(ratio) {
 const IMAGE_RE = /\.(jpe?g|png|webp|gif|bmp|svg)(\?|$)/i;
 
 /** 下载远端 url 到本地文件（桌面端与本机 express 同机，localhost 直连） */
-async function downloadTo(url, dest) {
-  const res = await fetch(url);
+async function downloadTo(url, dest, options = {}) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 45_000);
+  const headers = options.assetOrigin && String(url).startsWith(options.assetOrigin)
+    ? options.assetHeaders || {}
+    : {};
+  let res;
+  try {
+    res = await fetch(url, { headers, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) throw new Error(`download ${url} -> ${res.status}`);
   fs.writeFileSync(dest, Buffer.from(await res.arrayBuffer()));
   return dest;
@@ -121,6 +131,10 @@ async function composite(manifest, onProgress = () => {}, outDir) {
   fs.mkdirSync(dir, { recursive: true });
   const outputPath = path.join(dir, `studio-${jobId}.mp4`);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'studio-'));
+  const downloadOptions = {
+    assetOrigin: String(manifest && manifest.assetOrigin || ''),
+    assetHeaders: manifest && manifest.assetHeaders && typeof manifest.assetHeaders === 'object' ? manifest.assetHeaders : {},
+  };
 
   try {
     // 1) 拉取真实素材片段与 BGM
@@ -130,7 +144,7 @@ async function composite(manifest, onProgress = () => {}, outDir) {
       const u = timeline[i].url;
       const ext = (u.split('?')[0].split('.').pop() || 'mp4').toLowerCase();
       const dest = path.join(tmp, `clip${i}.${ext}`);
-      try { await downloadTo(u, dest); localClips.push({ ...timeline[i], file: dest, image: IMAGE_RE.test(u) }); } catch { /* 跳过失败片段 */ }
+      try { await downloadTo(u, dest, downloadOptions); localClips.push({ ...timeline[i], file: dest, image: IMAGE_RE.test(u) }); } catch { /* 跳过失败片段 */ }
     }
 
     let bgmFile = null;
@@ -138,7 +152,7 @@ async function composite(manifest, onProgress = () => {}, outDir) {
     if (bgmUrl) {
       try {
         bgmFile = path.join(tmp, `bgm${path.extname(bgmUrl.split('?')[0]) || '.wav'}`);
-        await downloadTo(bgmUrl, bgmFile);
+        await downloadTo(bgmUrl, bgmFile, downloadOptions);
       } catch { bgmFile = null; }
     }
 
@@ -147,7 +161,7 @@ async function composite(manifest, onProgress = () => {}, outDir) {
     if (voUrl) {
       try {
         voFile = path.join(tmp, `vo${path.extname(voUrl.split('?')[0]) || '.wav'}`);
-        await downloadTo(voUrl, voFile);
+        await downloadTo(voUrl, voFile, downloadOptions);
       } catch { voFile = null; }
     }
 
@@ -237,6 +251,8 @@ async function composite(manifest, onProgress = () => {}, outDir) {
       // stdin 忽略（双保险防挂起）、stdout 忽略、只读 stderr 解析进度
       const proc = spawn(ffmpegPath, args, { stdio: ['ignore', 'ignore', 'pipe'] });
       let stderr = '';
+      const maxRenderMs = Math.max(120_000, duration * 15_000);
+      const killTimer = setTimeout(() => proc.kill('SIGKILL'), maxRenderMs);
       proc.stderr.on('data', chunk => {
         const s = chunk.toString();
         stderr += s;
@@ -248,12 +264,13 @@ async function composite(manifest, onProgress = () => {}, outDir) {
       });
       proc.on('error', err => resolve({ ok: false, error: String(err) }));
       proc.on('close', code => {
+        clearTimeout(killTimer);
         try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* noop */ }
         if (code === 0) {
           onProgress(100);
           resolve({ ok: true, outputPath });
         } else {
-          resolve({ ok: false, error: `ffmpeg exited ${code}\n${stderr.slice(-1200)}` });
+          resolve({ ok: false, error: code === null ? 'ffmpeg 合成超时，请缩短素材或重试' : `ffmpeg exited ${code}\n${stderr.slice(-1200)}` });
         }
       });
     });
