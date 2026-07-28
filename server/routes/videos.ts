@@ -3342,12 +3342,11 @@ function apifyTikTokItemToCrawledVideo(item: Record<string, unknown>, keyword: s
     item.images,
     item,
   ]);
-  const rawDuration = Number(item.videoMeta && typeof item.videoMeta === 'object' && 'duration' in item.videoMeta
+  const duration = Number(item.videoMeta && typeof item.videoMeta === 'object' && 'duration' in item.videoMeta
     ? (item.videoMeta as Record<string, unknown>).duration
     : item.duration || 0);
-  // Clockworks returns duration in seconds for most rows, but some TikTok
-  // payloads expose milliseconds (for example 2111 for a 2.111s clip).
-  const duration = rawDuration > 600 ? rawDuration / 1000 : rawDuration;
+  const maxVideoDuration = Math.max(15, Number(process.env.CRAWLER_MAX_VIDEO_DURATION_SECONDS || 180));
+  if (duration > maxVideoDuration) return null;
   const playCount = Number(item.playCount || item.views || item.viewCount || 0);
   const diggCount = Number(item.diggCount || item.likes || item.likeCount || 0);
   const commentCount = Number(item.commentCount || item.comments || 0);
