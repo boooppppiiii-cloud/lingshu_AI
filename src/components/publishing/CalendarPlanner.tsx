@@ -49,11 +49,20 @@ export type CalendarPost = {
   platformPostId?: string;
 };
 
+export type PendingPublishContent = {
+  id: string;
+  title: string;
+  description?: string;
+  sourceProjectId?: string;
+  sourcePlatform?: string;
+  deliveryMode?: 'now' | 'schedule';
+  scheduledAt?: string;
+  status?: string;
+};
+
 type ViewMode = 'week' | 'month';
 
-type HoverContentData =
-  | { kind: 'post'; post: CalendarPost }
-  | { kind: 'suggestion'; suggestion: QueueSuggestion };
+type HoverContentData = { kind: 'post'; post: CalendarPost };
 
 type HoveredContent = HoverContentData & { x: number; y: number };
 
@@ -155,6 +164,27 @@ function hourLabel(value: number): string {
   return `${String(hour).padStart(2, '0')}:${minutes}`;
 }
 
+type ChartPoint = { x: number; y: number };
+
+function smoothChartPath(points: ChartPoint[]): string {
+  if (!points.length) return '';
+  if (points.length === 1) return `M ${points[0].x} ${points[0].y}`;
+  return points.slice(0, -1).reduce((path, point, index) => {
+    const previous = points[index - 1] || point;
+    const next = points[index + 1];
+    const afterNext = points[index + 2] || next;
+    const control1 = {
+      x: point.x + (next.x - previous.x) / 6,
+      y: point.y + (next.y - previous.y) / 6,
+    };
+    const control2 = {
+      x: next.x - (afterNext.x - point.x) / 6,
+      y: next.y - (afterNext.y - point.y) / 6,
+    };
+    return `${path} C ${control1.x.toFixed(2)} ${control1.y.toFixed(2)}, ${control2.x.toFixed(2)} ${control2.y.toFixed(2)}, ${next.x} ${next.y}`;
+  }, `M ${points[0].x} ${points[0].y}`);
+}
+
 function eventTone(event: MarketingEvent): string {
   if (event.market === 'middle-east') return 'border-violet-200 bg-violet-50 text-violet-700';
   if (event.market === 'southeast-asia') return 'border-rose-200 bg-rose-50 text-rose-700';
@@ -173,10 +203,14 @@ async function api<T>(url: string, init?: RequestInit): Promise<T> {
 export function CalendarPlanner({
   onCreate,
   onOpenPost,
+  pendingItems = [],
+  onOpenPending,
   refreshKey = 0,
 }: {
   onCreate?: (date: Date) => void;
   onOpenPost?: (post: CalendarPost) => void;
+  pendingItems?: PendingPublishContent[];
+  onOpenPending?: (id: string) => void;
   refreshKey?: number;
 }) {
   const today = startOfDay(new Date());
@@ -189,14 +223,8 @@ export function CalendarPlanner({
   const [items, setItems] = useState<CalendarPost[]>([]);
   const [scores, setScores] = useState<Record<number, number[]>>({});
   const [dragId, setDragId] = useState('');
-  const [activeSuggestionId, setActiveSuggestionId] = useState('');
-  const [calendarDragSuggestionId, setCalendarDragSuggestionId] = useState('');
-  const [matchedSuggestionId, setMatchedSuggestionId] = useState('');
   const [dragOverDate, setDragOverDate] = useState('');
-  const [suggestionOverrides, setSuggestionOverrides] = useState<Record<string, string>>({});
   const [queueSuggestions, setQueueSuggestions] = useState<QueueSuggestion[]>([]);
-  const [aiLayoutEnabled, setAiLayoutEnabled] = useState(false);
-  const [recentlyConfirmedId, setRecentlyConfirmedId] = useState('');
   const [hoveredEventDate, setHoveredEventDate] = useState('');
   const [hoveredContent, setHoveredContent] = useState<HoveredContent | null>(null);
   const [interactionMessage, setInteractionMessage] = useState('');
@@ -316,62 +344,55 @@ export function CalendarPlanner({
     return groups;
   }, [items]);
 
-  const suggestionsByDay = useMemo(() => {
-    const groups: Record<string, QueueSuggestion[]> = {};
-    if (!aiLayoutEnabled) return groups;
-    for (const suggestion of queueSuggestions) {
-      const key = dateKey(new Date(suggestion.scheduledAt));
-      groups[key] = [...(groups[key] || []), suggestion];
-    }
-    return groups;
-  }, [aiLayoutEnabled, queueSuggestions]);
-
   const handleSuggestionsChange = useCallback((suggestions: QueueSuggestion[]) => {
     setQueueSuggestions(suggestions);
   }, []);
 
-  const handleSuggestionHighlight = (id: string) => {
-    setMatchedSuggestionId(id);
-    if (!id) return;
-    const suggestion = queueSuggestions.find(item => item.id === id);
-    if (!suggestion) return;
-    const date = startOfDay(new Date(suggestion.scheduledAt));
-    if (!days.some(day => isSameDay(day, date))) {
-      setAnchor(date);
-      setSelectedDate(date);
-    }
-    const key = dateKey(date);
-    window.setTimeout(() => {
-      const container = calendarScrollRef.current;
-      const target = container?.querySelector<HTMLElement>(`[data-calendar-date="${key}"]`);
-      if (!container || !target) return;
-      container.scrollTo({
-        left: Math.max(0, target.offsetLeft - (container.clientWidth - target.clientWidth) / 2),
-        behavior: 'smooth',
-      });
-    }, 80);
-  };
-
-  const handleSuggestionActivate = (id: string) => {
-    setActiveSuggestionId('');
-    handleSuggestionHighlight(id);
-    window.setTimeout(() => calendarTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 40);
-  };
-
-  const moveSuggestion = useCallback((id: string, scheduledAt: Date) => {
-    setSuggestionOverrides(previous => ({ ...previous, [id]: scheduledAt.toISOString() }));
-  }, []);
-
   useEffect(() => {
-    setSuggestionOverrides({});
     setQueueSuggestions([]);
   }, [selectedMarket, selectedPlatform]);
 
   const selectedScores = scores[selectedDate.getDay()] || [];
-  const matchedSuggestionDate = useMemo(() => {
-    const suggestion = queueSuggestions.find(item => item.id === matchedSuggestionId || item.id === calendarDragSuggestionId);
-    return suggestion ? dateKey(new Date(suggestion.scheduledAt)) : '';
-  }, [calendarDragSuggestionId, matchedSuggestionId, queueSuggestions]);
+  const tideHours = [0, 4, 8, 12, 16, 20, 23];
+  const tideChartWidth = 1100;
+  const tidePoints = tideHours.map((hour, index) => ({
+    x: (index + 0.5) * (tideChartWidth / 7),
+    y: 82 - (selectedScores[hour] || 0) * 62,
+  }));
+  const tideLinePath = smoothChartPath(tidePoints);
+  const tideAreaPath = `${tideLinePath} L ${tidePoints[tidePoints.length - 1].x} 88 L ${tidePoints[0].x} 88 Z`;
+
+  const openAiLayout = () => {
+    const count = Math.max(3, Math.min(5, pendingItems.length || 3));
+    const rows = queueSuggestions.slice(0, count).map((suggestion, index) => {
+      const pending = pendingItems[index];
+      const title = pending?.title?.trim() || suggestion.title;
+      const time = suggestion.scheduledAt.toLocaleString('zh-CN', {
+        timeZone: market.timeZone,
+        month: 'numeric',
+        day: 'numeric',
+        weekday: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+      return `${index + 1}. ${time}｜${title}`;
+    });
+    const assistantText = rows.length
+      ? `我先按${enterpriseMarketLabel}的活跃时段排了一版：\n\n${rows.join('\n')}\n\n这些还没写进日历。想调整的话，直接告诉我“第几条换到哪天”就行。`
+      : '现在还没有可用的发布时段。你先选一个发布节奏，或准备一条待发布视频，我再帮你排。';
+    window.dispatchEvent(new CustomEvent('lingshu-assistant-open', {
+      detail: {
+        assistantText,
+        context: {
+          agent: 'traffic',
+          label: '内容排产',
+          summary: `正在为${enterpriseMarketLabel}的待发布视频安排发布节奏。`,
+          suggestions: ['按询盘机会排序', '避开周末', '节庆内容提前一周', '把第 1 条换到周五'],
+        },
+      },
+    }));
+    setInteractionMessage('灵小枢已打开，排布建议在对话里。');
+  };
 
   const reschedule = async (postId: string, day: Date, hour = 10) => {
     const target = roundToHalfHour(new Date(day));
@@ -382,30 +403,6 @@ export function CalendarPlanner({
       body: JSON.stringify({ scheduledAt: target.toISOString() }),
     });
     setItems(previous => previous.map(item => item.id === postId ? data.item : item));
-  };
-
-  const moveSuggestionToDay = (suggestionId: string, day: Date) => {
-    const suggestion = queueSuggestions.find(item => item.id === suggestionId);
-    if (!suggestion) return;
-    const source = new Date(suggestion.scheduledAt);
-    const target = startOfDay(day);
-    target.setHours(source.getHours(), source.getMinutes(), 0, 0);
-    moveSuggestion(suggestionId, target);
-    setAiLayoutEnabled(true);
-    setSelectedDate(startOfDay(day));
-    setActiveSuggestionId('');
-    if (calendarDragSuggestionId === suggestionId) {
-      window.setTimeout(() => setCalendarDragSuggestionId(''), 1600);
-    }
-    setInteractionMessage(`“${suggestion.title}”已移到 ${target.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })}，确认后才会进入正式排期。`);
-  };
-
-  const handleConfirmed = (post: CalendarPost) => {
-    setItems(previous => previous.some(item => item.id === post.id) ? previous : [...previous, post]);
-    setRecentlyConfirmedId(post.id);
-    setInteractionMessage(`“${post.title}”已确认并转移到内容日历。`);
-    window.setTimeout(() => setRecentlyConfirmedId(''), 2400);
-    window.setTimeout(() => calendarTopRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 60);
   };
 
   const previewAt = (event: React.MouseEvent, content: HoverContentData) => {
@@ -478,25 +475,15 @@ export function CalendarPlanner({
           <button
             type="button"
             data-lingshu-guide="ai-layout"
-            onClick={() => {
-              setAiLayoutEnabled(previous => {
-                const next = !previous;
-                setInteractionMessage(next ? '已让 AI 按当前发布节奏预排到日历；所有建议仍需逐条确认。' : '已隐藏 AI 预排建议，正式发布内容不受影响。');
-                return next;
-              });
-            }}
-            className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-2 text-xs font-black transition ${
-              aiLayoutEnabled
-                ? 'border-violet-300 bg-violet-600 text-white shadow-sm'
-                : 'border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100'
-            }`}
+            onClick={openAiLayout}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-violet-200 bg-violet-50 px-3 py-2 text-xs font-black text-violet-700 transition hover:-translate-y-0.5 hover:border-violet-300 hover:bg-violet-100 hover:shadow-sm"
           >
-            <Sparkles size={13} /> {aiLayoutEnabled ? 'AI 排布已开启' : 'AI 帮我排布发布节奏'}
+            <Sparkles size={13} /> AI 帮我排布发布节奏
           </button>
         </div>
 
-        <div data-lingshu-guide="publishing-tide" className="mt-3 rounded-xl border border-emerald-100 bg-emerald-50/30 px-3 pb-2 pt-3">
-          <div className="flex flex-wrap items-center justify-between gap-2">
+        <div data-lingshu-guide="publishing-tide" className="mt-3 overflow-hidden rounded-xl border border-emerald-100 bg-emerald-50/30 pb-2 pt-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 px-3">
             <div className="flex items-center gap-2">
               <Waves size={14} className="text-emerald-600" />
               <span className="text-xs font-black text-text-primary">
@@ -508,35 +495,43 @@ export function CalendarPlanner({
               目标市场：{enterpriseMarketLabel} · {scoreSource === '账号真实数据' ? scoreSource : `${scoreSource} · 非账号实测`} · 北京时间
             </span>
           </div>
-          <svg viewBox="0 0 720 104" className="mt-2 h-[104px] w-full overflow-visible" role="img" aria-label="24 小时发布潮汐折线图">
+          <svg viewBox={`0 0 ${tideChartWidth} 104`} preserveAspectRatio="none" className="mt-2 h-[104px] w-full overflow-visible" role="img" aria-label="24 小时发布潮汐平滑曲线图">
             <defs>
               <linearGradient id="publishing-tide-fill" x1="0" x2="0" y1="0" y2="1">
                 <stop offset="0%" stopColor="#10b981" stopOpacity="0.28" />
                 <stop offset="100%" stopColor="#10b981" stopOpacity="0.02" />
               </linearGradient>
+              <filter id="publishing-tide-glow" x="-10%" y="-35%" width="120%" height="170%">
+                <feGaussianBlur stdDeviation="2.2" result="blur" />
+                <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+              </filter>
             </defs>
-            {[20, 50, 80].map(y => <line key={y} x1="22" x2="698" y1={y} y2={y} stroke="#d1fae5" strokeDasharray="4 5" />)}
-            <polygon
-              points={`22,88 ${Array.from({ length: 24 }, (_, hour) => `${22 + hour * (676 / 23)},${88 - (selectedScores[hour] || 0) * 68}`).join(' ')} 698,88`}
+            {[20, 50, 80].map(y => <line key={y} x1="0" x2={tideChartWidth} y1={y} y2={y} stroke="#d1fae5" strokeDasharray="4 5" />)}
+            {Array.from({ length: 8 }, (_, index) => (
+              <line key={index} x1={index * (tideChartWidth / 7)} x2={index * (tideChartWidth / 7)} y1="10" y2="88" stroke="#ecfdf5" />
+            ))}
+            <path
+              d={tideAreaPath}
               fill="url(#publishing-tide-fill)"
             />
-            <polyline
-              points={Array.from({ length: 24 }, (_, hour) => `${22 + hour * (676 / 23)},${88 - (selectedScores[hour] || 0) * 68}`).join(' ')}
+            <path
+              d={tideLinePath}
               fill="none"
               stroke="#10b981"
               strokeWidth="3"
               strokeLinecap="round"
               strokeLinejoin="round"
+              filter="url(#publishing-tide-glow)"
             />
-            {Array.from({ length: 24 }, (_, hour) => {
+            {tideHours.map((hour, index) => {
               const score = selectedScores[hour] || 0;
-              if (hour % 3 !== 0 && hour !== 23) return null;
+              const point = tidePoints[index];
               return (
                 <g key={hour}>
-                  <circle cx={22 + hour * (676 / 23)} cy={88 - score * 68} r="3.5" fill="#fff" stroke="#059669" strokeWidth="2">
+                  <circle cx={point.x} cy={point.y} r="3.5" fill="#fff" stroke="#059669" strokeWidth="2">
                     <title>{`北京 ${hour}:00 · ${market.timeZoneLabel} ${hourLabel(targetHourFromBeijing(hour, utcOffset))} · 推荐分 ${Math.round(score * 100)}`}</title>
                   </circle>
-                  <text x={22 + hour * (676 / 23)} y="102" textAnchor="middle" fontSize="8" fill="#64748b">{String(hour).padStart(2, '0')}</text>
+                  <text x={point.x} y="101" textAnchor="middle" fontSize="8" fill="#64748b">{String(hour).padStart(2, '0')}</text>
                 </g>
               );
             })}
@@ -548,31 +543,16 @@ export function CalendarPlanner({
             {interactionMessage}
           </div>
         )}
-        {calendarDragSuggestionId && (() => {
-          const suggestion = queueSuggestions.find(item => item.id === calendarDragSuggestionId);
-          return suggestion ? (
-            <div className="mt-2 flex items-center justify-between gap-3 rounded-xl border border-violet-300 bg-white px-3 py-2 shadow-md ring-2 ring-violet-100">
-              <span className="inline-flex min-w-0 items-center gap-2">
-                <Sparkles size={12} className="shrink-0 text-violet-600" />
-                <span className="truncate text-[10px] font-black text-violet-800">对应队列已置顶：{suggestion.title}</span>
-              </span>
-              <span className="shrink-0 text-[9px] font-bold text-violet-600">{suggestion.scheduledAt.toLocaleString('zh-CN')}</span>
-            </div>
-          ) : null;
-        })()}
-
         <div ref={calendarScrollRef} className="mt-3 max-h-[420px] overflow-auto pb-2">
           <div className={`grid min-w-[960px] grid-cols-7 gap-2 ${mode === 'month' ? 'auto-rows-fr' : ''}`}>
             {days.map(day => {
               const key = dateKey(day);
               const dayItems = itemsByDay[key] || [];
-              const daySuggestions = suggestionsByDay[key] || [];
               const dayFestivalNotices = festivalNoticesByDay[key] || [];
               const isToday = isSameDay(day, today);
               const isSelected = isSameDay(day, selectedDate);
               const isFestivalHovered = hoveredEventDate === key;
               const isDragTarget = dragOverDate === key;
-              const isQueueMatched = matchedSuggestionDate === key;
               const isOutsideMonth = mode === 'month' && day.getMonth() !== anchor.getMonth();
               return (
                 <div
@@ -586,17 +566,8 @@ export function CalendarPlanner({
                   onDragLeave={event => {
                     if (!event.currentTarget.contains(event.relatedTarget as Node)) setDragOverDate('');
                   }}
-                  onMouseUp={() => {
-                    if (activeSuggestionId) moveSuggestionToDay(activeSuggestionId, day);
-                  }}
                   onDrop={event => {
                     event.preventDefault();
-                    const suggestionId = event.dataTransfer.getData('application/x-lingshu-queue-suggestion');
-                    if (suggestionId) {
-                      moveSuggestionToDay(suggestionId, day);
-                      setDragOverDate('');
-                      return;
-                    }
                     const id = event.dataTransfer.getData('text/post-id') || dragId;
                     if (id) void reschedule(id, day, 10);
                     setDragId('');
@@ -609,18 +580,13 @@ export function CalendarPlanner({
                       ? 'scale-[1.015] border-violet-400 bg-violet-50 ring-4 ring-violet-100 shadow-lg'
                       : isFestivalHovered
                         ? 'scale-[1.02] border-orange-400 bg-orange-50 ring-4 ring-orange-100 shadow-lg'
-                        : isQueueMatched
-                          ? 'border-violet-400 bg-violet-50/70 ring-2 ring-violet-200 shadow-md'
-                          : isToday
+                        : isToday
                             ? 'border-emerald-400 bg-emerald-50/40 shadow-[0_8px_24px_rgba(16,185,129,0.12)]'
                             : isSelected
                               ? 'border-sky-300 bg-sky-50/30 ring-2 ring-sky-100'
                               : 'border-border bg-white'
                   } ${isOutsideMonth ? 'opacity-45' : ''}`}
                 >
-                  {isQueueMatched && (
-                    <span className="absolute -top-2 left-2 rounded-full bg-violet-600 px-2 py-0.5 text-[8px] font-black text-white shadow-sm">对应队列</span>
-                  )}
                   <button
                     type="button"
                     onClick={() => setSelectedDate(startOfDay(day))}
@@ -674,52 +640,6 @@ export function CalendarPlanner({
                   )}
 
                   <div className="space-y-1.5">
-                    {daySuggestions.slice(0, mode === 'month' ? 1 : 3).map(suggestion => {
-                      const isMatched = matchedSuggestionId === suggestion.id || calendarDragSuggestionId === suggestion.id;
-                      return (
-                        <button
-                          key={suggestion.id}
-                          type="button"
-                          draggable
-                          onMouseDown={() => {
-                            setActiveSuggestionId(suggestion.id);
-                            setCalendarDragSuggestionId(suggestion.id);
-                            setMatchedSuggestionId(suggestion.id);
-                          }}
-                          onDragStart={event => {
-                            setActiveSuggestionId(suggestion.id);
-                            setCalendarDragSuggestionId(suggestion.id);
-                            setMatchedSuggestionId(suggestion.id);
-                            event.dataTransfer.effectAllowed = 'move';
-                            event.dataTransfer.setData('application/x-lingshu-queue-suggestion', suggestion.id);
-                            event.dataTransfer.setData('text/plain', suggestion.title);
-                          }}
-                          onDragEnd={() => {
-                            setActiveSuggestionId('');
-                            window.setTimeout(() => setCalendarDragSuggestionId(''), 1600);
-                          }}
-                          onMouseEnter={event => {
-                            setMatchedSuggestionId(suggestion.id);
-                            previewAt(event, { kind: 'suggestion', suggestion });
-                          }}
-                          onMouseMove={event => previewAt(event, { kind: 'suggestion', suggestion })}
-                          onMouseLeave={() => {
-                            setMatchedSuggestionId('');
-                            setHoveredContent(null);
-                          }}
-                          onClick={() => setSelectedDate(startOfDay(day))}
-                          className={`w-full cursor-grab rounded-xl border border-dashed bg-amber-50/80 p-1.5 text-left text-amber-800 shadow-sm transition hover:-translate-y-0.5 ${
-                            isMatched ? 'border-violet-400 ring-2 ring-violet-200' : 'border-amber-400'
-                          }`}
-                        >
-                          <div className="flex items-center justify-between gap-1 text-[9px] font-black">
-                            <span className="inline-flex items-center gap-1"><Sparkles size={9} /> AI 建议</span>
-                            <span>{new Date(suggestion.scheduledAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
-                          </div>
-                          <p className="mt-1 line-clamp-2 text-[10px] font-bold leading-tight">{suggestion.title}</p>
-                        </button>
-                      );
-                    })}
                     {dayItems.slice(0, mode === 'month' ? 1 : 4).map(item => {
                       const meta = statusMeta(item);
                       return (
@@ -735,9 +655,7 @@ export function CalendarPlanner({
                           onMouseMove={event => previewAt(event, { kind: 'post', post: item })}
                           onMouseLeave={() => setHoveredContent(null)}
                           onClick={() => onOpenPost?.(item)}
-                          className={`w-full rounded-xl border p-1.5 text-left shadow-sm transition hover:-translate-y-0.5 ${meta.className} ${
-                            recentlyConfirmedId === item.id ? 'animate-pulse ring-4 ring-emerald-200' : ''
-                          }`}
+                          className={`w-full rounded-xl border p-1.5 text-left shadow-sm transition hover:-translate-y-0.5 ${meta.className}`}
                         >
                           <div className="flex items-center justify-between gap-1 text-[9px] font-black">
                             <PlatformBadge platform={item.platform} compact />
@@ -756,12 +674,9 @@ export function CalendarPlanner({
                     {dayItems.length > (mode === 'month' ? 1 : 4) && (
                       <p className="text-center text-[9px] font-bold text-text-muted">还有 {dayItems.length - (mode === 'month' ? 1 : 4)} 条</p>
                     )}
-                    {daySuggestions.length > (mode === 'month' ? 1 : 3) && (
-                      <p className="text-center text-[9px] font-bold text-amber-600">另有 {daySuggestions.length - (mode === 'month' ? 1 : 3)} 条 AI 建议</p>
-                    )}
                   </div>
 
-                  {mode === 'week' && dayItems.length === 0 && daySuggestions.length === 0 && (
+                  {mode === 'week' && dayItems.length === 0 && (
                     <button
                       type="button"
                       onClick={() => onCreate?.(day)}
@@ -782,22 +697,12 @@ export function CalendarPlanner({
         selectedMarket={selectedMarket}
         marketLabel={enterpriseMarketLabel}
         marketTimeZone={market.timeZone}
-        marketTimeZoneLabel={market.timeZoneLabel}
         utcOffset={utcOffset}
         posts={items}
-        scores={scores}
         marketingEvents={marketingEvents}
-        onCreate={onCreate}
-        onOpenPost={onOpenPost}
-        onConfirmed={handleConfirmed}
-        suggestionOverrides={suggestionOverrides}
-        onSuggestionMove={moveSuggestion}
+        pendingItems={pendingItems}
+        onOpenPending={onOpenPending}
         onSuggestionsChange={handleSuggestionsChange}
-        onSuggestionDragState={setActiveSuggestionId}
-        highlightedSuggestionId={matchedSuggestionId}
-        pinnedSuggestionId={calendarDragSuggestionId}
-        onSuggestionHighlight={handleSuggestionHighlight}
-        onSuggestionActivate={handleSuggestionActivate}
       />
 
       {hoveredContent && (
@@ -808,7 +713,7 @@ export function CalendarPlanner({
             top: Math.max(12, Math.min(hoveredContent.y + 14, (typeof window === 'undefined' ? 900 : window.innerHeight) - 286)),
           }}
         >
-          {hoveredContent.kind === 'post' ? (() => {
+          {(() => {
             const post = hoveredContent.post;
             const meta = statusMeta(post);
             return (
@@ -845,24 +750,7 @@ export function CalendarPlanner({
                 </div>
               </>
             );
-          })() : (
-            <div className="p-4">
-              <div className="flex items-center justify-between gap-2">
-                <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-[9px] font-black text-amber-700">
-                  <Sparkles size={10} /> AI 建议 · 待确认
-                </span>
-                <span className="text-[9px] text-text-muted">{new Date(hoveredContent.suggestion.scheduledAt).toLocaleString('zh-CN')}</span>
-              </div>
-              <p className="mt-3 text-sm font-black leading-snug text-text-primary">{hoveredContent.suggestion.title}</p>
-              <p className="mt-2 text-[10px] leading-relaxed text-text-secondary">{hoveredContent.suggestion.brief}</p>
-              <div className="mt-3 flex flex-wrap gap-1">
-                {hoveredContent.suggestion.tags.map(tag => (
-                  <span key={tag} className="rounded-full bg-amber-50 px-2 py-1 text-[9px] font-bold text-amber-700">#{tag}</span>
-                ))}
-              </div>
-              <p className="mt-3 border-t border-amber-100 pt-2 text-[9px] font-bold text-amber-700">可继续拖到其他日期；在左侧确认后才成为正式排期。</p>
-            </div>
-          )}
+          })()}
         </div>
       )}
     </div>

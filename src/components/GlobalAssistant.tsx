@@ -624,7 +624,7 @@ export default function GlobalAssistant({
 
   useEffect(() => {
     const handler = (event: Event) => {
-      const detail = (event as CustomEvent<{ text?: string; context?: Partial<AssistantContext>; tool?: AssistantTool }>).detail;
+      const detail = (event as CustomEvent<{ text?: string; assistantText?: string; context?: Partial<AssistantContext>; tool?: AssistantTool }>).detail;
       let targetContext = pageContext;
       if (detail?.context?.agent && detail.context.label && detail.context.summary) {
         targetContext = {
@@ -640,6 +640,11 @@ export default function GlobalAssistant({
       const targetAgent = orbitIdForAgent(targetContext.agent);
       openAgent(targetAgent);
       if (detail?.tool === 'knowledge-intake') setAssistantTool('knowledge-intake');
+      const assistantText = detail?.assistantText?.trim();
+      if (assistantText) {
+        const current = useAssistantStore.getState().threads[targetAgent].messages;
+        setMessages(targetAgent, [...current, { role: 'assistant', content: assistantText }]);
+      }
       const text = detail?.text?.trim();
       if (text) window.setTimeout(() => void send(text, targetAgent, targetContext), 0);
     };

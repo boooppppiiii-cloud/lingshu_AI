@@ -72,12 +72,12 @@ export const ASSISTANT_GUIDES: Record<string, AssistantGuide> = {
   },
   'ai-layout': {
     title: '让 AI 帮忙排',
-    message: '打开后我先排一版，你可以再拖动调整，不会自动发。',
+    message: '点一下，我会在对话里给待发布视频排一版时间。',
     agent: 'traffic',
   },
   'future-queue': {
-    title: '未来排产',
-    message: '拖卡片换日期，满意点确认，不满意就换一版。',
+    title: '待发布内容',
+    message: '前面生成的视频会来这里，点卡片就能继续编辑和排期。',
     agent: 'traffic',
   },
   'publishing-rhythm': {

@@ -345,6 +345,23 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
 
   const connectedAccounts = accounts.filter(account => account.status === 'connected');
   const activeItem = items.find(item => item.id === activeItemId) || items[0] || null;
+  const pendingCalendarItems = items
+    .filter(item => (
+      item.status !== 'published' &&
+      item.status !== 'scheduled' &&
+      item.status !== 'publishing' &&
+      Boolean(item.videoPath.trim() || item.title.trim() || item.sourceProjectId || item.sourcePlatform)
+    ))
+    .map(item => ({
+      id: item.id,
+      title: item.title || titleFromVideoPath(item.videoPath),
+      description: item.description,
+      sourceProjectId: item.sourceProjectId,
+      sourcePlatform: item.sourcePlatform,
+      deliveryMode: item.deliveryMode,
+      scheduledAt: item.scheduledAt,
+      status: item.status,
+    }));
   const selectedConnectedAccounts = connectedAccounts.filter(account => activeItem?.targetAccountIds.includes(account.id));
   const selectedPlatforms = Array.from(new Set(selectedConnectedAccounts.map(account => account.platform)));
   const connectedAccountIds = new Set(connectedAccounts.map(account => account.id));
@@ -398,6 +415,14 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
     }
     setNotice(`已把当前视频安排到 ${scheduled.toLocaleString('zh-CN', { month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit' })}，补齐素材后即可加入日历。`);
     window.setTimeout(() => publishSettingsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60);
+  };
+
+  const openPendingContent = (id: string) => {
+    const item = items.find(candidate => candidate.id === id);
+    if (!item) return;
+    setActiveItemId(id);
+    setNotice(`已打开“${item.title || titleFromVideoPath(item.videoPath)}”，可以继续编辑或安排发布时间。`);
+    window.setTimeout(() => document.getElementById('publishing-content-editor')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60);
   };
 
   const openCalendarPost = (post: CalendarPost) => {
@@ -827,6 +852,8 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
             refreshKey={calendarRefreshKey}
             onCreate={scheduleForCalendarDate}
             onOpenPost={openCalendarPost}
+            pendingItems={pendingCalendarItems}
+            onOpenPending={openPendingContent}
           />
         </section>
 
@@ -996,7 +1023,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
 
         <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
           <section className="space-y-5">
-            <div className="rounded-2xl border border-border bg-white p-5 shadow-sm">
+            <div id="publishing-content-editor" className="scroll-mt-24 rounded-2xl border border-border bg-white p-5 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <h3 className="text-sm font-bold text-text-primary">内容编辑</h3>
                 <div className="flex flex-wrap items-center gap-1.5">
