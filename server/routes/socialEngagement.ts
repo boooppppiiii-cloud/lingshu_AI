@@ -44,6 +44,11 @@ function heuristic(text: string) {
       'Happy to help. Which model or customization option are you interested in?',
       'Thanks! I can share the most relevant product details. Are you sourcing for retail or a project?',
     ],
+    replyTranslations: [
+      '感谢关注！方便说一下您的目标市场和预计采购数量吗？',
+      '很乐意帮您。您对哪个型号或哪种定制选项感兴趣？',
+      '谢谢！我可以给您更匹配的产品资料。您是用于零售采购还是项目采购？',
+    ],
   };
 }
 
@@ -51,13 +56,20 @@ async function analyze(text: string, platform: string, contentTitle = '') {
   try {
     const raw = await callLLM([
       'Analyze this public social comment as a B2B export sales lead.',
-      'Return strict JSON only: {"intent":string,"score":number,"reason":string,"replies":[string,string,string]}.',
+      'Return strict JSON only: {"intent":string,"score":number,"reason":string,"replies":[string,string,string],"replyTranslations":[string,string,string]}.',
       'Replies must use the commenter language, sound human, avoid invented prices/lead times/promises, and end with one useful question.',
+      'replyTranslations must be accurate Simplified Chinese translations of the three replies, in the same order, for operator review only.',
       `Platform: ${platform}\nContent: ${contentTitle}\nComment: ${text}`,
     ].join('\n'), { systemPrompt: 'You are a cautious social selling assistant for an export manufacturer.' });
     const parsed = JSON.parse(cleanJson(raw));
-    if (!Array.isArray(parsed.replies) || parsed.replies.length < 3) throw new Error('invalid replies');
-    return { intent: String(parsed.intent), score: Math.max(0, Math.min(100, Number(parsed.score) || 0)), reason: String(parsed.reason), replies: parsed.replies.slice(0, 3).map(String) };
+    if (!Array.isArray(parsed.replies) || parsed.replies.length < 3 || !Array.isArray(parsed.replyTranslations) || parsed.replyTranslations.length < 3) throw new Error('invalid replies');
+    return {
+      intent: String(parsed.intent),
+      score: Math.max(0, Math.min(100, Number(parsed.score) || 0)),
+      reason: String(parsed.reason),
+      replies: parsed.replies.slice(0, 3).map(String),
+      replyTranslations: parsed.replyTranslations.slice(0, 3).map(String),
+    };
   } catch { return heuristic(text); }
 }
 

@@ -56,7 +56,7 @@ type PlatformCopy = {
   firstComment?: string;
 };
 
-type PublishItemStatus = 'draft' | 'publishing' | 'scheduled' | 'published' | 'partial' | 'failed';
+type PublishItemStatus = 'draft' | 'ready' | 'publishing' | 'scheduled' | 'published' | 'partial' | 'failed';
 type DeliveryMode = 'now' | 'schedule';
 
 type PublishQueueItem = {
@@ -181,6 +181,7 @@ function readStoredPublishDraft(): PublishDraft | null {
 
 const PUBLISH_STATUS_META: Record<PublishItemStatus, { label: string; className: string }> = {
   draft: { label: '待配置', className: 'bg-slate-100 text-slate-600' },
+  ready: { label: '待发布', className: 'bg-emerald-50 text-emerald-700' },
   publishing: { label: '发布中', className: 'bg-sky-50 text-sky-700' },
   scheduled: { label: '已排期', className: 'bg-violet-50 text-violet-700' },
   published: { label: '已完成', className: 'bg-emerald-50 text-emerald-700' },
@@ -347,9 +348,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
   const activeItem = items.find(item => item.id === activeItemId) || items[0] || null;
   const pendingCalendarItems = items
     .filter(item => (
-      item.status !== 'published' &&
-      item.status !== 'scheduled' &&
-      item.status !== 'publishing' &&
+      ['ready', 'partial', 'failed'].includes(item.status) &&
       Boolean(item.videoPath.trim() || item.title.trim() || item.sourceProjectId || item.sourcePlatform)
     ))
     .map(item => ({
@@ -358,6 +357,11 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
       description: item.description,
       sourceProjectId: item.sourceProjectId,
       sourcePlatform: item.sourcePlatform,
+      platforms: Array.from(new Set(
+        connectedAccounts
+          .filter(account => item.targetAccountIds.includes(account.id))
+          .map(account => account.platform),
+      )),
       deliveryMode: item.deliveryMode,
       scheduledAt: item.scheduledAt,
       status: item.status,
@@ -373,8 +377,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
     item.videoPath.trim() &&
     item.title.trim() &&
     item.targetAccountIds.some(id => connectedAccountIds.has(id)) &&
-    item.status !== 'published' &&
-    item.status !== 'scheduled'
+    ['ready', 'partial', 'failed'].includes(item.status)
   ));
   const immediateItems = publishableItems.filter(item => item.deliveryMode === 'now');
   const scheduledItems = publishableItems.filter(item => item.deliveryMode === 'schedule' && Boolean(item.scheduledAt));
@@ -423,6 +426,77 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
     setActiveItemId(id);
     setNotice(`已打开“${item.title || titleFromVideoPath(item.videoPath)}”，可以继续编辑或安排发布时间。`);
     window.setTimeout(() => document.getElementById('publishing-content-editor')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60);
+  };
+
+  const saveCurrentContent = () => {
+    if (!activeItem) return;
+    const targets = connectedAccounts.filter(account => activeItem.targetAccountIds.includes(account.id));
+    if (!activeItem.videoPath.trim()) { setError('请先上传视频'); return; }
+    if (!targets.length) { setError('请先选择至少一个发布平台账号'); return; }
+    if (!activeItem.title.trim()) { setError('请填写视频标题'); return; }
+    if (!activeItem.description.trim()) { setError('请填写发布文案'); return; }
+    const scheduledAt = activeItem.scheduledAt || nextScheduleValue();
+    updateItem(activeItem.id, {
+      status: 'ready',
+      deliveryMode: 'schedule',
+      scheduledAt,
+      error: undefined,
+    });
+    setError('');
+    setNotice(`“${activeItem.title.trim()}”已保存并进入待发布内容。`);
+    window.setTimeout(() => document.getElementById('publishing-calendar')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
+  };
+
+  const schedulePendingContent = async (id: string, scheduledAt: Date): Promise<number> => {
+    const item = items.find(candidate => candidate.id === id);
+    if (!item || !['ready', 'partial', 'failed'].includes(item.status)) throw new Error('这条视频还没有保存到待发布内容');
+    if (!Number.isFinite(scheduledAt.getTime()) || scheduledAt.getTime() <= Date.now()) throw new Error('计划发布时间必须晚于当前时间');
+    const targets = connectedAccounts.filter(account => item.targetAccountIds.includes(account.id));
+    if (!targets.length) throw new Error('这条视频还没有选择可用的发布账号');
+
+    const createdIds: string[] = [];
+    const failures: string[] = [];
+    for (const postId of item.calendarPostIds || []) {
+      try { await fetchJson(`/api/overseas/publishing/calendar/${postId}`, { method: 'DELETE' }); } catch { /* stale placeholder */ }
+    }
+    const platforms = Array.from(new Set(targets.map(account => account.platform)));
+    for (const platform of platforms) {
+      const platformAccounts = targets.filter(account => account.platform === platform);
+      const copy = item.platformCopy[platform];
+      try {
+        const result = await fetchJson<{ item: CalendarPost }>('/api/overseas/publishing/calendar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            scheduledAt: scheduledAt.toISOString(),
+            platform,
+            title: platformTitle(platform, copy, item.title.trim()),
+            description: platformBody(platform, copy, item.description.trim()),
+            contentId: item.sourceProjectId,
+            firstComment: copy?.firstComment || item.firstComment,
+            videoPath: item.videoPath.trim(),
+            targetAccountIds: platformAccounts.map(account => account.id),
+            targetAccountLabels: platformAccounts.map(account => account.handle || account.title),
+            trackWaLink: item.trackWaLink,
+          }),
+        });
+        createdIds.push(result.item.id);
+      } catch (scheduleError) {
+        failures.push(`${PLATFORM_META[platform].label}：${scheduleError instanceof Error ? scheduleError.message : '排期失败'}`);
+      }
+    }
+    updateItem(item.id, {
+      deliveryMode: 'schedule',
+      scheduledAt: dateTimeLocalValue(scheduledAt),
+      status: failures.length ? (createdIds.length ? 'partial' : 'ready') : 'scheduled',
+      calendarPostIds: createdIds.length ? createdIds : undefined,
+      completedTargets: failures.length ? createdIds.length : targets.length,
+      error: failures.length ? failures.join('；') : undefined,
+    });
+    setCalendarRefreshKey(value => value + 1);
+    if (failures.length) throw new Error(failures.join('；'));
+    setNotice(`“${item.title}”已安排到 ${scheduledAt.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}。`);
+    return createdIds.length;
   };
 
   const openCalendarPost = (post: CalendarPost) => {
@@ -687,6 +761,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
       updateItem(activeItem.id, {
         platformCopy: { ...activeItem.platformCopy, ...data.copy },
         firstComment: data.copy[first]?.firstComment || activeItem.firstComment,
+        status: 'draft',
       });
     } catch (e) {
       setError(e instanceof Error ? e.message : '生成平台文案失败');
@@ -854,6 +929,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
             onOpenPost={openCalendarPost}
             pendingItems={pendingCalendarItems}
             onOpenPending={openPendingContent}
+            onSchedulePending={schedulePendingContent}
           />
         </section>
 
@@ -1083,9 +1159,9 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                         <button type="button" onClick={() => void adaptCopy(platform)} className="rounded-lg border border-border px-2 py-1 text-[11px] font-bold text-text-secondary hover:border-accent hover:text-accent">换一版</button>
                       </div>
                       {platform === 'youtube' && (
-                        <input value={platformTitle(platform, copy, activeItem?.title || '')} onChange={event => activeItem && updateItem(activeItem.id, { platformCopy: { ...activeItem.platformCopy, [platform]: { ...activeItem.platformCopy[platform], title: event.target.value } } })} className="mt-3 w-full rounded-lg border border-border bg-white px-3 py-2 text-xs outline-none focus:border-accent" />
+                        <input value={platformTitle(platform, copy, activeItem?.title || '')} onChange={event => activeItem && updateItem(activeItem.id, { platformCopy: { ...activeItem.platformCopy, [platform]: { ...activeItem.platformCopy[platform], title: event.target.value } }, status: 'draft', error: undefined })} className="mt-3 w-full rounded-lg border border-border bg-white px-3 py-2 text-xs outline-none focus:border-accent" />
                       )}
-                      <textarea value={body} onChange={event => activeItem && updateItem(activeItem.id, { platformCopy: { ...activeItem.platformCopy, [platform]: { ...activeItem.platformCopy[platform], ...(platform === 'facebook' ? { text: event.target.value } : platform === 'youtube' ? { description: event.target.value } : { caption: event.target.value }) } } })} rows={4} className="mt-3 w-full resize-none rounded-lg border border-border bg-white px-3 py-2 text-xs outline-none focus:border-accent" />
+                      <textarea value={body} onChange={event => activeItem && updateItem(activeItem.id, { platformCopy: { ...activeItem.platformCopy, [platform]: { ...activeItem.platformCopy[platform], ...(platform === 'facebook' ? { text: event.target.value } : platform === 'youtube' ? { description: event.target.value } : { caption: event.target.value }) } }, status: 'draft', error: undefined })} rows={4} className="mt-3 w-full resize-none rounded-lg border border-border bg-white px-3 py-2 text-xs outline-none focus:border-accent" />
                       <div className="mt-2 flex items-center justify-between text-[11px] text-text-muted">
                         <span>{body.length} 字符</span>
                         <span>{platform === 'tiktok' && body.length > 120 ? '超出建议长度' : '长度正常'}</span>
@@ -1093,6 +1169,17 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                     </div>
                   );
                 })}
+              </div>
+              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
+                <p className="text-[11px] text-text-muted">保存后才会进入上方“待发布内容”，之后可手动拖入日历或让 AI 排布。</p>
+                <button
+                  type="button"
+                  onClick={saveCurrentContent}
+                  disabled={!activeItem || activeItem.status === 'publishing' || activeItem.status === 'scheduled' || activeItem.status === 'published'}
+                  className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-black text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-45"
+                >
+                  <CheckCircle2 size={14} /> {activeItem?.status === 'ready' ? '已保存到待发布内容' : '保存并加入待发布内容'}
+                </button>
               </div>
             </div>
           </section>

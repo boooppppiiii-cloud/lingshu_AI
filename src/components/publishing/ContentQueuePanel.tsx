@@ -1,12 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CalendarClock, Check, ChevronDown, Clock, Film, Play } from 'lucide-react';
+import { CalendarClock, Check, ChevronDown, Clock, Film, Loader2, Play, Sparkles } from 'lucide-react';
 import { authHeader } from '../../lib/auth';
-import {
-  campaignPhase,
-  dateFromKey,
-  type MarketId,
-  type MarketingEvent,
-} from './marketingCalendar';
+import type { MarketId } from './marketingCalendar';
 import type { CalendarPost, PendingPublishContent } from './CalendarPlanner';
 import { PlatformBadge } from './PlatformBadge';
 
@@ -22,14 +17,7 @@ type PostingSchedule = {
   slots: Array<{ weekday: number; time: string }>;
 };
 
-export type QueueSuggestion = {
-  id: string;
-  scheduledAt: Date;
-  title: string;
-  brief: string;
-  tags: string[];
-  festival?: string;
-};
+export type PendingPlacement = { id: string; scheduledAt: Date };
 
 const WEEKDAY_LABELS = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
 
@@ -42,34 +30,6 @@ const PRESETS: Array<{
   { id: 'light', label: '轻度', summary: '每周 3 条', weekdays: [1, 3, 5] },
   { id: 'standard', label: '标准', summary: '每周 5 条', weekdays: [1, 2, 3, 4, 5] },
   { id: 'high', label: '高频', summary: '每天 1 条', weekdays: [0, 1, 2, 3, 4, 5, 6] },
-];
-
-const DEFAULT_TOPICS = [
-  {
-    title: '主推产品：3 个采购决策点',
-    brief: '从买家视角拆解用途、采购关注点和询盘入口，不补写未确认参数。',
-    tags: ['主推品', '采购决策'],
-  },
-  {
-    title: '工厂能力：从打样到交付',
-    brief: '展示流程与交付节点，企业资料缺失的部分保持待确认。',
-    tags: ['工厂实力', '交付'],
-  },
-  {
-    title: '采购 FAQ：MOQ、定制与样品',
-    brief: '围绕高频询盘组织短内容，引导买家索取目录和报价。',
-    tags: ['采购FAQ', '询盘'],
-  },
-  {
-    title: '质量证明：细节、包装与检验',
-    brief: '用可拍摄的细节建立信任，只引用企业中心已有事实。',
-    tags: ['质量', '信任'],
-  },
-  {
-    title: '应用场景：买家如何使用这款产品',
-    brief: '从使用场景切入，结尾保留清晰的 WhatsApp 询盘动作。',
-    tags: ['场景', '转化'],
-  },
 ];
 
 function presetSlots(preset: RhythmPreset): Array<{ weekday: number; time: string }> {
@@ -102,11 +62,11 @@ function instantForTargetSlot(day: Date, time: string, utcOffset: number): Date 
   return new Date(utc);
 }
 
-function upcomingSlots(schedule: PostingSchedule, limit = 10): Array<{ id: string; scheduledAt: Date }> {
+function upcomingSlots(schedule: PostingSchedule, limit = 40): Array<{ id: string; scheduledAt: Date }> {
   const now = new Date();
   const start = targetToday(schedule.timeZone);
   const slots: Array<{ id: string; scheduledAt: Date }> = [];
-  for (let offset = 0; offset < 28 && slots.length < limit; offset += 1) {
+  for (let offset = 0; offset < 56 && slots.length < limit; offset += 1) {
     const targetDay = new Date(start);
     targetDay.setDate(targetDay.getDate() + offset);
     for (const slot of schedule.slots.filter(item => item.weekday === targetDay.getDay())) {
@@ -120,39 +80,6 @@ function upcomingSlots(schedule: PostingSchedule, limit = 10): Array<{ id: strin
 
 function isSameSlot(left: Date, right: Date): boolean {
   return Math.abs(left.getTime() - right.getTime()) < 45 * 60_000;
-}
-
-function localDateKey(date: Date, timeZone: string): string {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  }).formatToParts(date);
-  const values = Object.fromEntries(parts.map(part => [part.type, part.value]));
-  return `${values.year}-${values.month}-${values.day}`;
-}
-
-function defaultSuggestion(
-  id: string,
-  scheduledAt: Date,
-  index: number,
-  events: MarketingEvent[],
-  timeZone: string,
-): QueueSuggestion {
-  const event = events.find(item => campaignPhase(item, dateFromKey(localDateKey(scheduledAt, timeZone))));
-  if (event && index % 4 === 0) {
-    const phase = campaignPhase(event, dateFromKey(localDateKey(scheduledAt, timeZone)));
-    return {
-      id,
-      scheduledAt,
-      title: `${event.shortName}：${phase?.label || '营销'}内容`,
-      brief: `围绕${event.shortName}组织备货、交付与询盘内容，不虚构折扣、库存或认证。`,
-      tags: ['节庆', phase?.label || '营销'],
-      festival: event.shortName,
-    };
-  }
-  return { id, scheduledAt, ...DEFAULT_TOPICS[index % DEFAULT_TOPICS.length] };
 }
 
 async function api<T>(url: string, init?: RequestInit): Promise<T> {
@@ -169,10 +96,9 @@ export function ContentQueuePanel({
   marketTimeZone,
   utcOffset,
   posts,
-  marketingEvents,
   pendingItems,
   onOpenPending,
-  onSuggestionsChange,
+  onArrangePending,
   compact = false,
 }: {
   selectedPlatform: string;
@@ -181,10 +107,9 @@ export function ContentQueuePanel({
   marketTimeZone: string;
   utcOffset: number;
   posts: CalendarPost[];
-  marketingEvents: MarketingEvent[];
   pendingItems: PendingPublishContent[];
   onOpenPending?: (id: string) => void;
-  onSuggestionsChange: (suggestions: QueueSuggestion[]) => void;
+  onArrangePending?: (placements: PendingPlacement[]) => Promise<void>;
   compact?: boolean;
 }) {
   const [schedule, setSchedule] = useState<PostingSchedule>({
@@ -197,17 +122,16 @@ export function ContentQueuePanel({
   });
   const [scheduleLoading, setScheduleLoading] = useState(true);
   const [scheduleSaving, setScheduleSaving] = useState(false);
+  const [arranging, setArranging] = useState(false);
   const [message, setMessage] = useState('');
   const [queueExpanded, setQueueExpanded] = useState(false);
 
   useEffect(() => {
     let active = true;
     setScheduleLoading(true);
-    api<{ item: {
-      id?: string;
-      preset?: RhythmPreset;
-      slots?: Array<{ weekday: number; time: string }>;
-    } }>(`/api/overseas/publishing/posting-schedule?platform=${encodeURIComponent(selectedPlatform)}`)
+    api<{ item: { id?: string; preset?: RhythmPreset; slots?: Array<{ weekday: number; time: string }> } }>(
+      `/api/overseas/publishing/posting-schedule?platform=${encodeURIComponent(selectedPlatform)}`,
+    )
       .then(({ item }) => {
         if (!active) return;
         const preset = item.preset === 'light' || item.preset === 'high' ? item.preset : 'standard';
@@ -249,18 +173,13 @@ export function ContentQueuePanel({
   }, [marketTimeZone, selectedMarket, selectedPlatform, utcOffset]);
 
   const futurePosts = useMemo(
-    () => posts.filter(post => post.platform === selectedPlatform && Date.parse(post.publishedAt) > Date.now() - 30 * 60_000),
-    [posts, selectedPlatform],
+    () => posts.filter(post => Date.parse(post.publishedAt) > Date.now() - 30 * 60_000),
+    [posts],
   );
-
-  const suggestions = useMemo(() => upcomingSlots(schedule, 10)
-    .filter(slot => !futurePosts.some(post => isSameSlot(new Date(post.publishedAt), slot.scheduledAt)))
-    .map((slot, index) => defaultSuggestion(slot.id, slot.scheduledAt, index, marketingEvents, marketTimeZone)),
-  [futurePosts, marketingEvents, marketTimeZone, schedule]);
-
-  useEffect(() => {
-    onSuggestionsChange(suggestions);
-  }, [onSuggestionsChange, suggestions]);
+  const openSlots = useMemo(
+    () => upcomingSlots(schedule).filter(slot => !futurePosts.some(post => isSameSlot(new Date(post.publishedAt), slot.scheduledAt))),
+    [futurePosts, schedule],
+  );
 
   const savePreset = async (preset: RhythmPreset) => {
     const next: PostingSchedule = {
@@ -297,17 +216,42 @@ export function ContentQueuePanel({
     }
   };
 
+  const arrangeWithAi = async () => {
+    const placements = pendingItems.slice(0, openSlots.length).map((item, index) => ({
+      id: item.id,
+      scheduledAt: openSlots[index].scheduledAt,
+    }));
+    if (!placements.length || !onArrangePending) return;
+    setArranging(true);
+    setMessage('');
+    try {
+      await onArrangePending(placements);
+      setMessage(`已排布 ${placements.length} 条视频`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : '自动排布失败');
+    } finally {
+      setArranging(false);
+    }
+  };
+
   return (
     <div className={`grid items-start gap-3 ${compact ? '' : 'lg:grid-cols-[260px_minmax(0,1fr)]'}`}>
       <section data-lingshu-guide="publishing-rhythm" className="h-[168px] overflow-hidden rounded-2xl border border-border bg-white p-3 shadow-sm">
-        <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
-            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-50 text-sky-700">
-              <Clock size={14} />
-            </span>
-            <h3 className="text-sm font-black text-text-primary">发布节奏</h3>
+            <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-sky-50 text-sky-700"><Clock size={14} /></span>
+            <div><h3 className="text-sm font-black text-text-primary">发布节奏</h3><p className="text-[9px] font-bold text-text-muted">{marketLabel}当地时间</p></div>
           </div>
-          <span className="text-[10px] font-bold text-text-muted">{marketLabel}当地时间</span>
+          <button
+            type="button"
+            data-lingshu-guide="ai-layout"
+            onClick={() => void arrangeWithAi()}
+            disabled={arranging || scheduleLoading || scheduleSaving || pendingItems.length === 0 || openSlots.length === 0}
+            className="inline-flex items-center gap-1 rounded-lg border border-violet-200 bg-violet-50 px-2 py-1.5 text-[10px] font-black text-violet-700 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {arranging ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
+            {arranging ? '排布中' : 'AI 帮我排布'}
+          </button>
         </div>
 
         <div className="mt-2 grid grid-cols-3 gap-1.5">
@@ -315,7 +259,7 @@ export function ContentQueuePanel({
             <button
               key={preset.id}
               type="button"
-              disabled={scheduleLoading || scheduleSaving}
+              disabled={scheduleLoading || scheduleSaving || arranging}
               onClick={() => void savePreset(preset.id)}
               className={`rounded-lg border px-2 py-1.5 text-left transition ${
                 schedule.preset === preset.id
@@ -332,14 +276,14 @@ export function ContentQueuePanel({
           ))}
         </div>
 
-        <div className="mt-2 flex max-h-[52px] flex-wrap gap-1 overflow-hidden">
+        <div className="mt-2 flex max-h-[24px] flex-wrap gap-1 overflow-hidden">
           {schedule.slots.map(slot => (
             <span key={`${slot.weekday}-${slot.time}`} className="rounded-full border border-sky-100 bg-sky-50 px-1.5 py-0.5 text-[9px] font-bold text-sky-700">
               {WEEKDAY_LABELS[slot.weekday]} {slot.time}
             </span>
           ))}
         </div>
-        {message && <p className="mt-1.5 line-clamp-1 text-[9px] font-bold text-emerald-700">{message}</p>}
+        {message && <p className="mt-1 line-clamp-1 text-[9px] font-bold text-emerald-700">{message}</p>}
       </section>
 
       <section data-lingshu-guide="future-queue" className={`overflow-hidden rounded-2xl border border-border bg-white shadow-sm ${queueExpanded ? '' : 'h-[168px]'}`}>
@@ -347,17 +291,11 @@ export function ContentQueuePanel({
           <div className="flex min-w-0 items-center gap-2">
             <CalendarClock size={14} className="text-emerald-600" />
             <h3 className="shrink-0 text-sm font-black text-text-primary">待发布内容</h3>
-            <span className="truncate text-[10px] font-bold text-text-muted">{pendingItems.length} 条</span>
+            <span className="truncate text-[10px] font-bold text-text-muted">{pendingItems.length} 条 · 可拖入日历</span>
           </div>
           {pendingItems.length > 0 && (
-            <button
-              type="button"
-              onClick={() => setQueueExpanded(previous => !previous)}
-              className="inline-flex items-center gap-1 rounded-lg border border-border bg-white px-2 py-1.5 text-[10px] font-black text-text-secondary hover:border-emerald-200 hover:text-emerald-700"
-              aria-expanded={queueExpanded}
-            >
-              {queueExpanded ? '收起' : '展开'}
-              <ChevronDown size={11} className={`transition-transform ${queueExpanded ? 'rotate-180' : ''}`} />
+            <button type="button" onClick={() => setQueueExpanded(previous => !previous)} className="inline-flex items-center gap-1 rounded-lg border border-border bg-white px-2 py-1.5 text-[10px] font-black text-text-secondary hover:border-emerald-200 hover:text-emerald-700" aria-expanded={queueExpanded}>
+              {queueExpanded ? '收起' : '展开'}<ChevronDown size={11} className={`transition-transform ${queueExpanded ? 'rotate-180' : ''}`} />
             </button>
           )}
         </div>
@@ -374,39 +312,35 @@ export function ContentQueuePanel({
           {pendingItems.length === 0 ? (
             <div className="col-span-full flex h-[108px] items-center justify-center gap-3 rounded-xl border border-dashed border-emerald-200 bg-emerald-50/40 px-4 text-center">
               <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-emerald-600 shadow-sm"><Film size={16} /></span>
-              <div className="text-left">
-                <p className="text-[11px] font-black text-text-primary">还没有待发布视频</p>
-                <p className="mt-0.5 text-[9px] text-text-muted">AI 智能素材生成后，会自动出现在这里</p>
-              </div>
+              <div className="text-left"><p className="text-[11px] font-black text-text-primary">还没有待发布视频</p><p className="mt-0.5 text-[9px] text-text-muted">视频编辑完成并保存后，会出现在这里</p></div>
             </div>
           ) : pendingItems.map(item => {
-            const scheduledLabel = item.deliveryMode === 'schedule' && item.scheduledAt
-              ? new Date(item.scheduledAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
-              : '待安排日期';
+            const scheduledLabel = item.scheduledAt
+              ? new Date(item.scheduledAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+              : '20:00';
+            const platforms = item.platforms?.length ? item.platforms : [item.sourcePlatform || selectedPlatform];
             return (
               <button
                 key={item.id}
                 type="button"
+                draggable
+                onDragStart={event => {
+                  event.dataTransfer.effectAllowed = 'move';
+                  event.dataTransfer.setData('application/x-lingshu-pending-content', item.id);
+                  event.dataTransfer.setData('text/plain', item.title);
+                }}
                 onClick={() => onOpenPending?.(item.id)}
-                className={`group flex min-w-0 flex-col rounded-xl border border-emerald-200 bg-emerald-50/50 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-emerald-400 hover:shadow-md ${
-                  queueExpanded ? 'h-[154px] p-2.5' : 'h-[108px] p-2'
-                }`}
+                className={`group flex min-w-0 cursor-grab flex-col rounded-xl border border-emerald-200 bg-emerald-50/50 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-emerald-400 hover:shadow-md active:cursor-grabbing ${queueExpanded ? 'h-[154px] p-2.5' : 'h-[108px] p-2'}`}
               >
                 <span className="flex items-center justify-between gap-2">
-                  <PlatformBadge platform={item.sourcePlatform || selectedPlatform} compact />
-                  <span className="inline-flex items-center gap-1 rounded-full bg-white px-1.5 py-0.5 text-[8px] font-black text-emerald-700 shadow-sm">
-                    <Play size={8} fill="currentColor" /> 待发布
-                  </span>
+                  <span className="flex min-w-0 items-center gap-1">{platforms.slice(0, 3).map(platform => <PlatformBadge key={platform} platform={platform} compact />)}</span>
+                  <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-white px-1.5 py-0.5 text-[8px] font-black text-emerald-700 shadow-sm"><Play size={8} fill="currentColor" /> 待发布</span>
                 </span>
-                <span className={`${queueExpanded ? 'mt-2 line-clamp-2' : 'mt-1.5 truncate'} text-[11px] font-black leading-[1.35] text-text-primary`}>
-                  {item.title || '待填写标题的视频'}
-                </span>
-                {queueExpanded && item.description && (
-                  <span className="mt-1 line-clamp-2 text-[9px] leading-relaxed text-text-muted">{item.description}</span>
-                )}
+                <span className={`${queueExpanded ? 'mt-2 line-clamp-2' : 'mt-1.5 truncate'} text-[11px] font-black leading-[1.35] text-text-primary`}>{item.title || '待填写标题的视频'}</span>
+                {queueExpanded && item.description && <span className="mt-1 line-clamp-2 text-[9px] leading-relaxed text-text-muted">{item.description}</span>}
                 <span className="mt-auto flex items-center justify-between gap-2 text-[8px] font-bold text-text-muted">
-                  <span className="truncate">{item.sourceProjectId || item.sourcePlatform ? 'AI 智能素材' : '发布队列'}</span>
-                  <span className="shrink-0 text-emerald-700">{scheduledLabel}</span>
+                  <span className="truncate">{item.sourceProjectId || item.sourcePlatform ? 'AI 智能素材' : '已保存内容'}</span>
+                  <span className="shrink-0 text-emerald-700">计划 {scheduledLabel}</span>
                 </span>
               </button>
             );

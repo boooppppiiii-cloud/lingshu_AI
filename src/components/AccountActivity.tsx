@@ -41,6 +41,7 @@ type SocialComment = {
   reason: string;
   status: CommentStatus;
   replies: string[];
+  replyTranslations: string[];
   accountId: string;
   commentId: string;
   stateKey: string;
@@ -164,6 +165,7 @@ export default function AccountActivity() {
         score: Number(item.analysis?.score || 0),
         reason: item.analysis?.reason || '正在准备 AI 商机判断。',
         replies: item.analysis?.replies || [],
+        replyTranslations: item.analysis?.replyTranslations || [],
         status: item.status || 'pending',
         translation: item.translation?.text || '',
         translationLanguage: item.translation?.sourceLanguage || '',
@@ -200,6 +202,7 @@ export default function AccountActivity() {
     .map(id => filtered.find(comment => comment.id === id))
     .filter((comment): comment is SocialComment => Boolean(comment)), [filtered, selectedIds]);
   const selected = selectedComments[0] || null;
+  const selectedReplyTranslation = selected?.replyTranslations?.[replyIndex] || '';
   const translatingCount = comments.filter(comment => comment.translationStatus === 'loading').length;
 
   const toggleComment = (id: string) => {
@@ -219,7 +222,7 @@ export default function AccountActivity() {
   useEffect(() => {
     if (!selected) return;
     setReplyText(selected.replies[replyIndex] || '');
-    if (selected.replies.length) return;
+    if (selected.replies.length && selected.replyTranslations.length === selected.replies.length) return;
     let active = true;
     void api('/api/overseas/social-engagement/comments/analyze', { method: 'POST', body: JSON.stringify({ stateKey: selected.stateKey, text: selected.text, platform: selected.platform, contentTitle: selected.contentTitle }) })
       .then(data => { if (!active) return; setComments(list => list.map(item => item.id === selected.id ? { ...item, ...data.analysis } : item)); setReplyText(data.analysis?.replies?.[0] || ''); })
@@ -421,6 +424,13 @@ export default function AccountActivity() {
                     {selected.replies.slice(0, 3).map((reply, index) => <button key={index} type="button" onClick={() => { setReplyIndex(index); setReplyText(reply); }} className={`rounded-lg px-3 py-1.5 text-[11px] font-black ${replyIndex === index ? 'bg-accent text-white' : 'bg-surface-2 text-text-secondary'}`}>版本 {index + 1}</button>)}
                   </div>
                   <textarea value={replyText} onChange={event => setReplyText(event.target.value)} rows={4} placeholder={selected.replies.length ? '' : 'AI 正在生成回复建议…'} className="mt-3 w-full resize-none rounded-xl border border-border bg-surface px-4 py-3 text-sm leading-6 outline-none focus:border-accent" />
+                  {selectedReplyTranslation && (
+                    <div className="mt-2 rounded-xl border border-emerald-100 bg-emerald-50/70 px-4 py-3">
+                      <p className="flex items-center gap-1.5 text-[10px] font-black text-emerald-700"><Languages size={11} /> 回复中文翻译</p>
+                      <p className="mt-1 text-xs leading-5 text-emerald-950">{selectedReplyTranslation}</p>
+                      {replyText !== selected.replies[replyIndex] && <p className="mt-1 text-[9px] font-bold text-amber-700">你已修改外语回复，发送前请以外语原文为准。</p>}
+                    </div>
+                  )}
                   {selectedComments.length > 1 && <p className="mt-2 text-[10px] leading-4 text-amber-700">同一版回复将发送给全部 {selectedComments.length} 条已选评论，请确认内容对所有对象都适用。</p>}
                   <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
                     <button type="button" onClick={() => setStatus(selected.id, 'ignored')} className="text-xs font-bold text-text-muted hover:text-text-secondary">忽略评论</button>
