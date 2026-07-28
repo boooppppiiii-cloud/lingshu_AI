@@ -430,7 +430,8 @@ function referenceIndustryLeakTerms(referenceText: string, productInfo: string):
 }
 
 function productSupportsNumericClaim(claim: string, productInfo: string): boolean {
-  if (String(productInfo).toLowerCase().includes(String(claim).toLowerCase())) return true;
+  const source = String(productInfo).normalize('NFKC');
+  if (source.toLowerCase().includes(String(claim).normalize('NFKC').toLowerCase())) return true;
   const parsed = String(claim).match(/(\d+(?:\.\d+)?)\s*(瓶|ml|毫升|kg|g|克|斤|cm|厘米|mm|毫米|天|day|days|秒|%|个|pcs|件|箱|元|美元)/i);
   if (!parsed) return false;
   const value = parsed[1];
@@ -440,10 +441,32 @@ function productSupportsNumericClaim(claim: string, productInfo: string): boolea
     kg: ['kg', '千克', '公斤'], g: ['g', '克'], 克: ['g', '克'],
     cm: ['cm', '厘米'], 厘米: ['cm', '厘米'], mm: ['mm', '毫米'], 毫米: ['mm', '毫米'],
     day: ['day', 'days', '天'], days: ['day', 'days', '天'], 天: ['day', 'days', '天'],
-    pcs: ['pcs', '个', '件'], 个: ['pcs', '个', '件'], 件: ['pcs', '个', '件'],
+    pcs: ['pcs?', 'pieces?', '个', '件'], 个: ['pcs?', 'pieces?', '个', '件'], 件: ['pcs?', 'pieces?', '个', '件'],
+    瓶: ['瓶', 'bottles?'], 箱: ['箱', 'cartons?', 'boxes?'],
+    秒: ['秒', 's', 'sec(?:ond)?s?'],
+    '%': ['%', 'percent'],
   };
+  if (unit === '美元') {
+    return [
+      `\\$\\s*${value}`,
+      `(?:usd|us\\$)\\s*${value}`,
+      `${value}\\s*(?:usd|us\\$|美元)`,
+    ].some(pattern => new RegExp(pattern, 'i').test(source));
+  }
+  if (unit === '元') {
+    return [
+      `[¥￥]\\s*${value}`,
+      `(?:rmb|cny)\\s*${value}`,
+      `${value}\\s*(?:rmb|cny|元)`,
+    ].some(pattern => new RegExp(pattern, 'i').test(source));
+  }
   const candidates = equivalents[unit] || [unit];
-  return candidates.some(candidate => new RegExp(`${value.replace('.', '\\.')}\\s*${candidate}`, 'i').test(productInfo));
+  if (candidates.some(candidate => new RegExp(`${value.replace('.', '\\.')}\\s*${candidate}`, 'i').test(source))) return true;
+  // 结构化产品资料有时把单位放在字段名里，例如“起订量：50”“价格(USD)：20”。
+  if (['pcs', '个', '件', '瓶', '箱'].includes(unit)) {
+    return new RegExp(`(?:起订量|MOQ)[^\\n]{0,30}\\b${value}\\b`, 'i').test(source);
+  }
+  return false;
 }
 
 function stripScriptAnalysisSummary(text: string): string {
@@ -1146,7 +1169,7 @@ ${productTimeline}
 6. 至少包含两个已核实的商业信息，但优先放在短字幕和画面资料卡里；口播只说买家最关心的好处，不朗读 MOQ、认证和参数清单。
 7. 结尾 CTA 只要求一个低门槛动作，例如“发我数量和目标市场”“留言拿报价”“发包装需求看样”，不要一次索要五六项资料。
 8. 参考视频只允许借用节奏、镜头顺序和信息密度；不得输出参考视频标题、原 caption、原品牌、原 hashtag、原品类、原场景词或原产品功效。
-9. 产品事实采用封闭世界规则：只有“产品信息”逐字出现的名称、数字、单位、周期、价格、MOQ、材质、规格、认证、功效和定制项才允许写入。除时间戳外，禁止创造产品资料中没有的任何数字（例如3天、12天、提升30%）；缺失信息直接省略，不得猜测。
+9. 产品事实采用封闭世界规则：只有“产品信息”明确提供的名称、数字、单位、周期、价格、MOQ、材质、规格、认证、功效和定制项才允许写入。允许不改变含义的单位转换（如 $20→20美元、50 pcs→50件），禁止创造资料中没有的数字（例如3天、12天、提升30%）；缺失信息直接省略，不得猜测。
 10. 不得输出制作说明，不得解释规则，只输出成稿。
 11. 原始卖点如果包含夸张绝对化表达，必须降级成可验证表述，例如“不易撕裂”“抗拉表现可打样测试”“承重可按需求确认”，不得写“不破、不裂、纹丝不动、吹不烂”等绝对承诺。
 12. 只能使用下方“产品信息”里列出的选定产品。不得改成企业中心其它产品，不得写“企业产品组合/主推产品/this product”，不得使用对标视频原产品。
@@ -2308,7 +2331,30 @@ studioRouter.get('/materials', async (req, res) => {
 studioRouter.get('/materials/pb/:id/:kind', async (req, res) => {
   const field = req.params.kind === 'poster' ? 'posterFile' : req.params.kind === 'media' ? 'videoFile' : null;
   if (!field) { res.status(404).end(); return; }
-  const upstream = await fetchCloudMaterial(req.params.id, field, req.headers.range);
+  let upstream = await fetchCloudMaterial(req.params.id, field, req.headers.range);
+  if (!upstream && field === 'posterFile') {
+    const cacheDir = path.join(MEDIA_DIR, 'cloud-poster-cache');
+    const cachePath = path.join(cacheDir, `${req.params.id}.jpg`);
+    if (!fs.existsSync(cachePath)) {
+      const video = await fetchCloudMaterial(req.params.id, 'videoFile');
+      if (video?.ok) {
+        fs.mkdirSync(cacheDir, { recursive: true });
+        const tempPath = path.join(cacheDir, `${req.params.id}.${Date.now()}.mp4`);
+        try {
+          fs.writeFileSync(tempPath, Buffer.from(await video.arrayBuffer()));
+          await extractPoster(tempPath, cachePath, 1);
+        } finally {
+          fs.rmSync(tempPath, { force: true });
+        }
+      }
+    }
+    if (fs.existsSync(cachePath)) {
+      res.setHeader('Content-Type', 'image/jpeg');
+      res.setHeader('Cache-Control', 'private, max-age=86400');
+      res.sendFile(cachePath);
+      return;
+    }
+  }
   if (!upstream || !upstream.body) { res.status(404).end(); return; }
   for (const header of ['content-type', 'content-length', 'content-range', 'accept-ranges', 'etag', 'last-modified']) {
     const value = upstream.headers.get(header);
