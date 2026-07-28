@@ -211,7 +211,7 @@ function readableSocialError(error: any) {
   }
   if (lower.includes('permission') || lower.includes('permissions') || lower.includes('scope')) {
     if (lower.includes('tiktok') || lower.includes('video.publish') || lower.includes('content posting')) {
-      return 'TikTok 发布权限暂不可用。请联系服务顾问确认平台应用审核状态，然后重新连接账号。';
+      return 'TikTok 发布权限暂不可用。请检查平台应用权限配置后重新连接账号。';
     }
     return '平台授权权限不足。请重新连接账号，并确认 Meta 应用已开通 pages_manage_posts / instagram_content_publish 等发布权限。';
   }

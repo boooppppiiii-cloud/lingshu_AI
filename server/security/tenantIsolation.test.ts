@@ -34,6 +34,7 @@ assert.match(oauth, /if \(supportAccess\) return null/, 'support sessions must n
 const oauthUi = read('src/components/YouTubeIntegration.tsx');
 assert.match(oauthUi, /const popup = prepareOAuthPopup\('youtube-oauth'[\s\S]*?await fetch\('\/api\/overseas\/youtube\/oauth\/start'/, 'YouTube must open its OAuth window before awaiting the start request');
 assert.match(oauthUi, /const popup = prepareOAuthPopup\(`\$\{platform\}-oauth`[\s\S]*?await fetch\(`\/api\/overseas\/social\/oauth\/\$\{platform\}\/start`/, 'social platforms must open their OAuth window before awaiting the start request');
+assert.doesNotMatch(oauthUi, /isTikTokReviewPending|TikTok 账号正在审核中|status\?\.configured === false/, 'all social OAuth cards must keep their connection action available');
 const socialSetupGuide = read('docs/客户社媒账号配置与授权操作指南.md');
 assert.doesNotMatch(socialSetupGuide, /https:\/\/lingshu\.site\/api\//, 'production OAuth guidance must use the canonical app subdomain');
 assert.match(socialSetupGuide, /https:\/\/app\.lingshu\.site\/api\/overseas\/youtube\/oauth\/callback/, 'the canonical YouTube callback must remain documented');

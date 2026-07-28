@@ -351,7 +351,7 @@ export function YouTubeConnectionPanel({ compact = false }: { compact?: boolean 
           </button>
           <button
             onClick={() => void startOAuth()}
-            disabled={connecting || loading || oauthStatus?.configured === false}
+            disabled={connecting || loading}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {connecting ? <Loader2 size={15} className="animate-spin" /> : <TvMinimalPlay size={15} />}
@@ -371,14 +371,6 @@ export function YouTubeConnectionPanel({ compact = false }: { compact?: boolean 
         <div className="mt-4 flex items-start gap-2 rounded-lg bg-red-50 px-3 py-2 text-xs text-red-600">
           <AlertCircle size={14} className="mt-0.5 flex-shrink-0" />
           <span>{error}</span>
-        </div>
-      )}
-
-      {oauthStatus && !oauthStatus.configured && (
-        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-800">
-          <p className="font-semibold mb-1">YouTube 一键授权暂未开启</p>
-          <p className="leading-relaxed">请联系服务顾问配置平台应用和回调地址，完成后即可登录 YouTube 账号进行授权。</p>
-          <code className="mt-2 block break-all rounded-md bg-white/70 px-2 py-1 text-[11px] text-amber-900">{oauthStatus.redirectUri}</code>
         </div>
       )}
 
@@ -579,8 +571,6 @@ export function SocialConnectionPanel({ platform }: { platform: SocialPlatform }
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const manualCopy = SOCIAL_MANUAL_COPY[platform];
-  const isTikTokReviewPending = platform === 'tiktok' && status?.configured === false;
-
   const loadState = async () => {
     setLoading(true);
     setError('');
@@ -713,11 +703,11 @@ export function SocialConnectionPanel({ platform }: { platform: SocialPlatform }
             className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-gray-200 text-gray-500 hover:text-gray-800 hover:border-gray-300 disabled:opacity-50">
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           </button>
-          <button onClick={() => void startOAuth()} disabled={connecting || loading || status?.configured === false}
+          <button onClick={() => void startOAuth()} disabled={connecting || loading}
             className="inline-flex h-10 w-[156px] items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
             style={{ background: meta.color }}>
             {connecting ? <Loader2 size={15} className="animate-spin" /> : <TvMinimalPlay size={15} />}
-            {isTikTokReviewPending ? '审核中' : accounts.length > 0 ? '重新连接' : `连接 ${meta.label}`}
+            {accounts.length > 0 ? '重新连接' : `连接 ${meta.label}`}
           </button>
         </div>
       </div>
@@ -735,21 +725,9 @@ export function SocialConnectionPanel({ platform }: { platform: SocialPlatform }
             <span>{error}</span>
           </div>
         )}
-        {isTikTokReviewPending ? (
-          <div className="flex min-h-[132px] flex-col justify-center rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-800">
-            <p className="font-semibold mb-1">TikTok 账号正在审核中</p>
-            <p className="leading-relaxed">TikTok 发布权限需要平台审核，当前暂时不能连接账号或发布视频。审核通过后，系统会自动开放 TikTok 授权入口。</p>
-          </div>
-        ) : status && !status.configured ? (
-          <div className="flex min-h-[132px] flex-col justify-center rounded-lg border border-amber-200 bg-amber-50 px-3 py-3 text-xs text-amber-800">
-            <p className="font-semibold mb-1">{meta.label} 授权暂未开启</p>
-            <p className="leading-relaxed">请联系服务顾问配置平台应用和回调地址，完成后即可登录账号进行授权。</p>
-            <code className="mt-2 block break-all rounded-md bg-white/70 px-2 py-1 text-[11px] text-amber-900">{status.redirectUri}</code>
-          </div>
-        ) : null}
       </div>
 
-      {status?.manualConnectEnabled && !isTikTokReviewPending && (
+      {status?.manualConnectEnabled && (
       <div className="mt-4 border-t border-gray-100 pt-4">
         <button
           onClick={() => setManualOpen(v => !v)}
