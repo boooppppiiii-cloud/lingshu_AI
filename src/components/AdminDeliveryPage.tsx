@@ -12,6 +12,7 @@ interface DeliveryApp {
   tenantId: string;
   platform: Platform;
   appId: string;
+  appSecret: string;
   appSecretSet: boolean;
   appSecretLength: number;
   waConfigId: string;
@@ -77,7 +78,7 @@ const STATUS_LABEL: Record<Status, string> = {
 };
 
 const META_STEPS = [
-  { id: 'metaApp', title: '1. Meta 开发者应用', desc: '录入 App ID / Secret，Secret 只加密保存不回显。' },
+  { id: 'metaApp', title: '1. Meta 开发者应用', desc: '录入 App ID / Secret，保存后可继续核对。' },
   { id: 'webhook', title: '2. Webhook 回调', desc: '复制 Webhook URL 和 Verify Token 到 Meta 后台。' },
   { id: 'whatsapp', title: '3. WhatsApp 接入', desc: '录入 Config ID / WABA / Phone Number ID，完成扫码或新号接入。' },
   { id: 'social', title: '4. FB / IG 资产（可选）', desc: 'OAuth 会自动识别；仅在多主页时填写 ID 锁定资产。' },
@@ -150,6 +151,8 @@ function Field({
   value,
   placeholder,
   secret,
+  required,
+  completed,
   numericId,
   fieldName,
   onChange,
@@ -159,19 +162,35 @@ function Field({
   value?: string;
   placeholder?: string;
   secret?: boolean;
+  required?: boolean;
+  completed?: boolean;
   numericId?: boolean;
   fieldName?: string;
   onChange: (value: string) => void;
 }) {
+  const isCompleted = Boolean(value?.trim()) || Boolean(completed);
+
   return (
     <label className="grid gap-1 text-xs font-bold text-text-secondary">
       <span className="flex items-center justify-between gap-2">
-        {label}
-        <span className="text-[10px] font-medium text-text-muted">{hint}</span>
+        <span>
+          {label}
+          {required && <span className="ml-0.5 text-red-500" aria-label="必填">*</span>}
+        </span>
+        <span className="flex items-center gap-2">
+          <span className="text-[10px] font-medium text-text-muted">{hint}</span>
+          {isCompleted && (
+            <span className="inline-flex items-center gap-1 whitespace-nowrap text-[10px] font-bold text-emerald-600">
+              <CheckCircle2 size={11} /> 填写完成
+            </span>
+          )}
+        </span>
       </span>
       <input
         name={fieldName}
         type={secret ? 'password' : 'text'}
+        required={required}
+        aria-required={required}
         inputMode={numericId ? 'numeric' : undefined}
         autoComplete={secret ? 'new-password' : 'off'}
         data-1p-ignore
@@ -479,8 +498,8 @@ function PlatformWizard({
         <div className="min-w-0 space-y-3">
           {activeStep === 'metaApp' && (
             <div className="grid gap-3">
-              <Field label="App ID" hint="开发者后台首页" value={appValue(drafts, app, 'appId')} onChange={value => update({ appId: value })} />
-              <Field label="App Secret" hint={app.appSecretSet ? savedSecretHint(app.appSecretLength, '已保存') : '应用设置 > 基本'} secret placeholder={app.appSecretSet ? savedSecretPlaceholder(app.appSecretLength) : '客户输入密码后复制粘贴'} onChange={value => update({ appSecret: value })} />
+              <Field required label="App ID" hint="开发者后台首页" value={appValue(drafts, app, 'appId')} onChange={value => update({ appId: value })} />
+              <Field required label="App Secret" hint="应用设置 > 基本" value={appValue(drafts, app, 'appSecret')} placeholder="填写 App Secret" onChange={value => update({ appSecret: value })} />
               <Field label="Business ID" hint="BM 设置里可找到" value={appValue(drafts, app, 'businessId')} onChange={value => update({ businessId: value })} />
               <ChecklistButton app={app} id="privacy_domain_saved" label="隐私政策和域名已填" drafts={drafts} setDrafts={setDrafts} />
             </div>
@@ -504,11 +523,11 @@ function PlatformWizard({
 
           {activeStep === 'whatsapp' && (
             <div className="grid gap-3">
-              <Field label="Embedded Signup Config ID" hint="WhatsApp > Embedded Signup" value={appValue(drafts, app, 'waConfigId')} onChange={value => update({ waConfigId: value })} />
+              <Field required label="Embedded Signup Config ID" hint="WhatsApp > Embedded Signup" value={appValue(drafts, app, 'waConfigId')} onChange={value => update({ waConfigId: value })} />
               <Field label="WABA ID" hint="WhatsApp Business Account" value={appValue(drafts, app, 'wabaId')} onChange={value => update({ wabaId: value })} />
-              <Field label="Phone Number ID" hint="号码详情页" value={appValue(drafts, app, 'phoneNumberId')} onChange={value => update({ phoneNumberId: value })} />
+              <Field required label="Phone Number ID" hint="号码详情页" value={appValue(drafts, app, 'phoneNumberId')} onChange={value => update({ phoneNumberId: value })} />
               <Field label="WhatsApp 真实手机号" hint="用于 wa.me 询盘追踪，如 971501234567" value={appValue(drafts, app, 'waPublicNumber')} onChange={value => update({ waPublicNumber: value })} />
-              <Field label="Access Token" hint={app.accessTokenSet ? savedSecretHint(app.accessTokenLength, '已保存') : '60天或永久 token'} secret placeholder={app.accessTokenSet ? savedSecretPlaceholder(app.accessTokenLength) : 'EAAB...'} onChange={value => update({ accessToken: value })} />
+              <Field required completed={app.accessTokenSet} label="Access Token" hint={app.accessTokenSet ? savedSecretHint(app.accessTokenLength, '已保存') : '60天或永久 token'} secret placeholder={app.accessTokenSet ? savedSecretPlaceholder(app.accessTokenLength) : 'EAAB...'} onChange={value => update({ accessToken: value })} />
               <div className="grid grid-cols-2 gap-2">
                 <label className="grid gap-1 text-xs font-bold text-text-secondary">
                   Token 类型
@@ -536,9 +555,9 @@ function PlatformWizard({
 
           {activeStep === 'wecomApp' && (
             <div className="grid gap-3">
-              <Field label="企业 ID / CorpID" hint="企业微信管理后台 > 我的企业" value={appValue(drafts, app, 'appId')} onChange={value => update({ appId: value })} />
-              <Field label="应用 Secret" hint={app.appSecretSet ? savedSecretHint(app.appSecretLength, '已保存') : '自建应用 Secret'} secret placeholder={app.appSecretSet ? savedSecretPlaceholder(app.appSecretLength) : '客户管理员复制给顾问'} onChange={value => update({ appSecret: value })} />
-              <Field label="AgentId" hint="自建应用详情页" value={appValue(drafts, app, 'businessId')} onChange={value => update({ businessId: value })} />
+              <Field required label="企业 ID / CorpID" hint="企业微信管理后台 > 我的企业" value={appValue(drafts, app, 'appId')} onChange={value => update({ appId: value })} />
+              <Field required label="应用 Secret" hint="自建应用 Secret" value={appValue(drafts, app, 'appSecret')} placeholder="填写应用 Secret" onChange={value => update({ appSecret: value })} />
+              <Field required label="AgentId" hint="自建应用详情页" value={appValue(drafts, app, 'businessId')} onChange={value => update({ businessId: value })} />
               <ChecklistButton app={app} id="wecom_app_visible_range_set" label="应用可见范围已包含客户接待人员" drafts={drafts} setDrafts={setDrafts} />
             </div>
           )}
@@ -552,7 +571,7 @@ function PlatformWizard({
                   <CopyLine label="Token" value={app.webhookVerifyToken} />
                 </div>
               </div>
-              <Field label="EncodingAESKey" hint={app.wecomEncodingAesKeySet ? savedSecretHint(app.wecomEncodingAesKeyLength, '已保存') : '企业微信后台随机生成'} secret placeholder={app.wecomEncodingAesKeySet ? savedSecretPlaceholder(app.wecomEncodingAesKeyLength) : '43 位 EncodingAESKey'} onChange={value => update({ wecomEncodingAesKey: value })} />
+              <Field required completed={app.wecomEncodingAesKeySet} label="EncodingAESKey" hint={app.wecomEncodingAesKeySet ? savedSecretHint(app.wecomEncodingAesKeyLength, '已保存') : '企业微信后台随机生成'} secret placeholder={app.wecomEncodingAesKeySet ? savedSecretPlaceholder(app.wecomEncodingAesKeyLength) : '43 位 EncodingAESKey'} onChange={value => update({ wecomEncodingAesKey: value })} />
               <ChecklistButton app={app} id="wecom_callback_verified" label="企业微信后台 URL 验证通过" drafts={drafts} setDrafts={setDrafts} />
             </div>
           )}
@@ -570,8 +589,8 @@ function PlatformWizard({
 
           {activeStep === 'googleApp' && (
             <div className="grid gap-3">
-              <Field label="Client ID" hint="Google Cloud OAuth" value={appValue(drafts, app, 'appId')} onChange={value => update({ appId: value })} />
-              <Field label="Client Secret" hint={app.appSecretSet ? savedSecretHint(app.appSecretLength, '已保存') : 'Google Cloud OAuth'} secret placeholder={app.appSecretSet ? savedSecretPlaceholder(app.appSecretLength) : '客户项目里的 Client Secret'} onChange={value => update({ appSecret: value })} />
+              <Field required label="Client ID" hint="Google Cloud OAuth" value={appValue(drafts, app, 'appId')} onChange={value => update({ appId: value })} />
+              <Field required label="Client Secret" hint="Google Cloud OAuth" value={appValue(drafts, app, 'appSecret')} placeholder="填写 Client Secret" onChange={value => update({ appSecret: value })} />
               <ChecklistButton app={app} id="google_consent_published" label="OAuth 同意屏幕已发布到生产" drafts={drafts} setDrafts={setDrafts} />
             </div>
           )}

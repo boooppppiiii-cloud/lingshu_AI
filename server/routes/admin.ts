@@ -445,6 +445,7 @@ function publicPendingPlatformApp(req: Parameters<typeof publicTenantPlatformApp
     tenantId,
     platform,
     appId: '',
+    appSecret: '',
     appSecretSet: false,
     appSecretLength: 0,
     waConfigId: '',
@@ -466,6 +467,16 @@ function publicPendingPlatformApp(req: Parameters<typeof publicTenantPlatformApp
     status: 'pending',
     checklist: {},
     notes: '',
+  };
+}
+
+function adminTenantPlatformApp(
+  req: Parameters<typeof publicTenantPlatformApp>[0],
+  app: TenantPlatformAppRecord,
+) {
+  return {
+    ...publicTenantPlatformApp(req, app),
+    appSecret: decryptSecret(app.app_secret),
   };
 }
 
@@ -506,7 +517,7 @@ function publicDeliveryTenant(req: Parameters<typeof publicTenantPlatformApp>[0]
     accountType,
     apps: (['meta', 'google', 'wecom'] as TenantPlatform[]).map(platform => {
       const app = apps.find(item => item.tenant_id === tenantId && item.platform === platform);
-      return app ? publicTenantPlatformApp(req, app) : publicPendingPlatformApp(req, tenantId, platform);
+      return app ? adminTenantPlatformApp(req, app) : publicPendingPlatformApp(req, tenantId, platform);
     }),
   };
 }
@@ -564,8 +575,11 @@ function publicOAuthConfig(req: Parameters<typeof oauthCallbackUrls>[0], adminEm
     callbacks: oauthCallbackUrls(req),
     values: {
       youtubeOAuthClientId: effective.youtubeOAuthClientId,
+      youtubeOAuthClientSecret: effective.youtubeOAuthClientSecret,
       metaSocialAppId: effective.metaSocialAppId,
+      metaSocialAppSecret: effective.metaSocialAppSecret,
       tiktokClientKey: effective.tiktokClientKey,
+      tiktokClientSecret: effective.tiktokClientSecret,
       advancedManualConnectEnabled: effective.advancedManualConnectEnabled,
     },
     secretSet: {
@@ -973,6 +987,7 @@ adminRouter.get('/oauth-config', async (req, res) => {
     res.status(403).json({ error: 'admin_required' });
     return;
   }
+  res.setHeader('Cache-Control', 'no-store');
   res.json(publicOAuthConfig(req, admin.email));
 });
 
@@ -982,6 +997,7 @@ adminRouter.put('/oauth-config', async (req, res) => {
     res.status(403).json({ error: 'admin_required' });
     return;
   }
+  res.setHeader('Cache-Control', 'no-store');
 
   const body = req.body ?? {};
   const patch: Partial<StoredOAuthConfig> = {
@@ -1008,6 +1024,7 @@ adminRouter.get('/delivery/platform-apps', async (req, res) => {
     res.status(403).json({ error: 'admin_required' });
     return;
   }
+  res.setHeader('Cache-Control', 'no-store');
 
   let tenants: { items: Record<string, any>[] } | undefined;
   let apps: TenantPlatformAppRecord[] | undefined;
@@ -1107,6 +1124,7 @@ adminRouter.put('/delivery/platform-apps/:tenantId/:platform', async (req, res) 
     res.status(403).json({ error: 'admin_required' });
     return;
   }
+  res.setHeader('Cache-Control', 'no-store');
   const platform = platformParam(req.params.platform);
   if (!platform) {
     res.status(400).json({ error: 'invalid_platform' });
@@ -1134,7 +1152,7 @@ adminRouter.put('/delivery/platform-apps/:tenantId/:platform', async (req, res) 
       checklist: req.body?.checklist && typeof req.body.checklist === 'object' ? req.body.checklist : undefined,
       notes: bodyText(req.body?.notes),
     });
-    res.json({ ok: true, app: publicTenantPlatformApp(req, app) });
+    res.json({ ok: true, app: adminTenantPlatformApp(req, app) });
   } catch (error) {
     res.status(500).json({ error: error instanceof Error ? error.message : 'platform_app_save_failed' });
   }
@@ -1146,6 +1164,7 @@ adminRouter.post('/delivery/platform-apps/:tenantId/:platform/complete', async (
     res.status(403).json({ error: 'admin_required' });
     return;
   }
+  res.setHeader('Cache-Control', 'no-store');
   const platform = platformParam(req.params.platform);
   if (!platform) {
     res.status(400).json({ error: 'invalid_platform' });
@@ -1170,7 +1189,7 @@ adminRouter.post('/delivery/platform-apps/:tenantId/:platform/complete', async (
     status: 'active',
     notes: bodyText(req.body?.notes),
   });
-  res.json({ ok: true, app: publicTenantPlatformApp(req, app) });
+  res.json({ ok: true, app: adminTenantPlatformApp(req, app) });
 });
 
 adminRouter.post('/delivery/platform-apps/:tenantId/:platform/test/:kind', async (req, res) => {

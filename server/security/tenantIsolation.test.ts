@@ -31,6 +31,18 @@ assert.match(channelStatus, /where: \{ tenantId, status: 'connected' \}/, 'conne
 const oauth = read('server/routes/whatsappOAuth.ts');
 assert.match(oauth, /if \(supportAccess\) return null/, 'support sessions must not switch to a second tenant');
 
+const tenantPlatformApps = read('server/lib/tenantPlatformApps.ts');
+const publicPlatformApp = tenantPlatformApps.slice(
+  tenantPlatformApps.indexOf('export function publicTenantPlatformApp'),
+  tenantPlatformApps.indexOf('export async function upsertTenantPlatformApp'),
+);
+assert.doesNotMatch(publicPlatformApp, /\bappSecret\s*:/, 'customer-facing platform app data must not expose plaintext app secrets');
+const adminRoutes = read('server/routes/admin.ts');
+assert.match(adminRoutes, /function adminTenantPlatformApp[\s\S]*?appSecret:\s*decryptSecret\(app\.app_secret\)/, 'admin delivery responses should expose decrypted app secrets for administrator verification');
+for (const route of ["'/oauth-config'", "'/delivery/platform-apps'"]) {
+  assert.match(adminRoutes, new RegExp(`adminRouter\\.get\\(${route}[\\s\\S]*?requireAdminUser\\(req\\)`), `${route} must require an administrator before returning credentials`);
+}
+
 const videos = read('server/routes/videos.ts');
 assert.match(videos, /const \{ tenantId \} = res\.locals as AuthLocals/, 'video routes must resolve tenant from auth locals');
 
