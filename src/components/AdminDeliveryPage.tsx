@@ -3,6 +3,7 @@ import { CheckCircle2, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Clip
 import { authHeader } from '../lib/auth';
 import AdminContentOpsAlerts from './AdminContentOpsAlerts';
 import AdminSocialAccountSetup from './AdminSocialAccountSetup';
+import { SocialPlatformIcon } from './SocialPlatformIcon';
 
 type Platform = 'meta' | 'google' | 'tiktok' | 'wecom';
 type Status = 'pending' | 'configuring' | 'waiting_customer' | 'importing_history' | 'verifying' | 'active' | 'needs_permanent_token' | 'token_expired' | 'error';
@@ -456,7 +457,18 @@ function PlatformWizard({
     <div className="rounded-2xl border border-border bg-white p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-sm font-black text-text-primary">{platformName}</p>
+          <div className="flex items-center gap-2">
+            <span className="flex items-center gap-1">
+              {app.platform === 'meta' && <>
+                <SocialPlatformIcon platform="facebook" size={18} />
+                <SocialPlatformIcon platform="instagram" size={18} />
+                <SocialPlatformIcon platform="whatsapp" size={18} />
+              </>}
+              {app.platform === 'google' && <SocialPlatformIcon platform="youtube" size={20} />}
+              {app.platform === 'tiktok' && <SocialPlatformIcon platform="tiktok" size={20} />}
+            </span>
+            <p className="text-sm font-black text-text-primary">{platformName}</p>
+          </div>
           <p className="mt-1 text-xs text-text-muted">顾问在客户电脑上录入，Secret / Token 加密保存，不经过微信和邮件。</p>
         </div>
         <div className="flex flex-wrap items-center justify-end gap-2">

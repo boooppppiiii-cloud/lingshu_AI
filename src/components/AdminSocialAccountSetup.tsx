@@ -11,6 +11,7 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import { authHeader } from '../lib/auth';
+import { SocialPlatformIcon } from './SocialPlatformIcon';
 import { SocialConnectionPanel, YouTubeConnectionPanel } from './YouTubeIntegration';
 
 interface AdminOAuthConfig {
@@ -258,7 +259,9 @@ export default function AdminSocialAccountSetup() {
                 <div className="grid gap-3 xl:grid-cols-3">
                   <div className="space-y-3 rounded-2xl border border-border p-4">
                     <div>
-                      <p className="text-sm font-black text-text-primary">YouTube / Google</p>
+                      <p className="flex items-center gap-2 text-sm font-black text-text-primary">
+                        <SocialPlatformIcon platform="youtube" size={20} /> YouTube / Google
+                      </p>
                       <p className="mt-1 text-[11px] text-text-muted">Google Cloud OAuth Web application</p>
                     </div>
                     <CredentialField required fieldName="youtube-oauth-client-id" label="Client ID" value={form.youtubeOAuthClientId} onChange={value => setField('youtubeOAuthClientId', value)} />
@@ -268,7 +271,13 @@ export default function AdminSocialAccountSetup() {
 
                   <div className="space-y-3 rounded-2xl border border-border p-4">
                     <div>
-                      <p className="text-sm font-black text-text-primary">Instagram / Facebook</p>
+                      <p className="flex items-center gap-2 text-sm font-black text-text-primary">
+                        <span className="flex items-center gap-1">
+                          <SocialPlatformIcon platform="instagram" size={19} />
+                          <SocialPlatformIcon platform="facebook" size={19} />
+                        </span>
+                        Instagram / Facebook
+                      </p>
                       <p className="mt-1 text-[11px] text-text-muted">两个平台共用一套 Meta App</p>
                     </div>
                     <CredentialField required fieldName="meta-social-app-id" label="App ID" value={form.metaSocialAppId} onChange={value => setField('metaSocialAppId', value)} />
@@ -279,7 +288,9 @@ export default function AdminSocialAccountSetup() {
 
                   <div className="space-y-3 rounded-2xl border border-border p-4">
                     <div>
-                      <p className="text-sm font-black text-text-primary">TikTok</p>
+                      <p className="flex items-center gap-2 text-sm font-black text-text-primary">
+                        <SocialPlatformIcon platform="tiktok" size={20} /> TikTok
+                      </p>
                       <p className="mt-1 text-[11px] text-text-muted">Login Kit + Content Posting API</p>
                     </div>
                     <CredentialField required fieldName="tiktok-client-key" label="Client Key" value={form.tiktokClientKey} onChange={value => setField('tiktokClientKey', value)} />

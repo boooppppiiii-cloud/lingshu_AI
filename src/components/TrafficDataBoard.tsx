@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Film, Info, Loader2, Play, RefreshCw, Users } from 'lucide-react';
 import { authHeader } from '../lib/auth';
+import { SocialPlatformIcon, socialBrandLabel } from './SocialPlatformIcon';
 
 interface SocialAccount {
   id: string;
@@ -166,8 +167,8 @@ export default function TrafficDataBoard(_props: { windowDays?: number }) {
               {accounts.map(account => (
                 <div key={`${account.platform}-${account.id}`} className="rounded-lg border border-border bg-surface px-3 py-2">
                   <div className="flex items-center justify-between gap-2">
-                    <p className="truncate text-sm font-semibold text-text-primary">{account.name}</p>
-                    <span className="rounded bg-green-50 px-2 py-0.5 text-[10px] font-bold text-green-700">{account.platform}</span>
+                    <p className="inline-flex min-w-0 items-center gap-1.5 truncate text-sm font-semibold text-text-primary"><SocialPlatformIcon platform={account.platform} size={16} />{account.name}</p>
+                    <span className="rounded bg-green-50 px-2 py-0.5 text-[10px] font-bold text-green-700">{socialBrandLabel(account.platform)}</span>
                   </div>
                   <p className="mt-1 text-xs text-text-muted">粉丝/订阅 {compact(account.followers)} · 视频 {compact(account.videos)} · 累计播放 {compact(account.views)}</p>
                 </div>
@@ -190,7 +191,7 @@ export default function TrafficDataBoard(_props: { windowDays?: number }) {
                   <tbody>
                     {videos.map(video => (
                       <tr key={video.id} className="border-t border-border">
-                        <td className="px-3 py-2">{video.platform}</td>
+                        <td className="px-3 py-2"><span className="inline-flex items-center gap-1.5"><SocialPlatformIcon platform={video.platform} size={15} />{socialBrandLabel(video.platform)}</span></td>
                         <td className="px-3 py-2">{video.account}</td>
                         <td className="max-w-[320px] truncate px-3 py-2" title={video.title}>{video.permalinkUrl ? <a href={video.permalinkUrl} target="_blank" rel="noreferrer" className="text-accent hover:underline">{video.title}</a> : video.title}</td>
                         <td className="px-3 py-2">{compact(video.viewCount)}</td>

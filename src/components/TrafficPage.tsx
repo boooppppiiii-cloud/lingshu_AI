@@ -23,6 +23,7 @@ import AccountActivity from './AccountActivity';
 import { CalendarPlanner, type CalendarPost } from './publishing/CalendarPlanner';
 import type { ConversationContext, Page, RestoreSignal, KickoffSignal, AgentAction } from '../App';
 import { authHeader } from '../lib/auth';
+import { SocialPlatformIcon } from './SocialPlatformIcon';
 
 type ViewMode = 'materials' | 'create' | 'publish' | 'accounts';
 type PublishPlatform = 'youtube' | 'tiktok' | 'instagram' | 'facebook';
@@ -98,11 +99,11 @@ interface Props {
   onSessionRefresh?: () => void;
 }
 
-const PLATFORM_META: Record<PublishPlatform, { label: string; short: string; color: string; format: string }> = {
-  youtube: { label: 'YouTube', short: 'YT', color: '#ff0000', format: 'Shorts / Video' },
-  tiktok: { label: 'TikTok', short: 'TK', color: '#111827', format: '9:16 短视频' },
-  instagram: { label: 'Instagram', short: 'IG', color: '#c13584', format: 'Reels' },
-  facebook: { label: 'Facebook', short: 'FB', color: '#1877f2', format: 'Reels / Page Video' },
+const PLATFORM_META: Record<PublishPlatform, { label: string; color: string; format: string }> = {
+  youtube: { label: 'YouTube', color: '#ff0000', format: 'Shorts / Video' },
+  tiktok: { label: 'TikTok', color: '#111827', format: '9:16 短视频' },
+  instagram: { label: 'Instagram', color: '#c13584', format: 'Reels' },
+  facebook: { label: 'Facebook', color: '#1877f2', format: 'Reels / Page Video' },
 };
 
 async function fetchJson<T>(url: string, init?: RequestInit): Promise<T> {
@@ -934,8 +935,8 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                   const platformAccounts = connectedAccounts.filter(account => account.platform === platform);
                   const selected = platformAccounts.length > 0 && platformAccounts.every(account => activeItem?.targetAccountIds.includes(account.id));
                   return (
-                    <button key={platform} type="button" disabled={!platformAccounts.length} onClick={() => togglePlatform(platform as PublishPlatform)} className={`rounded-lg border px-2.5 py-1.5 text-[11px] font-bold disabled:opacity-40 ${selected ? 'border-accent bg-accent-glow text-accent' : 'border-border text-text-secondary'}`}>
-                      {meta.short} {platformAccounts.length}
+                    <button key={platform} type="button" disabled={!platformAccounts.length} onClick={() => togglePlatform(platform as PublishPlatform)} className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-bold disabled:opacity-40 ${selected ? 'border-accent bg-accent-glow text-accent' : 'border-border text-text-secondary'}`}>
+                      <SocialPlatformIcon platform={platform} size={15} /> {platformAccounts.length}
                     </button>
                   );
                 })}
@@ -964,14 +965,14 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                       <img src={account.avatarUrl} alt={account.title} className="h-10 w-10 rounded-xl object-cover" />
                     ) : (
                       <span className="flex h-10 w-10 items-center justify-center rounded-xl text-white" style={{ background: meta.color }}>
-                        <PlayCircle size={18} />
+                        <SocialPlatformIcon platform={account.platform} size={23} />
                       </span>
                     )}
                     <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${account.status === 'connected' ? 'bg-green-50 text-green-700' : 'bg-slate-100 text-text-muted'}`}>
                       {account.status === 'connected' ? '已连接' : '需重新授权'}
                     </span>
                   </div>
-                  <p className="mt-3 text-sm font-bold text-text-primary">{meta.label} <span className="text-xs text-text-muted">({meta.short})</span></p>
+                  <p className="mt-3 inline-flex items-center gap-1.5 text-sm font-bold text-text-primary"><SocialPlatformIcon platform={account.platform} size={16} /> {meta.label}</p>
                   <p className="mt-1 truncate text-xs font-semibold text-text-secondary">{account.handle || account.title}</p>
                   <p className="mt-2 text-xs text-text-muted">{meta.format}</p>
                 </button>
@@ -994,7 +995,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
               const style = status === 'recommended' ? 'border-green-200 bg-green-50/70' : status === 'adjust' ? 'border-amber-200 bg-amber-50/70' : 'border-red-200 bg-red-50/70';
               const label = status === 'recommended' ? '推荐发布' : status === 'adjust' ? '调整后发布' : '不建议本次发布';
               return <div key={account.id} className={`rounded-xl border p-3 ${style}`}>
-                <div className="flex items-center justify-between gap-2"><p className="text-xs font-black text-text-primary">{meta.label} · {account.handle || account.title}</p><span className="text-[10px] font-black">{label}</span></div>
+                <div className="flex items-center justify-between gap-2"><p className="inline-flex items-center gap-1.5 text-xs font-black text-text-primary"><SocialPlatformIcon platform={account.platform} size={14} /> {meta.label} · {account.handle || account.title}</p><span className="text-[10px] font-black">{label}</span></div>
                 <div className="mt-2 space-y-1">{(item?.reasons || ['正在检查当前版本…']).map(reason => <p key={reason} className="text-[11px] text-text-secondary">• {reason}</p>)}</div>
                 {item?.actions?.length ? <p className="mt-2 text-[10px] font-bold text-text-secondary">建议：{item.actions.join('；')}</p> : null}
                 <p className="mt-2 border-t border-black/5 pt-2 text-[10px] text-text-muted">历史覆盖：灵枢 {item?.coverage.lingshuRecords || 0} 条 · 平台同步 {item?.coverage.platformSyncedRecords || 0} 条</p>
@@ -1023,7 +1024,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                   <label className="flex cursor-pointer items-start gap-3">
                     <input type="checkbox" checked={activeItem?.trackWaLink ?? true} onChange={event => activeItem && updateItem(activeItem.id, { trackWaLink: event.target.checked, status: 'draft' })} className="mt-1 h-4 w-4 rounded border-border text-accent" />
                     <span>
-                      <span className="block text-xs font-black text-emerald-900">已附带 WhatsApp 询盘链接</span>
+                      <span className="flex items-center gap-1.5 text-xs font-black text-emerald-900"><SocialPlatformIcon platform="whatsapp" size={15} /> 已附带 WhatsApp 询盘链接</span>
                       <span className="mt-1 block text-[11px] leading-5 text-emerald-800">发布时自动生成短追踪码。买家首条消息带码后，客户来源会精确归因到这条内容。</span>
                     </span>
                   </label>
@@ -1050,7 +1051,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                   return (
                     <div key={platform} className="rounded-2xl border border-border bg-surface p-4">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-sm font-black text-text-primary">{meta.label}</span>
+                        <span className="inline-flex items-center gap-1.5 text-sm font-black text-text-primary"><SocialPlatformIcon platform={platform} size={16} /> {meta.label}</span>
                         <button type="button" onClick={() => void adaptCopy(platform)} className="rounded-lg border border-border px-2 py-1 text-[11px] font-bold text-text-secondary hover:border-accent hover:text-accent">换一版</button>
                       </div>
                       {platform === 'youtube' && (

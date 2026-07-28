@@ -1,5 +1,5 @@
-import { MessageCircle, Music2 } from 'lucide-react';
 import type { CustomerSource } from '../../types/customer';
+import { SocialPlatformIcon } from '../SocialPlatformIcon';
 
 const SOURCE_LABEL: Record<string, string> = {
   whatsapp: 'WhatsApp',
@@ -21,41 +21,30 @@ export function SourceIcon({ source, size = 16 }: { source: CustomerSource; size
   const normalized = String(source || '');
   const boxSize = Math.max(size + 4, 20);
 
-  if (normalized === 'whatsapp' || normalized.startsWith('whatsapp_from_')) {
+  if (normalized.startsWith('whatsapp_from_')) {
+    const origin = normalized.replace('whatsapp_from_', '');
     return (
       <span
         title={label}
         aria-label={label}
-        className="inline-flex shrink-0 items-center justify-center rounded-full bg-emerald-50 text-emerald-600"
-        style={{ width: boxSize, height: boxSize }}
+        className="relative inline-flex shrink-0 items-center justify-center"
+        style={{ width: boxSize + 6, height: boxSize }}
       >
-        <MessageCircle size={size} strokeWidth={2.4} />
+        <SocialPlatformIcon platform="whatsapp" size={size + 3} className="absolute left-0.5 top-0.5" />
+        <SocialPlatformIcon platform={origin} size={Math.max(10, size - 1)} className="absolute bottom-0 right-0 rounded-full bg-white ring-2 ring-white" />
       </span>
     );
   }
 
-  if (source === 'tiktok') {
+  if (normalized === 'whatsapp' || normalized === 'tiktok' || normalized === 'instagram' || normalized === 'facebook') {
     return (
       <span
         title={label}
         aria-label={label}
-        className="inline-flex shrink-0 items-center justify-center rounded-full bg-slate-100 text-slate-950"
+        className="inline-flex shrink-0 items-center justify-center"
         style={{ width: boxSize, height: boxSize }}
       >
-        <Music2 size={size} strokeWidth={2.4} />
-      </span>
-    );
-  }
-
-  if (source === 'instagram') {
-    return (
-      <span
-        title={label}
-        aria-label={label}
-        className="inline-flex shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-fuchsia-500 via-rose-500 to-amber-400 text-[9px] font-black text-white"
-        style={{ width: boxSize, height: boxSize, fontSize: Math.max(8, Math.round(size * 0.55)) }}
-      >
-        IG
+        <SocialPlatformIcon platform={normalized} size={size + 3} />
       </span>
     );
   }
@@ -64,10 +53,10 @@ export function SourceIcon({ source, size = 16 }: { source: CustomerSource; size
     <span
       title={label}
       aria-label={label}
-      className="inline-flex shrink-0 items-center justify-center rounded-full bg-blue-600 font-black text-white"
-      style={{ width: boxSize, height: boxSize, fontSize: Math.max(10, Math.round(size * 0.8)) }}
+      className="inline-flex shrink-0 items-center justify-center"
+      style={{ width: boxSize, height: boxSize }}
     >
-      f
+      <SocialPlatformIcon platform="whatsapp" size={size + 3} />
     </span>
   );
 }

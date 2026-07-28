@@ -12,6 +12,7 @@ import { authHeader } from '../lib/auth';
 import CompetitorAccountsModal from './CompetitorAccountsModal';
 import type { Page } from '../App';
 import { completeDemoStep, readDemoProgress } from '../lib/demoProgress';
+import { SocialPlatformIcon } from './SocialPlatformIcon';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type Platform = 'all' | 'tiktok' | 'instagram' | 'youtube' | 'facebook';
@@ -1233,8 +1234,6 @@ function needsVideoEnhancement(video: TrendVideo): boolean {
 // ── Fallback thumbnail ────────────────────────────────────────────────────────
 function VideoThumbnail({ platform, title }: { platform: Exclude<Platform, 'all'>; title: string }) {
   const meta = getPlatformMeta(platform);
-  const words = title.split(/\s+/).filter(Boolean);
-  const initials = words.slice(0, 2).map(w => w[0]).join('').toUpperCase();
   const shortTitle = title.length > 86 ? `${title.slice(0, 83)}...` : title;
   return (
     <div className="w-full h-full flex flex-col justify-between relative overflow-hidden p-4"
@@ -1242,7 +1241,7 @@ function VideoThumbnail({ platform, title }: { platform: Exclude<Platform, 'all'
       <div className="absolute inset-0 opacity-10"
         style={{ backgroundImage: 'linear-gradient(135deg, rgba(255,255,255,.35) 0, transparent 46%), repeating-linear-gradient(45deg, rgba(255,255,255,.3) 0, rgba(255,255,255,.3) 1px, transparent 1px, transparent 11px)' }} />
       <div className="relative">
-        <div className="mb-2 text-4xl font-black font-display text-white/15 select-none">{initials || meta.label.slice(0, 2).toUpperCase()}</div>
+        <SocialPlatformIcon platform={platform} size={38} className="mb-3 drop-shadow-sm" />
         <p className="line-clamp-3 text-sm font-semibold leading-snug text-white/90 drop-shadow-sm">{shortTitle}</p>
       </div>
     </div>
@@ -1522,7 +1521,7 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, onExactAnalysis, acti
     <div className="flex min-h-0 flex-1 flex-col" data-lingshu-guide="analysis-evidence">
       <div className="flex-shrink-0 border-b border-border bg-surface px-4 py-3">
         <div className="mb-3 flex flex-wrap items-center gap-2 text-[10px] text-text-muted">
-          <span className="rounded-md border border-border bg-surface-2 px-2 py-1 font-semibold text-text-secondary">{video.contentFormat === 'image' ? `${getPlatformMeta(video.platform).label} 图文` : analysis.videoType}</span>
+          <span className="inline-flex items-center gap-1 rounded-md border border-border bg-surface-2 px-2 py-1 font-semibold text-text-secondary">{video.contentFormat === 'image' && <SocialPlatformIcon platform={video.platform} size={12} />}{video.contentFormat === 'image' ? `${getPlatformMeta(video.platform).label} 图文` : analysis.videoType}</span>
           {video.contentFormat === 'image' ? <><span className="flex items-center gap-1"><BarChart2 size={9} className="text-accent" />{hasTrustedImageAnalysis ? `已提取 ${imageEvidenceCount} 条证据` : '图片分析待完成'}</span><span className="flex items-center gap-1"><Images size={9} />{video.aiAnalysis?.imageCount || video.aiAnalysis?.imageUrls?.length || 1} 张图片</span></> : <><span className="flex items-center gap-1"><BarChart2 size={9} className="text-accent" />信息速度 {analysis.infoSpeed}</span><span className="flex items-center gap-1"><TrendingUp size={9} />{video.views} 播放</span><span>{analysis.emotion}</span></>}
         </div>
         <div className="grid grid-cols-4 gap-1 rounded-xl border border-border bg-surface-2 p-1">
@@ -2371,7 +2370,7 @@ function VideoCard({ video, index, isSelected, onSelect, onWatch, onAnalyzeVideo
           {crawlRule}
         </div>
         <div className="absolute top-2 left-2">
-          <span className="platform-badge text-[10px]" style={{ background: meta.bg, color: meta.color }}>{meta.label}</span>
+          <span className="platform-badge inline-flex items-center gap-1 text-[10px]" style={{ background: 'rgba(255,255,255,.94)', color: '#0f172a' }}><SocialPlatformIcon platform={video.platform} size={13} />{meta.label}</span>
           {video.id.startsWith('material-') && (
             <span className="mt-1 block rounded-md bg-green-600 px-1.5 py-0.5 text-[9px] font-black text-white shadow-sm">置顶 · 片段已分析</span>
           )}
@@ -2426,7 +2425,7 @@ function VideoListItem({ video, isSelected, onSelect, onWatch, onAnalyzeVideo, o
       </button>
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 mb-0.5">
-          <span className="platform-badge text-[9px]" style={{ background: meta.bg, color: meta.color }}>{meta.label}</span>
+          <span className="platform-badge inline-flex items-center gap-1 text-[9px]" style={{ background: '#fff', color: '#0f172a' }}><SocialPlatformIcon platform={video.platform} size={12} />{meta.label}</span>
           {video.id.startsWith('material-') && <span className="rounded bg-green-100 px-1.5 py-0.5 text-[9px] font-bold text-green-700">置顶 · 片段已分析</span>}
           <span className={`text-[10px] font-semibold ${trendColor}`}>{trendLabel}</span>
         </div>
@@ -3300,7 +3299,9 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
               </div>
               <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
               <div className="relative h-14 rounded-2xl border border-border bg-surface shadow-sm transition-colors hover:border-border-bright focus-within:border-accent">
-                <Globe size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+                {platform === 'all'
+                  ? <Globe size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-text-muted pointer-events-none" />
+                  : <SocialPlatformIcon platform={platform} size={17} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2" />}
                 <span className="absolute left-11 top-2 text-[11px] font-semibold text-text-muted pointer-events-none">社媒平台</span>
                 <select
                   value={platform}
@@ -3653,7 +3654,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
                               need.priority === '高' ? 'bg-red-50 text-red-600' : need.priority === '中' ? 'bg-accent-50 text-accent-700' : 'bg-slate-100 text-text-muted'
                             }`}>{need.priority}优先级</span>
                             <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[10px] font-bold text-text-secondary">{need.ratio}</span>
-                            <span className="rounded-full bg-surface-2 px-2 py-0.5 text-[10px] font-bold text-text-secondary">{getPlatformMeta(need.platform).label}</span>
+                            <span className="inline-flex items-center gap-1 rounded-full bg-surface-2 px-2 py-0.5 text-[10px] font-bold text-text-secondary"><SocialPlatformIcon platform={need.platform} size={12} />{getPlatformMeta(need.platform).label}</span>
                           </div>
                           <h3 className="mt-2 text-sm font-bold text-text-primary">{need.title}</h3>
                           <p className="mt-1 text-xs leading-relaxed text-text-secondary">{need.suggestion}</p>

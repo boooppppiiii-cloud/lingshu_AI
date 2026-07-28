@@ -4,7 +4,6 @@ import {
   MessageSquare,
   Eye,
   ThumbsUp,
-  TvMinimalPlay,
   CheckCircle,
   AlertCircle,
   ExternalLink,
@@ -12,6 +11,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { authHeader } from '../lib/auth';
+import { SocialPlatformIcon } from './SocialPlatformIcon';
 
 interface YouTubeAccount {
   id: string;
@@ -331,7 +331,7 @@ export function YouTubeConnectionPanel({ compact = false }: { compact?: boolean 
       <div className="flex flex-col items-stretch gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-start gap-3 min-w-0">
           <div className="w-10 h-10 rounded-lg bg-red-50 text-red-600 flex items-center justify-center flex-shrink-0">
-            <TvMinimalPlay size={20} />
+            <SocialPlatformIcon platform="youtube" size={24} />
           </div>
           <div className="min-w-0">
             <h2 className="text-sm font-semibold text-gray-900">YouTube 一键授权</h2>
@@ -354,7 +354,7 @@ export function YouTubeConnectionPanel({ compact = false }: { compact?: boolean 
             disabled={connecting || loading}
             className="inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold text-white bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {connecting ? <Loader2 size={15} className="animate-spin" /> : <TvMinimalPlay size={15} />}
+            {connecting ? <Loader2 size={15} className="animate-spin" /> : <SocialPlatformIcon platform="youtube" size={17} />}
             {accounts.length > 0 ? '重新连接' : '连接 YouTube'}
           </button>
         </div>
@@ -428,7 +428,7 @@ export function YouTubeConnectionPanel({ compact = false }: { compact?: boolean 
                   <img src={account.thumbnailUrl} alt={account.channelTitle} className="w-11 h-11 rounded-lg object-cover flex-shrink-0" />
                 ) : (
                   <div className="w-11 h-11 rounded-lg bg-red-50 text-red-600 flex items-center justify-center flex-shrink-0">
-                    <TvMinimalPlay size={18} />
+                    <SocialPlatformIcon platform="youtube" size={22} />
                   </div>
                 )}
                 <div className="min-w-0 flex-1">
@@ -478,7 +478,7 @@ export function YouTubeConnectionPanel({ compact = false }: { compact?: boolean 
         </div>
       ) : (
         <div className="mt-auto rounded-xl border border-dashed border-gray-200 px-4 py-5 text-center">
-          <TvMinimalPlay size={28} className="mx-auto text-gray-300 mb-2" />
+          <SocialPlatformIcon platform="youtube" size={32} className="mx-auto mb-2 opacity-35" />
           <p className="text-sm font-medium text-gray-700">还没有连接 YouTube 频道</p>
           <p className="text-xs text-gray-400 mt-1">连接后，我的社媒里的 AI 生成视频可以一键发布到 YouTube。</p>
         </div>
@@ -691,7 +691,7 @@ export function SocialConnectionPanel({ platform }: { platform: SocialPlatform }
       <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-[minmax(0,1fr)_auto]">
         <div className="flex items-start gap-3 min-w-0">
           <div className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: meta.bg, color: meta.color }}>
-            <TvMinimalPlay size={20} />
+            <SocialPlatformIcon platform={platform} size={24} />
           </div>
           <div className="min-w-0">
             <h2 className="truncate whitespace-nowrap text-sm font-semibold text-gray-900">{meta.label} 授权</h2>
@@ -706,7 +706,7 @@ export function SocialConnectionPanel({ platform }: { platform: SocialPlatform }
           <button onClick={() => void startOAuth()} disabled={connecting || loading}
             className="inline-flex h-10 w-[156px] items-center justify-center gap-2 rounded-lg px-4 text-sm font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
             style={{ background: meta.color }}>
-            {connecting ? <Loader2 size={15} className="animate-spin" /> : <TvMinimalPlay size={15} />}
+            {connecting ? <Loader2 size={15} className="animate-spin" /> : <SocialPlatformIcon platform={platform} size={17} />}
             {accounts.length > 0 ? '重新连接' : `连接 ${meta.label}`}
           </button>
         </div>
@@ -802,7 +802,7 @@ export function SocialConnectionPanel({ platform }: { platform: SocialPlatform }
                   <img src={account.avatarUrl} alt={account.title} className="w-11 h-11 rounded-lg object-cover flex-shrink-0" />
                 ) : (
                   <div className="w-11 h-11 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: meta.bg, color: meta.color }}>
-                    <TvMinimalPlay size={18} />
+                    <SocialPlatformIcon platform={platform} size={22} />
                   </div>
                 )}
                 <div className="min-w-0 flex-1">
@@ -838,7 +838,7 @@ export function SocialConnectionPanel({ platform }: { platform: SocialPlatform }
         </div>
       ) : (
         <div className="mt-auto rounded-xl border border-dashed border-gray-200 px-4 py-5 text-center">
-          <TvMinimalPlay size={28} className="mx-auto text-gray-300 mb-2" />
+          <SocialPlatformIcon platform={platform} size={32} className="mx-auto mb-2 opacity-35" />
           <p className="text-sm font-medium text-gray-700">还没有连接 {meta.label} 账号</p>
           <p className="text-xs text-gray-400 mt-1">连接后会出现在「频道总览」和「一键发布」里。</p>
         </div>
@@ -1021,8 +1021,8 @@ export function ChannelOverview() {
         <div className="flex gap-1 rounded-xl bg-gray-100 p-1">
           {platforms.map(p => (
             <button key={p.id} onClick={() => setPlatform(p.id)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${platform === p.id ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-800'}`}>
-              {p.label}{p.count > 0 ? ` ${p.count}` : ''}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold ${platform === p.id ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500 hover:text-gray-800'}`}>
+              <SocialPlatformIcon platform={p.id} size={15} /> {p.label}{p.count > 0 ? ` ${p.count}` : ''}
             </button>
           ))}
         </div>
@@ -1047,7 +1047,7 @@ export function ChannelOverview() {
       ) : accounts.length === 0 ? (
         <div className="flex-1 grid place-items-center rounded-xl border border-dashed border-gray-200 bg-gray-50">
           <div className="text-center">
-            <TvMinimalPlay size={34} className="mx-auto mb-2 text-gray-300" />
+            <SocialPlatformIcon platform={currentPlatform} size={38} className="mx-auto mb-2 opacity-35" />
             <p className="text-sm font-semibold text-gray-800">还没有已授权的 {platforms.find(p => p.id === currentPlatform)?.label} 账号</p>
             <p className="mt-1 text-xs text-gray-400">请先在「账号配置 - 一键授权」连接账号。</p>
           </div>
@@ -1064,7 +1064,7 @@ export function ChannelOverview() {
                     <img src={account.avatarUrl} alt={account.title} className="w-9 h-9 rounded-lg object-cover flex-shrink-0" />
                   ) : (
                     <span className="w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0" style={platformTone(account.platform)}>
-                      <TvMinimalPlay size={16} />
+                      <SocialPlatformIcon platform={account.platform} size={20} />
                     </span>
                   )}
                   <span className="min-w-0 flex-1">

@@ -10,6 +10,7 @@ import { studioApi, getDesktopRender, type StudioProject, type VariationBatch, t
 import type { Page } from '../App';
 import { completeDemoStep } from '../lib/demoProgress';
 import { authHeader } from '../lib/auth';
+import { SocialPlatformIcon } from './SocialPlatformIcon';
 
 /* ──────────────────────────────────────────────────────────────────────────
    AI 生成内容工作台 — 社媒（流量）页子模块
@@ -5253,6 +5254,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                 <label className="block min-w-[168px]">
                   <span className="mb-1.5 block text-xs font-semibold text-text-secondary">目标平台</span>
                   <span className="relative block">
+                    <SocialPlatformIcon platform={platform} size={17} className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2" />
                     <select
                       value={platform}
                       onChange={event => {
@@ -5261,7 +5263,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                         setPlatform(next.id);
                         setRatio(next.ratio);
                       }}
-                      className="h-10 w-full appearance-none rounded-xl border border-border bg-surface px-3 pr-9 text-sm font-semibold text-text-primary outline-none transition focus:border-accent"
+                      className="h-10 w-full appearance-none rounded-xl border border-border bg-surface py-0 pl-10 pr-9 text-sm font-semibold text-text-primary outline-none transition focus:border-accent"
                     >
                       {visiblePlatforms.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
                     </select>

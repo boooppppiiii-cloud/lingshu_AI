@@ -4,8 +4,9 @@ import {
   Puzzle, X, CheckCircle, AlertCircle, Settings, Trash2, Plus,
   Star, GitBranch, Copy, Check, ChevronRight, Zap, BookOpen,
   Package, Users, Layers, ExternalLink, Lock, Globe, Brain,
-  MessageSquare, Wrench, ShieldCheck, FlaskConical,
+  Wrench, ShieldCheck, FlaskConical,
 } from 'lucide-react';
+import { SocialPlatformIcon, type SocialBrand } from './SocialPlatformIcon';
 
 // ── Plugin types & data ───────────────────────────────────────────────────────
 interface Plugin {
@@ -20,6 +21,19 @@ interface Plugin {
   config: Record<string, string>;
   installed: boolean;
   installedAt?: string;
+}
+
+function pluginSocialBrand(pluginKey: string): SocialBrand | null {
+  if (pluginKey === 'tiktok') return 'tiktok';
+  if (pluginKey === 'instagram') return 'instagram';
+  if (pluginKey === 'facebook') return 'facebook';
+  if (pluginKey === 'whatsapp_business') return 'whatsapp';
+  return null;
+}
+
+function PluginIcon({ plugin, size = 28 }: { plugin: Plugin; size?: number }) {
+  const brand = pluginSocialBrand(plugin.pluginKey);
+  return brand ? <SocialPlatformIcon platform={brand} size={size} /> : <>{plugin.icon}</>;
 }
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -174,7 +188,7 @@ const SKILLS: Skill[] = [
     tools: [
       { id: 'product_kb', label: '产品知识库查询', desc: '接入当前 Product Skill，查询产品规格、价格、库存',    icon: <Package size={12} /> },
       { id: 'crm',        label: '客户档案',   desc: '读取客户历史订单、询盘记录、标签信息',                icon: <Users size={12} /> },
-      { id: 'whatsapp',   label: 'WhatsApp 发送',  desc: '在成交阶段自动发送报价单、产品目录到客户 WhatsApp', icon: <MessageSquare size={12} /> },
+      { id: 'whatsapp',   label: 'WhatsApp 发送',  desc: '在成交阶段自动发送报价单、产品目录到客户 WhatsApp', icon: <SocialPlatformIcon platform="whatsapp" size={14} /> },
     ],
   },
   // ── 行业专家 ───────────────────────────────────────────────────────────────
@@ -348,7 +362,7 @@ function PluginDrawer({
       onClick={e => e.stopPropagation()}
     >
       <div className="flex items-start gap-3 px-5 py-4 border-b border-gray-100">
-        <div className="text-3xl w-11 h-11 rounded-xl bg-gray-50 flex items-center justify-center flex-shrink-0">{plugin.icon}</div>
+        <div className="text-3xl w-11 h-11 rounded-xl bg-gray-50 flex items-center justify-center flex-shrink-0"><PluginIcon plugin={plugin} /></div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <h3 className="text-sm font-semibold text-gray-900">{plugin.nameZh}</h3>
@@ -986,7 +1000,7 @@ export default function PluginsPage() {
                         key={plugin.pluginKey}
                         className="border border-gray-200 rounded-xl p-4 flex items-start gap-4 hover:border-gray-300 hover:shadow-sm transition-all"
                       >
-                        <div className="text-3xl flex-shrink-0 mt-0.5">{plugin.icon}</div>
+                        <div className="text-3xl flex-shrink-0 mt-0.5"><PluginIcon plugin={plugin} /></div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-start justify-between gap-2">
                             <div>
@@ -1208,7 +1222,7 @@ export default function PluginsPage() {
             >
               <div className="flex items-center justify-between mb-5">
                 <div className="flex items-center gap-3">
-                  <span className="text-2xl">{configTarget.icon}</span>
+                  <span className="text-2xl"><PluginIcon plugin={configTarget} size={24} /></span>
                   <h3 className="font-semibold text-gray-900">{configTarget.nameZh} 配置</h3>
                 </div>
                 <button type="button" onClick={() => setConfigTarget(null)} className="text-gray-400 hover:text-gray-600"><X size={20} /></button>

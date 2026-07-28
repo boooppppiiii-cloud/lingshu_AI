@@ -25,6 +25,7 @@ import {
   Bar,
 } from 'recharts';
 import { authHeader } from '../lib/auth';
+import { normalizeSocialBrand, SocialPlatformIcon } from './SocialPlatformIcon';
 
 type OrderStatus = '待付款' | '已付款' | '生产中' | '已发货' | '已完成' | '退款';
 
@@ -338,7 +339,12 @@ export default function OrderManagementPage() {
                         <p className="mt-0.5 text-[11px] text-text-muted">{order.product}</p>
                       </td>
                       <td className="px-4 py-3 text-text-secondary">{order.market}</td>
-                      <td className="px-4 py-3 text-text-secondary">{order.channel}</td>
+                      <td className="px-4 py-3 text-text-secondary">
+                        <span className="inline-flex items-center gap-1.5">
+                          {normalizeSocialBrand(order.channel) && <SocialPlatformIcon platform={order.channel} size={15} />}
+                          {order.channel}
+                        </span>
+                      </td>
                       <td className="px-4 py-3 text-text-secondary">{order.quantity.toLocaleString()}</td>
                       <td className="px-4 py-3 font-semibold text-text-primary">{money(order.amount)}</td>
                       <td className="px-4 py-3">

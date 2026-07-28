@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { X, Plus, Loader2, Trash2, Download, Users, ExternalLink, AlertCircle } from 'lucide-react';
 import { authHeader } from '../lib/auth';
+import { SocialPlatformIcon } from './SocialPlatformIcon';
 
 type AccountPlatform = 'youtube' | 'tiktok' | 'instagram' | 'facebook';
 
@@ -18,11 +19,11 @@ interface CompetitorAccount {
   createdAt: string;
 }
 
-const PLATFORM_META: Record<AccountPlatform, { label: string; bg: string }> = {
-  youtube: { label: 'YouTube', bg: '#ff0000' },
-  tiktok: { label: 'TikTok', bg: '#010101' },
-  instagram: { label: 'Instagram', bg: '#c13584' },
-  facebook: { label: 'Facebook', bg: '#1877f2' },
+const PLATFORM_META: Record<AccountPlatform, { label: string }> = {
+  youtube: { label: 'YouTube' },
+  tiktok: { label: 'TikTok' },
+  instagram: { label: 'Instagram' },
+  facebook: { label: 'Facebook' },
 };
 
 const CRAWL_COUNT = 10;
@@ -181,17 +182,20 @@ export default function CompetitorAccountsModal({
             {/* Add form */}
             <div className="border-b border-border bg-surface px-6 py-4">
               <div className="flex flex-col gap-2 sm:flex-row">
-                <select
-                  value={platform}
-                  onChange={e => setPlatform(e.target.value as AccountPlatform)}
-                  aria-label="平台"
-                  className="h-11 shrink-0 cursor-pointer rounded-xl border border-border bg-white px-3 text-sm font-bold text-text-primary outline-none focus:border-accent"
-                >
-                  <option value="youtube">YouTube</option>
-                  <option value="tiktok">TikTok</option>
-                  <option value="instagram">Instagram</option>
-                  <option value="facebook">Facebook</option>
-                </select>
+                <div className="relative shrink-0">
+                  <SocialPlatformIcon platform={platform} size={18} className="pointer-events-none absolute left-3 top-1/2 z-10 -translate-y-1/2" />
+                  <select
+                    value={platform}
+                    onChange={e => setPlatform(e.target.value as AccountPlatform)}
+                    aria-label="平台"
+                    className="h-11 cursor-pointer rounded-xl border border-border bg-white pl-9 pr-3 text-sm font-bold text-text-primary outline-none focus:border-accent"
+                  >
+                    <option value="youtube">YouTube</option>
+                    <option value="tiktok">TikTok</option>
+                    <option value="instagram">Instagram</option>
+                    <option value="facebook">Facebook</option>
+                  </select>
+                </div>
                 <input
                   type="text"
                   value={url}
@@ -240,9 +244,8 @@ export default function CompetitorAccountsModal({
                     return (
                       <li key={account.id}
                         className="flex items-center gap-3 rounded-xl border border-border bg-white px-3.5 py-3">
-                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-[10px] font-black text-white"
-                          style={{ background: meta.bg }}>
-                          {meta.label.slice(0, 2).toUpperCase()}
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-surface-2">
+                          <SocialPlatformIcon platform={account.platform} size={23} />
                         </span>
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-1.5">

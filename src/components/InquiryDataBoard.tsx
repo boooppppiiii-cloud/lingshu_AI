@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
-import { AlertCircle, Info, MessageSquare, RefreshCw, TrendingUp, UserCheck } from 'lucide-react';
+import { AlertCircle, Info, RefreshCw, TrendingUp, UserCheck } from 'lucide-react';
 import { useCustomers } from '../hooks/useCustomers';
 import type { CustomerProfile } from '../types/customer';
+import { SocialPlatformIcon } from './SocialPlatformIcon';
 
 const STAGE_LABEL: Record<CustomerProfile['stage'], string> = {
   lead: '潜客',
@@ -59,7 +60,7 @@ export default function InquiryDataBoard(_props: { windowDays?: number }) {
       ) : (
         <>
           <div className="mb-4 grid gap-3 md:grid-cols-4">
-            <StatCard label="WhatsApp询盘" value={String(inquiries.length)} icon={<MessageSquare size={14} />} />
+            <StatCard label="WhatsApp询盘" value={String(inquiries.length)} icon={<SocialPlatformIcon platform="whatsapp" size={15} />} />
             <StatCard label="高意向客户" value={String(summary.highIntent)} icon={<TrendingUp size={14} />} />
             <StatCard label="需人工跟进" value={String(summary.needsHuman)} icon={<UserCheck size={14} />} />
             <StatCard label="预估金额" value={`$${summary.estimated.toLocaleString('en-US')}`} icon={<Info size={14} />} />

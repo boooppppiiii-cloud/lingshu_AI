@@ -45,6 +45,7 @@ const GUIDE_MEMORY_KEY = 'lingshu-feature-guides-human-v1';
 const GUIDE_HOVER_DELAY_MS = 900;
 const GUIDE_COOLDOWN_MS = 45_000;
 const GUIDE_VISIBLE_MS = 6_000;
+const ENTERPRISE_GUIDE_MEMORY_ID = '__enterprise-guide-shown__';
 
 type GuideMemory = {
   seen: string[];
@@ -311,6 +312,7 @@ export default function GlobalAssistant({
   const [assistantTool, setAssistantTool] = useState<AssistantTool | null>(null);
   const [liveContext, setLiveContext] = useState<AssistantContext | null>(null);
   const [featureGuide, setFeatureGuide] = useState<(AssistantGuide & { id: string }) | null>(null);
+  const [enterpriseGuideSeen, setEnterpriseGuideSeen] = useState(false);
   const [enterpriseContext, setEnterpriseContext] = useState('');
   const [loading, setLoading] = useState(false);
   const longPressRef = useRef<number | null>(null);
@@ -389,20 +391,35 @@ export default function GlobalAssistant({
   const showFeatureGuide = useCallback((id: string) => {
     const guide = ASSISTANT_GUIDES[id];
     if (!guide || seenGuideIdsRef.current.has(id)) return;
+    const isEnterpriseGuide = page === 'enterprise' && id.startsWith('enterprise-');
+    if (
+      isEnterpriseGuide
+      && (enterpriseGuideSeen || seenGuideIdsRef.current.has(ENTERPRISE_GUIDE_MEMORY_ID))
+    ) return;
     const now = Date.now();
     if (now - lastGuideShownAtRef.current < GUIDE_COOLDOWN_MS) return;
     if (featureGuideTimerRef.current) window.clearTimeout(featureGuideTimerRef.current);
+    if (isEnterpriseGuide) {
+      seenGuideIdsRef.current.add(ENTERPRISE_GUIDE_MEMORY_ID);
+      setEnterpriseGuideSeen(true);
+    }
     rememberGuide(id, now);
     setFeatureGuide({ ...guide, id });
     featureGuideTimerRef.current = window.setTimeout(() => setFeatureGuide(null), GUIDE_VISIBLE_MS);
-  }, [rememberGuide]);
+  }, [enterpriseGuideSeen, page, rememberGuide]);
 
   useEffect(() => {
     try {
       const stored = window.localStorage.getItem(GUIDE_MEMORY_KEY);
       if (!stored) return;
       const memory = JSON.parse(stored) as Partial<GuideMemory>;
-      if (Array.isArray(memory.seen)) seenGuideIdsRef.current = new Set(memory.seen.filter(id => typeof id === 'string'));
+      if (Array.isArray(memory.seen)) {
+        seenGuideIdsRef.current = new Set(memory.seen.filter(id => typeof id === 'string'));
+        setEnterpriseGuideSeen(
+          seenGuideIdsRef.current.has(ENTERPRISE_GUIDE_MEMORY_ID)
+          || [...seenGuideIdsRef.current].some(id => id.startsWith('enterprise-')),
+        );
+      }
       if (typeof memory.lastShownAt === 'number') lastGuideShownAtRef.current = memory.lastShownAt;
     } catch {
       // Ignore malformed or unavailable storage and start with a clean guide memory.
@@ -749,6 +766,21 @@ export default function GlobalAssistant({
             </button>
             <span className="absolute -right-2 bottom-6 h-4 w-4 rotate-45 border-r border-t border-emerald-100 bg-white" />
           </motion.div>
+        )}
+      </AnimatePresence>
+
+      <AnimatePresence>
+        {page === 'enterprise' && mode === 'breathing' && enterpriseGuideSeen && !featureGuide && (
+          <motion.button
+            type="button"
+            initial={{ opacity: 0, x: 6 }}
+            animate={{ opacity: 1, x: 0 }}
+            exit={{ opacity: 0, x: 4 }}
+            onClick={openCurrentPageAgent}
+            className="absolute bottom-5 right-[68px] z-10 whitespace-nowrap rounded-full border border-emerald-100 bg-white/95 px-3 py-1.5 text-[11px] font-black text-emerald-700 shadow-sm hover:border-emerald-200 hover:bg-emerald-50"
+          >
+            要补资料？点我
+          </motion.button>
         )}
       </AnimatePresence>
 

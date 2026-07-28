@@ -4,6 +4,7 @@ import { Activity, BarChart3, Clock, Download, DownloadCloud, Plus, X, Trash2, C
 import type { AgentAction, AgentType } from '../App';
 import { completeDemoStep, readDemoProgress } from '../lib/demoProgress';
 import { authHeader } from '../lib/auth';
+import { SocialPlatformIcon } from './SocialPlatformIcon';
 
 interface ScheduledTask {
   id: string;
@@ -78,7 +79,7 @@ const TASK_TEMPLATES = [
     category: 'daily' as const,
     cronExpr: '0 1 * * *',
     cronLabel: '每天 01:00（北京时间）',
-    icon: '▶️',
+    icon: <SocialPlatformIcon platform="youtube" size={24} />,
     desc: '每天凌晨自动采集 YouTube 热点关键词视频，并排队获取真实视频 / Gemini 分析',
     config: { platforms: 'youtube', keywords: 'skincare', limit: '5', dateWindowDays: '7' },
   },
@@ -89,7 +90,7 @@ const TASK_TEMPLATES = [
     category: 'daily' as const,
     cronExpr: '0 1 * * *',
     cronLabel: '每天 01:00（北京时间）',
-    icon: '🎵',
+    icon: <SocialPlatformIcon platform="tiktok" size={24} />,
     desc: '每天凌晨自动采集 TikTok 热点关键词视频，并排队获取真实视频 / Gemini 分析',
     config: { platforms: 'tiktok', keywords: 'skincare', limit: '5', dateWindowDays: '7' },
   },
@@ -100,11 +101,11 @@ const TASK_TEMPLATES = [
     category: 'daily' as const,
     cronExpr: '0 1 * * *',
     cronLabel: '每天 01:00（北京时间）',
-    icon: '📘',
+    icon: <SocialPlatformIcon platform="facebook" size={24} />,
     desc: '每天凌晨自动采集 Facebook 热点关键词视频，并排队获取真实视频 / AI 分析',
     config: { platforms: 'facebook', keywords: 'skincare', limit: '5', dateWindowDays: '7' },
   },
-  { templateId: 'trend_report', taskType: 'trend_report', name: 'TikTok 爆款日报', category: 'daily' as const, cronExpr: '0 8 * * *', cronLabel: '每天 08:00', icon: '🔥', desc: '每日生成 TikTok 跨境电商热门趋势简报' },
+  { templateId: 'trend_report', taskType: 'trend_report', name: 'TikTok 爆款日报', category: 'daily' as const, cronExpr: '0 8 * * *', cronLabel: '每天 08:00', icon: <SocialPlatformIcon platform="tiktok" size={24} />, desc: '每日生成 TikTok 跨境电商热门趋势简报' },
   { templateId: 'exchange_rate', taskType: 'exchange_rate', name: '汇率日报', category: 'daily' as const, cronExpr: '0 9 * * *', cronLabel: '每天 09:00', icon: '💱', desc: '实时获取 USD/SAR/AED/VND/MYR 等汇率并发送' },
   { templateId: 'weekly_review', taskType: 'weekly_review', name: '每周经营复盘', category: 'report' as const, cronExpr: '0 18 * * 5', cronLabel: '每周五 18:00', icon: '📊', desc: 'AI 生成本周流量、询盘、转化、复购复盘报告' },
   { templateId: 'crm_wakeup', taskType: 'crm_wakeup', name: '沉默客户唤醒', category: 'automation' as const, cronExpr: '0 10 * * 1', cronLabel: '每周一 10:00', icon: '💌', desc: '自动生成针对 60 天沉默老客的唤醒消息并推送' },

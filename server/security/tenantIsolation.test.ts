@@ -35,6 +35,14 @@ const oauthUi = read('src/components/YouTubeIntegration.tsx');
 assert.match(oauthUi, /const popup = prepareOAuthPopup\('youtube-oauth'[\s\S]*?await fetch\('\/api\/overseas\/youtube\/oauth\/start'/, 'YouTube must open its OAuth window before awaiting the start request');
 assert.match(oauthUi, /const popup = prepareOAuthPopup\(`\$\{platform\}-oauth`[\s\S]*?await fetch\(`\/api\/overseas\/social\/oauth\/\$\{platform\}\/start`/, 'social platforms must open their OAuth window before awaiting the start request');
 assert.doesNotMatch(oauthUi, /isTikTokReviewPending|TikTok 账号正在审核中|status\?\.configured === false/, 'all social OAuth cards must keep their connection action available');
+assert.match(oauthUi, /SocialPlatformIcon/, 'integration cards must use the shared social brand logos');
+const socialPlatformIcon = read('src/components/SocialPlatformIcon.tsx');
+for (const brand of ['youtube', 'tiktok', 'instagram', 'facebook', 'whatsapp']) {
+  assert.match(socialPlatformIcon, new RegExp(`brand === '${brand}'`), `${brand} must have a real brand logo`);
+}
+const assistantUi = read('src/components/GlobalAssistant.tsx');
+assert.match(assistantUi, /ENTERPRISE_GUIDE_MEMORY_ID[\s\S]*?enterpriseGuideSeen/, 'enterprise center must remember its single proactive assistant guide');
+assert.match(assistantUi, /要补资料？点我/, 'enterprise center must leave a concise click-to-open reminder after the proactive guide');
 const socialSetupGuide = read('docs/客户社媒账号配置与授权操作指南.md');
 assert.doesNotMatch(socialSetupGuide, /https:\/\/lingshu\.site\/api\//, 'production OAuth guidance must use the canonical app subdomain');
 assert.match(socialSetupGuide, /https:\/\/app\.lingshu\.site\/api\/overseas\/youtube\/oauth\/callback/, 'the canonical YouTube callback must remain documented');
