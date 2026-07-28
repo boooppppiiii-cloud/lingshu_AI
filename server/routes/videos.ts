@@ -3246,7 +3246,10 @@ async function crawlTikTokApify(keyword: string, limit: number, dateFrom = '', d
   const token = process.env.APIFY_TOKEN?.trim();
   if (!token) throw new Error('APIFY_TOKEN is not configured');
   const actor = process.env.APIFY_TIKTOK_ACTOR?.trim() || 'clockworks/tiktok-scraper';
-  const input = buildApifyTikTokInput(keyword, limit, dateFrom, dateTo);
+  // TikTok profiles can interleave photo-mode slideshows with actual videos.
+  // Fetch a small candidate window so a video-only task with limit=1 does not
+  // persist the first slideshow and then fail forever in the video downloader.
+  const input = buildApifyTikTokInput(keyword, Math.max(limit * 5, 5), dateFrom, dateTo);
   const runUrl = `https://api.apify.com/v2/acts/${encodeURIComponent(actor)}/run-sync-get-dataset-items?clean=true&token=${encodeURIComponent(token)}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), Number(process.env.APIFY_TIMEOUT_MS || 120_000));
@@ -3300,6 +3303,7 @@ function buildApifyTikTokInput(keyword: string, limit: number, dateFrom = '', da
 }
 
 function apifyTikTokItemToCrawledVideo(item: Record<string, unknown>, keyword: string): CrawledVideo | null {
+  if (item.isSlideshow === true || (Array.isArray(item.slideshowImageLinks) && item.slideshowImageLinks.length > 0)) return null;
   const author = apifyAuthor(item);
   const sourceUrl = canonicalSourceUrl('tiktok', String(item.webVideoUrl || item.url || item.shareUrl || item.videoUrl || item.link || '').trim(), author);
   if (!sourceUrl || !isPlatformUrl(sourceUrl, 'tiktok')) return null;
