@@ -10,7 +10,7 @@ import { gzipSync, gunzipSync } from 'node:zlib';
 import ffmpegStatic from 'ffmpeg-static';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 import { store } from '../storage/index.js';
-import { attachFile, createFilePlaybackUrl, fetchFile } from '../storage/files.js';
+import { attachFile, fetchFile } from '../storage/files.js';
 import { analyzeImagePostEvidenceWithGemini, analyzeVideo, analyzeYouTubeUrl } from '../agents/gemini.js';
 import { analyzeImagePostEvidenceWithQwen, analyzeVideoFramesWithQwen, transcribeAudioWithQwen, type ImagePostEvidenceAnalysis } from '../agents/qwen.js';
 import type { Platform, VideoAiAnalysis, VideoStatus } from '../types/index.js';
@@ -1740,10 +1740,8 @@ videosRouter.get('/:id/media-url', async (req, res) => {
   if (record.tenantId !== tenantId && !await requireAdminUser(req)) { res.status(404).json({ error: 'Not found' }); return; }
   const filename = String(record.videoFileId || '');
   if (!filename) { res.status(404).json({ error: 'Video not stored' }); return; }
-  const url = await createFilePlaybackUrl(COL, req.params.id, filename);
-  if (!url) { res.status(502).json({ error: 'Unable to create playback URL' }); return; }
   res.setHeader('Cache-Control', 'private, no-store');
-  res.json({ url });
+  res.json({ url: `/api/overseas/videos/${encodeURIComponent(req.params.id)}/media` });
 });
 
 /**
@@ -1816,16 +1814,23 @@ videosRouter.patch('/:id/reanalyze', async (req, res) => {
 
   const analysisMode = req.body?.analysisMode === 'exact' ? 'exact' : 'strategy';
   const previous = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
-  if (analysisMode === 'exact' && canPromoteExistingAnalysisToExact(previous.gemini, Number(record.duration || 0))) {
+  const fileId = record.videoFileId as string | undefined;
+  if (analysisMode === 'exact'
+    && Boolean(fileId)
+    && previous.analysisQuality === 'video'
+    && canPromoteExistingAnalysisToExact(previous.gemini, Number(record.duration || 0))) {
     await store.update(COL, req.params.id, {
       status: 'analyzed',
       aiAnalysis: JSON.stringify({
         ...previous,
         ...videoSuccessVisibilityPatch(),
         analysisMode: 'exact',
+        analysisQuality: 'video',
         requestedAnalysisMode: undefined,
         geminiStatus: 'analyzed',
-        downloadStatus: previous.downloadStatus === 'uploaded' ? 'analyzed' : previous.downloadStatus,
+        downloadStatus: 'analyzed',
+        videoFetchStatus: 'fetched',
+        videoStorage: 'pocketbase',
         videoLevelFailureStatus: undefined,
         manualRequiredReason: undefined,
         analysisError: undefined,
@@ -1837,7 +1842,6 @@ videosRouter.patch('/:id/reanalyze', async (req, res) => {
     res.json({ status: 'analyzed', reused: true });
     return;
   }
-  const fileId = record.videoFileId as string | undefined;
   if (!fileId) {
     const sourceUrl = String(record.sourceUrl || '').trim();
     if (!/^https?:\/\//i.test(sourceUrl)) {
@@ -3369,9 +3373,7 @@ async function crawlInstagramApify(keyword: string, limit: number, dateFrom = ''
   // Hashtag results mix image posts and Reels. Fetching exactly `limit` rows can
   // return only images which are correctly filtered below, leaving a false zero.
   // Oversample keyword searches, then keep the requested number of real videos.
-  const fetchLimit = directUrl
-    ? limit
-    : Math.min(50, Math.max(12, limit * 8));
+  const fetchLimit = limit;
   const input = buildApifyInstagramInput(keyword, fetchLimit, dateFrom, dateTo);
   const rows = await runApifyActorDatasetItems(actor, input, Number(process.env.APIFY_TIMEOUT_MS || 240_000), 'Instagram crawl');
   return rows
@@ -3384,7 +3386,7 @@ function buildApifyInstagramInput(keyword: string, limit: number, dateFrom = '',
   const input = keyword.trim();
   const resultsLimit = Math.min(50, Math.max(1, limit));
   const base: Record<string, unknown> = {
-    resultsType: 'posts',
+    resultsType: 'reels',
     resultsLimit,
     addParentData: false,
   };
@@ -3662,7 +3664,7 @@ async function crawlFacebookImagePostsApify(keyword: string, limit: number): Pro
   const actor = process.env.APIFY_FACEBOOK_ACTOR?.trim() || 'apify/facebook-posts-scraper';
   const inputUrl = isPlatformUrl(keyword, 'facebook')
     ? keyword
-    : `https://www.facebook.com/search/posts/?q=${encodeURIComponent(keyword)}`;
+    : await discoverFacebookPageUrl(keyword);
   const rows = await runApifyActorDatasetItems(actor, {
     startUrls: [{ url: inputUrl }],
     resultsLimit: Math.min(50, Math.max(limit * 4, 10)),
@@ -3674,6 +3676,17 @@ async function crawlFacebookImagePostsApify(keyword: string, limit: number): Pro
     .slice(0, limit);
   if (mapped.length > 0) return mapped;
   return crawlFacebookImagePostsPublicSearch(keyword, limit);
+}
+
+async function discoverFacebookPageUrl(keyword: string): Promise<string> {
+  const actor = process.env.APIFY_FACEBOOK_SEARCH_ACTOR?.trim() || 'apify/facebook-search-scraper';
+  const rows = await runApifyActorDatasetItems(actor, {
+    categories: [keyword.trim()],
+    resultsLimit: 1,
+  }, Number(process.env.APIFY_TIMEOUT_MS || 240_000), 'Facebook page search');
+  const pageUrl = String(rows[0]?.pageUrl || rows[0]?.facebookUrl || rows[0]?.url || '').trim();
+  if (!isPlatformUrl(pageUrl, 'facebook')) throw new Error(`Facebook page search returned no public page for: ${keyword}`);
+  return stripTrackingParams(pageUrl);
 }
 
 function isDirectFacebookImageAsset(value: string): boolean {
@@ -4788,7 +4801,7 @@ export async function analyzeDownloadedVideoWithFallback(opts: {
       }
     } catch (error) { console.warn('[videos] Qwen ASR unavailable, continuing with frames:', error instanceof Error ? error.message : error); }
     finally { try { for (const file of fs.readdirSync(asrDir)) fs.unlinkSync(path.join(asrDir, file)); fs.rmdirSync(asrDir); } catch { /* best effort */ } }
-    const qwenAnalysis = opts.analysisMode === 'exact' && Number(opts.duration || 0) > 90
+    const qwenAnalysis = opts.analysisMode === 'exact' && Number(opts.duration || 0) > 15
       ? await analyzeExactLongVideoChunks({ frames, title: opts.title, platform: opts.platform, duration: Number(opts.duration), views: opts.views, tags: opts.tags, transcript })
       : await analyzeVideoFramesWithQwen({
         frames,
@@ -5920,12 +5933,14 @@ async function crawlFacebook(keyword: string, limit: number, dateFrom = '', date
     return [await crawlFacebookUrl(input, keyword)];
   }
   try {
-    return await crawlPublicSearch('facebook', input, limit, dateFrom, dateTo);
+    const publicItems = await crawlPublicSearch('facebook', input, limit, dateFrom, dateTo);
+    if (publicItems.length > 0) return publicItems;
   } catch (publicError) {
     if (!canUseApifyFacebookCrawlFallback()) throw publicError;
-    const searchUrl = `https://www.facebook.com/search/videos?q=${encodeURIComponent(input)}`;
-    return crawlFacebookAccountApify(searchUrl, limit, dateFrom, dateTo);
   }
+  if (!canUseApifyFacebookCrawlFallback()) throw new Error(`Facebook public search returned no videos for: ${input}`);
+  const pageUrl = await discoverFacebookPageUrl(input);
+  return crawlFacebookAccountApify(pageUrl, limit, dateFrom, dateTo);
 }
 
 async function crawlFacebookUrl(url: string, keyword: string): Promise<CrawledVideo> {
