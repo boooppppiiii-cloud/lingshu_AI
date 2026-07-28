@@ -667,6 +667,8 @@ export interface CrawlVideosInput {
   accountUrl?: string;
   accountName?: string;
   cloudFallback?: boolean;
+  /** One-shot diagnostics must never fan out into automatic replacement crawls. */
+  disableBackfill?: boolean;
 }
 
 export interface CrawlVideosResult {
@@ -1126,7 +1128,7 @@ export async function crawlVideosForTenant(input: CrawlVideosInput): Promise<Cra
     resultRecords = await analyzeFreshCrawledRecordsForTestTenant(records, target);
     visibleNewCount = resultRecords.length;
     returnedExisting = 0;
-    if (visibleNewCount < target) {
+    if (visibleNewCount < target && !input.disableBackfill) {
       scheduleTestTenantVideoBackfill({
         tenantId,
         platform,
@@ -2704,6 +2706,33 @@ async function analyzeSourceVideoJobInner(input: {
 
     const downloaded = await downloadVideoForAnalysis(input);
     tempPath = downloaded.filePath;
+    // Precise analysis previously deleted its temporary file without attaching a
+    // playable copy to the record.  Persist a compact preview first so a record
+    // that passes video-level analysis is also guaranteed to play in-app.
+    if (recordId) {
+      const previewPath = await compressPocketBasePreview(downloaded.filePath);
+      try {
+        const pocketBaseFilename = await attachFile(COL, recordId, 'videoFile', {
+          name: `analysis-preview-${Date.now()}.mp4`,
+          buf: fs.readFileSync(previewPath),
+          contentType: 'video/mp4',
+        });
+        if (!pocketBaseFilename) throw new Error('PocketBase analysis preview persistence failed');
+        const latest = await store.getById(COL, recordId);
+        const analysis = parseJsonRecord(latest?.aiAnalysis ?? input.record?.aiAnalysis, {});
+        await store.update(COL, recordId, {
+          videoFileId: pocketBaseFilename,
+          aiAnalysis: JSON.stringify({
+            ...analysis,
+            videoStorage: 'pocketbase',
+            materialUrl: `/api/overseas/videos/${recordId}/media`,
+            previewPersistedAt: new Date().toISOString(),
+          }),
+        });
+      } finally {
+        try { fs.unlinkSync(previewPath); } catch { /* best effort */ }
+      }
+    }
     if (recordId) {
       const latest = await store.getById(COL, recordId);
       const analysis = parseJsonRecord(latest?.aiAnalysis ?? input.record?.aiAnalysis, {});
@@ -3334,16 +3363,16 @@ async function crawlInstagramApify(keyword: string, limit: number, dateFrom = ''
   const directUrl = isPlatformUrl(keyword.trim(), 'instagram');
   const actor = directUrl
     ? (process.env.APIFY_INSTAGRAM_ACTOR?.trim() || 'apify/instagram-scraper')
-    : (process.env.APIFY_INSTAGRAM_SEARCH_ACTOR?.trim() || 'apify/instagram-search-scraper');
+    : (process.env.APIFY_INSTAGRAM_SEARCH_ACTOR?.trim()
+      || process.env.APIFY_INSTAGRAM_ACTOR?.trim()
+      || 'apify/instagram-scraper');
   // Hashtag results mix image posts and Reels. Fetching exactly `limit` rows can
   // return only images which are correctly filtered below, leaving a false zero.
   // Oversample keyword searches, then keep the requested number of real videos.
   const fetchLimit = directUrl
     ? limit
     : Math.min(50, Math.max(12, limit * 8));
-  const input = directUrl
-    ? buildApifyInstagramInput(keyword, fetchLimit, dateFrom, dateTo)
-    : { search: keyword.trim().replace(/^#/, ''), searchType: 'popular', searchLimit: fetchLimit };
+  const input = buildApifyInstagramInput(keyword, fetchLimit, dateFrom, dateTo);
   const rows = await runApifyActorDatasetItems(actor, input, Number(process.env.APIFY_TIMEOUT_MS || 240_000), 'Instagram crawl');
   return rows
     .map(item => apifyInstagramItemToCrawledVideo(item, keyword))
@@ -3993,6 +4022,16 @@ async function downloadVideoForAnalysis(input: {
       console.warn('[videos] Facebook Apify analysis video fallback failed, trying yt-dlp:', error instanceof Error ? error.message : error);
     }
   }
+  // Datacenter YouTube traffic is commonly challenged before yt-dlp can obtain
+  // media bytes. A dedicated downloader actor stores one low-res MP4 in Apify
+  // KVS, which we immediately copy into our own PocketBase-backed pipeline.
+  if (input.platform === 'youtube' && canUseApifyVideoFallback(tenantId, 'youtube')) {
+    try {
+      return await downloadYouTubeVideoViaApify(input.sourceUrl, tenantId);
+    } catch (error) {
+      console.warn('[videos] YouTube Apify analysis video fallback failed, trying yt-dlp:', error instanceof Error ? error.message : error);
+    }
+  }
   const id = randomUUID();
   const outTpl = path.join(ANALYSIS_DIR, `${id}.%(ext)s`);
   const clipSeconds = Math.max(30, Number(process.env.VIDEO_ANALYSIS_CLIP_SECONDS || 180));
@@ -4139,6 +4178,39 @@ async function downloadTikTokVideoViaApify(sourceUrl: string, tenantId?: string)
   } finally {
     clearTimeout(timer);
   }
+}
+
+async function downloadYouTubeVideoViaApify(sourceUrl: string, tenantId?: string): Promise<{ filePath: string; fileName: string; mimeType: string; size: number }> {
+  const token = process.env.APIFY_TOKEN?.trim();
+  if (!token) throw new Error('APIFY_TOKEN is not configured');
+  if (!canUseApifyVideoFallback(tenantId, 'youtube')) throw new Error('Apify YouTube fallback daily limit reached for this account or server');
+  const actor = process.env.APIFY_YOUTUBE_VIDEO_ACTOR?.trim() || 'streamers/youtube-video-downloader';
+  const rows = await runApifyActorDatasetItems(actor, {
+    videos: [{ url: sourceUrl }],
+    storeInKVStore: true,
+    preferredQuality: '360p',
+    preferredFormat: 'mp4',
+    filenameTemplateParts: [],
+  }, Number(process.env.APIFY_YOUTUBE_VIDEO_TIMEOUT_MS || 300_000), 'YouTube video');
+  const videoUrl = String(rows[0]?.downloadedFileUrl || '').trim();
+  if (!videoUrl) throw new Error('Apify did not return a downloaded YouTube video URL');
+  const videoRes = await fetch(`${videoUrl}${videoUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`, {
+    signal: AbortSignal.timeout(Number(process.env.APIFY_YOUTUBE_FILE_TIMEOUT_MS || 120_000)),
+  });
+  if (!videoRes.ok) throw new Error(`Apify YouTube video download HTTP ${videoRes.status}`);
+  const buf = Buffer.from(await videoRes.arrayBuffer());
+  if (buf.length < 1024) throw new Error('Apify returned an empty YouTube video file');
+  fs.mkdirSync(ANALYSIS_DIR, { recursive: true });
+  const fileName = `${randomUUID()}.mp4`;
+  const filePath = path.join(ANALYSIS_DIR, fileName);
+  fs.writeFileSync(filePath, buf);
+  recordApifyVideoFallbackUse(tenantId);
+  return {
+    filePath,
+    fileName,
+    mimeType: videoRes.headers.get('content-type')?.split(';')[0] || 'video/mp4',
+    size: buf.length,
+  };
 }
 
 async function downloadInstagramVideoViaApify(sourceUrl: string, tenantId?: string): Promise<{ filePath: string; fileName: string; mimeType: string; size: number }> {
@@ -5845,7 +5917,13 @@ async function crawlFacebook(keyword: string, limit: number, dateFrom = '', date
   if (/^https?:\/\/(?:www\.|m\.|mbasic\.)?facebook\.com\//i.test(input)) {
     return [await crawlFacebookUrl(input, keyword)];
   }
-  return crawlPublicSearch('facebook', input, limit, dateFrom, dateTo);
+  try {
+    return await crawlPublicSearch('facebook', input, limit, dateFrom, dateTo);
+  } catch (publicError) {
+    if (!canUseApifyFacebookCrawlFallback()) throw publicError;
+    const searchUrl = `https://www.facebook.com/search/videos?q=${encodeURIComponent(input)}`;
+    return crawlFacebookAccountApify(searchUrl, limit, dateFrom, dateTo);
+  }
 }
 
 async function crawlFacebookUrl(url: string, keyword: string): Promise<CrawledVideo> {
@@ -6496,7 +6574,9 @@ function canUseApifyVideoFallback(tenantId?: string, platform: Platform = 'tikto
     ? 'APIFY_INSTAGRAM_VIDEO_FALLBACK_ENABLED'
     : platform === 'facebook'
       ? 'APIFY_FACEBOOK_VIDEO_FALLBACK_ENABLED'
-      : 'APIFY_TIKTOK_VIDEO_FALLBACK_ENABLED';
+      : platform === 'youtube'
+        ? 'APIFY_YOUTUBE_VIDEO_FALLBACK_ENABLED'
+        : 'APIFY_TIKTOK_VIDEO_FALLBACK_ENABLED';
   if (process.env[enableEnv] === '0') return false;
   if (!process.env.APIFY_TOKEN?.trim()) return false;
   // TikTok / Instagram 共用同一份 Apify 视频下载日额度（apify-video-usage.json）。

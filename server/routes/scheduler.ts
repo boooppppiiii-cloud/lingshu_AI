@@ -626,7 +626,18 @@ async function executeVideoKeywordCrawl(task: ScheduledTask): Promise<string> {
   for (const keyword of keywords) {
     for (const platform of platforms) {
       try {
-        const result = await crawlVideosForTenant({ tenantId, platform, keyword, limit, dateFrom, dateTo });
+        const result = await crawlVideosForTenant({
+          tenantId,
+          platform,
+          keyword,
+          limit,
+          dateFrom,
+          dateTo,
+          disableBackfill: task.config.smokeTest === '1',
+        });
+        if (result.items.length === 0 && result.imported === 0 && /未找到|无可用|失败|blocked|degraded/i.test(result.message)) {
+          throw new Error(result.message);
+        }
         imported += result.imported;
         returned += result.items.length;
         existing += result.returnedExisting;
@@ -661,6 +672,9 @@ async function executeImagePostCrawl(task: ScheduledTask): Promise<string> {
   for (const keyword of keywords) {
     try {
       const result = await crawlImagePostsForTenant({ tenantId, platform, keyword, limit });
+      if (result.items.length === 0 && result.imported === 0 && /未找到|无可用|失败|blocked|degraded/i.test(result.message)) {
+        throw new Error(result.message);
+      }
       imported += result.imported;
       succeeded += 1;
       lines.push(`${platform} / ${keyword}: ${result.message}`);
@@ -693,7 +707,19 @@ async function executeCompetitorAccountCrawl(task: ScheduledTask): Promise<strin
     const accountUrl = String(account.accountUrl || '');
     const accountName = String(account.accountName || account.handle || accountUrl);
     try {
-      const result = await crawlVideosForTenant({ tenantId, platform, mode: 'account', accountUrl, accountName, limit, cloudFallback: true });
+      const result = await crawlVideosForTenant({
+        tenantId,
+        platform,
+        mode: 'account',
+        accountUrl,
+        accountName,
+        limit,
+        cloudFallback: true,
+        disableBackfill: task.config.smokeTest === '1',
+      });
+      if (result.items.length === 0 && result.imported === 0 && /未找到|无可用|失败|blocked|degraded/i.test(result.message)) {
+        throw new Error(result.message);
+      }
       imported += result.imported;
       succeeded += 1;
       await store.update('competitor_accounts', String(account.id), { lastCrawledAt: new Date().toISOString(), lastCrawlCount: result.imported });
