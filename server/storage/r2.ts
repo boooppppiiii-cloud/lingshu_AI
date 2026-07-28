@@ -3,6 +3,7 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
+  HeadObjectCommand,
 } from '@aws-sdk/client-s3';
 
 function getR2Client(): S3Client {
@@ -31,6 +32,22 @@ function getBucket(): string {
   return process.env.OBJECT_STORAGE_BUCKET_NAME || process.env.R2_BUCKET_NAME || 'overseas-assets';
 }
 
+export function objectStorageEnabled(): boolean {
+  const endpoint = process.env.OBJECT_STORAGE_ENDPOINT?.trim()
+    || (process.env.R2_ACCOUNT_ID?.trim() ? 'configured' : '');
+  const accessKeyId = (process.env.OBJECT_STORAGE_ACCESS_KEY_ID || process.env.R2_ACCESS_KEY_ID)?.trim();
+  const secretAccessKey = (process.env.OBJECT_STORAGE_SECRET_ACCESS_KEY || process.env.R2_SECRET_ACCESS_KEY)?.trim();
+  const bucket = (process.env.OBJECT_STORAGE_BUCKET_NAME || process.env.R2_BUCKET_NAME)?.trim();
+  return Boolean(endpoint && accessKeyId && secretAccessKey && bucket);
+}
+
+function isNotFound(error: unknown): boolean {
+  const candidate = error as { name?: string; $metadata?: { httpStatusCode?: number } };
+  return candidate?.name === 'NoSuchKey'
+    || candidate?.name === 'NotFound'
+    || candidate?.$metadata?.httpStatusCode === 404;
+}
+
 /** Upload a Buffer to R2, return the public URL */
 export async function r2Upload(opts: {
   key: string;
@@ -53,21 +70,67 @@ export async function r2Upload(opts: {
 /** Download an object from R2 as a Buffer */
 export async function r2Download(key: string): Promise<{ buf: Buffer; contentType: string } | null> {
   try {
-    const client = getR2Client();
-    const res = await client.send(
-      new GetObjectCommand({ Bucket: getBucket(), Key: key }),
-    );
-    if (!res.Body) return null;
+    const res = await r2GetObject(key);
+    if (!res) return null;
     const chunks: Uint8Array[] = [];
-    for await (const chunk of res.Body as AsyncIterable<Uint8Array>) {
+    for await (const chunk of res.body) {
       chunks.push(chunk);
     }
     return {
       buf: Buffer.concat(chunks),
-      contentType: res.ContentType ?? 'application/octet-stream',
+      contentType: res.contentType,
     };
-  } catch {
-    return null;
+  } catch (error) {
+    if (isNotFound(error)) return null;
+    throw error;
+  }
+}
+
+export interface R2ObjectStream {
+  body: AsyncIterable<Uint8Array>;
+  contentType: string;
+  contentLength?: number;
+  contentRange?: string;
+  acceptRanges?: string;
+  etag?: string;
+  lastModified?: Date;
+}
+
+/** Stream a private object through an authenticated application route. */
+export async function r2GetObject(key: string, range?: string): Promise<R2ObjectStream | null> {
+  try {
+    const res = await getR2Client().send(new GetObjectCommand({
+      Bucket: getBucket(),
+      Key: key,
+      ...(range ? { Range: range } : {}),
+    }));
+    if (!res.Body) return null;
+    return {
+      body: res.Body as AsyncIterable<Uint8Array>,
+      contentType: res.ContentType ?? 'application/octet-stream',
+      contentLength: res.ContentLength,
+      contentRange: res.ContentRange,
+      acceptRanges: res.AcceptRanges,
+      etag: res.ETag,
+      lastModified: res.LastModified,
+    };
+  } catch (error) {
+    if (isNotFound(error)) return null;
+    throw error;
+  }
+}
+
+export async function r2Head(key: string): Promise<{ size: number; contentType: string; etag?: string } | null> {
+  try {
+    const res = await getR2Client().send(new HeadObjectCommand({ Bucket: getBucket(), Key: key }));
+    return {
+      size: res.ContentLength ?? 0,
+      contentType: res.ContentType ?? 'application/octet-stream',
+      etag: res.ETag,
+    };
+  } catch (error) {
+    if (isNotFound(error)) return null;
+    throw error;
   }
 }
 

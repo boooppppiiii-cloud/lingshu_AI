@@ -10,6 +10,13 @@ import type { AutonomyLevel } from '../autonomy/actionRules.js';
 import { callLLM } from '../agents/llm.js';
 import { notifyDeliveryTeam } from '../lib/tenantPlatformApps.js';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
+import { objectStorageEnabled, r2GetObject, r2Upload } from '../storage/r2.js';
+import {
+  enterpriseAssetContentType,
+  enterpriseAssetObjectKey,
+  enterpriseAssetTenantKey,
+  enterpriseAssetTypeAllowed,
+} from '../storage/enterpriseAssets.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA_FILE = path.join(__dirname, '../../data/enterprise.json');
@@ -1676,7 +1683,7 @@ enterpriseRouter.get('/product-api/status', async (_req, res) => {
   });
 });
 
-enterpriseRouter.post('/assets', (req, res) => {
+enterpriseRouter.post('/assets', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
   const { name, type, dataUrl } = req.body as { name?: string; type?: string; dataUrl?: string };
   const match = String(dataUrl || '').match(/^data:([^;]+);base64,(.+)$/);
@@ -1684,26 +1691,79 @@ enterpriseRouter.post('/assets', (req, res) => {
     res.status(400).json({ error: 'invalid asset payload' });
     return;
   }
-  ensureAssetsDir();
   const storedName = safeStoredName(name);
-  const tenantDir = path.join(ASSETS_DIR, Buffer.from(tenantId, 'utf8').toString('base64url'));
-  fs.mkdirSync(tenantDir, { recursive: true });
-  const filePath = path.join(tenantDir, storedName);
   const buffer = Buffer.from(match[2], 'base64');
-  fs.writeFileSync(filePath, buffer);
+  const contentType = enterpriseAssetContentType(name, type || match[1]);
+  if (!enterpriseAssetTypeAllowed(contentType)) {
+    res.status(415).json({ error: 'only image, video and PDF enterprise assets are supported' });
+    return;
+  }
+  if (buffer.length === 0 || buffer.length > 110 * 1024 * 1024) {
+    res.status(413).json({ error: 'enterprise asset must be between 1 byte and 110 MB' });
+    return;
+  }
+
+  try {
+    if (objectStorageEnabled()) {
+      await r2Upload({
+        key: enterpriseAssetObjectKey(tenantId, storedName),
+        body: buffer,
+        contentType,
+      });
+    } else {
+      ensureAssetsDir();
+      const tenantDir = path.join(ASSETS_DIR, enterpriseAssetTenantKey(tenantId));
+      fs.mkdirSync(tenantDir, { recursive: true });
+      fs.writeFileSync(path.join(tenantDir, storedName), buffer);
+    }
+  } catch (error) {
+    console.error('[enterprise-assets] upload failed', error instanceof Error ? error.message : error);
+    res.status(503).json({ error: 'enterprise asset storage unavailable' });
+    return;
+  }
+
   res.json({
     name,
-    type: type || match[1] || 'application/octet-stream',
+    type: contentType,
     size: buffer.length,
     updatedAt: new Date().toISOString(),
     url: `/api/overseas/enterprise/assets/${storedName}`,
   });
 });
 
-enterpriseRouter.get('/assets/:file', (req, res) => {
+enterpriseRouter.get('/assets/:file', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
   const file = path.basename(req.params.file);
-  const tenantDir = path.join(ASSETS_DIR, Buffer.from(tenantId, 'utf8').toString('base64url'));
+  if (objectStorageEnabled()) {
+    try {
+      const requestedRange = /^bytes=\d*-\d*$/.test(String(req.headers.range || ''))
+        ? String(req.headers.range)
+        : undefined;
+      const object = await r2GetObject(enterpriseAssetObjectKey(tenantId, file), requestedRange);
+      if (object) {
+        res.setHeader('Content-Type', object.contentType);
+        res.setHeader('Cache-Control', 'private, max-age=300');
+        res.setHeader('Accept-Ranges', object.acceptRanges || 'bytes');
+        if (object.contentLength !== undefined) res.setHeader('Content-Length', String(object.contentLength));
+        if (object.contentRange) {
+          res.status(206);
+          res.setHeader('Content-Range', object.contentRange);
+        }
+        if (object.etag) res.setHeader('ETag', object.etag);
+        if (object.lastModified) res.setHeader('Last-Modified', object.lastModified.toUTCString());
+        for await (const chunk of object.body) res.write(chunk);
+        res.end();
+        return;
+      }
+    } catch (error) {
+      console.error('[enterprise-assets] COS read failed', error instanceof Error ? error.message : error);
+      res.status(503).json({ error: 'enterprise asset storage unavailable' });
+      return;
+    }
+  }
+
+  // Compatibility path while the resumable migration copies historical files.
+  const tenantDir = path.join(ASSETS_DIR, enterpriseAssetTenantKey(tenantId));
   const filePath = path.join(tenantDir, file);
   if (!fs.existsSync(filePath)) {
     res.status(404).end();

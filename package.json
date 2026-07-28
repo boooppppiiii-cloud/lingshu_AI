@@ -13,6 +13,7 @@
     "setup:pb": "tsx scripts/setup-pb.ts",
     "migrate:tenant-business-data": "tsx scripts/migrate-tenant-business-data.ts",
     "migrate:production-data": "tsx scripts/migrate-production-data.ts",
+    "migrate:enterprise-assets-cos": "tsx scripts/migrate-enterprise-assets-to-cos.ts",
     "backup:production-data": "bash scripts/backup-production-data.sh",
     "restore:production-data": "bash scripts/restore-production-data.sh",
     "demo:sync-accounts": "tsx scripts/sync-demo-accounts.ts",

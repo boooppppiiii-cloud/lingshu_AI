@@ -16,6 +16,9 @@ assert.doesNotMatch(
   /req\.query\.tenantId|x-tenant-id/,
   'authenticated enterprise UI routes must not accept a caller-selected tenant id',
 );
+assert.match(enterprise, /enterpriseAssetObjectKey\(tenantId, storedName\)/, 'enterprise asset uploads must include the authenticated tenant in their object key');
+assert.match(enterprise, /enterpriseAssetObjectKey\(tenantId, file\)/, 'enterprise asset reads must derive the object key from the authenticated tenant');
+assert.match(enterprise, /Compatibility path while the resumable migration/, 'enterprise assets must retain a local fallback during migration');
 
 const customers = read('server/routes/customerSuggestions.ts');
 assert.match(customers, /customerSuggestionsRouter\.use\(requireAuth\)/, 'customer routes must require authentication');
