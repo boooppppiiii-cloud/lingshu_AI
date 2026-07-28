@@ -9,6 +9,7 @@ import { callLLMChatStream } from '../agents/llm.js';
 import { buildEnterpriseContext, readTenantEnterpriseProfile } from './enterprise.js';
 import { store } from '../storage/index.js';
 import { crawlImagePostsForTenant, crawlVideosForTenant, getVideoPipelineStats } from './videos.js';
+import { createCrawlWorkerJob } from './crawlWorker.js';
 import type { Platform } from '../types/index.js';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 
@@ -626,6 +627,20 @@ async function executeVideoKeywordCrawl(task: ScheduledTask): Promise<string> {
   for (const keyword of keywords) {
     for (const platform of platforms) {
       try {
+        if (platform === 'youtube' && task.config.localWorker !== '0') {
+          const job = await createCrawlWorkerJob({
+            tenantId,
+            requestedBy: `scheduler:${task.id}`,
+            platform,
+            mode: 'keyword',
+            keyword,
+            limit,
+          });
+          if (!job) throw new Error('Mac 本地采集任务创建失败');
+          succeeded += 1;
+          lines.push(`${platform} / ${keyword}: 已提交 Mac 登录态采集队列（1 个任务）`);
+          continue;
+        }
         const result = await crawlVideosForTenant({
           tenantId,
           platform,
@@ -707,6 +722,21 @@ async function executeCompetitorAccountCrawl(task: ScheduledTask): Promise<strin
     const accountUrl = String(account.accountUrl || '');
     const accountName = String(account.accountName || account.handle || accountUrl);
     try {
+      if (platform === 'youtube' && task.config.localWorker !== '0') {
+        const job = await createCrawlWorkerJob({
+          tenantId,
+          requestedBy: `scheduler:${task.id}`,
+          platform,
+          mode: 'account',
+          accountUrl,
+          accountName,
+          limit,
+        });
+        if (!job) throw new Error('Mac 本地采集任务创建失败');
+        succeeded += 1;
+        lines.push(`${accountName}: 已提交 Mac 登录态采集队列（1 个任务）`);
+        continue;
+      }
       const result = await crawlVideosForTenant({
         tenantId,
         platform,

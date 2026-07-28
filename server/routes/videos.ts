@@ -6412,12 +6412,16 @@ function firstCrawlerProxyFromPool(): string {
 function buildYtDlpArgs(extra: string[], url: string, withCookies: boolean): string[] {
   const args = [
     '-m', 'yt_dlp',
+    '--ignore-config',
     '--no-warnings',
     '--user-agent', browserUserAgent(),
     '--add-header', 'Accept-Language: en-US,en;q=0.9',
     '--referer', platformReferer(url),
     ...extra,
   ];
+  if (/youtube\.com|youtu\.be/i.test(url) && process.env.YT_DLP_YOUTUBE_EJS_ENABLED !== '0') {
+    args.push('--js-runtimes', `node:${process.execPath}`, '--remote-components', 'ejs:github');
+  }
   const proxy = proxyUrl();
   if (proxy) args.push('--proxy', proxy);
   if (withCookies) args.push('--cookies-from-browser', cookiesBrowser());
