@@ -56,11 +56,21 @@ type PlatformCopy = {
   firstComment?: string;
 };
 
+type GeneratedVideoVersion = {
+  id: string;
+  versionNumber: number;
+  title: string;
+  url?: string;
+  promptSnapshot?: { ratio?: string };
+  context?: { projectId?: string };
+};
+
 type PublishItemStatus = 'draft' | 'ready' | 'publishing' | 'scheduled' | 'published' | 'partial' | 'failed';
 type DeliveryMode = 'now' | 'schedule';
 
 type PublishQueueItem = {
   id: string;
+  selected: boolean;
   videoPath: string;
   title: string;
   description: string;
@@ -142,6 +152,7 @@ function createPublishItem(draft?: PublishDraft | null, targetAccountIds: string
     : {};
   return {
     id: publishItemId(),
+    selected: true,
     videoPath: draft?.videoPath || '',
     title: draft?.title || '',
     description: draft?.description || '',
@@ -327,6 +338,7 @@ export default function TrafficPage({
 }
 
 function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => void; draft?: PublishDraft | null }) {
+  const [workspaceTab, setWorkspaceTab] = useState<'schedule' | 'publish'>(() => draft || readStoredPublishDraft() ? 'publish' : 'schedule');
   const [accounts, setAccounts] = useState<PublishAccount[]>([]);
   const [items, setItems] = useState<PublishQueueItem[]>(() => [createPublishItem(draft || readStoredPublishDraft())]);
   const [activeItemId, setActiveItemId] = useState('');
@@ -341,6 +353,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
   const [calendarRefreshKey, setCalendarRefreshKey] = useState(0);
   const accountTargetsSeededRef = useRef(false);
   const appliedDraftRef = useRef(JSON.stringify(draft || readStoredPublishDraft() || {}));
+  const loadedVersionProjectRef = useRef('');
   const videoInputRef = useRef<HTMLInputElement | null>(null);
   const publishSettingsRef = useRef<HTMLElement | null>(null);
 
@@ -373,7 +386,12 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
     (sum, item) => sum + item.targetAccountIds.filter(id => connectedAccountIds.has(id)).length,
     0,
   );
+  const selectedAssignments = items.reduce(
+    (sum, item) => item.selected ? sum + item.targetAccountIds.filter(id => connectedAccountIds.has(id)).length : sum,
+    0,
+  );
   const publishableItems = items.filter(item => (
+    item.selected &&
     item.videoPath.trim() &&
     item.title.trim() &&
     item.targetAccountIds.some(id => connectedAccountIds.has(id)) &&
@@ -384,6 +402,13 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
 
   const updateItem = (id: string, patch: Partial<PublishQueueItem>) => {
     setItems(prev => prev.map(item => item.id === id ? { ...item, ...patch } : item));
+  };
+
+  const selectedQueueItems = items.filter(item => item.selected);
+  const allQueueItemsSelected = items.length > 0 && selectedQueueItems.length === items.length;
+  const toggleAllQueueItems = () => {
+    const selected = !allQueueItemsSelected;
+    setItems(previous => previous.map(item => ({ ...item, selected })));
   };
 
   const setDeliveryMode = (mode: DeliveryMode) => {
@@ -424,6 +449,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
     const item = items.find(candidate => candidate.id === id);
     if (!item) return;
     setActiveItemId(id);
+    setWorkspaceTab('publish');
     setNotice(`已打开“${item.title || titleFromVideoPath(item.videoPath)}”，可以继续编辑或安排发布时间。`);
     window.setTimeout(() => document.getElementById('publishing-content-editor')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60);
   };
@@ -444,6 +470,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
     });
     setError('');
     setNotice(`“${activeItem.title.trim()}”已保存并进入待发布内容。`);
+    setWorkspaceTab('schedule');
     window.setTimeout(() => document.getElementById('publishing-calendar')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
   };
 
@@ -528,6 +555,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
       setActiveItemId(next.id);
     }
     setNotice(`已将“${post.title}”带回发布队列。确认素材和账号后，可直接提交平台。`);
+    setWorkspaceTab('publish');
     window.setTimeout(() => publishSettingsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60);
   };
 
@@ -578,8 +606,44 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
     const next = createPublishItem(draft, connectedAccounts.map(account => account.id));
     setItems(prev => [...prev, next]);
     setActiveItemId(next.id);
+    setWorkspaceTab('publish');
     appliedDraftRef.current = fingerprint;
   }, [draft]);
+
+  useEffect(() => {
+    const projectId = String(draft?.sourceProjectId || readStoredPublishDraft()?.sourceProjectId || '').trim();
+    if (!projectId || loadedVersionProjectRef.current === projectId) return;
+    loadedVersionProjectRef.current = projectId;
+    void fetchJson<GeneratedVideoVersion[]>(`/api/overseas/studio/video-versions?projectId=${encodeURIComponent(projectId)}`)
+      .then(versions => {
+        const additions = versions
+          .filter(version => Boolean(version.url?.trim()))
+          .map(version => createPublishItem({
+            videoPath: String(version.url),
+            title: `${version.title || draft?.title || 'AI 生成视频'} · V${version.versionNumber}`,
+            description: draft?.description || '',
+            ratio: version.promptSnapshot?.ratio || draft?.ratio,
+            sourceProjectId: projectId,
+            platform: draft?.platform,
+          }));
+        if (!additions.length) return;
+        setItems(previous => {
+          const existingPaths = new Set(previous.map(item => item.videoPath.trim()).filter(Boolean));
+          const fallbackTargets = previous.find(item => item.targetAccountIds.length)?.targetAccountIds
+            || connectedAccounts.map(account => account.id);
+          const unique = additions
+            .filter(item => !existingPaths.has(item.videoPath.trim()))
+            .map(item => ({ ...item, targetAccountIds: [...fallbackTargets] }));
+          if (!unique.length) return previous;
+          const onlyBlank = previous.length === 1 && !previous[0].videoPath.trim() && !previous[0].title.trim();
+          return onlyBlank ? unique : [...previous, ...unique];
+        });
+      })
+      .catch(versionError => {
+        loadedVersionProjectRef.current = '';
+        setError(versionError instanceof Error ? versionError.message : '无法读取全部视频版本');
+      });
+  }, [draft?.sourceProjectId, accounts]);
 
   const toggleAccount = (accountId: string) => {
     if (!activeItem) return;
@@ -784,6 +848,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
     let skippedItems = 0;
 
     for (const item of items) {
+      if (!item.selected) continue;
       if (item.status === 'published' || item.status === 'scheduled') continue;
       const targets = connectedAccounts.filter(account => item.targetAccountIds.includes(account.id));
       if (!item.videoPath.trim() || !item.title.trim() || !targets.length) {
@@ -922,6 +987,26 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
   return (
     <div className="px-6 pb-5 pt-3">
       <div className="mx-auto max-w-[1600px] space-y-4">
+        <div className="flex justify-center">
+          <div className="grid w-full max-w-xl grid-cols-2 gap-1 rounded-2xl border border-border bg-surface-2 p-1 shadow-sm">
+            <button
+              type="button"
+              onClick={() => setWorkspaceTab('schedule')}
+              className={`h-10 rounded-xl px-4 text-sm font-black transition-all ${workspaceTab === 'schedule' ? 'bg-white text-text-primary shadow-sm ring-1 ring-border' : 'text-text-muted hover:bg-white/60'}`}
+            >
+              内容排产工作台
+            </button>
+            <button
+              type="button"
+              onClick={() => setWorkspaceTab('publish')}
+              className={`h-10 rounded-xl px-4 text-sm font-black transition-all ${workspaceTab === 'publish' ? 'bg-white text-text-primary shadow-sm ring-1 ring-border' : 'text-text-muted hover:bg-white/60'}`}
+            >
+              一键发布内容
+            </button>
+          </div>
+        </div>
+
+        {workspaceTab === 'schedule' ? (
         <section id="publishing-calendar" className="scroll-mt-5 rounded-2xl border border-border bg-surface/60 p-3 shadow-sm">
           <CalendarPlanner
             refreshKey={calendarRefreshKey}
@@ -932,8 +1017,10 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
             onSchedulePending={schedulePendingContent}
           />
         </section>
+        ) : (
+        <>
 
-        <section data-lingshu-guide="publishing-workbench" className="rounded-2xl border border-border bg-white p-5 shadow-sm">
+        <section data-lingshu-guide="publishing-workbench" className="rounded-2xl border border-emerald-200 bg-white p-5 shadow-sm ring-2 ring-emerald-50">
           <div className="flex flex-wrap items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-2">
@@ -959,7 +1046,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 className="text-sm font-bold text-text-primary">发布队列</h3>
-                <p className="mt-1 text-xs text-text-muted">{items.length} 条视频 · {totalAssignments} 个发布目标</p>
+                <p className="mt-1 text-xs text-text-muted">所有产出版本 {items.length} 条 · 已选 {selectedQueueItems.length} 条 · {totalAssignments} 个发布目标</p>
               </div>
               <div className="flex flex-wrap gap-2">
                 <input
@@ -988,6 +1075,9 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                   className="inline-flex items-center gap-1.5 rounded-lg border border-accent/30 bg-accent-glow px-3 py-2 text-xs font-bold text-accent hover:border-accent disabled:cursor-not-allowed disabled:opacity-40"
                 >
                   <Copy size={13} /> 当前发布内容应用到全部
+                </button>
+                <button type="button" onClick={toggleAllQueueItems} className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">
+                  {allQueueItemsSelected ? '取消全选素材' : '全选所有素材'}
                 </button>
               </div>
             </div>
@@ -1018,6 +1108,13 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                 const targetCount = item.targetAccountIds.filter(id => connectedAccountIds.has(id)).length;
                 return (
                   <div key={item.id} className={`flex min-w-0 items-center gap-2 rounded-xl border p-2 transition-colors ${active ? 'border-accent bg-accent-glow' : 'border-border bg-surface'}`}>
+                    <input
+                      type="checkbox"
+                      checked={item.selected}
+                      onChange={event => updateItem(item.id, { selected: event.target.checked })}
+                      aria-label={`选择素材 ${item.title || index + 1}`}
+                      className="h-4 w-4 flex-shrink-0 rounded border-border text-emerald-600"
+                    />
                     <button type="button" onClick={() => setActiveItemId(item.id)} className="min-w-0 flex-1 px-1.5 py-1 text-left">
                       <div className="flex items-center gap-2">
                         <span className="text-xs font-black text-text-muted">{String(index + 1).padStart(2, '0')}</span>
@@ -1257,13 +1354,15 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
 
             <button type="button" onClick={() => void publish()} disabled={publishing || loading || publishableItems.length === 0} className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 text-sm font-bold text-white shadow-sm hover:brightness-95 disabled:opacity-50">
               {publishing ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
-              {publishing ? '正在执行发布计划...' : `执行发布计划 · 立即 ${immediateItems.length} / 排期 ${scheduledItems.length}`}
+              {publishing ? '正在遍历账号群发...' : `群发选中素材 · ${publishableItems.length} 条 / ${selectedAssignments} 个账号目标`}
             </button>
-            <button type="button" onClick={() => document.getElementById('publishing-calendar')?.scrollIntoView({ behavior: 'smooth', block: 'start' })} className="mt-2 w-full rounded-xl border border-border px-4 py-3 text-sm font-bold text-text-secondary hover:border-accent hover:text-accent">
+            <button type="button" onClick={() => setWorkspaceTab('schedule')} className="mt-2 w-full rounded-xl border border-border px-4 py-3 text-sm font-bold text-text-secondary hover:border-accent hover:text-accent">
               返回顶部内容排产
             </button>
           </aside>
         </div>
+        </>
+        )}
       </div>
     </div>
   );

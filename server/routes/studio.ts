@@ -2214,9 +2214,11 @@ async function materialResponse(material: Material, tenantId: string): Promise<M
 studioRouter.get('/video-versions', (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
   const groupKey = String(req.query.groupKey || '').trim();
-  if (!groupKey) { res.status(400).json({ error: 'groupKey is required' }); return; }
+  const projectId = String(req.query.projectId || '').trim();
+  if (!groupKey && !projectId) { res.status(400).json({ error: 'groupKey or projectId is required' }); return; }
   const versions = loadVideoVersions()
-    .filter(item => item.tenantId === tenantId && item.groupKey === groupKey)
+    .filter(item => item.tenantId === tenantId)
+    .filter(item => groupKey ? item.groupKey === groupKey : String(item.context?.projectId || '') === projectId)
     .sort((a, b) => b.versionNumber - a.versionNumber);
   res.json(versions);
 });
