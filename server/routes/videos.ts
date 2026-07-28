@@ -10,7 +10,8 @@ import { gzipSync, gunzipSync } from 'node:zlib';
 import ffmpegStatic from 'ffmpeg-static';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 import { store } from '../storage/index.js';
-import { attachFile, fetchFile } from '../storage/files.js';
+import { fetchFile } from '../storage/files.js';
+import { objectStorageEnabled, r2Download, r2GetObject, r2Head, r2Upload } from '../storage/r2.js';
 import { analyzeImagePostEvidenceWithGemini, analyzeVideo, analyzeYouTubeUrl } from '../agents/gemini.js';
 import { analyzeImagePostEvidenceWithQwen, analyzeVideoFramesWithQwen, transcribeAudioWithQwen, type ImagePostEvidenceAnalysis } from '../agents/qwen.js';
 import type { Platform, VideoAiAnalysis, VideoStatus } from '../types/index.js';
@@ -37,6 +38,48 @@ let activeDownloadJobs = 0;
 const MAX_DOWNLOAD_JOBS = Number(process.env.VIDEO_DOWNLOAD_CONCURRENCY || 3);
 const pendingVisibleBackfillJobs = new Set<string>();
 const pocketBaseBackfillFailures = new Map<string, number>();
+
+function crawlerCosKey(record: Record<string, unknown>, role: string, extension: string): string {
+  const tenantId = String(record.tenantId || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const recordId = String(record.id || 'unknown').replace(/[^a-zA-Z0-9_-]/g, '_');
+  const safeRole = role.replace(/[^a-zA-Z0-9_-]/g, '_');
+  const safeExtension = extension.replace(/[^a-zA-Z0-9]/g, '') || 'bin';
+  return `crawlers/tenants/${tenantId}/trend-videos/${recordId}/${safeRole}.${safeExtension}`;
+}
+
+async function uploadCrawlerCosObject(
+  recordId: string,
+  role: string,
+  body: Buffer,
+  contentType: string,
+): Promise<string> {
+  if (!objectStorageEnabled()) throw new Error('COS object storage is not configured for crawler media');
+  const record = await store.getById<Record<string, unknown>>(COL, recordId);
+  if (!record) throw new Error(`Crawler record not found before COS upload: ${recordId}`);
+  const extension = contentType.includes('webp') ? 'webp'
+    : contentType.includes('png') ? 'png'
+      : contentType.includes('jpeg') || contentType.includes('jpg') ? 'jpg'
+        : contentType.includes('mp4') ? 'mp4' : 'bin';
+  const key = crawlerCosKey(record, role, extension);
+  await r2Upload({ key, body, contentType });
+  const verified = await r2Head(key);
+  if (!verified || verified.size !== body.length) throw new Error(`COS crawler upload verification failed: ${key}`);
+  return key;
+}
+
+async function streamCrawlerCosObject(res: Response, key: string, range?: string): Promise<boolean> {
+  const object = await r2GetObject(key, range);
+  if (!object) return false;
+  res.status(object.contentRange ? 206 : 200);
+  res.setHeader('Content-Type', object.contentType || 'application/octet-stream');
+  res.setHeader('Accept-Ranges', object.acceptRanges || 'bytes');
+  res.setHeader('Cache-Control', 'private, max-age=3600');
+  if (object.contentLength !== undefined) res.setHeader('Content-Length', object.contentLength);
+  if (object.contentRange) res.setHeader('Content-Range', object.contentRange);
+  for await (const chunk of object.body) res.write(chunk);
+  res.end();
+  return true;
+}
 
 interface CrawledVideo {
   platform: Platform;
@@ -822,12 +865,18 @@ export async function crawlImagePostsForTenant(input: {
       const remoteThumbnail = item.thumbnailUrl || String(existingRecord.thumbnailUrl || '');
       const thumbnailUrl = await persistImagePostThumbnail(recordId, remoteThumbnail);
       const storedImageUrls = await persistImagePostImages(recordId, item.imageUrls?.length ? item.imageUrls : [remoteThumbnail]);
+      const storedRecord = await store.getById<Record<string, unknown>>(COL, recordId);
+      const storedAnalysis = videoAnalysisOf(storedRecord || existingRecord);
       await store.update(COL, recordId, {
         contentFormat: 'image',
         thumbnailUrl,
         status: (imageAnalysis.status === 'analyzed' ? 'analyzed' : 'failed') as VideoStatus,
         aiAnalysis: serializeImagePostAnalysis({
           ...existingAnalysis,
+          imageStorage: storedAnalysis.imageStorage,
+          imageObjectKeys: storedAnalysis.imageObjectKeys,
+          thumbnailStorage: storedAnalysis.thumbnailStorage,
+          thumbnailObjectKey: storedAnalysis.thumbnailObjectKey,
           contentFormat: 'image',
           caption: item.caption || existingAnalysis.caption || item.title,
           imageUrls: storedImageUrls.length ? storedImageUrls : (item.imageUrls?.length ? item.imageUrls : existingAnalysis.imageUrls),
@@ -1378,17 +1427,13 @@ videosRouter.post('/ingest', async (req, res) => {
     const buf = Buffer.from(videoBase64.replace(/^data:[^,]+,/, ''), 'base64');
     const ext = (mimeType ?? 'video/mp4').split('/')[1] ?? 'mp4';
     const previewBuf = await compressVideoBufferForPocketBase(buf, ext);
-    filename = (await attachFile(COL, record.id, 'videoFile', {
-      name: 'video-preview-480.mp4',
-      buf: previewBuf,
-      contentType: 'video/mp4',
-    })) ?? '';
+    filename = await uploadCrawlerCosObject(record.id, 'video', previewBuf, 'video/mp4');
     if (!filename) {
       await store.update(COL, record.id, { status: 'failed' });
       res.status(500).json({ error: 'Video upload failed' });
       return;
     }
-    await store.update(COL, record.id, { videoFileId: filename, aiAnalysis: JSON.stringify({ videoStorage: 'pocketbase' }) });
+    await store.update(COL, record.id, { videoFileId: filename, aiAnalysis: JSON.stringify({ videoStorage: 'cos', videoObjectKey: filename }) });
   }
 
   // Trigger analysis async (fire and forget)
@@ -1723,6 +1768,12 @@ videosRouter.get('/:id/media', async (req, res) => {
   const record = await store.getById(COL, req.params.id);
   if (!record) { res.status(404).json({ error: 'Not found' }); return; }
   if (record.tenantId !== tenantId && !await requireAdminUser(req)) { res.status(404).json({ error: 'Not found' }); return; }
+  const analysis = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
+  const cosKey = String(analysis.videoObjectKey || '');
+  if (cosKey) {
+    if (!await streamCrawlerCosObject(res, cosKey, req.headers.range)) res.status(404).json({ error: 'COS video not found' });
+    return;
+  }
   const filename = String(record.videoFileId || '');
   if (!filename) { res.status(404).json({ error: 'Video not stored' }); return; }
   const file = await fetchFile(COL, req.params.id, filename);
@@ -1742,8 +1793,9 @@ videosRouter.get('/:id/media-url', async (req, res) => {
   const record = await store.getById(COL, req.params.id);
   if (!record) { res.status(404).json({ error: 'Not found' }); return; }
   if (record.tenantId !== tenantId && !await requireAdminUser(req)) { res.status(404).json({ error: 'Not found' }); return; }
+  const analysis = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
   const filename = String(record.videoFileId || '');
-  if (!filename) { res.status(404).json({ error: 'Video not stored' }); return; }
+  if (!filename && !analysis.videoObjectKey) { res.status(404).json({ error: 'Video not stored' }); return; }
   res.setHeader('Cache-Control', 'private, no-store');
   res.json({ url: `/api/overseas/videos/${encodeURIComponent(req.params.id)}/media` });
 });
@@ -1770,6 +1822,12 @@ videosRouter.get('/:id/thumbnail', async (req, res) => {
   if (!record) { res.status(404).end(); return; }
   if (record.tenantId !== tenantId && !await isAdminForAssetRequest(req)) { res.status(404).end(); return; }
 
+  const analysis = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
+  const cosKey = String(analysis.thumbnailObjectKey || '');
+  if (cosKey) {
+    if (!await streamCrawlerCosObject(res, cosKey, req.headers.range)) res.status(404).end();
+    return;
+  }
   const filename = String(record.thumbnailFile || '');
   if (!filename) { res.status(404).end(); return; }
   const file = await fetchFile(COL, req.params.id, filename);
@@ -1779,6 +1837,18 @@ videosRouter.get('/:id/thumbnail', async (req, res) => {
   res.setHeader('Cache-Control', 'private, max-age=86400');
   res.setHeader('Content-Length', file.buf.length);
   res.end(file.buf);
+});
+
+videosRouter.get('/:id/image/:index', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const record = await store.getById(COL, req.params.id);
+  if (!record) { res.status(404).end(); return; }
+  if (record.tenantId !== tenantId && !await isAdminForAssetRequest(req)) { res.status(404).end(); return; }
+  const analysis = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
+  const keys = Array.isArray(analysis.imageObjectKeys) ? analysis.imageObjectKeys.map(String) : [];
+  const index = Number(req.params.index);
+  const key = Number.isInteger(index) && index >= 0 ? keys[index] : '';
+  if (!key || !await streamCrawlerCosObject(res, key, req.headers.range)) res.status(404).end();
 });
 
 videosRouter.patch('/:id/analysis-corrections', async (req, res) => {
@@ -1835,7 +1905,7 @@ videosRouter.patch('/:id/reanalyze', async (req, res) => {
         geminiStatus: 'analyzed',
         downloadStatus: 'analyzed',
         videoFetchStatus: 'fetched',
-        videoStorage: 'pocketbase',
+        videoStorage: previous.videoObjectKey ? 'cos' : (previous.videoStorage || 'pocketbase'),
         videoLevelFailureStatus: undefined,
         manualRequiredReason: undefined,
         analysisError: undefined,
@@ -1903,7 +1973,10 @@ async function triggerVideoAnalysis(
   let runId = expectedRunId || '';
   try {
     const record = await store.getById<Record<string, unknown>>(COL, recordId);
-    const dl = await fetchFile(COL, recordId, filename);
+    const previousRecordAnalysis = parseJsonRecord<Record<string, unknown>>(record?.aiAnalysis, {});
+    const dl = previousRecordAnalysis.videoObjectKey
+      ? await r2Download(String(previousRecordAnalysis.videoObjectKey))
+      : await fetchFile(COL, recordId, filename);
     if (!dl) throw new Error('video file fetch failed');
 
     if (!fs.existsSync(ANALYSIS_DIR)) fs.mkdirSync(ANALYSIS_DIR, { recursive: true });
@@ -2018,11 +2091,7 @@ export async function attachManualVideoUploadAndQueue(input: {
 
   const ext = safeVideoExtension(input.filename, mimeType);
   const previewBuf = await compressVideoBufferForPocketBase(buf, ext);
-  const storedFilename = await attachFile(COL, input.recordId, 'videoFile', {
-    name: `manual-preview-${Date.now()}-${randomUUID()}.mp4`,
-    buf: previewBuf,
-    contentType: 'video/mp4',
-  });
+  const storedFilename = await uploadCrawlerCosObject(input.recordId, 'video', previewBuf, 'video/mp4');
   if (!storedFilename) throw new Error('Video upload failed');
 
   const previous = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
@@ -2031,7 +2100,8 @@ export async function attachManualVideoUploadAndQueue(input: {
     status: 'pending' as VideoStatus,
     aiAnalysis: JSON.stringify({
       ...previous,
-      videoStorage: 'pocketbase',
+      videoStorage: 'cos',
+      videoObjectKey: storedFilename,
       manualVideoUploadedAt: new Date().toISOString(),
       manualVideoUploadedBy: input.uploadedBy,
       manualVideoUploadStatus: 'queued',
@@ -2224,25 +2294,22 @@ async function cacheThumbnailLocally(recordId: string, url: string): Promise<str
 /** 把封面字节写进 PB 文件字段；PB 不可用时退回本地目录，保证抓取链路不被卡死。 */
 async function storeThumbnailBuffer(recordId: string, buf: Buffer, contentType: string): Promise<string | null> {
   const ext = contentType.includes('png') ? 'png' : contentType.includes('webp') ? 'webp' : 'jpg';
-  const stored = await attachFile(COL, recordId, 'thumbnailFile', {
-    name: `${recordId}.thumb.${ext}`,
-    buf,
-    contentType,
-  }).catch(() => null);
-  if (stored) return recordThumbnailUrl(recordId);
-
   try {
-    fs.mkdirSync(MEDIA_DIR, { recursive: true });
-    const file = `${recordId}.thumb.jpg`;
-    fs.writeFileSync(path.join(MEDIA_DIR, file), buf);
-    return `/media/${file}`;
-  } catch {
+    const key = await uploadCrawlerCosObject(recordId, 'thumbnail', buf, contentType);
+    const record = await store.getById<Record<string, unknown>>(COL, recordId);
+    const analysis = parseJsonRecord<Record<string, unknown>>(record?.aiAnalysis, {});
+    await store.update(COL, recordId, {
+      aiAnalysis: JSON.stringify({ ...analysis, thumbnailStorage: 'cos', thumbnailObjectKey: key, thumbnailExtension: ext }),
+    });
+    return recordThumbnailUrl(recordId);
+  } catch (error) {
+    console.warn('[videos] COS thumbnail persistence failed:', error instanceof Error ? error.message : error);
     return null;
   }
 }
 
 async function persistThumbnailIfExpiring(recordId: string, url: string): Promise<void> {
-  if (!isSignedExpiringThumbnail(url) || isExpiredSignedThumbnail(url)) return;
+  if (!/^https?:\/\//i.test(url)) return;
   const local = await cacheThumbnailLocally(recordId, url);
   if (local) await store.update(COL, recordId, { thumbnailUrl: local });
 }
@@ -2258,19 +2325,23 @@ async function persistImagePostThumbnail(recordId: string, url: string): Promise
 }
 
 async function persistImagePostImages(recordId: string, urls: string[]): Promise<string[]> {
-  fs.mkdirSync(MEDIA_DIR, { recursive: true });
   const unique = [...new Set(urls.filter(Boolean))].slice(0, 10);
   const stored: string[] = [];
+  const objectKeys: string[] = [];
   for (let index = 0; index < unique.length; index += 1) {
     const url = unique[index]!;
     if (!/^https?:\/\//i.test(url)) { stored.push(url); continue; }
     const image = await fetchImageForAnalysis(url);
     if (!image) continue;
-    const ext = image.mimeType.includes('png') ? 'png' : image.mimeType.includes('webp') ? 'webp' : 'jpg';
-    const file = `${recordId}.image-${index + 1}.${ext}`;
-    fs.writeFileSync(path.join(MEDIA_DIR, file), Buffer.from(image.base64, 'base64'));
-    stored.push(`/media/${file}`);
+    const key = await uploadCrawlerCosObject(recordId, `image-${index + 1}`, Buffer.from(image.base64, 'base64'), image.mimeType);
+    objectKeys.push(key);
+    stored.push(`/api/overseas/videos/${recordId}/image/${objectKeys.length - 1}`);
   }
+  const record = await store.getById<Record<string, unknown>>(COL, recordId);
+  const analysis = parseJsonRecord<Record<string, unknown>>(record?.aiAnalysis, {});
+  await store.update(COL, recordId, {
+    aiAnalysis: JSON.stringify({ ...analysis, imageStorage: 'cos', imageObjectKeys: objectKeys }),
+  });
   return stored;
 }
 
@@ -2429,7 +2500,7 @@ export async function backfillMissingCrawledMedia(records: unknown[]): Promise<v
     .filter(record => recordContentFormat(record) === 'video');
   for (const record of normalizedRecords) {
     const analysis = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
-    if (record.videoFileId && analysis.videoStorage !== 'pocketbase') {
+    if (record.videoFileId && !analysis.videoStorage) {
       await store.update(COL, String(record.id), {
         aiAnalysis: JSON.stringify({ ...analysis, videoStorage: 'pocketbase' }),
       });
@@ -2441,7 +2512,7 @@ export async function backfillMissingCrawledMedia(records: unknown[]): Promise<v
     const recordId = String(record.id || '');
     const retryAfter = pocketBaseBackfillFailures.get(recordId) || 0;
     return !record.videoFileId
-      && analysis.videoStorage !== 'pocketbase'
+      && !analysis.videoObjectKey
       && /^https?:\/\//i.test(String(record.sourceUrl || ''))
       && Date.now() >= retryAfter
       && !['downloading', 'queued', 'failed', 'download_failed', 'unavailable', 'metadata_only'].includes(String(analysis.downloadStatus || ''));
@@ -2626,7 +2697,7 @@ async function downloadMaterialJobInner(input: {
       const localVideoPath = path.join(MEDIA_DIR, material.file);
       if (!fs.existsSync(localVideoPath)) throw new Error('Downloaded video file missing before PocketBase upload');
       const previewPath = await compressPocketBasePreview(localVideoPath);
-      const pocketBaseFilename = await attachFile(COL, recordId, 'videoFile', { name: `crawl-preview-${Date.now()}.mp4`, buf: fs.readFileSync(previewPath), contentType: 'video/mp4' });
+      const pocketBaseFilename = await uploadCrawlerCosObject(recordId, 'video', fs.readFileSync(previewPath), 'video/mp4');
       try { fs.unlinkSync(previewPath); } catch { /* best effort */ }
       if (!pocketBaseFilename) throw new Error('PocketBase video persistence failed');
       const analysis = parseJsonRecord(input.record?.aiAnalysis, {});
@@ -2637,7 +2708,8 @@ async function downloadMaterialJobInner(input: {
           ...analysis,
           materialId: material.id,
           materialUrl: `/api/overseas/videos/${recordId}/media`,
-          videoStorage: 'pocketbase',
+          videoStorage: 'cos',
+          videoObjectKey: pocketBaseFilename,
           materialPoster: material.poster,
           downloadedAt: material.createdAt,
           downloadStatus: 'downloaded',
@@ -2767,11 +2839,7 @@ async function analyzeSourceVideoJobInner(input: {
       if (!await stillOwnsRun()) return null;
       const previewPath = await compressPocketBasePreview(downloaded.filePath);
       try {
-        const pocketBaseFilename = await attachFile(COL, recordId, 'videoFile', {
-          name: `analysis-preview-${Date.now()}.mp4`,
-          buf: fs.readFileSync(previewPath),
-          contentType: 'video/mp4',
-        });
+        const pocketBaseFilename = await uploadCrawlerCosObject(recordId, 'video', fs.readFileSync(previewPath), 'video/mp4');
         if (!pocketBaseFilename) throw new Error('PocketBase analysis preview persistence failed');
         const latest = await store.getById(COL, recordId);
         const analysis = parseJsonRecord(latest?.aiAnalysis ?? input.record?.aiAnalysis, {});
@@ -2779,7 +2847,8 @@ async function analyzeSourceVideoJobInner(input: {
           videoFileId: pocketBaseFilename,
           aiAnalysis: JSON.stringify({
             ...analysis,
-            videoStorage: 'pocketbase',
+            videoStorage: 'cos',
+            videoObjectKey: pocketBaseFilename,
             materialUrl: `/api/overseas/videos/${recordId}/media`,
             previewPersistedAt: new Date().toISOString(),
           }),
