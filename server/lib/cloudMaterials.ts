@@ -16,7 +16,9 @@ export async function listCloudMaterials(): Promise<Array<Record<string, unknown
     size: humanSize(Number(item.sizeBytes || 0)),
     file: String(item.videoFile || ''),
     url: `/cloud-files/${item.id}/media.mp4`,
-    poster: item.posterFile ? `/cloud-files/${item.id}/poster.jpg` : undefined,
+    // 始终提供同源封面端点；旧云端素材没有 posterFile 时，路由会从视频
+    // 按需抽帧并缓存，避免浏览器直接读取受保护视频失败后显示灰块。
+    poster: `/api/overseas/studio/materials/pb/${item.id}/poster`,
     scope: String(item.scope || 'shared'),
     usage: String(item.usage || 'editable'),
     sourceType: String(item.sourceType || 'licensed_upload'),
