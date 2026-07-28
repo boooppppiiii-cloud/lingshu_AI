@@ -3388,13 +3388,15 @@ function buildApifyInstagramInput(keyword: string, limit: number, dateFrom = '',
     resultsLimit,
     addParentData: false,
   };
-  if (dateFrom) base.onlyPostsNewerThan = dateFrom;
   if (isPlatformUrl(input, 'instagram')) {
     base.directUrls = [input];
+    if (dateFrom) base.onlyPostsNewerThan = dateFrom;
   } else {
-    base.search = input.replace(/^#/, '').trim();
-    base.searchType = 'hashtag';
-    base.searchLimit = 1;
+    // The actor's search mode currently redirects some English hashtags to an
+    // unrelated localized tag page. Direct hashtag URLs are stable; fetch a
+    // small page and apply the requested date window locally below.
+    const tag = input.replace(/^#/, '').trim();
+    base.directUrls = [`https://www.instagram.com/explore/tags/${encodeURIComponent(tag)}/`];
   }
   return base;
 }
