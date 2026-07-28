@@ -4790,9 +4790,12 @@ async function analyzeExactLongVideoChunks(input: {
     new Promise<VideoAiAnalysis>((_, reject) => setTimeout(() => reject(new Error('exact_chunk_timeout')), chunkTimeoutMs)),
   ])));
   const successful = settled.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
-  if (!successful.length) throw new Error('qwen_exact_no_chunk_succeeded');
   const results = settled.map((result, index) => result.status === 'fulfilled' ? result.value : fallbackChunk(chunks[index]));
-  const first = successful[0];
+  // Even a short clip can occasionally time out before Qwen returns its first
+  // structured segment. We still have uniformly sampled full-video frames, so
+  // retain a conservative, review-marked timeline instead of turning an
+  // otherwise playable record into a permanent video_failed item.
+  const first = successful[0] || results[0];
   const unique = (values: string[]) => [...new Set(values.filter(Boolean))];
   return {
     ...first,
