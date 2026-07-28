@@ -33,6 +33,11 @@ interface AdminOAuthConfig {
     metaSocialAppSecret: boolean;
     tiktokClientSecret: boolean;
   };
+  secretLength?: {
+    youtubeOAuthClientSecret: number;
+    metaSocialAppSecret: number;
+    tiktokClientSecret: number;
+  };
 }
 
 interface OAuthForm {
@@ -100,6 +105,7 @@ function CredentialField({
   value,
   secret,
   secretSaved,
+  secretLength,
   onChange,
 }: {
   fieldName: string;
@@ -107,13 +113,14 @@ function CredentialField({
   value: string;
   secret?: boolean;
   secretSaved?: boolean;
+  secretLength?: number;
   onChange: (value: string) => void;
 }) {
   return (
     <label className="grid gap-1 text-[11px] font-bold text-text-secondary">
       <span className="flex items-center justify-between gap-2">
         {label}
-        {secret && secretSaved && <span className="text-[10px] text-emerald-600">已保存</span>}
+        {secret && secretSaved && <span className="text-[10px] text-emerald-600">{secretLength ? `已保存 · ${secretLength} 位` : '已保存'}</span>}
       </span>
       <input
         name={fieldName}
@@ -124,7 +131,11 @@ function CredentialField({
         data-form-type="other"
         value={value}
         onChange={event => onChange(event.target.value)}
-        placeholder={secret && secretSaved ? '留空则继续使用已保存的 Secret' : label}
+        placeholder={secret && secretSaved
+          ? secretLength
+            ? `${'•'.repeat(Math.min(secretLength, 48))}${secretLength > 48 ? '…' : ''}（${secretLength} 位）`
+            : '留空则继续使用已保存的 Secret'
+          : label}
         className="rounded-xl border border-border bg-surface-2 px-3 py-2.5 text-sm font-normal text-text-primary outline-none focus:border-emerald-400"
       />
     </label>
@@ -245,7 +256,7 @@ export default function AdminSocialAccountSetup() {
                       <p className="mt-1 text-[11px] text-text-muted">Google Cloud OAuth Web application</p>
                     </div>
                     <CredentialField fieldName="youtube-oauth-client-id" label="Client ID" value={form.youtubeOAuthClientId} onChange={value => setField('youtubeOAuthClientId', value)} />
-                    <CredentialField fieldName="youtube-oauth-client-secret" label="Client Secret" secret secretSaved={config.secretSet.youtubeOAuthClientSecret} value={form.youtubeOAuthClientSecret} onChange={value => setField('youtubeOAuthClientSecret', value)} />
+                    <CredentialField fieldName="youtube-oauth-client-secret" label="Client Secret" secret secretSaved={config.secretSet.youtubeOAuthClientSecret} secretLength={config.secretLength?.youtubeOAuthClientSecret} value={form.youtubeOAuthClientSecret} onChange={value => setField('youtubeOAuthClientSecret', value)} />
                     <CallbackLine label="Authorized redirect URI" value={config.callbacks.youtube} />
                   </div>
 
@@ -255,7 +266,7 @@ export default function AdminSocialAccountSetup() {
                       <p className="mt-1 text-[11px] text-text-muted">两个平台共用一套 Meta App</p>
                     </div>
                     <CredentialField fieldName="meta-social-app-id" label="App ID" value={form.metaSocialAppId} onChange={value => setField('metaSocialAppId', value)} />
-                    <CredentialField fieldName="meta-social-app-secret" label="App Secret" secret secretSaved={config.secretSet.metaSocialAppSecret} value={form.metaSocialAppSecret} onChange={value => setField('metaSocialAppSecret', value)} />
+                    <CredentialField fieldName="meta-social-app-secret" label="App Secret" secret secretSaved={config.secretSet.metaSocialAppSecret} secretLength={config.secretLength?.metaSocialAppSecret} value={form.metaSocialAppSecret} onChange={value => setField('metaSocialAppSecret', value)} />
                     <CallbackLine label="Instagram redirect URI" value={config.callbacks.instagram} />
                     <CallbackLine label="Facebook redirect URI" value={config.callbacks.facebook} />
                   </div>
@@ -266,7 +277,7 @@ export default function AdminSocialAccountSetup() {
                       <p className="mt-1 text-[11px] text-text-muted">Login Kit + Content Posting API</p>
                     </div>
                     <CredentialField fieldName="tiktok-client-key" label="Client Key" value={form.tiktokClientKey} onChange={value => setField('tiktokClientKey', value)} />
-                    <CredentialField fieldName="tiktok-client-secret" label="Client Secret" secret secretSaved={config.secretSet.tiktokClientSecret} value={form.tiktokClientSecret} onChange={value => setField('tiktokClientSecret', value)} />
+                    <CredentialField fieldName="tiktok-client-secret" label="Client Secret" secret secretSaved={config.secretSet.tiktokClientSecret} secretLength={config.secretLength?.tiktokClientSecret} value={form.tiktokClientSecret} onChange={value => setField('tiktokClientSecret', value)} />
                     <CallbackLine label="Redirect URI" value={config.callbacks.tiktok} />
                   </div>
                 </div>

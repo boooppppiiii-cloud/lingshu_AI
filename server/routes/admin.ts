@@ -446,6 +446,7 @@ function publicPendingPlatformApp(req: Parameters<typeof publicTenantPlatformApp
     platform,
     appId: '',
     appSecretSet: false,
+    appSecretLength: 0,
     waConfigId: '',
     businessId: '',
     wabaId: '',
@@ -456,9 +457,11 @@ function publicPendingPlatformApp(req: Parameters<typeof publicTenantPlatformApp
     youtubeChannelId: '',
     webhookVerifyToken: '',
     wecomEncodingAesKeySet: false,
+    wecomEncodingAesKeyLength: 0,
     webhookUrl: platform === 'meta' || platform === 'wecom' ? tenantWebhookUrl(req, tenantId, platform) : '',
     tokenType: 'user_60d',
     accessTokenSet: false,
+    accessTokenLength: 0,
     tokenExpiresAt: '',
     status: 'pending',
     checklist: {},
@@ -536,7 +539,6 @@ function missingDeliveryRequirements(platform: TenantPlatform, app: any): string
   if (platform === 'meta') {
     if (!bodyText(app?.phone_number_id)) missing.push('Phone Number ID');
     if (!passedRecently(checklist, 'whatsapp_test_passed')) missing.push('WhatsApp 最近自检通过');
-    if (!passedRecently(checklist, 'pages_test_passed')) missing.push('主页列表最近自检通过');
     if (!passedRecently(checklist, 'webhook_test_passed')) missing.push('Webhook 订阅最近自检通过');
   } else {
     if (!passedRecently(checklist, 'google_test_passed')) missing.push('Google OAuth 最近自检通过');
@@ -570,6 +572,11 @@ function publicOAuthConfig(req: Parameters<typeof oauthCallbackUrls>[0], adminEm
       youtubeOAuthClientSecret: Boolean(effective.youtubeOAuthClientSecret),
       metaSocialAppSecret: Boolean(effective.metaSocialAppSecret),
       tiktokClientSecret: Boolean(effective.tiktokClientSecret),
+    },
+    secretLength: {
+      youtubeOAuthClientSecret: effective.youtubeOAuthClientSecret.length,
+      metaSocialAppSecret: effective.metaSocialAppSecret.length,
+      tiktokClientSecret: effective.tiktokClientSecret.length,
     },
   };
 }

@@ -25,6 +25,9 @@ assert.match(customers, /customerSuggestionsRouter\.use\(requireAuth\)/, 'custom
 assert.doesNotMatch(customers, /req\.query\.tenantId|x-tenant-id/, 'customer routes must use the authenticated tenant');
 assert.match(read('server/whatsapp/historyImport.ts'), /item\.tenantId === customer\.tenantId/, 'WhatsApp timelines must include a tenant check');
 
+const channelStatus = read('server/routes/channels.ts');
+assert.match(channelStatus, /where: \{ tenantId, status: 'connected' \}/, 'connected channel lookups must remain tenant scoped');
+
 const oauth = read('server/routes/whatsappOAuth.ts');
 assert.match(oauth, /if \(supportAccess\) return null/, 'support sessions must not switch to a second tenant');
 

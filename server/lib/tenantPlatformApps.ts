@@ -51,6 +51,7 @@ export interface PublicTenantPlatformApp {
   platform: TenantPlatform;
   appId: string;
   appSecretSet: boolean;
+  appSecretLength: number;
   waConfigId: string;
   businessId: string;
   wabaId: string;
@@ -61,9 +62,11 @@ export interface PublicTenantPlatformApp {
   youtubeChannelId: string;
   webhookVerifyToken: string;
   wecomEncodingAesKeySet: boolean;
+  wecomEncodingAesKeyLength: number;
   webhookUrl: string;
   tokenType: TenantTokenType;
   accessTokenSet: boolean;
+  accessTokenLength: number;
   tokenExpiresAt: string;
   status: TenantPlatformStatus;
   checklist: Record<string, boolean>;
@@ -158,25 +161,32 @@ export function publicTenantPlatformApp(req: Request, app: TenantPlatformAppReco
       return {};
     }
   })();
+  const appSecret = decryptSecret(app.app_secret);
+  const accessToken = decryptSecret(app.access_token);
+  const wecomEncodingAesKey = decryptSecret(app.wecom_encoding_aes_key);
+  const numericAssetId = (value: unknown) => /^\d+$/.test(text(value)) ? text(value) : '';
   return {
     id: app.id,
     tenantId: app.tenant_id,
     platform: app.platform,
     appId: text(app.app_id),
-    appSecretSet: Boolean(text(app.app_secret)),
+    appSecretSet: Boolean(appSecret),
+    appSecretLength: appSecret.length,
     waConfigId: text(app.wa_config_id),
     businessId: text(app.business_id),
     wabaId: text(app.waba_id),
     phoneNumberId: text(app.phone_number_id),
     waPublicNumber: text(app.wa_public_number),
-    pageId: text(app.page_id),
-    igUserId: text(app.ig_user_id),
+    pageId: numericAssetId(app.page_id),
+    igUserId: numericAssetId(app.ig_user_id),
     youtubeChannelId: text(app.youtube_channel_id),
     webhookVerifyToken: text(app.webhook_verify_token),
-    wecomEncodingAesKeySet: Boolean(text(app.wecom_encoding_aes_key)),
+    wecomEncodingAesKeySet: Boolean(wecomEncodingAesKey),
+    wecomEncodingAesKeyLength: wecomEncodingAesKey.length,
     webhookUrl: app.platform === 'meta' || app.platform === 'wecom' ? tenantWebhookUrl(req, app.tenant_id, app.platform) : '',
     tokenType: app.token_type || 'user_60d',
-    accessTokenSet: Boolean(text(app.access_token)),
+    accessTokenSet: Boolean(accessToken),
+    accessTokenLength: accessToken.length,
     tokenExpiresAt: text(app.token_expires_at),
     status: app.status || 'pending',
     checklist,

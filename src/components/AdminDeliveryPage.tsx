@@ -13,6 +13,7 @@ interface DeliveryApp {
   platform: Platform;
   appId: string;
   appSecretSet: boolean;
+  appSecretLength: number;
   waConfigId: string;
   businessId: string;
   wabaId: string;
@@ -23,9 +24,11 @@ interface DeliveryApp {
   youtubeChannelId: string;
   webhookVerifyToken: string;
   wecomEncodingAesKeySet: boolean;
+  wecomEncodingAesKeyLength: number;
   webhookUrl: string;
   tokenType: 'user_60d' | 'system_user_permanent';
   accessTokenSet: boolean;
+  accessTokenLength: number;
   tokenExpiresAt: string;
   status: Status;
   checklist: Record<string, boolean | string>;
@@ -77,7 +80,7 @@ const META_STEPS = [
   { id: 'metaApp', title: '1. Meta 开发者应用', desc: '录入 App ID / Secret，Secret 只加密保存不回显。' },
   { id: 'webhook', title: '2. Webhook 回调', desc: '复制 Webhook URL 和 Verify Token 到 Meta 后台。' },
   { id: 'whatsapp', title: '3. WhatsApp 接入', desc: '录入 Config ID / WABA / Phone Number ID，完成扫码或新号接入。' },
-  { id: 'social', title: '4. FB / IG 资产', desc: '记录主页和 IG 专业账号 ID，避免客户多主页选错。' },
+  { id: 'social', title: '4. FB / IG 资产（可选）', desc: 'OAuth 会自动识别；仅在多主页时填写 ID 锁定资产。' },
   { id: 'acceptance', title: '5. 验收', desc: '测试 WhatsApp 收发、Webhook 订阅和主页列表。' },
 ];
 
@@ -101,6 +104,16 @@ function keyOf(tenantId: string, platform: Platform) {
 function appValue(drafts: Draft, app: DeliveryApp, field: keyof DeliveryApp) {
   const value = drafts[keyOf(app.tenantId, app.platform)]?.[field];
   return typeof value === 'string' ? value : String(app[field] ?? '');
+}
+
+function savedSecretHint(length: number, fallback: string) {
+  return length > 0 ? `已保存 · ${length} 位` : fallback;
+}
+
+function savedSecretPlaceholder(length: number) {
+  if (length <= 0) return '已加密保存，留空则不修改';
+  const dots = '•'.repeat(Math.min(length, 48));
+  return `${dots}${length > 48 ? '…' : ''}（${length} 位）`;
 }
 
 async function jsonFetch(url: string, init?: RequestInit) {
@@ -137,6 +150,8 @@ function Field({
   value,
   placeholder,
   secret,
+  numericId,
+  fieldName,
   onChange,
 }: {
   label: string;
@@ -144,6 +159,8 @@ function Field({
   value?: string;
   placeholder?: string;
   secret?: boolean;
+  numericId?: boolean;
+  fieldName?: string;
   onChange: (value: string) => void;
 }) {
   return (
@@ -153,10 +170,16 @@ function Field({
         <span className="text-[10px] font-medium text-text-muted">{hint}</span>
       </span>
       <input
+        name={fieldName}
         type={secret ? 'password' : 'text'}
+        inputMode={numericId ? 'numeric' : undefined}
+        autoComplete={secret ? 'new-password' : 'off'}
+        data-1p-ignore
+        data-lpignore="true"
+        data-form-type="other"
         value={value ?? ''}
         placeholder={placeholder}
-        onChange={event => onChange(event.target.value)}
+        onChange={event => onChange(numericId ? event.target.value.replace(/\D/g, '') : event.target.value)}
         className="rounded-xl border border-border bg-surface-2 px-3 py-2 text-sm font-normal text-text-primary outline-none focus:border-primary"
       />
     </label>
@@ -353,20 +376,21 @@ function PlatformWizard({
   onComplete,
   onAssistLink,
   assistLink,
+  saving,
 }: {
   app: DeliveryApp;
   drafts: Draft;
   setDrafts: (next: Draft | ((current: Draft) => Draft)) => void;
   tests: TestState;
-  onSave: (app: DeliveryApp, options?: { silent?: boolean }) => Promise<void>;
+  onSave: (app: DeliveryApp, options?: { silent?: boolean }) => Promise<boolean>;
   onTest: (app: DeliveryApp, kind: string) => Promise<void>;
   onComplete: (app: DeliveryApp) => Promise<void>;
   onAssistLink: (app: DeliveryApp) => Promise<void>;
   assistLink?: { link: string; loading?: boolean };
+  saving: boolean;
 }) {
   const appKey = keyOf(app.tenantId, app.platform);
   const [activeStep, setActiveStep] = useState(app.platform === 'meta' ? 'metaApp' : app.platform === 'google' ? 'googleApp' : 'wecomApp');
-  const autoSaveTimer = useRef<number | null>(null);
   const test = tests[appKey] ?? {};
   const steps = app.platform === 'meta' ? META_STEPS : app.platform === 'google' ? GOOGLE_STEPS : WECOM_STEPS;
   const update = (patch: Record<string, string | Record<string, boolean>>) => {
@@ -393,21 +417,8 @@ function PlatformWizard({
         ? 'bg-amber-50 text-amber-700'
         : 'bg-surface-2 text-text-secondary';
 
-  const hasDraft = Object.keys(drafts[appKey] ?? {}).length > 0;
-  function scheduleAutoSave() {
-    if (!hasDraft) return;
-    if (autoSaveTimer.current) window.clearTimeout(autoSaveTimer.current);
-    autoSaveTimer.current = window.setTimeout(() => {
-      void onSave(app, { silent: true });
-    }, 800);
-  }
-
-  useEffect(() => () => {
-    if (autoSaveTimer.current) window.clearTimeout(autoSaveTimer.current);
-  }, []);
-
   return (
-    <div className="rounded-2xl border border-border bg-white p-4 shadow-sm" onBlurCapture={scheduleAutoSave}>
+    <div className="rounded-2xl border border-border bg-white p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div>
           <p className="text-sm font-black text-text-primary">{platformName}</p>
@@ -469,7 +480,7 @@ function PlatformWizard({
           {activeStep === 'metaApp' && (
             <div className="grid gap-3">
               <Field label="App ID" hint="开发者后台首页" value={appValue(drafts, app, 'appId')} onChange={value => update({ appId: value })} />
-              <Field label="App Secret" hint={app.appSecretSet ? '已保存，留空不改' : '应用设置 > 基本'} secret placeholder={app.appSecretSet ? '已加密保存，留空则不修改' : '客户输入密码后复制粘贴'} onChange={value => update({ appSecret: value })} />
+              <Field label="App Secret" hint={app.appSecretSet ? savedSecretHint(app.appSecretLength, '已保存') : '应用设置 > 基本'} secret placeholder={app.appSecretSet ? savedSecretPlaceholder(app.appSecretLength) : '客户输入密码后复制粘贴'} onChange={value => update({ appSecret: value })} />
               <Field label="Business ID" hint="BM 设置里可找到" value={appValue(drafts, app, 'businessId')} onChange={value => update({ businessId: value })} />
               <ChecklistButton app={app} id="privacy_domain_saved" label="隐私政策和域名已填" drafts={drafts} setDrafts={setDrafts} />
             </div>
@@ -497,7 +508,7 @@ function PlatformWizard({
               <Field label="WABA ID" hint="WhatsApp Business Account" value={appValue(drafts, app, 'wabaId')} onChange={value => update({ wabaId: value })} />
               <Field label="Phone Number ID" hint="号码详情页" value={appValue(drafts, app, 'phoneNumberId')} onChange={value => update({ phoneNumberId: value })} />
               <Field label="WhatsApp 真实手机号" hint="用于 wa.me 询盘追踪，如 971501234567" value={appValue(drafts, app, 'waPublicNumber')} onChange={value => update({ waPublicNumber: value })} />
-              <Field label="Access Token" hint={app.accessTokenSet ? '已保存，留空不改' : '60天或永久 token'} secret placeholder={app.accessTokenSet ? '已加密保存，留空则不修改' : 'EAAB...'} onChange={value => update({ accessToken: value })} />
+              <Field label="Access Token" hint={app.accessTokenSet ? savedSecretHint(app.accessTokenLength, '已保存') : '60天或永久 token'} secret placeholder={app.accessTokenSet ? savedSecretPlaceholder(app.accessTokenLength) : 'EAAB...'} onChange={value => update({ accessToken: value })} />
               <div className="grid grid-cols-2 gap-2">
                 <label className="grid gap-1 text-xs font-bold text-text-secondary">
                   Token 类型
@@ -517,8 +528,8 @@ function PlatformWizard({
 
           {activeStep === 'social' && (
             <div className="grid gap-3">
-              <Field label="Facebook Page ID" hint="主页详情/Graph API" value={appValue(drafts, app, 'pageId')} onChange={value => update({ pageId: value })} />
-              <Field label="Instagram User ID" hint="IG 专业账号" value={appValue(drafts, app, 'igUserId')} onChange={value => update({ igUserId: value })} />
+              <Field fieldName="facebook-page-id" label="Facebook Page ID（可选）" hint="OAuth 可自动识别" numericId placeholder="有多个主页时填写数字 ID" value={appValue(drafts, app, 'pageId')} onChange={value => update({ pageId: value })} />
+              <Field fieldName="instagram-user-id" label="Instagram User ID（可选）" hint="OAuth 可自动识别" numericId placeholder="有多个 IG 时填写数字 ID" value={appValue(drafts, app, 'igUserId')} onChange={value => update({ igUserId: value })} />
               <ChecklistButton app={app} id="fb_ig_authorized" label="客户已授权正确主页/IG" drafts={drafts} setDrafts={setDrafts} />
             </div>
           )}
@@ -526,7 +537,7 @@ function PlatformWizard({
           {activeStep === 'wecomApp' && (
             <div className="grid gap-3">
               <Field label="企业 ID / CorpID" hint="企业微信管理后台 > 我的企业" value={appValue(drafts, app, 'appId')} onChange={value => update({ appId: value })} />
-              <Field label="应用 Secret" hint={app.appSecretSet ? '已保存，留空不改' : '自建应用 Secret'} secret placeholder={app.appSecretSet ? '已加密保存，留空则不修改' : '客户管理员复制给顾问'} onChange={value => update({ appSecret: value })} />
+              <Field label="应用 Secret" hint={app.appSecretSet ? savedSecretHint(app.appSecretLength, '已保存') : '自建应用 Secret'} secret placeholder={app.appSecretSet ? savedSecretPlaceholder(app.appSecretLength) : '客户管理员复制给顾问'} onChange={value => update({ appSecret: value })} />
               <Field label="AgentId" hint="自建应用详情页" value={appValue(drafts, app, 'businessId')} onChange={value => update({ businessId: value })} />
               <ChecklistButton app={app} id="wecom_app_visible_range_set" label="应用可见范围已包含客户接待人员" drafts={drafts} setDrafts={setDrafts} />
             </div>
@@ -541,7 +552,7 @@ function PlatformWizard({
                   <CopyLine label="Token" value={app.webhookVerifyToken} />
                 </div>
               </div>
-              <Field label="EncodingAESKey" hint={app.wecomEncodingAesKeySet ? '已保存，留空不改' : '企业微信后台随机生成'} secret placeholder={app.wecomEncodingAesKeySet ? '已加密保存，留空则不修改' : '43 位 EncodingAESKey'} onChange={value => update({ wecomEncodingAesKey: value })} />
+              <Field label="EncodingAESKey" hint={app.wecomEncodingAesKeySet ? savedSecretHint(app.wecomEncodingAesKeyLength, '已保存') : '企业微信后台随机生成'} secret placeholder={app.wecomEncodingAesKeySet ? savedSecretPlaceholder(app.wecomEncodingAesKeyLength) : '43 位 EncodingAESKey'} onChange={value => update({ wecomEncodingAesKey: value })} />
               <ChecklistButton app={app} id="wecom_callback_verified" label="企业微信后台 URL 验证通过" drafts={drafts} setDrafts={setDrafts} />
             </div>
           )}
@@ -560,7 +571,7 @@ function PlatformWizard({
           {activeStep === 'googleApp' && (
             <div className="grid gap-3">
               <Field label="Client ID" hint="Google Cloud OAuth" value={appValue(drafts, app, 'appId')} onChange={value => update({ appId: value })} />
-              <Field label="Client Secret" hint={app.appSecretSet ? '已保存，留空不改' : 'Google Cloud OAuth'} secret placeholder={app.appSecretSet ? '已加密保存，留空则不修改' : '客户项目里的 Client Secret'} onChange={value => update({ appSecret: value })} />
+              <Field label="Client Secret" hint={app.appSecretSet ? savedSecretHint(app.appSecretLength, '已保存') : 'Google Cloud OAuth'} secret placeholder={app.appSecretSet ? savedSecretPlaceholder(app.appSecretLength) : '客户项目里的 Client Secret'} onChange={value => update({ appSecret: value })} />
               <ChecklistButton app={app} id="google_consent_published" label="OAuth 同意屏幕已发布到生产" drafts={drafts} setDrafts={setDrafts} />
             </div>
           )}
@@ -610,8 +621,8 @@ function PlatformWizard({
           </label>
 
           <div className="flex flex-wrap gap-2 border-t border-border pt-3">
-            <button type="button" onClick={() => void onSave(app)} className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white">
-              <Save size={13} /> 保存配置
+            <button type="button" onClick={() => void onSave(app)} disabled={saving} className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white disabled:cursor-wait disabled:opacity-60">
+              {saving ? <Loader2 size={13} className="animate-spin" /> : <Save size={13} />} {saving ? '保存中' : '保存配置'}
             </button>
             {app.platform === 'meta' && app.tokenType === 'user_60d' && (
               <button type="button" onClick={() => void onSave({ ...app, status: 'needs_permanent_token' })} className="inline-flex items-center gap-1.5 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">
@@ -643,12 +654,17 @@ export default function AdminDeliveryPage() {
   const [copiedInvite, setCopiedInvite] = useState<'code' | 'url' | ''>('');
   const [creatingTenant, setCreatingTenant] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [savingAppKeys, setSavingAppKeys] = useState<Set<string>>(() => new Set());
+  const [saveToast, setSaveToast] = useState('');
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const hasUnsavedDrafts = useMemo(() => Object.values(drafts).some(draft => Object.keys(draft ?? {}).length > 0), [drafts]);
 
-  const load = async () => {
-    setLoading(true);
+  const load = async ({ background = false }: { background?: boolean } = {}) => {
+    if (background) setRefreshing(true);
+    else setLoading(true);
     setError('');
     try {
       const data = await jsonFetch('/api/overseas/admin/delivery/platform-apps');
@@ -662,11 +678,28 @@ export default function AdminDeliveryPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : '读取失败');
     } finally {
-      setLoading(false);
+      if (background) setRefreshing(false);
+      else setLoading(false);
     }
   };
 
   useEffect(() => { void load(); }, []);
+
+  useEffect(() => {
+    if (loading || !scrollContainerRef.current) return;
+    const savedPosition = Number(sessionStorage.getItem('lingshu:admin-delivery:scroll') || 0);
+    if (!Number.isFinite(savedPosition) || savedPosition <= 0) return;
+    const frame = window.requestAnimationFrame(() => {
+      if (scrollContainerRef.current) scrollContainerRef.current.scrollTop = savedPosition;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [loading]);
+
+  useEffect(() => {
+    if (!saveToast) return;
+    const timer = window.setTimeout(() => setSaveToast(''), 2600);
+    return () => window.clearTimeout(timer);
+  }, [saveToast]);
 
   useEffect(() => {
     if (!hasUnsavedDrafts) return;
@@ -700,35 +733,52 @@ export default function AdminDeliveryPage() {
   const save = async (app: DeliveryApp, options: { silent?: boolean } = {}) => {
     const appKey = keyOf(app.tenantId, app.platform);
     const draft = drafts[appKey] ?? {};
-    await jsonFetch(`/api/overseas/admin/delivery/platform-apps/${app.tenantId}/${app.platform}`, {
-      method: 'PUT',
-      body: JSON.stringify({
-        appId: draft.appId ?? app.appId,
-        appSecret: draft.appSecret ?? '',
-        waConfigId: draft.waConfigId ?? app.waConfigId,
-        businessId: draft.businessId ?? app.businessId,
-        wabaId: draft.wabaId ?? app.wabaId,
-        phoneNumberId: draft.phoneNumberId ?? app.phoneNumberId,
-        waPublicNumber: draft.waPublicNumber ?? app.waPublicNumber,
-        pageId: draft.pageId ?? app.pageId,
-        igUserId: draft.igUserId ?? app.igUserId,
-        youtubeChannelId: draft.youtubeChannelId ?? app.youtubeChannelId,
-        wecomEncodingAesKey: draft.wecomEncodingAesKey ?? '',
-        tokenType: draft.tokenType ?? app.tokenType,
-        accessToken: draft.accessToken ?? '',
-        tokenExpiresAt: draft.tokenExpiresAt ?? app.tokenExpiresAt,
-        status: draft.status ?? app.status,
-        checklist: { ...(app.checklist ?? {}), ...(draft.checklist ?? {}) },
-        notes: draft.notes ?? app.notes,
-      }),
-    });
-    setDrafts(current => {
-      const next = { ...current };
-      delete next[appKey];
-      return next;
-    });
-    if (!options.silent) setMessage('配置已保存');
-    await load();
+    setSavingAppKeys(current => new Set(current).add(appKey));
+    setError('');
+    try {
+      await jsonFetch(`/api/overseas/admin/delivery/platform-apps/${app.tenantId}/${app.platform}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          appId: draft.appId ?? app.appId,
+          appSecret: draft.appSecret ?? '',
+          waConfigId: draft.waConfigId ?? app.waConfigId,
+          businessId: draft.businessId ?? app.businessId,
+          wabaId: draft.wabaId ?? app.wabaId,
+          phoneNumberId: draft.phoneNumberId ?? app.phoneNumberId,
+          waPublicNumber: draft.waPublicNumber ?? app.waPublicNumber,
+          pageId: draft.pageId ?? app.pageId,
+          igUserId: draft.igUserId ?? app.igUserId,
+          youtubeChannelId: draft.youtubeChannelId ?? app.youtubeChannelId,
+          wecomEncodingAesKey: draft.wecomEncodingAesKey ?? '',
+          tokenType: draft.tokenType ?? app.tokenType,
+          accessToken: draft.accessToken ?? '',
+          tokenExpiresAt: draft.tokenExpiresAt ?? app.tokenExpiresAt,
+          status: draft.status ?? app.status,
+          checklist: { ...(app.checklist ?? {}), ...(draft.checklist ?? {}) },
+          notes: draft.notes ?? app.notes,
+        }),
+      });
+      setDrafts(current => {
+        const next = { ...current };
+        delete next[appKey];
+        return next;
+      });
+      if (!options.silent) {
+        setMessage('配置已保存');
+        setSaveToast('配置保存成功');
+      }
+      await load({ background: true });
+      return true;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : '配置保存失败');
+      return false;
+    } finally {
+      setSavingAppKeys(current => {
+        const next = new Set(current);
+        next.delete(appKey);
+        return next;
+      });
+    }
   };
 
   const test = async (app: DeliveryApp, kind: string) => {
@@ -746,7 +796,7 @@ export default function AdminDeliveryPage() {
         wecom: 'wecom_message_test_passed',
       }[kind];
       if (autoCheckId) {
-        await load();
+        await load({ background: true });
       }
       setMessage(data.message || '自检通过');
     } catch (err) {
@@ -759,14 +809,15 @@ export default function AdminDeliveryPage() {
     const appKey = keyOf(app.tenantId, app.platform);
     const draft = drafts[appKey] ?? {};
     if (Object.keys(draft).length > 0) {
-      await save(app, { silent: true });
+      const saved = await save(app, { silent: true });
+      if (!saved) return;
     }
     await jsonFetch(`/api/overseas/admin/delivery/platform-apps/${app.tenantId}/${app.platform}/complete`, {
       method: 'POST',
       body: JSON.stringify({ notes: draft.notes ?? app.notes }),
     });
     setMessage('已标记交付完成，客户端将显示“已由专属顾问配置”。');
-    await load();
+    await load({ background: true });
   };
 
   const createTenant = async () => {
@@ -873,7 +924,7 @@ export default function AdminDeliveryPage() {
       }
       await saveAppChecklist(app, checklist);
       setMessage('部署进度已更新');
-      await load();
+      await load({ background: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : '部署进度更新失败');
     } finally {
@@ -933,13 +984,18 @@ export default function AdminDeliveryPage() {
           <button type="button" onClick={openInviteDialog} className="inline-flex items-center gap-1.5 rounded-xl bg-slate-950 px-3 py-2 text-xs font-bold text-white">
             <KeyRound size={13} /> 生成注册邀请码
           </button>
-          <button type="button" onClick={() => void load()} className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-white px-3 py-2 text-xs font-bold text-text-secondary">
-            {loading ? <Loader2 size={13} className="animate-spin" /> : <RefreshCcw size={13} />} 刷新
+          <button data-testid="admin-delivery-refresh" type="button" onClick={() => void load({ background: true })} disabled={refreshing} className="inline-flex items-center gap-1.5 rounded-xl border border-border bg-white px-3 py-2 text-xs font-bold text-text-secondary disabled:cursor-wait disabled:opacity-60">
+            {refreshing ? <Loader2 size={13} className="animate-spin" /> : <RefreshCcw size={13} />} 刷新
           </button>
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto p-5">
+      <div
+        ref={scrollContainerRef}
+        data-testid="admin-delivery-scroll"
+        onScroll={event => sessionStorage.setItem('lingshu:admin-delivery:scroll', String(event.currentTarget.scrollTop))}
+        className="min-h-0 flex-1 overflow-y-auto p-5"
+      >
         {message && <p className="mb-3 rounded-xl bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">{message}</p>}
         {error && <p className="mb-3 rounded-xl bg-red-50 px-3 py-2 text-xs font-bold text-red-700">{error}</p>}
         <AdminSocialAccountSetup />
@@ -1075,6 +1131,7 @@ export default function AdminDeliveryPage() {
                             onComplete={complete}
                             onAssistLink={createAssistLink}
                             assistLink={assistLinks[keyOf(app.tenantId, app.platform)]}
+                            saving={savingAppKeys.has(keyOf(app.tenantId, app.platform))}
                           />
                         ))}
                       </div>
@@ -1086,6 +1143,11 @@ export default function AdminDeliveryPage() {
           </div>
         )}
       </div>
+      {saveToast && (
+        <div role="status" className="fixed right-6 top-20 z-[70] inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-black text-white shadow-xl">
+          <CheckCircle2 size={17} /> {saveToast}
+        </div>
+      )}
       {tenantDialogOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/30 px-4">
           <div className="w-full max-w-md rounded-3xl border border-border bg-white p-5 shadow-xl">

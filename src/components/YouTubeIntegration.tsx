@@ -278,8 +278,8 @@ export function YouTubeConnectionPanel({ compact = false }: { compact?: boolean 
   };
 
   return (
-    <section className={`border border-gray-200 rounded-xl bg-white ${compact ? 'p-4' : 'p-5'}`}>
-      <div className="flex items-start justify-between gap-4">
+    <section className={`flex h-full min-h-[360px] flex-col rounded-xl border border-gray-200 bg-white ${compact ? 'p-4' : 'p-5'}`}>
+      <div className="flex flex-col items-stretch gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="flex items-start gap-3 min-w-0">
           <div className="w-10 h-10 rounded-lg bg-red-50 text-red-600 flex items-center justify-center flex-shrink-0">
             <TvMinimalPlay size={20} />
@@ -291,7 +291,7 @@ export function YouTubeConnectionPanel({ compact = false }: { compact?: boolean 
             </p>
           </div>
         </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="flex flex-shrink-0 items-center justify-start gap-2 sm:justify-end">
           <button
             onClick={() => void loadConnectionState()}
             disabled={loading}
@@ -375,11 +375,11 @@ export function YouTubeConnectionPanel({ compact = false }: { compact?: boolean 
       )}
 
       {loading ? (
-        <div className="mt-5 flex items-center gap-2 text-sm text-gray-400">
+        <div className="mt-auto flex min-h-[104px] items-center gap-2 text-sm text-gray-400">
           <Loader2 size={16} className="animate-spin" /> 正在读取 YouTube 连接状态...
         </div>
       ) : accounts.length > 0 ? (
-        <div className="mt-5 grid gap-3" style={{ gridTemplateColumns: compact ? '1fr' : 'repeat(auto-fit, minmax(260px, 1fr))' }}>
+        <div className="mt-auto grid gap-3" style={{ gridTemplateColumns: compact ? '1fr' : 'repeat(auto-fit, minmax(260px, 1fr))' }}>
           {accounts.map(account => (
             <div key={account.id} className="border border-gray-200 rounded-xl p-4">
               <div className="flex items-start gap-3">
@@ -436,7 +436,7 @@ export function YouTubeConnectionPanel({ compact = false }: { compact?: boolean 
           ))}
         </div>
       ) : (
-        <div className="mt-5 rounded-xl border border-dashed border-gray-200 px-4 py-5 text-center">
+        <div className="mt-auto rounded-xl border border-dashed border-gray-200 px-4 py-5 text-center">
           <TvMinimalPlay size={28} className="mx-auto text-gray-300 mb-2" />
           <p className="text-sm font-medium text-gray-700">还没有连接 YouTube 频道</p>
           <p className="text-xs text-gray-400 mt-1">连接后，我的社媒里的 AI 生成视频可以一键发布到 YouTube。</p>
@@ -653,17 +653,17 @@ export function SocialConnectionPanel({ platform }: { platform: SocialPlatform }
 
   return (
     <section className="flex h-full min-h-[360px] flex-col rounded-xl border border-gray-200 bg-white p-5">
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-4">
+      <div className="grid grid-cols-1 items-start gap-4 sm:grid-cols-[minmax(0,1fr)_auto]">
         <div className="flex items-start gap-3 min-w-0">
           <div className="w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0" style={{ background: meta.bg, color: meta.color }}>
             <TvMinimalPlay size={20} />
           </div>
           <div className="min-w-0">
             <h2 className="truncate whitespace-nowrap text-sm font-semibold text-gray-900">{meta.label} 授权</h2>
-            <p className="mt-1 min-h-[72px] text-xs leading-relaxed text-gray-500">{meta.description}</p>
+            <p className="mt-1 text-xs leading-relaxed text-gray-500 sm:min-h-[72px]">{meta.description}</p>
           </div>
         </div>
-        <div className="flex items-center gap-2 flex-shrink-0">
+        <div className="flex flex-shrink-0 items-center justify-start gap-2 sm:justify-end">
           <button onClick={() => void loadState()} disabled={loading} title="刷新"
             className="inline-flex h-10 w-10 items-center justify-center rounded-lg border border-gray-200 text-gray-500 hover:text-gray-800 hover:border-gray-300 disabled:opacity-50">
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />

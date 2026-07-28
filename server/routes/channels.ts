@@ -13,6 +13,7 @@ import { sendTenantWhatsAppText } from '../whatsapp/send.js';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 import { requireAdminUser } from '../lib/demoAccounts.js';
 import { getTenantPlatformApp, type TenantPlatformAppRecord, type TenantPlatformStatus } from '../lib/tenantPlatformApps.js';
+import { store } from '../storage/index.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA = path.join(__dirname, '../../data/channels.json');
@@ -69,12 +70,26 @@ channelsRouter.get('/status', requireAuth, async (req, res) => {
   const googleApp = await getTenantPlatformApp(tenantId, 'google');
   const wecomApp = await getTenantPlatformApp(tenantId, 'wecom');
   const platformApps = { meta: metaApp, google: googleApp, wecom: wecomApp };
+  const [youtubeAccounts, socialAccounts] = await Promise.all([
+    store.list<Record<string, unknown>>('youtube_accounts', {
+      where: { tenantId, status: 'connected' }, page: 1, perPage: 10,
+    }).then(result => result.items).catch(() => []),
+    store.list<Record<string, unknown>>('social_accounts', {
+      where: { tenantId, status: 'connected' }, page: 1, perPage: 50,
+    }).then(result => result.items).catch(() => []),
+  ]);
+  const connectedSocialPlatforms = new Set(socialAccounts.map(account => String(account.platform || '')));
 
   res.json({
     isAdmin,
     channels: USER_CHANNELS.map(channel => {
       const app = platformApps[channel.platform];
-      const status = tenantStatus(app?.status);
+      const hasConnectedAccount = channel.id === 'youtube'
+        ? youtubeAccounts.length > 0
+        : channel.id === 'facebook' || channel.id === 'instagram'
+          ? connectedSocialPlatforms.has(channel.id)
+          : false;
+      const status = hasConnectedAccount ? 'connected' : tenantStatus(app?.status);
       return {
         id: channel.id,
         name: channel.name,
