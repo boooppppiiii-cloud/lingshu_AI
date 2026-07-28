@@ -3509,7 +3509,7 @@ function apifyFacebookPostToCrawledVideo(item: Record<string, unknown>, accountU
 }
 
 function findFacebookVideoMedia(value: unknown, depth = 0): Record<string, unknown> | null {
-  if (depth > 5 || value == null) return null;
+  if (depth > 8 || value == null) return null;
   if (Array.isArray(value)) {
     for (const item of value) {
       const found = findFacebookVideoMedia(item, depth + 1);
@@ -3522,7 +3522,7 @@ function findFacebookVideoMedia(value: unknown, depth = 0): Record<string, unkno
   const type = String(record.__typename || record.__isMedia || '').toLowerCase();
   const playable = record.is_playable === true
     || type === 'video'
-    || Boolean(record.playable_url || record.browser_native_hd_url || record.browser_native_sd_url || record.videoId || record.permalink_url);
+    || Boolean(record.playable_url || record.playable_url_quality_hd || record.browser_native_hd_url || record.browser_native_sd_url || record.videoId);
   const mediaUrl = String(record.url || record.permalink_url || '').trim();
   if (playable && (!mediaUrl || isPlatformUrl(mediaUrl, 'facebook'))) return record;
   for (const key of ['media', 'attachments', 'video', 'videos', 'comet_sections']) {
@@ -3734,7 +3734,7 @@ function apifyFacebookPostToImagePost(item: Record<string, unknown>, keyword: st
 }
 
 function findFacebookImageMedia(value: unknown, depth = 0): Record<string, unknown> | null {
-  if (depth > 5 || value == null) return null;
+  if (depth > 8 || value == null) return null;
   if (Array.isArray(value)) {
     for (const item of value) {
       const found = findFacebookImageMedia(item, depth + 1);
@@ -3745,8 +3745,8 @@ function findFacebookImageMedia(value: unknown, depth = 0): Record<string, unkno
   if (typeof value !== 'object') return null;
   const record = value as Record<string, unknown>;
   const type = String(record.__typename || record.__isMedia || '').toLowerCase();
-  if (type === 'photo' || record.photo_image || record.image || record.thumbnail) return record;
-  for (const key of ['media', 'attachments', 'photo', 'photos']) {
+  if (type === 'photo' || record.photo_image || record.photoImage || record.image || record.thumbnail || record.thumbnail_image) return record;
+  for (const key of ['media', 'attachments', 'attachment', 'subattachments', 'all_subattachments', 'styles', 'photo', 'photos']) {
     const found = findFacebookImageMedia(record[key], depth + 1);
     if (found) return found;
   }
@@ -5742,7 +5742,7 @@ function firstImageUrl(values: unknown[]): string {
 function imageUrlsFrom(values: unknown[], limit = 10): string[] {
   const out: string[] = [];
   const visit = (value: unknown, depth = 0) => {
-    if (out.length >= limit || depth > 5 || value == null) return;
+    if (out.length >= limit || depth > 8 || value == null) return;
     if (typeof value === 'string') {
       const found = normalizeThumbnailUrl(value);
       if (found && !out.includes(found)) out.push(found);
@@ -5754,7 +5754,12 @@ function imageUrlsFrom(values: unknown[], limit = 10): string[] {
     }
     if (typeof value !== 'object') return;
     const record = value as Record<string, unknown>;
-    for (const key of ['displayUrl', 'url', 'thumbnail', 'thumbnailUrl', 'image', 'images', 'media', 'photos', 'photo_image']) {
+    for (const key of [
+      'displayUrl', 'url', 'uri', 'src', 'thumbnail', 'thumbnailUrl', 'thumbnail_url',
+      'thumbnail_image', 'image', 'images', 'media', 'attachments', 'attachment',
+      'subattachments', 'all_subattachments', 'styles', 'photos', 'photo',
+      'photo_image', 'photoImage',
+    ]) {
       visit(record[key], depth + 1);
     }
   };
