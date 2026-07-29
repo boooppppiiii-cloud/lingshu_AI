@@ -5,7 +5,6 @@ import { getFacebookComments, getFacebookVideos, getInstagramComments, getInstag
 import { getMyVideoComments, replyToYouTubeComment, type YouTubeConfig } from '../integrations/youtube.js';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 import { store } from '../storage/index.js';
-import { upsertSocialLead } from '../whatsapp/historyImport.js';
 
 export const socialEngagementRouter = Router();
 socialEngagementRouter.use(requireAuth);
@@ -230,8 +229,8 @@ socialEngagementRouter.patch('/comments/status', async (req, res) => {
 });
 
 socialEngagementRouter.post('/comments/convert', async (req, res) => {
-  const { tenantId } = res.locals as AuthLocals;
-  const lead = upsertSocialLead({ tenantId, platform: String(req.body?.platform || 'social'), externalId: String(req.body?.authorId || req.body?.commentId || ''), name: String(req.body?.authorName || '社媒潜客'), comment: String(req.body?.text || ''), score: Number(req.body?.score || 50), postId: String(req.body?.videoId || ''), postTitle: String(req.body?.contentTitle || '') });
-  await saveState(tenantId, String(req.body?.stateKey || ''), { status: 'converted' });
-  res.json({ ok: true, customerId: lead.id });
+  res.status(409).json({
+    error: 'whatsapp_contact_required',
+    message: '评论用户添加 WhatsApp 并发送真实消息后，才会自动进入「我的客户」。',
+  });
 });

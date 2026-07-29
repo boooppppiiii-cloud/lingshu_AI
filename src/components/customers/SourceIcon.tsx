@@ -3,6 +3,7 @@ import { SocialPlatformIcon } from '../SocialPlatformIcon';
 
 const SOURCE_LABEL: Record<string, string> = {
   whatsapp: 'WhatsApp',
+  youtube: 'YouTube',
   facebook: 'Facebook',
   instagram: 'Instagram',
   tiktok: 'TikTok',
@@ -13,12 +14,12 @@ const SOURCE_LABEL: Record<string, string> = {
 };
 
 export function sourceLabel(source: CustomerSource) {
-  return SOURCE_LABEL[source] || 'WhatsApp';
+  return SOURCE_LABEL[String(source || '').toLowerCase()] || 'WhatsApp';
 }
 
 export function SourceIcon({ source, size = 16 }: { source: CustomerSource; size?: number }) {
   const label = sourceLabel(source);
-  const normalized = String(source || '');
+  const normalized = String(source || '').toLowerCase();
   const boxSize = Math.max(size + 4, 20);
 
   if (normalized.startsWith('whatsapp_from_')) {
@@ -36,7 +37,7 @@ export function SourceIcon({ source, size = 16 }: { source: CustomerSource; size
     );
   }
 
-  if (normalized === 'whatsapp' || normalized === 'tiktok' || normalized === 'instagram' || normalized === 'facebook') {
+  if (normalized === 'whatsapp' || normalized === 'youtube' || normalized === 'tiktok' || normalized === 'instagram' || normalized === 'facebook') {
     return (
       <span
         title={label}

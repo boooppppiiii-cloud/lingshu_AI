@@ -20,11 +20,12 @@ export function BasicInfoWidget({
     onCustomerPatch?.({ language, languageLocked: true });
     setLanguageOpen(false);
   };
-  const sourceText = customer.sourcePostTitle
-    ? `WhatsApp · 来自 ${customer.sourcePostPlatform || '内容'}《${customer.sourcePostTitle}》`
-    : customer.softAttribution?.candidates?.length
-      ? `可能来自近期发布 · ${customer.softAttribution.candidates[0].platform}《${customer.softAttribution.candidates[0].title}》`
-      : sourceLabel(customer.source);
+  const attributedPlatform = String(customer.sourcePostPlatform
+    || (String(customer.source).startsWith('whatsapp_from_') ? String(customer.source).replace('whatsapp_from_', '') : '')
+    || customer.softAttribution?.candidates?.[0]?.platform
+    || '').toLowerCase();
+  const displaySource = attributedPlatform || customer.source;
+  const sourceText = sourceLabel(displaySource);
   const openSourcePost = async () => {
     if (!customer.sourcePostId && customer.softAttribution?.candidates?.[0]?.id) {
       const candidate = customer.softAttribution.candidates[0];
@@ -114,7 +115,7 @@ export function BasicInfoWidget({
           <div className="rounded-xl bg-surface-2 p-3">
             <p className="text-text-muted">来源渠道</p>
             <div className="mt-1 flex items-center gap-1.5">
-              <SourceIcon source={customer.source} size={16} />
+              <SourceIcon source={displaySource} size={16} />
               <button
                 type="button"
                 onClick={openSourcePost}

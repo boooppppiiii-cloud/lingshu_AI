@@ -16,7 +16,6 @@ import {
   Send,
   Sparkles,
   Square,
-  UserPlus,
   UsersRound,
   X,
 } from 'lucide-react';
@@ -73,14 +72,14 @@ const FILTERS: Array<{ id: CommentFilter; label: string }> = [
   { id: 'high', label: '高意向' },
   { id: 'pending', label: '待回复' },
   { id: 'following', label: '跟进中' },
-  { id: 'converted', label: '已转客户' },
+  { id: 'converted', label: '已引导 WhatsApp' },
   { id: 'ignored', label: '已忽略' },
 ];
 
 const statusLabel: Record<CommentStatus, string> = {
   pending: '待回复',
   following: '跟进中',
-  converted: '已转客户',
+  converted: '已引导 WhatsApp',
   ignored: '已忽略',
   replied: '已回复',
 };
@@ -252,15 +251,6 @@ export default function AccountActivity() {
     if (succeeded.length) setComments(current => current.map(comment => succeeded.includes(comment.id) ? { ...comment, status: 'replied' } : comment));
     setNotice(`已回复 ${succeeded.length} 条${failed.length ? `，失败 ${failed.length} 条（${failed.join('；')}）` : '。'}`);
     setActing(false);
-  };
-
-  const convertLead = async () => {
-    if (!selected) return; setActing(true); setNotice('');
-    try {
-      await api('/api/overseas/social-engagement/comments/convert', { method: 'POST', body: JSON.stringify({ stateKey: selected.stateKey, platform: selected.platform.toLowerCase(), authorId: selected.authorId, authorName: selected.author, commentId: selected.commentId, text: selected.text, score: selected.score, videoId: selected.videoId, contentTitle: selected.contentTitle }) });
-      setComments(list => list.map(item => item.id === selected.id ? { ...item, status: 'converted' } : item)); setNotice('已转入「我的客户」。');
-    } catch (error) { setNotice(error instanceof Error ? error.message : '转客户失败'); }
-    finally { setActing(false); }
   };
 
   return (
@@ -436,7 +426,7 @@ export default function AccountActivity() {
                     <button type="button" onClick={() => setStatus(selected.id, 'ignored')} className="text-xs font-bold text-text-muted hover:text-text-secondary">忽略评论</button>
                     <div className="flex gap-2">
                       <button type="button" onClick={() => setStatus(selected.id, 'following')} className="inline-flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-black text-text-secondary"><MessageCircle size={14} /> 标记跟进</button>
-                      <button type="button" onClick={() => void convertLead()} disabled={acting} className="inline-flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-xs font-black text-text-secondary disabled:opacity-50"><UserPlus size={14} /> 转入我的客户</button>
+                      <span className="inline-flex items-center rounded-xl border border-border bg-surface-2 px-3 py-2 text-xs font-bold text-text-muted">加 WhatsApp 后自动进入客户</span>
                       <button type="button" onClick={() => void sendReplies()} disabled={acting || !replyText.trim()} className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2 text-xs font-black text-white disabled:opacity-50"><Send size={14} /> {acting ? '批量发送中' : `一键回复 ${selectedComments.length} 条`}</button>
                     </div>
                   </div>
