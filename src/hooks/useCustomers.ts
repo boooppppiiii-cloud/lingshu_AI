@@ -3,15 +3,25 @@ import { authHeader } from '../lib/auth';
 import { createMockCustomers } from '../mocks/customerProfiles';
 import type { CustomerProfile, TimelineEvent } from '../types/customer';
 
-const MOCK_STORAGE_KEY = 'lingshu:mock-customer-conversations:v2';
+const LEGACY_MOCK_STORAGE_KEY = 'lingshu:mock-customer-conversations:v2';
 
-function storedMockCustomers(): CustomerProfile[] {
+function mockStorageKey(scope: string): string {
+  return `${LEGACY_MOCK_STORAGE_KEY}:${scope || 'admin'}`;
+}
+
+function storedMockCustomers(storageKey: string): CustomerProfile[] {
   try {
-    const parsed = JSON.parse(localStorage.getItem(MOCK_STORAGE_KEY) || '[]');
+    const scopedValue = localStorage.getItem(storageKey);
+    const legacyValue = localStorage.getItem(LEGACY_MOCK_STORAGE_KEY);
+    const parsed = JSON.parse(scopedValue || legacyValue || '[]');
+    if (!scopedValue && legacyValue) {
+      localStorage.setItem(storageKey, legacyValue);
+      localStorage.removeItem(LEGACY_MOCK_STORAGE_KEY);
+    }
     if (!Array.isArray(parsed) || !parsed.length) return createMockCustomers();
     const stored = parsed.map(cloneCustomer);
     if (stored.some(customer => /LED pendant lights|吊灯/i.test(`${customer.product} ${customer.outboundProduct} ${customer.timeline.map(item => item.body).join(' ')}`))) {
-      localStorage.removeItem(MOCK_STORAGE_KEY);
+      localStorage.removeItem(storageKey);
       return createMockCustomers();
     }
     return stored;
@@ -20,8 +30,9 @@ function storedMockCustomers(): CustomerProfile[] {
   }
 }
 
-function persistMockCustomers(customers: CustomerProfile[]) {
-  try { localStorage.setItem(MOCK_STORAGE_KEY, JSON.stringify(customers.filter(customer => customer.isMock))); } catch { /* ignore storage quota */ }
+function persistMockCustomers(customers: CustomerProfile[], storageKey: string | null) {
+  if (!storageKey) return;
+  try { localStorage.setItem(storageKey, JSON.stringify(customers.filter(customer => customer.isMock))); } catch { /* ignore storage quota */ }
 }
 
 function cloneCustomer(customer: CustomerProfile): CustomerProfile {
@@ -37,7 +48,7 @@ function cloneCustomer(customer: CustomerProfile): CustomerProfile {
   };
 }
 
-export function useCustomers(refreshKey = 0, includeMockCustomers = false): {
+export function useCustomers(refreshKey = 0, includeMockCustomers = false, mockCustomerScope = 'admin'): {
   customers: CustomerProfile[];
   updateCustomer: (id: string, patch: Partial<CustomerProfile>) => void;
   appendTimelineEvent: (id: string, event: TimelineEvent) => void;
@@ -47,8 +58,13 @@ export function useCustomers(refreshKey = 0, includeMockCustomers = false): {
 } {
   const [customers, setCustomers] = useState<CustomerProfile[]>([]);
   const [loading, setLoading] = useState(false);
+  const scopedMockStorageKey = includeMockCustomers ? mockStorageKey(mockCustomerScope) : null;
 
   useEffect(() => {
+    if (!includeMockCustomers) {
+      setCustomers(current => current.filter(customer => !customer.isMock));
+      try { localStorage.removeItem(LEGACY_MOCK_STORAGE_KEY); } catch { /* ignore unavailable storage */ }
+    }
     let alive = true;
     let timer: number | undefined;
     const loadLiveCustomers = async () => {
@@ -59,7 +75,7 @@ export function useCustomers(refreshKey = 0, includeMockCustomers = false): {
       setCustomers(current => {
         if (!includeMockCustomers) return liveCustomers;
         const existingMocks = current.filter(customer => customer.isMock).map(cloneCustomer);
-        return [...liveCustomers, ...(existingMocks.length ? existingMocks : storedMockCustomers())];
+        return [...liveCustomers, ...(existingMocks.length ? existingMocks : storedMockCustomers(scopedMockStorageKey!))];
       });
     };
     const load = async () => {
@@ -73,7 +89,7 @@ export function useCustomers(refreshKey = 0, includeMockCustomers = false): {
         if (alive) setCustomers(current => {
           if (!includeMockCustomers) return [];
           const existingMocks = current.filter(customer => customer.isMock).map(cloneCustomer);
-          return existingMocks.length ? existingMocks : storedMockCustomers();
+          return existingMocks.length ? existingMocks : storedMockCustomers(scopedMockStorageKey!);
         });
       } finally {
         if (alive) setLoading(false);
@@ -84,15 +100,15 @@ export function useCustomers(refreshKey = 0, includeMockCustomers = false): {
       alive = false;
       if (timer) window.clearInterval(timer);
     };
-  }, [refreshKey, includeMockCustomers]);
+  }, [refreshKey, includeMockCustomers, scopedMockStorageKey]);
 
   const updateCustomer = useCallback((id: string, patch: Partial<CustomerProfile>) => {
     setCustomers(list => {
       const next = list.map(customer => customer.id === id ? { ...customer, ...patch } : customer);
-      persistMockCustomers(next);
+      persistMockCustomers(next, scopedMockStorageKey);
       return next;
     });
-  }, []);
+  }, [scopedMockStorageKey]);
 
   const appendTimelineEvent = useCallback((id: string, event: TimelineEvent) => {
     setCustomers(list => {
@@ -100,10 +116,10 @@ export function useCustomers(refreshKey = 0, includeMockCustomers = false): {
         ? { ...customer, timeline: [...customer.timeline, event], todoCompletedAt: event.actor === 'buyer' ? undefined : customer.todoCompletedAt }
         : customer
       );
-      persistMockCustomers(next);
+      persistMockCustomers(next, scopedMockStorageKey);
       return next;
     });
-  }, []);
+  }, [scopedMockStorageKey]);
 
   const updateTimelineEvent = useCallback((customerId: string, eventId: string, patch: Partial<TimelineEvent>) => {
     setCustomers(list => {
@@ -111,10 +127,10 @@ export function useCustomers(refreshKey = 0, includeMockCustomers = false): {
         ? { ...customer, timeline: customer.timeline.map(event => event.id === eventId ? { ...event, ...patch } : event) }
         : customer
       );
-      persistMockCustomers(next);
+      persistMockCustomers(next, scopedMockStorageKey);
       return next;
     });
-  }, []);
+  }, [scopedMockStorageKey]);
 
   const removeTimelineEvent = useCallback((customerId: string, eventId: string) => {
     setCustomers(list => {
@@ -122,10 +138,10 @@ export function useCustomers(refreshKey = 0, includeMockCustomers = false): {
         ? { ...customer, timeline: customer.timeline.filter(event => event.id !== eventId) }
         : customer
       );
-      persistMockCustomers(next);
+      persistMockCustomers(next, scopedMockStorageKey);
       return next;
     });
-  }, []);
+  }, [scopedMockStorageKey]);
 
   return {
     customers,

@@ -66,6 +66,10 @@ const isAdminSession = (session: AuthSession | null) => Boolean(session && !sess
   session.tenant?.subscriptionPlan === 'admin' ||
   session.subscription?.plan === 'admin'
 ));
+const isLocalCustomerReplyLab = () => (
+  (window.location.hostname === '127.0.0.1' || window.location.hostname === 'localhost') &&
+  window.location.pathname.replace(/\/+$/, '') === '/customer-reply-lab'
+);
 const firstUserText = (msgs?: Message[]) => (msgs?.find(m => m.role === 'user')?.content ?? '新会话').slice(0, 24);
 const customerUnifiedAgent = (agent: AgentType): AgentType => (agent === 'retention' ? 'conversion' : agent);
 const loadConvs = (): Conversation[] => {
@@ -465,6 +469,8 @@ export default function App() {
               onAction={startAgentTask}
               onSessionRefresh={() => void refreshSession()}
               isDemo={Boolean(session.demo?.enabled)}
+              includeMockCustomers={isAdminSession(session) || isLocalCustomerReplyLab()}
+              mockCustomerScope={session.user.id || session.tenant?.id || 'admin'}
             />
           )}
           {page === 'orders' && <OrderManagementPage />}

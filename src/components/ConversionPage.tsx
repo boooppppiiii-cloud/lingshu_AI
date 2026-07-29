@@ -103,6 +103,8 @@ interface Props {
   onAction?: AgentAction;
   onSessionRefresh?: () => void;
   isDemo?: boolean;
+  includeMockCustomers?: boolean;
+  mockCustomerScope?: string;
 }
 
 const VIEW_META: Record<CustomerView, { label: string; desc: string }> = {
@@ -1504,9 +1506,9 @@ async function sendCustomerOutbox(customer: CustomerProfile, body: string, outsi
   return data as { status?: 'queued' | 'sent' | 'delivered'; outboxId?: string };
 }
 
-export default function ConversionPage({ onLeaveConversation: _onLeaveConversation, isDemo = false }: Props) {
+export default function ConversionPage({ onLeaveConversation: _onLeaveConversation, isDemo = false, includeMockCustomers = false, mockCustomerScope = 'admin' }: Props) {
   const [view, setView] = useState<CustomerView>('inbox');
-  const { customers, updateCustomer, appendTimelineEvent, updateTimelineEvent, removeTimelineEvent } = useCustomers(0, true);
+  const { customers, updateCustomer, appendTimelineEvent, updateTimelineEvent, removeTimelineEvent } = useCustomers(0, includeMockCustomers, mockCustomerScope);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [autonomyLevel, setAutonomyLevel] = useState<AutonomyLevel>('draft');
   const [dailyBriefingOpen, setDailyBriefingOpen] = useState(false);
