@@ -3931,7 +3931,9 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
               '',
             ), 45_000, '后端模型生成超过 45 秒。');
             nextScript = sanitizeStoryboardScript(response.script || '', activeProductInfo, activeProductLabel).trim();
-            if (!nextScript || response.source === 'local') throw new Error('后端脚本生成接口未返回结果。');
+            if (!nextScript || response.source === 'local') throw new Error(response.error
+              ? `脚本服务连接失败：${response.error}`
+              : '后端脚本生成接口未返回结果。');
             if (response.source === 'fallback') {
               usedLocalFallback = true;
               generatedByFallback = true;
@@ -4030,7 +4032,9 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
             { signal: controller.signal },
           );
           nextScript = sanitizeStoryboardScript(response.script || '', product, activeProductLabel).trim();
-          if (!nextScript || response.source === 'local') throw new Error('后端脚本生成接口未返回结果。');
+          if (!nextScript || response.source === 'local') throw new Error(response.error
+            ? `脚本服务连接失败：${response.error}`
+            : '后端脚本生成接口未返回结果。');
           if (response.source === 'fallback') {
             generatedByFallback = true;
             usedLocalFallback = true;
@@ -4191,7 +4195,9 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
             localFallbackReason = '后端返回脚本未满足标准分镜字段或与已有脚本重复，已自动生成差异化标准分镜稿';
           }
           if (!generatedScript || response.source === 'local') {
-            throw new Error(response.source === 'local' ? '后端脚本生成接口未返回结果。' : '模型没有返回可用脚本。');
+            throw new Error(response.source === 'local'
+              ? response.error ? `脚本服务连接失败：${response.error}` : '后端脚本生成接口未返回结果。'
+              : '模型没有返回可用脚本。');
           }
         } catch (err: any) {
           const message = String(err?.message || '');

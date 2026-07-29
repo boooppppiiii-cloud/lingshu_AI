@@ -2,24 +2,44 @@
 import { authHeader } from './auth';
 
 async function post<T>(path: string, body: unknown, fallback: T, signal?: AbortSignal): Promise<T & { source?: string }> {
-  try {
-    const r = await fetch(`/api/overseas/studio/${path}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...authHeader() },
-      body: JSON.stringify(body),
-      signal,
-    });
-    if (r.status === 402 || r.status === 429) {
-      const j = await r.json().catch(() => ({}));
-      throw new Error(formatDemoQuotaError(j));
+  const maxAttempts = path === 'script' ? 4 : 1;
+  let lastError = 'request_failed';
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      const r = await fetch(`/api/overseas/studio/${path}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeader() },
+        body: JSON.stringify(body),
+        signal,
+      });
+      if (r.status === 402 || r.status === 429) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(formatDemoQuotaError(j));
+      }
+      if (!r.ok) {
+        const payload = await r.json().catch(() => ({})) as { error?: string };
+        const message = payload.error || `HTTP ${r.status}`;
+        if ([502, 503, 504].includes(r.status) && attempt < maxAttempts) {
+          await new Promise(resolve => window.setTimeout(resolve, [0, 2000, 5000, 10000][attempt] || 10000));
+          continue;
+        }
+        throw new Error(message);
+      }
+      return (await r.json()) as T & { source?: string };
+    } catch (err: any) {
+      const message = String(err?.message || '');
+      if (message.includes('Demo') || message.includes('试用') || message.includes('额度') || message.includes('到期')) throw err;
+      if (signal?.aborted) throw err;
+      lastError = message || 'request_failed';
+      const transientNetworkError = /fetch|network|failed|load|eof|502|503|504/i.test(lastError);
+      if (path === 'script' && transientNetworkError && attempt < maxAttempts) {
+        await new Promise(resolve => window.setTimeout(resolve, [0, 2000, 5000, 10000][attempt] || 10000));
+        continue;
+      }
+      break;
     }
-    if (!r.ok) throw new Error(String(r.status));
-    return (await r.json()) as T & { source?: string };
-  } catch (err: any) {
-    const message = String(err?.message || '');
-    if (message.includes('Demo') || message.includes('试用') || message.includes('额度') || message.includes('到期')) throw err;
-    return { ...fallback, source: 'local', error: message || 'request_failed' };
   }
+  return { ...fallback, source: 'local', error: lastError };
 }
 
 function formatDemoQuotaError(j: any): string {
@@ -409,7 +429,7 @@ export const studioApi = {
     existingScripts?: string[];
     variantSeed?: number;
   }, fb: string, options?: { signal?: AbortSignal }) =>
-    post<{ script: string; source?: 'ai' | 'fallback' | 'local'; fallbackReason?: string; validationIssues?: string[] }>('script', b, { script: fb }, options?.signal),
+    post<{ script: string; source?: 'ai' | 'fallback' | 'local'; fallbackReason?: string; validationIssues?: string[]; error?: string }>('script', b, { script: fb }, options?.signal),
 
   covers: (b: { script?: string; productInfo?: string; language: string; provider?: 'gemini' | 'qwen'; tone?: string }, fb: string[]) =>
     post<{ covers: string[] }>('covers', b, { covers: fb }),
