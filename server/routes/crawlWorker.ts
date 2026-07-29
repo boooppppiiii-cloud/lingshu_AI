@@ -173,6 +173,7 @@ async function runCloudFallbackJob(job: CrawlJob): Promise<void> {
       finishedAt,
       leasedUntil: '',
     });
+    await notifyScheduler(job.requestedBy);
   } catch (error) {
     const finishedAt = nowIso();
     await store.update(COL, job.id, {
@@ -184,6 +185,17 @@ async function runCloudFallbackJob(job: CrawlJob): Promise<void> {
       finishedAt,
       leasedUntil: '',
     });
+    await notifyScheduler(job.requestedBy);
+  }
+}
+
+async function notifyScheduler(requestedBy: string): Promise<void> {
+  if (!requestedBy.startsWith('scheduler:')) return;
+  try {
+    const { reconcileScheduledCrawlBatch } = await import('./scheduler.js');
+    await reconcileScheduledCrawlBatch(requestedBy);
+  } catch (error) {
+    console.warn('[crawl-worker] scheduler result update failed:', error instanceof Error ? error.message : error);
   }
 }
 
@@ -310,6 +322,7 @@ crawlWorkerRouter.get('/next', async (req, res) => {
     leasedUntil,
     error: '',
   });
+  await notifyScheduler(job.requestedBy);
   res.json({
     job: publicJob({
       ...job,
@@ -352,5 +365,6 @@ crawlWorkerRouter.post('/jobs/:id/complete', async (req, res) => {
     finishedAt,
     leasedUntil: '',
   });
+  await notifyScheduler(job.requestedBy);
   res.json({ ok: true, status: ok ? 'done' : 'failed' });
 });

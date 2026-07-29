@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Activity, BarChart3, ChevronDown, Clock, Download, DownloadCloud, Plus, X, Trash2, CheckCircle, Loader } from 'lucide-react';
+import { Activity, AlertTriangle, BarChart3, ChevronDown, Clock, Download, DownloadCloud, Play, Plus, X, Trash2, CheckCircle, Loader } from 'lucide-react';
 import type { AgentAction, AgentType } from '../App';
 import { completeDemoStep, readDemoProgress } from '../lib/demoProgress';
 import { authHeader } from '../lib/auth';
 import { SocialPlatformIcon } from './SocialPlatformIcon';
+import { normalizeKeywordInput, type KeywordPlatform } from '../lib/keywordInput';
 
 interface ScheduledTask {
   id: string;
@@ -205,6 +206,9 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
   const [scheduleDays, setScheduleDays] = useState<string[]>([]);
   const [customName, setCustomName] = useState('');
   const [taskKeywords, setTaskKeywords] = useState('foundation');
+  const [confirmedKeywordSignature, setConfirmedKeywordSignature] = useState('');
+  const [runAfterCreate, setRunAfterCreate] = useState(true);
+  const [createError, setCreateError] = useState('');
   const [creatingTasks, setCreatingTasks] = useState(false);
   const runResult: Record<string, string> = {};
   const [expandedId, setExpandedId] = useState<string | null>(null);
@@ -216,10 +220,20 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
   const [videoStats, setVideoStats] = useState<VideoStatsPayload | null>(null);
   const didAutoOpenDemoTask = useRef(false);
 
+  const closeResultPanel = () => {
+    // 用户主动关闭后，本次页面生命周期内不再由演示引导自动拉起任务侧栏。
+    didAutoOpenDemoTask.current = true;
+    setResultTaskId(null);
+    setWorkspaceMessage('');
+  };
+
   useEffect(() => {
     void fetchTasks();
     void fetchVideoStats();
-    const timer = window.setInterval(() => { void fetchVideoStats(); }, 5000);
+    const timer = window.setInterval(() => {
+      void fetchTasks(false);
+      void fetchVideoStats();
+    }, 5000);
     return () => window.clearInterval(timer);
   }, []);
 
@@ -231,8 +245,17 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
     setResultTaskId(tasks[0].id);
   }, [resultTaskId, tasks]);
 
-  async function fetchTasks() {
-    setLoading(true);
+  useEffect(() => {
+    if (!resultTaskId) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') closeResultPanel();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [resultTaskId]);
+
+  async function fetchTasks(showLoading = true) {
+    if (showLoading) setLoading(true);
     try {
       const r = await fetch('/api/overseas/scheduler', { headers: authHeader() });
       if (!r.ok) {
@@ -240,7 +263,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
         return;
       }
       setTasks(await r.json());
-    } finally { setLoading(false); }
+    } finally { if (showLoading) setLoading(false); }
   }
 
   async function fetchVideoStats() {
@@ -256,34 +279,63 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
   async function createTask() {
     const selectedTemplates = TASK_TEMPLATES.filter(template => selectedTemplateIds.includes(template.templateId));
     if (!selectedTemplates.length || creatingTasks) return;
+    const keywordTemplates = selectedTemplates.filter(template => ['video_keyword_crawl', 'image_post_crawl'].includes(template.taskType));
+    const reviews = keywordTemplates.map(template => {
+      const platform = String(('config' in template ? template.config?.platforms : '') || 'youtube') as KeywordPlatform;
+      return { template, platform, review: normalizeKeywordInput(taskKeywords, platform) };
+    });
+    const signature = reviews.map(({ platform, review }) => `${platform}:${review.serialized}`).join('|');
+    if (reviews.some(({ review }) => review.items.length === 0) || (reviews.length > 0 && confirmedKeywordSignature !== signature)) {
+      setCreateError('请先确认自动清洗后的关键词，再创建任务。');
+      return;
+    }
     const [hour = '8', minute = '0'] = scheduleTime.split(':');
     const cronExpr = `${Number(minute) || 0} ${Number(hour) || 0} * * ${scheduleDays.length ? scheduleDays.join(',') : '*'}`;
     setCreatingTasks(true);
+    setCreateError('');
     try {
+      const created: ScheduledTask[] = [];
       for (const template of selectedTemplates) {
         const templateConfig = normalizedTemplateConfig(template);
-        await createTaskFromTemplate(
+        const platform = String(templateConfig.platforms || 'youtube') as KeywordPlatform;
+        const cleanedKeywords = normalizeKeywordInput(taskKeywords, platform).serialized;
+        const saved = await createTaskFromTemplate(
           template,
           selectedTemplates.length === 1 ? customName : '',
           cronExpr,
           scheduleLabel(scheduleTime, scheduleDays),
           false,
           ['video_keyword_crawl', 'image_post_crawl'].includes(template.taskType)
-            ? { ...templateConfig, keywords: taskKeywords.trim() || 'foundation' }
+            ? { ...templateConfig, keywords: cleanedKeywords }
             : templateConfig,
         );
+        created.push(saved);
+      }
+      if (runAfterCreate) {
+        const crawlerTasks = created.filter(task => ['video_keyword_crawl', 'image_post_crawl', 'competitor_account_crawl'].includes(task.taskType));
+        const results = await Promise.all(crawlerTasks.map(async task => {
+          const response = await fetch(`/api/overseas/scheduler/${task.id}/run`, { method: 'POST', headers: authHeader() });
+          if (!response.ok) throw new Error(`${task.name} 启动失败`);
+          return response.json();
+        }));
+        if (results.length) setWorkspaceMessage(`已创建 ${created.length} 个任务，并启动 ${results.length} 个爬虫任务。`);
       }
       await fetchTasks();
+      await fetchVideoStats();
       setShowAdd(false);
       setSelectedTemplateIds([]);
       setCustomName('');
+      setConfirmedKeywordSignature('');
       setScheduleOpen(false);
+      if (created.length) setResultTaskId(created[created.length - 1].id);
+    } catch (error) {
+      setCreateError(error instanceof Error ? error.message : '任务创建或执行失败，请重试。');
     } finally {
       setCreatingTasks(false);
     }
   }
 
-  async function createTaskFromTemplate(template: TaskTemplate, name = '', cronExpr = '', customLabel = '', refresh = true, config: Record<string, string> = normalizedTemplateConfig(template)) {
+  async function createTaskFromTemplate(template: TaskTemplate, name = '', cronExpr = '', customLabel = '', refresh = true, config: Record<string, string> = normalizedTemplateConfig(template)): Promise<ScheduledTask> {
     const resolvedCronExpr = cronExpr || template.cronExpr;
     const body = {
       ...template,
@@ -298,8 +350,10 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
       body: JSON.stringify(body),
     });
     if (!response.ok) throw new Error('定时任务创建失败');
+    const saved = await response.json() as ScheduledTask;
     completeDemoStep('scheduler');
     if (refresh) await fetchTasks();
+    return saved;
   }
 
   async function toggleTask(id: string) {
@@ -351,6 +405,8 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
     setSelectedTemplateIds([]);
     setCustomName('');
     setTaskKeywords('foundation');
+    setConfirmedKeywordSignature('');
+    setCreateError('');
     setScheduleOpen(false);
     setResultTaskId(null);
     setWorkspaceMessage('');
@@ -361,6 +417,8 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
     setSelectedTemplateIds([]);
     setCustomName('');
     setTaskKeywords('foundation');
+    setConfirmedKeywordSignature('');
+    setCreateError('');
     setScheduleOpen(false);
   }
 
@@ -369,6 +427,12 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
   const visibleTemplates = TASK_TEMPLATES.filter(t => taskAgentGroup(t.taskType) === activeGroup);
   const selectedTemplates = TASK_TEMPLATES.filter(template => selectedTemplateIds.includes(template.templateId));
   const selectedTemplate = selectedTemplates[0] ?? null;
+  const keywordTemplates = selectedTemplates.filter(template => ['video_keyword_crawl', 'image_post_crawl'].includes(template.taskType));
+  const keywordReviews = [...new Set(keywordTemplates.map(template => String(('config' in template ? template.config?.platforms : '') || 'youtube') as KeywordPlatform))]
+    .map(platform => ({ platform, review: normalizeKeywordInput(taskKeywords, platform) }));
+  const keywordSignature = keywordReviews.map(({ platform, review }) => `${platform}:${review.serialized}`).join('|');
+  const keywordReviewReady = keywordReviews.length === 0 || keywordReviews.every(({ review }) => review.items.length > 0);
+  const keywordReviewConfirmed = keywordReviews.length === 0 || (keywordReviewReady && confirmedKeywordSignature === keywordSignature);
   const groupedTemplates = TEMPLATE_GROUPS
     .map(group => ({ ...group, templates: visibleTemplates.filter(template => (group.taskTypes as readonly string[]).includes(template.taskType)) }))
     .filter(group => group.templates.length > 0);
@@ -1024,6 +1088,8 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
                         setScheduleTime(schedule.time);
                         setScheduleDays(schedule.days);
                         if (tmpl.config && 'keywords' in tmpl.config) setTaskKeywords(String(tmpl.config.keywords || 'foundation'));
+                        setConfirmedKeywordSignature('');
+                        setCreateError('');
                         setScheduleOpen(false);
                       }
                       if (selected && selectedTemplateIds.length === 1) setCustomName('');
@@ -1066,13 +1132,62 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
                   {selectedTemplates.some(template => ['video_keyword_crawl', 'image_post_crawl'].includes(template.taskType)) && (
                     <div className="mb-4">
                       <label className="block text-xs font-medium text-gray-700 mb-1.5">采集关键词</label>
-                      <input
+                      <textarea
                         value={taskKeywords}
-                        onChange={event => setTaskKeywords(event.target.value)}
-                        placeholder="例如：foundation"
-                        className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm focus:outline-none focus:border-green-400"
+                        onChange={event => {
+                          setTaskKeywords(event.target.value);
+                          setConfirmedKeywordSignature('');
+                          setCreateError('');
+                        }}
+                        placeholder={'可粘贴脏格式，例如：\n##foundation，Bahja Care عناية بهجة'}
+                        rows={3}
+                        className="w-full px-3 py-2.5 border border-gray-200 rounded-xl text-sm leading-5 resize-none focus:outline-none focus:border-green-400"
                       />
-                      <p className="text-[10px] text-gray-400 mt-1.5">多个关键词可用逗号分隔；将应用到本批次的关键词采集任务</p>
+                      <p className="text-[10px] text-gray-400 mt-1.5">支持逗号、空格、换行、全角符号、标签链接及混合语种，系统会先清洗再提交。</p>
+
+                      <div className={`mt-3 rounded-xl border p-3 ${keywordReviewReady ? 'border-green-100 bg-green-50/70' : 'border-amber-200 bg-amber-50'}`}>
+                        <div className="flex items-start justify-between gap-3">
+                          <div>
+                            <p className="text-xs font-semibold text-gray-800">自动清洗结果</p>
+                            <p className="text-[10px] text-gray-500 mt-0.5">请确认以下内容，确认后才会创建并执行任务。</p>
+                          </div>
+                          {keywordReviewConfirmed && <span className="flex items-center gap-1 text-[10px] font-medium text-green-700"><CheckCircle size={13} /> 已确认</span>}
+                        </div>
+                        <div className="mt-2.5 space-y-2.5">
+                          {keywordReviews.map(({ platform, review }) => (
+                            <div key={platform}>
+                              <div className="flex items-center gap-1.5 mb-1.5">
+                                <SocialPlatformIcon platform={platform} size={13} />
+                                <span className="text-[10px] font-medium text-gray-600 capitalize">{platform}</span>
+                              </div>
+                              {review.items.length > 0 ? (
+                                <div className="flex flex-wrap gap-1.5">
+                                  {review.items.map(item => <span key={item} className="max-w-full break-all px-2 py-1 rounded-full bg-white border border-green-200 text-[11px] text-green-800">{item}</span>)}
+                                </div>
+                              ) : (
+                                <p className="flex items-center gap-1 text-[11px] text-amber-700"><AlertTriangle size={13} /> 没有识别到可用关键词，请修改输入。</p>
+                              )}
+                              {[...review.changes, ...review.warnings].length > 0 && (
+                                <ul className="mt-2 space-y-0.5 text-[10px] text-gray-500">
+                                  {[...review.changes, ...review.warnings].map(message => <li key={message}>· {message}</li>)}
+                                </ul>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!keywordReviewReady) return;
+                            setConfirmedKeywordSignature(keywordSignature);
+                            setCreateError('');
+                          }}
+                          disabled={!keywordReviewReady || keywordReviewConfirmed}
+                          className="mt-3 w-full py-2 rounded-lg border border-green-300 bg-white text-xs font-medium text-green-700 disabled:opacity-50"
+                        >
+                          {keywordReviewConfirmed ? '已确认清洗结果' : `确认使用以上 ${keywordReviews.reduce((sum, item) => sum + item.review.items.length, 0)} 个关键词`}
+                        </button>
+                      </div>
                     </div>
                   )}
                   <div className="mb-5">
@@ -1139,20 +1254,43 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
                       </AnimatePresence>
                     </div>
                   </div>
+                  {selectedTemplates.some(template => ['video_keyword_crawl', 'image_post_crawl', 'competitor_account_crawl'].includes(template.taskType)) && (
+                    <button
+                      type="button"
+                      onClick={() => setRunAfterCreate(value => !value)}
+                      className={`mb-4 w-full rounded-xl border px-3.5 py-3 flex items-center justify-between text-left transition-colors ${runAfterCreate ? 'border-green-200 bg-green-50' : 'border-gray-200 bg-white'}`}
+                    >
+                      <span className="flex items-center gap-2.5">
+                        <span className={`w-7 h-7 rounded-lg flex items-center justify-center ${runAfterCreate ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-400'}`}><Play size={14} /></span>
+                        <span>
+                          <span className="block text-xs font-medium text-gray-800">创建后立即执行一次</span>
+                          <span className="block text-[10px] text-gray-500 mt-0.5">确认参数没有问题后，直接启动爬虫并返回本次结果</span>
+                        </span>
+                      </span>
+                      <span className={`w-9 h-5 rounded-full p-0.5 transition-colors ${runAfterCreate ? 'bg-green-600' : 'bg-gray-300'}`}><span className={`block w-4 h-4 rounded-full bg-white transition-transform ${runAfterCreate ? 'translate-x-4' : ''}`} /></span>
+                    </button>
+                  )}
                 </>
               )}
 
+              {createError && <p className="mb-3 flex items-start gap-1.5 text-xs text-red-600"><AlertTriangle size={14} className="mt-0.5 flex-shrink-0" />{createError}</p>}
               <div className="flex gap-3">
                 <button type="button" onClick={closeAddModal} className="flex-1 py-2.5 border border-gray-200 rounded-xl text-sm text-gray-600">取消</button>
                 <button
                   type="button"
                   data-demo-target={showAdd && selectedTemplates.length > 0 ? 'scheduled_run' : undefined}
                   onClick={createTask}
-                  disabled={selectedTemplates.length === 0 || creatingTasks}
+                  disabled={selectedTemplates.length === 0 || creatingTasks || !keywordReviewConfirmed}
                   className="flex-1 py-2.5 rounded-xl text-sm text-white font-medium disabled:opacity-40"
                   style={{ background: '#16a34a' }}
                 >
-                  {creatingTasks ? '正在创建…' : selectedTemplates.length > 1 ? `创建 ${selectedTemplates.length} 个任务` : '创建任务'}
+                  {creatingTasks
+                    ? (runAfterCreate ? '正在创建并执行…' : '正在创建…')
+                    : selectedTemplates.length > 1
+                      ? `${runAfterCreate ? '创建并执行' : '创建'} ${selectedTemplates.length} 个任务`
+                      : runAfterCreate && ['video_keyword_crawl', 'image_post_crawl', 'competitor_account_crawl'].includes(selectedTemplate?.taskType || '')
+                        ? '创建并执行任务'
+                        : '创建任务'}
                 </button>
               </div>
             </motion.div>
@@ -1163,7 +1301,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
             <motion.div
               initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
               className="fixed inset-0 bg-black/20 z-40"
-              onClick={() => setResultTaskId(null)}
+              onClick={closeResultPanel}
             />
             <motion.div
               initial={{ x: '100%' }} animate={{ x: 0 }} exit={{ x: '100%' }}
@@ -1195,7 +1333,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
                   {exportingId === resultTask.id ? <Loader size={12} className="animate-spin" /> : <Download size={12} />}
                   导出 PDF
                 </button>
-                <button type="button" onClick={() => setResultTaskId(null)} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600">
+                <button type="button" aria-label="关闭任务详情" onClick={closeResultPanel} className="p-1.5 rounded-lg hover:bg-gray-100 text-gray-400 hover:text-gray-600">
                   <X size={16} />
                 </button>
               </div>
@@ -1283,7 +1421,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
               </div>
 
               <div className="border-t border-gray-100 p-4 flex justify-end">
-                <button type="button" onClick={() => setResultTaskId(null)} className="px-4 py-2.5 border border-gray-200 rounded-xl text-xs text-gray-600 hover:bg-gray-50">
+                <button type="button" onClick={closeResultPanel} className="px-4 py-2.5 border border-gray-200 rounded-xl text-xs text-gray-600 hover:bg-gray-50">
                   关闭
                 </button>
               </div>

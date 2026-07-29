@@ -4,6 +4,7 @@ import os from 'os';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import { spawn } from 'child_process';
+import { randomUUID } from 'node:crypto';
 import cron, { type ScheduledTask as CronJob } from 'node-cron';
 import { callLLMChatStream } from '../agents/llm.js';
 import { buildEnterpriseContext, readTenantEnterpriseProfile } from './enterprise.js';
@@ -12,6 +13,7 @@ import { crawlImagePostsForTenant, crawlVideosForTenant, getVideoPipelineStats }
 import { createCrawlWorkerJob } from './crawlWorker.js';
 import type { Platform } from '../types/index.js';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
+import { normalizeKeywordInput, type KeywordPlatform } from '../../src/lib/keywordInput.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const DATA = path.join(__dirname, '../../data/tasks.json');
@@ -601,20 +603,26 @@ function resolveCrawlerPlatform(raw: unknown, fallback = 'youtube'): string {
 
 function normalizeCrawlerConfig(config: Record<string, string>, fallbackPlatform = 'youtube'): Record<string, string> {
   const platform = resolveCrawlerPlatform(config.platforms, fallbackPlatform);
-  const keywords = String(config.keywords || config.keyword || 'skincare').trim() || 'skincare';
+  const rawKeywords = String(config.keywords || config.keyword || 'skincare').trim() || 'skincare';
+  const normalized = normalizeKeywordInput(rawKeywords, platform as KeywordPlatform);
   return {
     ...config,
     platforms: platform,
-    keywords,
+    keywords: normalized.serialized || 'skincare',
     limit: normalizeCrawlerLimit(config.limit),
   };
+}
+
+function normalizedKeywordList(value: string | undefined, platform: Platform, fallback = ['skincare']): string[] {
+  const normalized = normalizeKeywordInput(String(value || ''), platform as KeywordPlatform);
+  return normalized.items.length > 0 ? normalized.items : fallback;
 }
 
 async function executeVideoKeywordCrawl(task: ScheduledTask): Promise<string> {
   const tenantId = await resolveSchedulerTenantId(task);
   const platforms = splitConfigList(task.config.platforms, ['youtube'])
     .filter((platform): platform is Platform => ['youtube', 'tiktok', 'facebook', 'instagram'].includes(platform));
-  const keywords = splitConfigList(task.config.keywords || task.config.keyword, ['skincare']);
+  const displayedKeywords = new Set<string>();
   const limit = Math.max(1, Math.min(10, Number(task.config.limit || 5) || 5));
   const { dateFrom, dateTo } = beijingDateRange(task.config.dateWindowDays);
   const lines: string[] = [];
@@ -623,21 +631,25 @@ async function executeVideoKeywordCrawl(task: ScheduledTask): Promise<string> {
   let existing = 0;
   let succeeded = 0;
   let failed = 0;
+  let queued = 0;
+  const workerBatch = `scheduler:${task.id}:run:${randomUUID()}`;
 
-  for (const keyword of keywords) {
-    for (const platform of platforms) {
+  for (const platform of platforms) {
+    const keywords = normalizedKeywordList(task.config.keywords || task.config.keyword, platform);
+    for (const keyword of keywords) {
+      displayedKeywords.add(keyword);
       try {
         if (platform === 'youtube' && task.config.localWorker !== '0') {
           const job = await createCrawlWorkerJob({
             tenantId,
-            requestedBy: `scheduler:${task.id}`,
+            requestedBy: workerBatch,
             platform,
             mode: 'keyword',
             keyword,
             limit,
           });
           if (!job) throw new Error('Mac 本地采集任务创建失败');
-          succeeded += 1;
+          queued += 1;
           lines.push(`${platform} / ${keyword}: 已提交 Mac 登录态采集队列（1 个任务）`);
           continue;
         }
@@ -667,18 +679,19 @@ async function executeVideoKeywordCrawl(task: ScheduledTask): Promise<string> {
 
   return [
     `【视频关键词自动采集】${dateFrom} 至 ${dateTo}`,
-    `执行状态：${succeeded > 0 ? '执行成功' : '执行失败'}${failed > 0 ? `（成功 ${succeeded} 组，失败 ${failed} 组）` : ''}`,
-    `本次结论：${succeeded === 0 ? '采集请求均未完成，请根据分组错误处理后重试' : returned + imported + existing > 0 ? '已完成检索并取得可入库或待处理内容' : '已完成检索，本次时间窗口内暂无符合条件的新内容'}`,
-    `平台：${platforms.join(', ')}；关键词：${keywords.join('、')}；每组数量：${limit}`,
+    `执行状态：${queued > 0 ? `已排队（${queued} 组等待 Worker）` : succeeded > 0 ? '执行成功' : '执行失败'}${failed > 0 ? `（另有 ${failed} 组提交失败）` : ''}`,
+    `本次结论：${queued > 0 ? '采集请求已进入队列，Worker 领取后将显示处理中，完成后自动回写最终结果' : succeeded === 0 ? '采集请求均未完成，请根据分组错误处理后重试' : returned + imported + existing > 0 ? '已完成检索并取得可入库或待处理内容' : '已完成检索，本次时间窗口内暂无符合条件的新内容'}`,
+    `平台：${platforms.join(', ')}；关键词：${[...displayedKeywords].join('、')}；每组数量：${limit}`,
     `汇总：当前可见 ${returned} 条，新增候选 ${imported} 条，库内已有 ${existing} 条`,
     ...lines,
+    ...(queued > 0 ? [`队列批次：${workerBatch}`] : []),
   ].join('\n');
 }
 
 async function executeImagePostCrawl(task: ScheduledTask): Promise<string> {
   const tenantId = await resolveSchedulerTenantId(task);
   const platform = resolveCrawlerPlatform(task.config.platforms, 'instagram') as Platform;
-  const keywords = splitConfigList(task.config.keywords || task.config.keyword, ['skincare']);
+  const keywords = normalizedKeywordList(task.config.keywords || task.config.keyword, platform);
   const limit = Math.max(1, Math.min(10, Number(task.config.limit || 5) || 5));
   const lines: string[] = [];
   let imported = 0;
@@ -718,6 +731,8 @@ async function executeCompetitorAccountCrawl(task: ScheduledTask): Promise<strin
   let imported = 0;
   let succeeded = 0;
   let failed = 0;
+  let queued = 0;
+  const workerBatch = `scheduler:${task.id}:run:${randomUUID()}`;
   for (const account of accounts.items) {
     const accountUrl = String(account.accountUrl || '');
     const accountName = String(account.accountName || account.handle || accountUrl);
@@ -725,7 +740,7 @@ async function executeCompetitorAccountCrawl(task: ScheduledTask): Promise<strin
       if (platform === 'youtube' && task.config.localWorker !== '0') {
         const job = await createCrawlWorkerJob({
           tenantId,
-          requestedBy: `scheduler:${task.id}`,
+          requestedBy: workerBatch,
           platform,
           mode: 'account',
           accountUrl,
@@ -733,7 +748,7 @@ async function executeCompetitorAccountCrawl(task: ScheduledTask): Promise<strin
           limit,
         });
         if (!job) throw new Error('Mac 本地采集任务创建失败');
-        succeeded += 1;
+        queued += 1;
         lines.push(`${accountName}: 已提交 Mac 登录态采集队列（1 个任务）`);
         continue;
       }
@@ -761,10 +776,50 @@ async function executeCompetitorAccountCrawl(task: ScheduledTask): Promise<strin
   }
   return [
     `【${platform} 对标账号自动采集】账号 ${accounts.items.length} 个；每账号最多 ${limit} 条`,
-    `执行状态：${succeeded > 0 ? '执行成功' : '执行失败'}${failed > 0 ? `（成功 ${succeeded} 个账号，失败 ${failed} 个账号）` : ''}`,
-    `本次结论：${succeeded === 0 ? '账号采集请求均未完成，请根据账号错误处理后重试' : imported > 0 ? `已新增 ${imported} 条对标内容` : '已完成账号检索，本次暂无新增内容'}`,
-    `汇总：新增 ${imported} 条`, ...lines,
+    `执行状态：${queued > 0 ? `已排队（${queued} 个账号等待 Worker）` : succeeded > 0 ? '执行成功' : '执行失败'}${failed > 0 ? `（另有 ${failed} 个账号提交失败）` : ''}`,
+    `本次结论：${queued > 0 ? '采集请求已进入队列，Worker 完成后自动回写最终结果' : succeeded === 0 ? '账号采集请求均未完成，请根据账号错误处理后重试' : imported > 0 ? `已新增 ${imported} 条对标内容` : '已完成账号检索，本次暂无新增内容'}`,
+    `汇总：新增 ${imported} 条`, ...lines, ...(queued > 0 ? [`队列批次：${workerBatch}`] : []),
   ].join('\n');
+}
+
+/** Worker 状态变化后，将同一调度批次的真实执行结果回写到任务面板。 */
+export async function reconcileScheduledCrawlBatch(requestedBy: string): Promise<void> {
+  const match = /^scheduler:(.+):run:[^:]+$/.exec(requestedBy);
+  if (!match) return;
+  const taskId = match[1];
+  const jobs = await store.list<Record<string, any>>('crawl_jobs', {
+    where: { requestedBy }, sort: 'createdAt', page: 1, perPage: 200,
+  });
+  if (!jobs.items.length) return;
+  const counts = { queued: 0, running: 0, done: 0, failed: 0 };
+  let imported = 0;
+  const details: string[] = [];
+  for (const job of jobs.items) {
+    const status = String(job.status || 'queued') as keyof typeof counts;
+    if (status in counts) counts[status] += 1;
+    let result: Record<string, any> = {};
+    try { result = job.resultJson ? JSON.parse(String(job.resultJson)) : {}; } catch { /* keep empty */ }
+    imported += Number(result.imported || 0);
+    const label = String(job.keyword || job.accountName || job.accountUrl || job.platform || '采集任务');
+    if (status === 'done') details.push(`${label}: 已完成，新增 ${Number(result.imported || 0)} 条${result.message ? `（${result.message}）` : ''}`);
+    else if (status === 'failed') details.push(`${label}: 执行失败 - ${String(job.error || 'worker_failed')}`);
+  }
+  const pending = counts.queued + counts.running;
+  const state = pending > 0
+    ? `处理中（排队 ${counts.queued}，执行中 ${counts.running}，已完成 ${counts.done}，失败 ${counts.failed}）`
+    : counts.done > 0 && counts.failed === 0 ? '执行成功'
+      : counts.done > 0 ? `部分成功（成功 ${counts.done}，失败 ${counts.failed}）` : '执行失败';
+  const resultText = [
+    '【本地 Worker 采集结果】', `执行状态：${state}`,
+    `本次结论：${pending > 0 ? 'Worker 正在处理，完成后会继续自动更新' : counts.done > 0 ? `采集已结束，共新增 ${imported} 条` : '采集任务均执行失败，请检查 Worker 日志后重试'}`,
+    `汇总：新增 ${imported} 条；总任务 ${jobs.items.length} 个`, ...details,
+    `队列批次：${requestedBy}`,
+  ].join('\n');
+  const tasks = load();
+  const idx = tasks.findIndex(task => task.id === taskId && task.lastResult?.includes(`队列批次：${requestedBy}`));
+  if (idx === -1) return; // A newer run already owns the visible result.
+  tasks[idx].lastResult = resultText;
+  save(tasks);
 }
 
 async function executeTask(task: ScheduledTask): Promise<string> {
@@ -792,6 +847,8 @@ async function executeAndPersistTask(task: ScheduledTask, trigger: 'cron' | 'cat
       tasks[idx].lastRun = new Date().toISOString();
       tasks[idx].lastResult = result;
       save(tasks);
+      const workerBatch = /队列批次：(scheduler:.+:run:[^:\s]+)/.exec(result)?.[1];
+      if (workerBatch) await reconcileScheduledCrawlBatch(workerBatch);
     }
     console.log(`[scheduler] ${trigger} task "${task.name}" done:`, result.slice(0, 100));
     return result;
@@ -916,6 +973,13 @@ schedulerRouter.post('/', (req: Request, res: Response) => {
   const requestedCronExpr = String(req.body.cronExpr ?? (isCrawler ? '0 1 * * *' : '0 8 * * *'));
   if (!cron.validate(requestedCronExpr)) { res.status(400).json({ error: '无效的任务启动时间' }); return; }
   const crawlerPlatform = resolveCrawlerPlatform(req.body.config?.platforms);
+  if (['video_keyword_crawl', 'image_post_crawl'].includes(req.body.taskType)) {
+    const keywordReview = normalizeKeywordInput(String(req.body.config?.keywords || req.body.config?.keyword || ''), crawlerPlatform as KeywordPlatform);
+    if (!keywordReview.items.length) {
+      res.status(400).json({ error: 'invalid_keywords', message: '没有识别到当前平台可用的关键词', rejected: keywordReview.rejected });
+      return;
+    }
+  }
   const crawlerConfig = normalizeCrawlerConfig({ ...(req.body.config ?? {}), tenantId }, crawlerPlatform);
   const task: ScheduledTask = {
     id: `task_${Date.now()}`,
@@ -946,8 +1010,17 @@ schedulerRouter.put('/:id', (req: Request, res: Response) => {
   const requestedCronExpr = String(req.body.cronExpr ?? current.cronExpr);
   if (!cron.validate(requestedCronExpr)) { res.status(400).json({ error: '无效的任务启动时间' }); return; }
   const nextIsCrawler = ['video_keyword_crawl', 'image_post_crawl', 'competitor_account_crawl'].includes(nextTaskType);
+  const mergedConfig = { ...current.config, ...(req.body.config ?? {}) };
+  if (['video_keyword_crawl', 'image_post_crawl'].includes(nextTaskType)) {
+    const platform = resolveCrawlerPlatform(mergedConfig.platforms, current.config.platforms || 'youtube');
+    const keywordReview = normalizeKeywordInput(String(mergedConfig.keywords || mergedConfig.keyword || ''), platform as KeywordPlatform);
+    if (!keywordReview.items.length) {
+      res.status(400).json({ error: 'invalid_keywords', message: '没有识别到当前平台可用的关键词', rejected: keywordReview.rejected });
+      return;
+    }
+  }
   const nextConfig = nextIsCrawler
-    ? normalizeCrawlerConfig({ ...current.config, ...(req.body.config ?? {}) }, current.config.platforms || 'youtube')
+    ? normalizeCrawlerConfig(mergedConfig, current.config.platforms || 'youtube')
     : (req.body.config ?? current.config);
   tasks[idx] = {
     ...current,
