@@ -5523,7 +5523,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       case 'mode':
         const visibleModes = contentMode === 'poster' ? POSTER_MODES : MODES;
         return (
-          <div className="min-w-0 max-w-6xl">
+          <div className="w-full min-w-0 max-w-6xl overflow-x-hidden">
             <SectionTitle title="选择生成模式" desc="先选择内容形态，再确定 AI 从哪里取信息和素材" />
             <Field label="内容形态">
               <div className="inline-flex rounded-xl border border-border bg-surface-2 p-1">
@@ -5548,7 +5548,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                 ))}
               </div>
             </Field>
-            <div className="mt-4 grid grid-cols-3 gap-3 mb-7">
+            <div className="mb-7 mt-4 grid min-w-0 grid-cols-1 gap-3 lg:grid-cols-2 2xl:grid-cols-3">
               {visibleModes.map(m => {
                 const on = mode === m.id;
                 return (
@@ -5557,7 +5557,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                     const sourceTitle = videoKickoff?.video?.title || videoKickoff?.generatedVideo?.title || '';
                     setProjectTitle(contentMode === 'video' ? draftTitleForMode(m.id, sourceTitle) : m.title);
                   }}
-                    className="card p-4 text-left transition-all"
+                    className="card min-w-0 overflow-hidden p-4 text-left transition-all"
                     style={on ? { borderColor: TRAFFIC_GREEN, boxShadow: `0 0 0 1px ${TRAFFIC_GREEN}` } : undefined}>
                     <div className="mb-2 flex items-center gap-2">
                       <div className="w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0"
@@ -8221,7 +8221,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       </aside>
 
       {/* ── ② 操作区 ───────────────────────────────── */}
-      <div className="flex-1 min-w-0 flex flex-col">
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <div className="flex-1 min-h-0 overflow-y-auto p-6">
           <AnimatePresence mode="wait">
             <motion.div key={step} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }}
@@ -8263,7 +8263,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
 
       {/* ── ③ 对标内容 / 产品信息右侧栏 ────────────────── */}
       {step === 'mode' && (
-        <aside data-studio-context-rail="true" className="hidden w-[320px] flex-shrink-0 overflow-y-auto border-l border-border bg-surface-2/30 p-4 xl:block 2xl:w-[360px]">
+        <aside data-studio-context-rail="true" className="hidden w-[360px] flex-shrink-0 overflow-y-auto border-l border-border bg-surface-2/30 p-4 xl:block 2xl:w-[400px]">
           {mode === 'product'
             ? <ProductInfoPreview products={selectedProductOptions} />
             : <BenchmarkVideoPreview kickoff={videoKickoff} onOpenMaterialLibrary={openInspirationMaterialLibrary} />}
