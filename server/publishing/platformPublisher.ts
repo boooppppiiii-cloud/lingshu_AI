@@ -1,6 +1,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+import ffmpegStatic from 'ffmpeg-static';
 import { uploadVideoToYouTube, type YouTubeConfig } from '../integrations/youtube.js';
 import {
   publishInstagramReel,
@@ -13,6 +16,8 @@ import { recordSuccessfulPublish, type PublishPlatform } from '../lib/publishHis
 import { store } from '../storage/index.js';
 import { r2Upload } from '../storage/r2.js';
 import { appendTrackedWaLink, createTrackedPostDraft, finalizeTrackedPost, type PostRecord } from './waLink.js';
+
+const execFileAsync = promisify(execFile);
 
 interface YouTubeAccountRecord {
   id: string;
@@ -121,6 +126,60 @@ async function publicVideoUrlIfNeeded(filePath: string | undefined): Promise<str
   return r2Upload({ key, body: fs.readFileSync(filePath), contentType: socialVideoContentType(filePath) });
 }
 
+async function instagramCompatibleVideo(filePath: string | undefined): Promise<string | undefined> {
+  if (!filePath) return undefined;
+  const parsed = path.parse(filePath);
+  const outputPath = path.join(parsed.dir, `${parsed.name}.instagram.mp4`);
+  const sourceStat = fs.statSync(filePath);
+  try {
+    const outputStat = fs.statSync(outputPath);
+    if (outputStat.isFile() && outputStat.size > 0 && outputStat.mtimeMs >= sourceStat.mtimeMs) return outputPath;
+  } catch {
+    // Build a platform-compatible derivative below.
+  }
+  const temporaryPath = `${outputPath}.${process.pid}.tmp.mp4`;
+  try {
+    await execFileAsync(String(ffmpegStatic), [
+      '-hide_banner',
+      '-loglevel', 'error',
+      '-nostdin',
+      '-y',
+      '-i', filePath,
+      '-filter_complex',
+      '[0:v]split=2[background][foreground];'
+        + '[background]scale=720:1280:force_original_aspect_ratio=increase,crop=720:1280,boxblur=20:10[background_ready];'
+        + '[foreground]scale=720:1280:force_original_aspect_ratio=decrease[foreground_ready];'
+        + '[background_ready][foreground_ready]overlay=(W-w)/2:(H-h)/2,format=yuv420p[video]',
+      '-map', '[video]',
+      '-map', '0:a?',
+      '-c:v', 'libx264',
+      '-profile:v', 'high',
+      '-level:v', '4.0',
+      '-preset', 'medium',
+      '-crf', '20',
+      '-maxrate', '8M',
+      '-bufsize', '16M',
+      '-r', '30',
+      '-g', '60',
+      '-keyint_min', '60',
+      '-sc_threshold', '0',
+      '-flags', '+cgop',
+      '-c:a', 'aac',
+      '-profile:a', 'aac_low',
+      '-ar', '48000',
+      '-ac', '2',
+      '-b:a', '128k',
+      '-movflags', '+faststart',
+      temporaryPath,
+    ], { timeout: 15 * 60_000, maxBuffer: 8 * 1024 * 1024 });
+    fs.renameSync(temporaryPath, outputPath);
+    return outputPath;
+  } catch (error) {
+    try { fs.rmSync(temporaryPath, { force: true }); } catch { /* best effort */ }
+    throw publishError(`Instagram 兼容视频生成失败：${error instanceof Error ? error.message : String(error)}`, 500);
+  }
+}
+
 function platformContentId(video: any): string {
   return String(video?.id || video?.videoId || video?.publishId || '').trim();
 }
@@ -214,9 +273,11 @@ export async function publishVideoToAccount(input: PublishToAccountInput): Promi
     if (account.platform === 'tiktok') video = await uploadTikTokVideo(account.accessToken, socialInput);
     if (account.platform === 'facebook') video = await uploadFacebookVideo(account.providerAccountId, account.accessToken, process.env.META_GRAPH_VERSION?.trim() || 'v25.0', socialInput);
     if (account.platform === 'instagram') {
+      const compatibleFilePath = socialInput.videoUrl ? undefined : await instagramCompatibleVideo(filePath);
       video = await publishInstagramReel(account.providerAccountId, account.accessToken, process.env.META_GRAPH_VERSION?.trim() || 'v25.0', {
         ...socialInput,
-        videoUrl: socialInput.videoUrl || await publicVideoUrlIfNeeded(filePath),
+        filePath: compatibleFilePath,
+        videoUrl: socialInput.videoUrl || await publicVideoUrlIfNeeded(compatibleFilePath),
       });
     }
     const id = platformContentId(video);
