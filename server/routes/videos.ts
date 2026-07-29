@@ -4816,7 +4816,7 @@ function videoAnalysisHardTimeoutMs(analysisMode: 'strategy' | 'exact' = 'strate
   // Bound the complete frame extraction + ASR + VL request, not only the
   // individual OpenAI-compatible HTTP call.  Otherwise a record can remain in
   // `analyzing` forever when one of the preparatory stages stalls.
-  const fallback = analysisMode === 'exact' ? 240_000 : 150_000;
+  const fallback = analysisMode === 'exact' ? 480_000 : 150_000;
   return Math.max(30_000, Number(process.env.VIDEO_ANALYSIS_HARD_TIMEOUT_MS || fallback));
 }
 
@@ -5016,7 +5016,10 @@ async function analyzeExactLongVideoChunks(input: {
       scriptDetails15s: details,
     };
   };
-  const chunkTimeoutMs = Math.max(20_000, Number(process.env.VIDEO_EXACT_CHUNK_TIMEOUT_MS || 60_000));
+  // A schema-complete director storyboard commonly needs more than one minute
+  // even for a short clip. 110s remains bounded, while allowing the smaller
+  // retry to finish instead of aborting a healthy generation at 60s.
+  const chunkTimeoutMs = Math.max(20_000, Number(process.env.VIDEO_EXACT_CHUNK_TIMEOUT_MS || 110_000));
   const primaryFrameLimit = Math.max(8, Math.min(20, Number(process.env.VIDEO_EXACT_CHUNK_FRAME_LIMIT || 16)));
   const retryFrameLimit = Math.max(6, Math.min(primaryFrameLimit, Number(process.env.VIDEO_EXACT_RETRY_FRAME_LIMIT || 10)));
   const runWithTimeout = async (chunk: { start: number; end: number }, frameLimit: number, attempt: number) => {

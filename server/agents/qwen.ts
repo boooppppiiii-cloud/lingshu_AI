@@ -18,7 +18,10 @@ function client(): OpenAI {
   return new OpenAI({
     apiKey,
     baseURL: BASE_URL(),
-    timeout: Math.max(30_000, Number(process.env.QWEN_REQUEST_TIMEOUT_MS || 90_000)),
+    // Exact storyboard JSON is substantially larger than classification output.
+    // Keep the transport timeout above the per-chunk deadline so our own abort
+    // controller remains the single, observable timeout authority.
+    timeout: Math.max(30_000, Number(process.env.QWEN_REQUEST_TIMEOUT_MS || 120_000)),
     maxRetries: Math.max(0, Math.min(2, Number(process.env.QWEN_MAX_RETRIES || 0))),
   });
 }
