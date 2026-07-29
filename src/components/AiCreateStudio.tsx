@@ -2257,7 +2257,7 @@ function RealThumb({ clip, onSourceError }: { clip: Clip; onSourceError?: () => 
               src={clip.poster}
               alt={clip.name}
               className="absolute inset-0 h-full w-full object-cover"
-              loading="lazy"
+              loading="eager"
               draggable={false}
               onError={() => { setPosterFailed(true); onSourceError?.(); }}
             />
