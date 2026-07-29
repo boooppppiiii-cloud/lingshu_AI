@@ -1854,6 +1854,7 @@ interface ScriptPanelProps {
     scriptType?: ScriptType;
     language?: string;
     productInfo?: string;
+    materialRole?: 'hook';
     generatedVideo?: GeneratedVideo;
     referenceAnalysis?: {
       title?: string;
@@ -2779,6 +2780,7 @@ interface InspirationDashboardProps {
     scriptType?: ScriptType;
     language?: string;
     productInfo?: string;
+    materialRole?: 'hook';
     generatedVideo?: GeneratedVideo;
     referenceAnalysis?: {
       title?: string;
@@ -3037,6 +3039,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
     };
     onEnterWorkflow?.({
       source: 'material_library',
+      materialRole: 'hook',
       video,
       generatedVideo: {
         id: material.id,

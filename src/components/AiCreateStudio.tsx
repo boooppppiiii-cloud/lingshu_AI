@@ -931,6 +931,7 @@ interface VideoKickoff {
     createdAt?: string;
     material?: Material;
   };
+  materialRole?: 'hook';
   video?: {
     title?: string;
     platform?: string;
@@ -2615,6 +2616,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   const [activeFolder, setActiveFolder] = useState('recommend');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<string[]>([]);
+  const [hookMaterialId, setHookMaterialId] = useState('');
   const [scriptRecommendedMaterialIds, setScriptRecommendedMaterialIds] = useState<string[]>([]);
   const [storyboardAssignments, setStoryboardAssignments] = useState<Record<string, string>>({});
   const [storyboardSourcePlans, setStoryboardSourcePlans] = useState<Record<string, StoryboardSourcePlan>>({});
@@ -3286,7 +3288,9 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       setMode(kickoffMode);
       setActiveFolder(kickoff.generatedVideo ? 'upload' : 'hot');
       setProjectTitle(draftTitleForMode(kickoffMode, kickoff.video?.title || kickoff.generatedVideo?.title || ''));
-      setStepIdx(STEPS.findIndex(s => s.id === (fromInspiration ? 'script' : 'material')));
+      setStepIdx(kickoff.source === 'material_library'
+        ? 0
+        : STEPS.findIndex(s => s.id === (fromInspiration ? 'script' : 'material')));
       autoGen.current = true;
     } catch { /* ignore malformed kickoff */ }
   }, []);
@@ -3313,6 +3317,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       return [clip, ...prev];
     });
     setSelected([clip.id]);
+    if (videoKickoff.materialRole === 'hook' || videoKickoff.source === 'material_library') setHookMaterialId(clip.id);
   }, [duration, videoKickoff]);
 
   useEffect(() => {
@@ -3343,7 +3348,10 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     const materialUrl = videoKickoff.generatedVideo?.url || videoKickoff.video?.aiAnalysis?.materialUrl || videoKickoff.video?.videoUrl || '';
     const title = videoKickoff.generatedVideo?.title || videoKickoff.video?.title || '';
     const matched = materials.find(m => (materialUrl && m.url === materialUrl) || (title && m.name.includes(title.slice(0, 40))));
-    if (matched) setSelected([matched.id]);
+    if (matched) {
+      setSelected([matched.id]);
+      if (videoKickoff.materialRole === 'hook' || videoKickoff.source === 'material_library') setHookMaterialId(matched.id);
+    }
   }, [materials, videoKickoff]);
 
   const editFor = (clip: Clip): ClipEdit => clipEdits[clip.id] ?? {
@@ -3371,6 +3379,17 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     };
   };
   const defaultEditForSlot = (clip: Clip, slot: StoryboardSlot): ClipEdit => {
+    const isHookSlot = hookMaterialId === clip.id && storyboardSlots[0]?.id === slot.id;
+    if (isHookSlot) {
+      const fullDuration = clip.type === 'image' ? Math.max(3, slot.end - slot.start) : Math.max(0.5, clip.duration || slot.end - slot.start);
+      return {
+        trimStart: 0,
+        trimEnd: fullDuration,
+        speed: 1,
+        transition: '硬切',
+        note: `${slot.detail}\n钩子素材：使用完整素材，不按分镜时间戳裁切。`,
+      };
+    }
     const targetDuration = Math.max(0.5, slot.end - slot.start);
     const sourceDuration = clip.type === 'image' ? Math.max(10, targetDuration) : Math.max(1, clip.duration || targetDuration);
     const usable = Math.min(targetDuration, sourceDuration);
@@ -3382,6 +3401,18 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       note: slot.detail,
     };
   };
+  useEffect(() => {
+    const firstSlot = storyboardSlots[0];
+    const hookClip = hookMaterialId ? materialById.get(hookMaterialId) : undefined;
+    if (!firstSlot || !hookClip) return;
+    setStoryboardAssignments(current => current[firstSlot.id] === hookClip.id
+      ? current
+      : { ...current, [firstSlot.id]: hookClip.id });
+    setClipEdits(current => {
+      const key = slotClipEditKey(firstSlot.id, hookClip.id);
+      return current[key] ? current : { ...current, [key]: defaultEditForSlot(hookClip, firstSlot) };
+    });
+  }, [hookMaterialId, materialById, storyboardSlots]); // eslint-disable-line react-hooks/exhaustive-deps
   const renderTimeline = useMemo(() => {
     const rows = storyboardSlots.map(slot => {
       const clip = materialById.get(storyboardAssignments[slot.id] || '');
@@ -3735,10 +3766,16 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         .filter(item => item.id !== activeAssemblyId)
         .map(item => item.assignments)
         .filter(item => Object.keys(item).length > 0);
-      const assignments = matchMaterialsToStoryboardLocally(pool, storyboardSlots, selected, {
+      const hookClip = hookMaterialId ? materialById.get(hookMaterialId) : undefined;
+      const slotsToMatch = hookClip ? storyboardSlots.slice(1) : storyboardSlots;
+      const matchPool = hookClip ? pool.filter(item => item.id !== hookClip.id) : pool;
+      const matchedAssignments = matchMaterialsToStoryboardLocally(matchPool, slotsToMatch, selected.filter(id => id !== hookMaterialId), {
         variantIndex,
         previousAssignments,
       });
+      const assignments = hookClip && storyboardSlots[0]
+        ? { ...matchedAssignments, [storyboardSlots[0].id]: hookClip.id }
+        : matchedAssignments;
       const orderedIds = storyboardSlots.map(slot => assignments[slot.id]).filter((id): id is string => Boolean(id));
       const nextEdits: Record<string, ClipEdit> = {};
       const nextPlans: Record<string, StoryboardSourcePlan> = {};
@@ -3770,7 +3807,9 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       const diversityMessage = previousAssignments.length
         ? `；其中 ${freshCount}/${orderedIds.length} 条为新素材（差异率 ${freshRatio}%），开场和素材顺序已按流量测试策略变化`
         : '';
-      setModeNotice(`已按“脚本语义 + 镜头角色 + 有效时长 + 版本差异”完成 ${orderedIds.length}/${storyboardSlots.length} 个分镜匹配${diversityMessage}。可逐镜替换后继续。`);
+      setModeNotice(hookClip
+        ? `已固定“${hookClip.name}”为第一个钩子分镜（完整素材、不按时间戳裁切），并为后续 ${Math.max(0, orderedIds.length - 1)} 个分镜完成素材匹配${diversityMessage}。`
+        : `已按“脚本语义 + 镜头角色 + 有效时长 + 版本差异”完成 ${orderedIds.length}/${storyboardSlots.length} 个分镜匹配${diversityMessage}。可逐镜替换后继续。`);
     } catch (error) {
       setModeNotice(error instanceof Error ? `智能选材失败：${error.message}` : '智能选材失败，请重试。');
     } finally {
