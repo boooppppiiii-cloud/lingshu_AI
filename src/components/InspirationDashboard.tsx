@@ -25,7 +25,6 @@ type MaterialIndustryFilter = 'all' | 'beauty_skincare' | 'universal_manufacturi
 type MaterialApplicabilityFilter = 'all' | 'universal' | 'cross_industry' | 'industry_specific';
 type MaterialOrientationFilter = 'all' | 'vertical' | 'horizontal';
 type MaterialSourceFilter = 'all' | 'local_upload' | 'seedance' | 'gemini' | 'official_import';
-const INSPIRATION_INITIAL_VIEW_KEY = 'lingshu:inspiration:initial-view';
 
 const MATERIAL_INDUSTRY_LABELS: Record<string, string> = {
   all: '全部行业', beauty_skincare: '美妆护肤', universal_manufacturing: '通用制造',
@@ -2791,14 +2790,7 @@ interface InspirationDashboardProps {
 }
 
 export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelClose, onNavigate, onEnterWorkflow }: InspirationDashboardProps) {
-  const [innerView, setInnerView] = useState<InspirationInnerView>(() => {
-    try {
-      const initialView = localStorage.getItem(INSPIRATION_INITIAL_VIEW_KEY);
-      localStorage.removeItem(INSPIRATION_INITIAL_VIEW_KEY);
-      if (initialView === 'library' || initialView === 'shooting') return initialView;
-    } catch { /* ignore blocked storage */ }
-    return 'inspiration';
-  });
+  const [innerView, setInnerView] = useState<InspirationInnerView>('inspiration');
   const [platform, setPlatform] = useState<Platform>('all');
   const [search, setSearch] = useState('');
   // 搜索改为服务端执行：此前只在已加载的那一页做前端过滤，翻页之外的记录搜不到。

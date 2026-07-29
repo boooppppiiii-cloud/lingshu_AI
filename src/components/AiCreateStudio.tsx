@@ -22,7 +22,6 @@ const TRAFFIC_GREEN = '#16a34a';
 const CANVA_VIDEO_COVER_URL = 'https://www.canva.cn/create/video-covers/';
 const CANVA_COVER_RETURN_KEY = 'ow_canva_cover_return';
 const CANVA_COVER_RETURN_TTL = 6 * 60 * 60 * 1000;
-const INSPIRATION_INITIAL_VIEW_KEY = 'lingshu:inspiration:initial-view';
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
@@ -1003,7 +1002,7 @@ function LeadContentPackagePreview({ value, imageUrl }: { value: LeadContentPack
   );
 }
 
-function BenchmarkVideoPreview({ kickoff, onOpenMaterialLibrary }: { kickoff: VideoKickoff | null; onOpenMaterialLibrary?: () => void }) {
+function BenchmarkVideoPreview({ kickoff }: { kickoff: VideoKickoff | null }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [playbackUrl, setPlaybackUrl] = useState('');
   const [loading, setLoading] = useState(false);
@@ -1106,11 +1105,6 @@ function BenchmarkVideoPreview({ kickoff, onOpenMaterialLibrary }: { kickoff: Vi
           <Film size={28} className="text-text-muted opacity-35" />
           <p className="mt-3 text-xs font-bold text-text-secondary">尚未载入对标内容</p>
           <p className="mt-1 text-[10px] leading-relaxed text-text-muted">从灵感大屏选择视频或图文并进入 AI 智能素材后，将在这里显示。</p>
-          {onOpenMaterialLibrary && (
-            <button type="button" onClick={onOpenMaterialLibrary} className="mt-4 inline-flex items-center gap-1.5 rounded-xl bg-accent px-4 py-2 text-xs font-bold text-white shadow-sm transition hover:brightness-95 active:scale-[0.98]">
-              前往灵感大屏·素材 <ChevronRight size={13} />
-            </button>
-          )}
         </div>
       )}
     </aside>
@@ -5555,12 +5549,6 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     if (projectId === id) setProjectId(null);
   };
 
-  const openInspirationMaterialLibrary = () => {
-    try { localStorage.setItem(INSPIRATION_INITIAL_VIEW_KEY, 'library'); } catch { /* ignore blocked storage */ }
-    window.dispatchEvent(new CustomEvent('lingshu:navigate', { detail: { page: 'traffic', view: 'materials' } }));
-    onNavigate?.('traffic');
-  };
-
   /* ── 渲染各步骤操作区 ─────────────────────────────────────────────── */
   const renderStep = () => {
     switch (step) {
@@ -8311,7 +8299,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         <aside data-studio-context-rail="true" className="hidden w-[280px] flex-shrink-0 overflow-y-auto border-l border-border bg-surface-2/30 p-3 lg:block xl:w-[360px] xl:p-4 2xl:w-[400px]">
           {mode === 'product'
             ? <ProductInfoPreview products={selectedProductOptions} />
-            : <BenchmarkVideoPreview kickoff={videoKickoff} onOpenMaterialLibrary={openInspirationMaterialLibrary} />}
+            : <BenchmarkVideoPreview kickoff={videoKickoff} />}
         </aside>
       )}
 
