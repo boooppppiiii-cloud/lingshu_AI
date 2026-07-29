@@ -6622,7 +6622,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                     </button>
                   </div>
                   <video
-                    key={previewClip.id}
+                    key={`${previewClip.id}:${previewClip.url}`}
                     src={previewClip.url}
                     poster={previewClip.poster}
                     controls
@@ -6630,6 +6630,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                     playsInline
                     preload="metadata"
                     className="max-h-[75vh] w-full bg-black object-contain"
+                    onLoadedData={() => setModeNotice('')}
                     onError={() => {
                       setModeNotice('素材预览链接已失效，正在刷新后重试…');
                       void refreshMaterialSource(previewClip.id).then(refreshed => {
@@ -7702,7 +7703,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                           <img src={activeBgmPreviewItem.clip.poster} alt="素材预览帧" className="absolute inset-0 h-full w-full object-cover" />
                         )}
                         <video
-                          key={`bgm-preview-${activeBgmPreviewItem.clipId}-${activeBgmPreviewItem.trimStart}`}
+                          key={`bgm-preview-${activeBgmPreviewItem.clipId}-${activeBgmPreviewItem.trimStart}-${activeBgmPreviewItem.clip.url}`}
                           ref={previewVideoRef}
                           src={activeBgmPreviewItem.clip.url}
                           poster={activeBgmPreviewItem.clip.poster}
@@ -7712,7 +7713,15 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                           className={`absolute inset-0 h-full w-full object-cover transition-opacity ${previewVideoReady ? 'opacity-100' : 'opacity-0'}`}
                           onLoadedData={() => { setPreviewVideoReady(true); setPreviewNote(false); }}
                           onCanPlay={() => setPreviewVideoReady(true)}
-                          onError={() => { setPreviewVideoReady(false); setPreviewNote(true); }}
+                          onError={() => {
+                            setPreviewVideoReady(false);
+                            setPreviewNote(true);
+                            void refreshMaterialSource(activeBgmPreviewItem.clipId).then(refreshed => {
+                              if (!refreshed) return;
+                              setPreviewNote(false);
+                              setPreviewVideoReady(false);
+                            });
+                          }}
                           onPause={pausePreviewAudio}
                           onPlay={resumePreviewAudio}
                           onTimeUpdate={updatePreviewClock}

@@ -2335,7 +2335,9 @@ async function materialResponse(material: Material, tenantId: string): Promise<M
   const url = material.objectKey
     ? await signedMaterialObjectUrl(material.objectKey)
     : /^\/cloud-files\//.test(material.url)
-      ? signPathAssetUrl(material.url, tenantId)
+      // Studio workflows often span script, material, music and render steps.
+      // Keep the protected playback URL valid for the whole editing session.
+      ? signPathAssetUrl(material.url, tenantId, 24 * 60 * 60 * 1000)
       : /^\/(?:media|api\/overseas\/studio\/materials\/pb)\//.test(material.url) ? signAssetUrl(material.url, tenantId) : material.url;
   const poster = material.posterObjectKey
     ? await signedMaterialObjectUrl(material.posterObjectKey)
