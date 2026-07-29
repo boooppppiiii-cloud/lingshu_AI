@@ -13,7 +13,7 @@ import { store } from '../storage/index.js';
 import { fetchFile } from '../storage/files.js';
 import { objectStorageEnabled, r2Download, r2GetObject, r2Head, r2Upload } from '../storage/r2.js';
 import { analyzeImagePostEvidenceWithGemini, analyzeVideo, analyzeYouTubeUrl } from '../agents/gemini.js';
-import { analyzeImagePostEvidenceWithQwen, analyzeVideoFramesWithQwen, transcribeAudioWithQwen, type ImagePostEvidenceAnalysis } from '../agents/qwen.js';
+import { analyzeImagePostEvidenceWithQwen, analyzeVideoFramesWithQwen, analyzeVideoTimelineDetailsWithQwen, detectVideoTimelineWithQwen, transcribeAudioWithQwen, type ImagePostEvidenceAnalysis, type QwenTimelinePlan } from '../agents/qwen.js';
 import type { Platform, VideoAiAnalysis, VideoStatus } from '../types/index.js';
 import { isDemoMode } from '../lib/demo.js';
 import { recordVideoAdminAlert, updateVideoAdminAlertByRecordId } from '../lib/videoAdminAlerts.js';
@@ -260,7 +260,10 @@ function analysisTimelineQualityError(analysis: VideoAiAnalysis, duration: numbe
     .filter((item): item is { detail: NonNullable<VideoAiAnalysis['scriptDetails15s']>[number]; range: { start: number; end: number } } => Boolean(item.range))
     .sort((a, b) => a.range.start - b.range.start);
   if (!details.length) return 'no_valid_storyboard_segments';
-  if (details.some(({ detail }) => detail.needsReview || Number(detail.confidence ?? 1) < 0.5)) return 'contains_unverified_segments';
+  // `needsReview` is an honest uncertainty marker for proper nouns, prices,
+  // handedness or ASR; rejecting it would incentivize fabricated certainty.
+  // Only genuinely low-confidence visual segments fail the exact gate.
+  if (details.some(({ detail }) => Number(detail.confidence ?? 1) < 0.5)) return 'contains_low_confidence_segments';
 
   const effectiveDuration = duration > 0 ? duration : details[details.length - 1].range.end;
   const requiredSegments = effectiveDuration > 5 ? Math.max(2, Math.ceil(effectiveDuration / 5)) : 1;
@@ -4980,6 +4983,24 @@ async function analyzeExactLongVideoChunks(input: {
     if (values.length <= limit) return values;
     return Array.from({ length: limit }, (_, index) => values[Math.round(index * (values.length - 1) / Math.max(1, limit - 1))]!);
   };
+  const timelinePlanError = (plan: QwenTimelinePlan, duration: number): string | null => {
+    const rows = plan.boundaries;
+    if (!plan.theme.trim()) return 'missing_theme';
+    if (!rows.length) return 'missing_boundaries';
+    const ids = new Set<string>();
+    let cursor = 0;
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index];
+      if (!row.id || ids.has(row.id)) return `duplicate_boundary_${index + 1}`;
+      ids.add(row.id);
+      if (!Number.isFinite(row.start) || !Number.isFinite(row.end) || row.end <= row.start) return `invalid_boundary_${index + 1}`;
+      if (Math.abs(row.start - cursor) > 0.35) return `boundary_gap_or_overlap_${index + 1}`;
+      if (row.end - row.start > 5.35) return `boundary_too_long_${index + 1}`;
+      cursor = row.end;
+    }
+    if (Math.abs(cursor - duration) > 0.5) return `boundary_tail_${cursor.toFixed(2)}_of_${duration.toFixed(2)}`;
+    return null;
+  };
   const analyzeChunk = async (chunk: { start: number; end: number }, frameLimit: number, signal: AbortSignal) => {
     const localDuration = chunk.end - chunk.start;
     let selected = input.frames.filter(frame => {
@@ -4996,15 +5017,21 @@ async function analyzeExactLongVideoChunks(input: {
     const localSegments = (input.transcript?.segments || [])
       .filter(segment => segment.end > chunk.start && segment.start < chunk.end)
       .map(segment => ({ ...segment, start: Math.max(0, segment.start - chunk.start), end: Math.min(localDuration, segment.end - chunk.start) }));
-    const result = await analyzeVideoFramesWithQwen({
+    console.log(`[videos] exact timeline ${chunk.start.toFixed(0)}-${chunk.end.toFixed(0)}s started, frames=${localFrames.length}`);
+    const timeline = await detectVideoTimelineWithQwen({
       frames: localFrames,
       title: input.title,
       platform: input.platform,
       duration: localDuration,
-      views: input.views,
-      tags: input.tags,
+      signal,
+    });
+    const planError = timelinePlanError(timeline, localDuration);
+    if (planError) throw new Error(`exact_timeline_quality_failed_${chunk.start.toFixed(0)}_${planError}`);
+    console.log(`[videos] exact details ${chunk.start.toFixed(0)}-${chunk.end.toFixed(0)}s started, boundaries=${timeline.boundaries.length}`);
+    const result = await analyzeVideoTimelineDetailsWithQwen({
+      frames: localFrames,
+      timeline,
       transcript: localSegments.length ? { text: localSegments.map(item => item.text).join(''), segments: localSegments } : undefined,
-      analysisMode: input.analysisMode || 'exact',
       signal,
     });
     const localQualityError = analysisTimelineQualityError(result, localDuration, input.analysisMode || 'exact');

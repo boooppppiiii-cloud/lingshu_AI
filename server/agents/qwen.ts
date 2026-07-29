@@ -27,6 +27,26 @@ function client(): OpenAI {
 }
 
 export interface QwenAsrSegment { start: number; end: number; text: string; confidence?: number }
+export interface QwenTimelineBoundary {
+  id: string;
+  start: number;
+  end: number;
+  reason: string;
+  evidence: string;
+}
+export interface QwenTimelinePlan {
+  theme: string;
+  hooks: string[];
+  sellingPoints: string[];
+  mood: string;
+  structure: string;
+  baseRequirements: string;
+  firstTenSeconds: NonNullable<VideoAiAnalysis['firstTenSeconds']>;
+  coarseStructure: NonNullable<VideoAiAnalysis['coarseStructure']>;
+  scriptSummary15s: NonNullable<VideoAiAnalysis['scriptSummary15s']>;
+  recommendedScriptType: 'voiceover' | 'storyboard';
+  boundaries: QwenTimelineBoundary[];
+}
 export interface ImagePostEvidenceAnalysis {
   version: 2;
   status: 'analyzed';
@@ -173,6 +193,84 @@ ${modeInstruction}
     normalized = normalizeVideoAnalysis({ ...parsed, scriptDetails15s: repaired.scriptDetails15s });
   }
   return normalized;
+}
+
+export async function detectVideoTimelineWithQwen(opts: {
+  frames: Array<{ base64: string; mimeType: string; timeLabel: string }>;
+  title?: string;
+  platform?: string;
+  duration: number;
+  signal?: AbortSignal;
+}): Promise<QwenTimelinePlan> {
+  if (!opts.frames.length) throw new Error('Qwen timeline detection requires frames');
+  const completion = await client().chat.completions.create({
+    model: QWEN_EXACT_VL_MODEL(),
+    messages: [{ role: 'user', content: [
+      { type: 'text', text: `你是视频时间轴检测器。只输出合法JSON，不要解释。根据按时间排列的真实关键帧建立连续分析窗口，不编造画面、台词、品牌或动作。
+视频标题：${opts.title || '未知'}；平台：${opts.platform || '未知'}；局部时长：${opts.duration.toFixed(2)}s；帧时间：${opts.frames.map(frame => frame.timeLabel).join(', ')}。
+JSON字段：theme、hooks、sellingPoints、mood、structure、baseRequirements、firstTenSeconds（atmosphere/audioVisual/camera/visuals/voiceMusic）、coarseStructure（time/label/description）、scriptSummary15s（visualStyle/coreEmotion/competitors）、recommendedScriptType，以及boundaries。
+boundaries每项仅含id、start、end、reason、evidence。必须从0连续无重叠覆盖到${opts.duration.toFixed(2)}，每段最长5秒；真实内容稳定时也拆成连续“分析窗口”，reason写“连续观察窗口”，不要伪称转场。start/end为数字，id依次为b1、b2。evidence只写可见变化或持续状态。` },
+      ...opts.frames.map(frame => ({ type: 'image_url', image_url: { url: `data:${frame.mimeType};base64,${frame.base64}` } })),
+    ] as any }],
+    response_format: { type: 'json_object' },
+    max_tokens: 1400,
+  } as any, { signal: opts.signal });
+  const parsed = parseJson<Partial<QwenTimelinePlan>>(completion.choices[0]?.message?.content || '', {});
+  return {
+    theme: String(parsed.theme || ''),
+    hooks: Array.isArray(parsed.hooks) ? parsed.hooks.map(String) : [],
+    sellingPoints: Array.isArray(parsed.sellingPoints) ? parsed.sellingPoints.map(String) : [],
+    mood: String(parsed.mood || ''),
+    structure: String(parsed.structure || ''),
+    baseRequirements: String(parsed.baseRequirements || ''),
+    firstTenSeconds: parsed.firstTenSeconds || {},
+    coarseStructure: Array.isArray(parsed.coarseStructure) ? parsed.coarseStructure : [],
+    scriptSummary15s: parsed.scriptSummary15s || {},
+    recommendedScriptType: parsed.recommendedScriptType === 'storyboard' ? 'storyboard' : 'voiceover',
+    boundaries: Array.isArray(parsed.boundaries) ? parsed.boundaries.map((item, index) => ({
+      id: String(item?.id || `b${index + 1}`),
+      start: Number(item?.start),
+      end: Number(item?.end),
+      reason: String(item?.reason || ''),
+      evidence: String(item?.evidence || ''),
+    })) : [],
+  };
+}
+
+export async function analyzeVideoTimelineDetailsWithQwen(opts: {
+  frames: Array<{ base64: string; mimeType: string; timeLabel: string }>;
+  timeline: QwenTimelinePlan;
+  transcript?: { text: string; segments: QwenAsrSegment[] };
+  signal?: AbortSignal;
+}): Promise<VideoAiAnalysis> {
+  const boundaries = opts.timeline.boundaries.map(item => ({ id: item.id, start: item.start, end: item.end, evidence: item.evidence }));
+  const completion = await client().chat.completions.create({
+    model: QWEN_EXACT_VL_MODEL(),
+    messages: [{ role: 'user', content: [
+      { type: 'text', text: `你是视频导演分镜分析器。只输出合法JSON对象 {"shots":[]}。严格逐项分析服务端时间窗口，不得新增、删除、合并或修改边界；每项用boundaryId关联。
+时间窗口：${JSON.stringify(boundaries)}
+${opts.transcript?.segments.length ? `独立ASR：${JSON.stringify(opts.transcript.segments)}` : '无可靠ASR，dialogue留空。'}
+shots每项字段：boundaryId、environment、shot、camera、angle、composition、purpose、visual、dialogue、onScreenText、ambientSound、bgm、soundEffects、beats、persistentState、startState、endState、transitionToNext、backgroundPriority、depthOfField、authenticity、observedFacts、inferredIntent、causalGap、estimatedSpeechDuration、dialogueFits、omniPrompt、omniNegativePrompt、confidence、needsReview、viralPotential、subtitle、audio、note。
+observedFacts仅写真实可见内容；推断只写inferredIntent；缺失因果只写causalGap，不得进入visual或omniPrompt。分别记录口播、屏幕文字、环境声、BGM、音效。动作写初态、接触/路径、终态；运镜、角度、构图分开。专名、价格、型号、左右方向或ASR不确定时needsReview=true，禁止猜测。omni字段使用英文。` },
+      ...opts.frames.map(frame => ({ type: 'image_url', image_url: { url: `data:${frame.mimeType};base64,${frame.base64}` } })),
+    ] as any }],
+    response_format: { type: 'json_object' },
+    max_tokens: Math.max(1600, Math.min(3200, boundaries.length * 650)),
+  } as any, { signal: opts.signal });
+  const parsed = parseJson<{ shots?: Array<Record<string, unknown>> }>(completion.choices[0]?.message?.content || '', {});
+  const byId = new Map((parsed.shots || []).map(shot => [String(shot.boundaryId || ''), shot]));
+  if (byId.size !== boundaries.length || boundaries.some(item => !byId.has(item.id))) {
+    throw new Error(`exact_detail_boundary_mismatch_${byId.size}_of_${boundaries.length}`);
+  }
+  const scriptDetails15s = boundaries.map(boundary => {
+    const shot = byId.get(boundary.id)!;
+    return { ...shot, time: `${boundary.start.toFixed(2)}-${boundary.end.toFixed(2)}s` };
+  });
+  return normalizeVideoAnalysis({
+    ...opts.timeline,
+    scriptDetails15s,
+    recommendedScriptType: opts.timeline.recommendedScriptType,
+  });
 }
 
 export async function analyzeImagePostEvidenceWithQwen(opts: {
