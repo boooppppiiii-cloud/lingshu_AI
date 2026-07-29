@@ -1234,9 +1234,9 @@ studioRouter.post('/script', async (req, res) => {
   const forbiddenLine = forbiddenTerms.length
     ? `Reference-only forbidden terms: ${forbiddenTerms.join(', ')}. Do not output these words, hashtags, brand names, original captions, or original product claims.`
     : 'Do not output reference-video brand names, hashtags, original captions, or original product claims.';
-  // 产品分镜固定走千问，避免跟随工作台的全局模型选择误切到 Gemini。
-  const effectiveProvider = generationMode === 'product' ? 'qwen' : provider;
-  const providerOpt = effectiveProvider === 'qwen' || effectiveProvider === 'gemini' ? effectiveProvider : undefined;
+  // 工作台脚本统一走千问；视频理解仍可使用独立的视觉模型配置。
+  // 统一文本模型后，四类脚本可以共享同一套事实、结构和自然表达契约。
+  const providerOpt: 'qwen' = 'qwen';
   const selectedProductBrief = productBrief(productInfo);
   const selectedProductCategory = selectedProductBrief.category || compactBriefCategory(selectedProductBrief);
   const normalizedVideoTheme = typeof videoTheme === 'object' && videoTheme ? videoTheme as Record<string, unknown> : {};
@@ -1245,14 +1245,14 @@ studioRouter.post('/script', async (req, res) => {
   const videoThemePainPoint = String(normalizedVideoTheme.painPoint || '').trim();
   const videoThemeConversionGoal = String(normalizedVideoTheme.conversionGoal || '').trim();
   const themeDirectives: Record<string, string> = {
-    buyer_pain: '以一个具体的买家顾虑开场，后续至少两个镜头必须用可见证据回应同一个顾虑。',
-    product_proof: '先提出“仅凭图片难判断”的问题，再用规格、包装、细节或真实素材逐项建立证据。',
-    use_case: '只围绕一个已被资料或素材支持的使用场景，用动作解释产品价值，不能虚构效果。',
-    supplier_capability: '围绕批量供货或质量稳定顾虑，只使用已有工厂、产线、质检、产能和交付证据。',
-    customization: '围绕品牌适配顾虑，只展示资料明确提供的包装、标识、规格或定制选项。',
-    comparison: '使用统一、可验证的维度帮助选型，不贬低竞品，不引入资料外参数。',
-    customer_case: '仅使用已确认并可公开的客户问题、过程和结果；缺少案例证据时不得编造故事。',
-    trend: '趋势只作为切入角度，必须有输入来源；产品结论仍只能来自企业资料和素材证据。',
+    buyer_pain: '叙事公式：一个具体采购/使用顾虑 → 造成顾虑的判断难点 → 两个可见或可核实证据 → 一个会话式询盘。开场说买家会说的话，不能空喊焦虑。',
+    product_proof: '叙事公式：提出一个“怎么判断”的问题 → 实物细节 → 资料/规格证据 → 采购价值。每个结论紧跟证据，不把功效当作已发生结果。',
+    use_case: '叙事公式：一个明确人物和场景 → 一个完整使用动作 → 可见状态/操作细节 → 适用选择。场景、动作和结果必须有资料或素材支持。',
+    supplier_capability: '叙事公式：买家担心的供应风险 → 工厂/产线/质检/产能证据 → 该证据对采购的意义 → 询盘。没有对应企业证据就不输出该能力。',
+    customization: '叙事公式：渠道或品牌适配问题 → 已确认的包装/标识/规格选项 → 一个可拍的样品或版式动作 → 提交定制需求。不得把“可咨询”写成“均可定制”。',
+    comparison: '叙事公式：明确选型场景 → 统一比较维度 → 各自差异和适用条件 → 让买家描述需求。只比较输入中真实存在的产品，不虚构对手。',
+    customer_case: '叙事公式：已授权客户背景 → 可核实问题 → 企业采取的过程 → 已确认结果 → 相似需求邀请。缺少任一核心证据就不要故事化补全。',
+    trend: '叙事公式：带来源的变化/信号 → 对目标买家的含义 → 企业产品证据如何回应 → 讨论需求。没有趋势来源时降级为常青采购问题，禁止编造“大盘正在增长”。',
     talking_head: '以已识别的真人出镜素材为主体，台词必须像自然讲解；人物动作、口型时长和每镜信息量必须匹配。',
   };
   const videoThemeRules = `本条视频主题（系统已自动匹配脚本策略，不要在输出中解释）：
@@ -1267,6 +1267,27 @@ studioRouter.post('/script', async (req, res) => {
 - 禁止“革命性、颠覆、卓越解决方案、Meet our、Are you ready、Look no further、Contact us today”等模板广告腔。
 - 不得把“未提供、待确认、没有素材、资料不足、系统检查”等内部审核语言说给客户；未知信息直接省略。
 - CTA像正常商务邀请，只保留一个动作，不虚构样品、MOQ、库存、交期或经销政策。`;
+  const sharedScriptQualityCore = `灵枢社媒脚本共享质量内核（内部执行，不得复述）：
+一、信息优先级
+1. 企业中心/本次产品信息中的明确字段，是产品事实的唯一来源；已选素材元信息只证明可见画面；对标分析只提供结构与节奏；用户补充要求不能覆盖事实边界。
+2. 输入没有提供的价格、折扣、MOQ、交期、库存、销量、排名、认证、功效结果、客户案例、样品政策、定制能力和市场趋势，一律省略。不得用“通常、一般、行业常见”补齐。
+3. 时间戳、目标视频时长、镜头序号和台词时长上限属于制作参数，不属于产品卖点。
+
+二、社媒爆量结构
+1. 一条视频只解决一个受众问题。前 1.5-3 秒给出停留理由：具体问题、反差、测试动作、可见结果或直接判断，禁止企业自我介绍和平铺产品名。
+2. 钩子之后尽快兑现，正文只保留 2-3 个证明点；证明按“画面证据 → 一句解释 → 对买家的意义”推进，不能连续罗列参数。
+3. 每 2-4 秒发生一次信息或视觉推进；相邻镜头的功能、动作、句式不能相同。允许强证据镜头无口播，避免全程播报。
+4. 结尾只有一个低门槛动作，并承接开场问题。不得同时索要数量、市场、包装、邮箱、电话等多项信息。
+5. 多版本差异必须来自钩子机制、证明顺序、叙述视角、镜头动作和 CTA 中至少两项，而不是同义词替换。
+
+三、可拍与自然表达
+1. 画面写清初始状态、主体接触、运动路径和结束状态；分别给出环境、景别、运镜和构图，禁止“高级感展示、真实场景、突出卖点”等空指令。
+2. 口播与字幕互补：画面显示数字时，口播解释意义；字幕只保留 2-8 个词/字的重点，不让三处重复同一句。
+3. 中文按每秒约 4-5 字并预留停顿；英文单句通常 7-16 词。说不下就删信息或写“无”，不能压缩成生硬长句。
+4. 面向人的字段要像销售、产品经理或工厂人员自然说话；机器字段、时间轴和证据字段保持规范。
+
+四、输出前静默质检
+逐项检查：主题单一；钩子被正文兑现；至少两个结论有输入证据；动作可拍；时间连续；台词放得下；产品名/数字/单位原样；无内部审核话术；无模板广告腔；CTA 单一。发现问题直接修稿，只输出最终成稿。`;
   const cloneMigrationMode = String(tone).includes('高保真复刻')
     ? 'fidelity'
     : String(tone).includes('机制借鉴')
@@ -1307,7 +1328,7 @@ studioRouter.post('/script', async (req, res) => {
 以下约束是输出协议，不是建议；任何一项不满足都视为无效脚本：
 1. 必须恰好输出5段，严格使用下方给定时间段，不得改时间、重叠、留空或额外增加段落：
 ${productTimeline}
-2. 每段必须依次包含且只包含：时间、环境、景别、运镜、镜头功能、画面、配乐、台词、字幕。不得缺字段，不得输出标题、解释、自检、Markdown或代码围栏。
+2. 每段必须依次包含且只包含：时间、环境、景别、运镜、构图、镜头功能、画面、配乐、台词、字幕。不得缺字段，不得输出标题、解释、自检、Markdown或代码围栏。
 3. 台词必须是镜头中真人能直接说出口的话，不得包含“镜头、画面、字幕、参考节奏、展示卖点”等制作指令；必须严格低于对应段落字数上限，宁可短句或写“无”，不可超时。
 3. 每段画面必须是具体可拍动作，必须包含手部动作、产品动作、对比测试、包装/定制展示或使用场景之一。
 4. 第一段必须是痛点、对比、测试或结果 hook，不能用“这款产品适合……”平铺开场。
@@ -1330,13 +1351,14 @@ ${productTimeline}
 环境：<具体地点与可见陈设>
 景别：<远景/全景/中景/中近景/近景/特写之一>
 运镜：<固定/推进/拉远/横移/跟拍/环绕之一，并说明动作>
+构图：<主体位置、产品朝向、前中后景关系>
 镜头功能：<单一功能>
 画面：<主体+动作+可见结果，不能写抽象意图>
 配乐：<音乐或音效及其节奏>
 台词：<字数不超过本段上限；没有必要则写“无”>
 字幕：<短字幕；不能引入产品资料以外的新事实>
 
-最终输出前在内部检查但不要输出检查过程：字段完整；时间连续；台词不超时；所有产品数字均可在产品信息中逐字找到；没有编造效果与承诺。语言为${lang}。`;
+最终输出前在内部检查但不要输出检查过程：字段完整；时间连续；台词不超时；所有产品事实均可回指输入；没有编造效果与承诺。语言为${lang}。`;
 
   const materialScriptRules = `你是在把“已选素材库片段”剪成一条有销售情绪的社媒带货/外贸留资视频。素材约束留在画面说明中，人物口播必须始终面向潜在买家，不能说后台审核语言。
 
@@ -1346,7 +1368,7 @@ ${productTimeline}
 2. 只能根据素材元信息做保守推断：素材名、类型、角色、原始时长、建议时间段。没有真实画面识别时，不得编造画面里出现的人、场景、动作或效果。
 3. “原始时长”只是文件长度，“建议有效时长”才是当前脚本可使用的动作长度。禁止为了填满目标时长而慢放、循环或重复同一个动作，除非分段观察明确支持。
 4. 画面字段必须写“使用素材《素材名》...”并说明剪辑重点，例如截取开头、细节处、动作最清楚处、包装/样品处。
-5. 每段承担不同剪辑任务：开场、细节、使用/对比、供应能力、定制/包装、CTA。
+5. 每段承担不同剪辑任务，按实际素材数量选择开场、细节、使用/对比、供应能力、定制/包装、CTA；不得为了凑结构虚构素材不存在的功能。
 6. 口播必须承接该素材的角色并形成连续销售逻辑：第一段让人停留，中段把可见细节变成购买理由，最后一段只给一个低门槛行动。不能每段复用同一句式。
 7. 如果素材信息不足，只能写“按该素材可见内容剪辑”，不能伪装已经识别出画面。尤其禁止从液体滴落推断吸收、渗透、淡纹、美白、祛痘或其它功效。
 8. “按可见内容剪辑、不得推断、资料可确认”只能写进画面字段，禁止出现在人物说中。禁止口播“先看素材、这段只按可见内容、逐项确认”等制作/审核腔。
@@ -1363,15 +1385,29 @@ ${normalizedMaterialInfos.map((info, index) => {
 
 爆款模板必须服务于当前主题“${videoThemeTitle}”：钩子素材原动作完整建立停留理由 → 1-2 个与主推产品有关的可见证明 → 一个采购/使用价值解释 → 单一低门槛 CTA。不得为了套模板虚构素材中不存在的动作，也不得把无关工厂素材硬套到消费品功效。
 
-固定格式：
+固定格式（每段完整重复）：
 [start-end s]
 素材：<素材名>
-画面：<基于该素材的剪辑方式，必须提到素材名>
-人物说：“<真人能说出口的一句话>”
+环境：<仅写素材元信息支持的环境；未知写“按素材可见环境”>
+景别：<远景/全景/中景/中近景/近景/特写之一>
+运镜：<固定/推进/拉远/横移/跟拍/环绕之一>
+构图：<主体位置、产品朝向、前中后景关系；未知时给出保守裁切方案>
+镜头功能：<单一功能>
+画面：<基于该素材的剪辑方式，必须提到素材名和明确截取重点>
+配乐：<音乐/环境声/音效的节奏，不与口播混写>
+台词：<真人能说出口的一句话；不需要则写“无”>
 字幕：<短字幕>`;
+
+  const productDiversityRules = generationMode === 'product'
+    ? `本次是第 ${Math.max(1, Number(variantSeed) || 1)} 次生成。${previousCloneScripts.length
+      ? `以下是此前版本，只用于排重：\n${previousCloneScripts.map((item, index) => `--- 旧版本 ${index + 1} ---\n${item.slice(0, 2400)}`).join('\n')}\n`
+      : ''}新版本不得复用旧版本的完整开场句、五段证据顺序和 CTA 句式；至少同时改变钩子机制、前两个证据的顺序、一个镜头动作和 CTA 表达，但产品事实、时间轴与字段格式保持不变。`
+    : '';
 
   const prompt = generationMode === 'material'
     ? `${materialScriptRules}
+
+${sharedScriptQualityCore}
 
 ${videoThemeRules}
 
@@ -1392,7 +1428,11 @@ ${product || '未选择产品。只能围绕素材做保守剪辑建议，不得
     : generationMode === 'product'
     ? `${productScriptRules}
 
+${sharedScriptQualityCore}
+
 ${videoThemeRules}
+
+${productDiversityRules}
 
 ${humanVoiceRules}
 
@@ -1427,8 +1467,7 @@ ${forbiddenLine}
 ${cloneFusionRules}
 ${cloneDiversityRules}
 
-${videoThemeRules}
-注意：爆款裂变中，主题只能适配原片已有的钩子、口播、字幕和证明位置；不得为了套主题新增镜头、CTA或改变原片爆点机制。
+${sharedScriptQualityCore}
 
 ${humanVoiceRules}
 
@@ -1437,6 +1476,7 @@ ${humanVoiceRules}
 环境：<按迁移方式保留原环境，或重建为适合企业产品的可拍场景>
 景别：<照抄原详析景别>
 运镜：<照抄原详析运镜>
+构图：<保留原片主体位置和层次；迁移时明确新产品朝向与前中后景>
 镜头功能：<钩子/效果证明/价格反差/产品介绍/信任证明/CTA等单一主要功能>
 画面：<保留该段镜头功能与卡点节奏；高保真时做产品替换，结构迁移/机制借鉴时必须按企业产品重建可执行动作与可见证据>
 配乐：<照抄或贴近原详析配乐音效>
@@ -1476,14 +1516,16 @@ ${forbiddenLine}
 
 ${videoThemeRules}
 
+${sharedScriptQualityCore}
+
 ${humanVoiceRules}
 
 Requirements:
-- Exactly three sections, each on its own block, labelled like "[Hook · 0-3s]", "[Body · 3-${duration - 5}s]", "[CTA · ${duration - 5}-${duration}s]".
+- Exactly three sections, each on its own block, labelled like "[Hook · 0-3s]", "[Proof · 3-${duration - 5}s]", "[CTA · ${duration - 5}-${duration}s]".
 - Each section must contain 1-3 short spoken lines only, in ${lang}.
 - The hook must mention a concrete buyer pain, use case, visible product result, or sourcing problem in the first line.
-- The body must include at least two concrete details from product info, such as MOQ, material, packaging, certification, market, sample speed, shade/range, usage result, or delivery condition.
-- The CTA must ask for a specific B2B action: sample, quote, catalog, color list, packaging plan, or MOQ confirmation.
+- The proof section must include one or two concrete details explicitly present in product info and explain why they matter to this audience. Omit unsupported fields rather than completing a checklist.
+- The CTA must ask for one specific B2B action supported by the input. When purchasing policies are absent, safely ask the viewer to message for verified product details.
 - Do NOT write generic phrases like "premium quality", "stable solution", "high conversion", "everyone is asking", unless backed by a concrete detail.
 - Reuse the reference video's rhythm, not its exact product or claims.
 - Do not copy or mention the reference video's title, original caption, hashtags, brand names, original product category, or original product claims.
@@ -1494,7 +1536,8 @@ Requirements:
     let script = normalizeScriptTimestamps(enforceProductNameInScript(stripScriptAnalysisSummary(text), productInfo));
     if (generationMode === 'material') script = repairMaterialScript(script, productInfo, structuredMaterials);
     const selectedNames = selectedProductNames(productInfo);
-    const unsupportedNumberClaims = Array.from(script.matchAll(/\d+(?:\.\d+)?\s*(?:瓶|ml|ML|毫升|kg|KG|g|克|斤|cm|厘米|mm|毫米|天|day|days|Days|秒|%|个|pcs|件|箱|元|美元)/g))
+    // “秒”及时间戳是视频制作参数，不是产品主张，不能触发“资料外数字”风险。
+    const unsupportedNumberClaims = Array.from(script.matchAll(/\d+(?:\.\d+)?\s*(?:瓶|ml|ML|毫升|kg|KG|g|克|斤|cm|厘米|mm|毫米|天|day|days|Days|%|个|pcs|件|箱|元|美元)/g))
       .map(match => match[0])
       .filter(claim => !productSupportsNumericClaim(claim, productInfo));
     const missingProduct = !String(productInfo || '').trim();
@@ -1512,11 +1555,12 @@ Requirements:
       && (!/环境[：:]/.test(script)
         || !/景别[：:]/.test(script)
         || !/运镜[：:]/.test(script)
+        || !/构图[：:]/.test(script)
         || !/配乐[：:]/.test(script)
         || !/台词[：:]/.test(script));
     const genericCloneStoryboard = generationMode === 'clone'
       && /真实使用场景|痛点特写|买家最关心的结果|采购这类|先看真实使用效果|把「[^」]+」放到真实使用场景/.test(script);
-    const productStoryboardFields = ['环境', '景别', '运镜', '镜头功能', '画面', '配乐', '台词', '字幕'];
+    const productStoryboardFields = ['环境', '景别', '运镜', '构图', '镜头功能', '画面', '配乐', '台词', '字幕'];
     const productStoryboardBlocks = script.split(/(?=^\[[^\]]+\]\s*$)/m).filter(block => /^\[[^\]]+\]/.test(block.trim()));
     const incompleteProductStoryboard = generationMode === 'product'
       && (productStoryboardBlocks.length !== 5
@@ -1536,6 +1580,9 @@ Requirements:
     const invalidProductScript = generationMode === 'product'
       && (/人物说[：:][^\n]*(镜头|画面|字幕|参考节奏|展示卖点|制作)/.test(script)
         || /Scene N/.test(script));
+    const duplicateProductScript = generationMode === 'product'
+      && previousCloneScripts.length > 0
+      && previousCloneScripts.some(previous => jaccardSimilarity(script, previous) > 0.82);
     const leakedReference = forbiddenTerms.some(term => new RegExp(`(^|[^A-Za-z0-9])${term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}($|[^A-Za-z0-9])`, 'i').test(script))
       || forbiddenIndustryTerms.some(term => new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i').test(script))
       || /#[A-Za-z][A-Za-z0-9_-]{2,}/.test(script);
@@ -1543,12 +1590,13 @@ Requirements:
       missingProduct ? '缺少产品信息' : '',
       missingSelectedProduct ? `脚本未完整覆盖选定产品名称：${selectedNames.join('、')}` : '',
       unsupportedNumberClaims.length ? `出现产品资料未提供的数字：${unsupportedNumberClaims.join('、')}` : '',
-      incompleteCloneStoryboard ? '爆款分镜缺少环境、景别、运镜、配乐或台词字段' : '',
-      incompleteProductStoryboard ? '产品分镜必须为5段，且每段完整包含环境、景别、运镜、镜头功能、画面、配乐、台词和字幕' : '',
+      incompleteCloneStoryboard ? '爆款分镜缺少环境、景别、运镜、构图、配乐或台词字段' : '',
+      incompleteProductStoryboard ? '产品分镜必须为5段，且每段完整包含环境、景别、运镜、构图、镜头功能、画面、配乐、台词和字幕' : '',
       genericCloneStoryboard ? '爆款分镜包含不可执行的泛化镜头描述' : '',
       hasRepetitiveStoryboard(script) ? '分镜或口播内容重复度过高' : '',
       hasUnnaturalVoiceover(script) ? '口播过长或堆叠过多技术名词' : '',
       invalidProductScript ? '产品模式把制作指令写进了人物口播' : '',
+      duplicateProductScript ? '本次脚本与上一版本过于相似，已切换差异化版本' : '',
       leakedReference ? '脚本包含对标来源、品牌、行业或Hashtag泄漏' : '',
       ...speechIssues,
       ...groundingIssues,
@@ -1558,7 +1606,7 @@ Requirements:
     const shouldFallback = validationIssues.length > 0 || unsafeScript;
     const fallback = generationMode === 'material'
       ? fallbackMaterialStoryboard(normalizedMaterialInfos, Number(duration) || 20, productInfo)
-      : fallbackStoryboard(duration, productInfo);
+      : fallbackStoryboard(duration, productInfo, Number(variantSeed) || 0);
     const repairedFallback = generationMode === 'material'
       ? repairMaterialScript(fallback, productInfo, structuredMaterials)
       : fallback;
@@ -1593,7 +1641,7 @@ Requirements:
         ? ''
         : generationMode === 'material'
         ? repairMaterialScript(fallbackMaterialStoryboard(normalizedMaterialInfos, Number(duration) || 20, productInfo), productInfo, structuredMaterials)
-        : scriptType === 'storyboard' ? fallbackStoryboard(duration, productInfo) : fallbackScript(productInfo, duration),
+        : scriptType === 'storyboard' ? fallbackStoryboard(duration, productInfo, Number(variantSeed) || 0) : fallbackScript(productInfo, duration),
       qualityStatus: generationMode === 'material' ? 'recovered' : 'fallback',
       fallbackReason: publicFailureReason,
       validationIssues: [publicFailureReason],
@@ -3181,7 +3229,10 @@ function normalizeTtsStyle(input: unknown): TtsStyleOptions {
 function ttsPerformancePrompt(text: string, style: TtsStyleOptions): string {
   const guide = TTS_PRESET_GUIDE[style.preset || 'authentic_review'];
   const durationGuide = style.targetDuration ? ` Aim for about ${style.targetDuration} seconds by adjusting natural pauses only; never add words.` : '';
-  return `${guide}\nEmotion: ${style.emotion || 'natural and credible'}; intensity ${Math.round(style.emotionIntensity || 65)}/100; speaking rate ${Number(style.speed || 1).toFixed(2)}x.${durationGuide} Use meaningful pauses at punctuation and emphasize concrete product benefits. Speak only the script below; never read these directions aloud.\n\nSCRIPT:\n${text}`;
+  const pronunciationGuide = (style.pronunciations || []).length
+    ? `\nPronunciation rules: ${style.pronunciations!.map(item => `"${item.word}" must be pronounced as "${item.pronunciation}"`).join('; ')}. Follow these rules exactly for brand names, abbreviations and product terms; never read this instruction aloud.`
+    : '';
+  return `${guide}\nEmotion: ${style.emotion || 'natural and credible'}; intensity ${Math.round(style.emotionIntensity || 65)}/100; speaking rate ${Number(style.speed || 1).toFixed(2)}x.${durationGuide} Use meaningful pauses at punctuation and emphasize concrete product benefits.${pronunciationGuide} Speak only the script below; never read these directions aloud.\n\nSCRIPT:\n${text}`;
 }
 
 // 工作台 4 个音色 → Gemini 预置嗓音
@@ -3191,11 +3242,11 @@ const TTS_VOICE_MAP: Record<string, string> = {
   v3: 'Aoede',   // 女声 · 温暖
 };
 
-// 工作台音色 → Qwen3-TTS 系统人声。三种音色均支持中、英、西、法等主要语种。
+// 工作台音色 → Qwen3-TTS 系统人声。三种音色均支持中、英等主要语种。
 const QWEN_TTS_VOICE_MAP: Record<string, string> = {
-  v1: 'Cherry', // 女声 · 亲和自然
-  v2: 'Ethan',  // 男声 · 阳光沉稳
-  v3: 'Serena', // 女声 · 温柔
+  v1: 'Cherry',
+  v2: 'Ethan',
+  v3: 'Serena',
 };
 
 const MINIMAX_VOICE_MAP: Record<string, Record<string, string>> = {
@@ -3495,24 +3546,6 @@ function execFileOk(file: string, args: string[], timeout = 45_000): Promise<boo
 function durationFromText(text: string): number {
   const chars = String(text || '').replace(/\s+/g, '').length;
   return Math.max(2, Math.min(60, Math.ceil(chars / 9)));
-}
-
-function fallbackToneWav(text: string): { file: string; duration: number } {
-  try { fs.mkdirSync(scopedStudioAssetDir(TTS_ROOT), { recursive: true }); } catch { /* ignore */ }
-  const sampleRate = 24000;
-  const duration = durationFromText(text);
-  const samples = sampleRate * duration;
-  const pcm = Buffer.alloc(samples * 2);
-  for (let i = 0; i < samples; i++) {
-    const t = i / sampleRate;
-    const envelope = Math.min(1, i / 1600, (samples - i) / 1600);
-    const freq = 210 + (i % sampleRate) / sampleRate * 90;
-    const value = Math.sin(2 * Math.PI * freq * t) * 0.12 * Math.max(0, envelope);
-    pcm.writeInt16LE(Math.max(-1, Math.min(1, value)) * 32767, i * 2);
-  }
-  const file = `${randomUUID()}.wav`;
-  fs.writeFileSync(path.join(scopedStudioAssetDir(TTS_ROOT), file), wavFromPcm(pcm, sampleRate));
-  return { file, duration };
 }
 
 async function minimaxFetchJson(pathname: string, body: Record<string, unknown>, timeoutMs = 90_000): Promise<any> {
@@ -3869,12 +3902,11 @@ async function generateQwenTts(text: string, voice: string, language: string): P
   if (!apiKey) return null;
   const endpoint = process.env.DASHSCOPE_TTS_ENDPOINT
     || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation';
-  const model = process.env.QWEN_TTS_MODEL || 'qwen3-tts-flash';
   const response = await fetch(endpoint, {
     method: 'POST',
     headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model,
+      model: process.env.QWEN_TTS_MODEL || 'qwen3-tts-flash',
       input: {
         text: text.slice(0, 5000),
         voice: process.env[`QWEN_TTS_VOICE_${String(voice || 'v1').toUpperCase()}`] || QWEN_TTS_VOICE_MAP[voice] || 'Cherry',
@@ -3892,14 +3924,14 @@ async function generateQwenTts(text: string, voice: string, language: string): P
   const audioResponse = await fetch(remoteUrl, { signal: AbortSignal.timeout(Number(process.env.QWEN_TTS_DOWNLOAD_TIMEOUT_MS || 60_000)) });
   if (!audioResponse.ok) throw new Error(`Qwen TTS audio download HTTP ${audioResponse.status}`);
   const bytes = Buffer.from(await audioResponse.arrayBuffer());
-  if (bytes.length < 1000 || bytes.subarray(0, 4).toString('ascii') !== 'RIFF') throw new Error('Qwen TTS returned invalid WAV audio');
+  const measuredDuration = wavDurationFromBytes(bytes);
+  if (bytes.length < 1000 || measuredDuration < 0.5) throw new Error('Qwen TTS returned invalid or empty WAV audio');
   try { fs.mkdirSync(scopedStudioAssetDir(TTS_ROOT), { recursive: true }); } catch { /* ignore */ }
   const file = `${randomUUID()}.wav`;
   fs.writeFileSync(path.join(scopedStudioAssetDir(TTS_ROOT), file), bytes);
-  const measuredDuration = wavDurationFromBytes(bytes);
   return {
     url: scopedStudioAssetUrl('tts', file),
-    duration: Math.max(1, Math.round(measuredDuration || durationFromText(text))),
+    duration: Math.max(1, Math.round(measuredDuration)),
     source: 'qwen_tts',
   };
 }
@@ -4747,9 +4779,9 @@ function firstProductField(productInfo: string, labels: string[]): string {
 function productBrief(productInfo: string) {
   const name = compactProductLabel(productInfo);
   const category = firstProductField(productInfo, ['所属类目', '产品类目']) || '目标采购场景';
-  const highlights = conservativeClaim(firstProductField(productInfo, ['产品卖点', '核心优势']) || '真实材质和使用细节');
-  const moq = firstProductField(productInfo, ['起订量', 'MOQ']) || '可按需求确认';
-  const cert = firstProductField(productInfo, ['认证资质', '认证']) || '可按需求确认';
+  const highlights = conservativeClaim(firstProductField(productInfo, ['产品卖点', '核心优势']));
+  const moq = firstProductField(productInfo, ['起订量', 'MOQ']);
+  const cert = firstProductField(productInfo, ['认证资质', '认证']);
   const price = firstProductField(productInfo, ['价格区间', '价格']);
   const detailPoints = [
     ['容量', firstProductField(productInfo, ['容量'])],
@@ -4775,9 +4807,9 @@ function productBrief(productInfo: string) {
     moq,
     cert,
     price,
-    firstPoint: pointList[0] || highlights || category,
-    secondPoint: pointList[1] || cert || '样品和资料可确认',
-    thirdPoint: pointList[2] || highlightPoints[0] || '实际操作可打样确认',
+    firstPoint: pointList[0] || highlights || name,
+    secondPoint: pointList[1] || pointList[0] || name,
+    thirdPoint: pointList[2] || pointList[1] || pointList[0] || name,
     detailPoints,
     highlightPoints,
     naturalTrustPoint: cert && cert !== '可按需求确认' ? '认证和检测资料能不能一次给齐' : '样品和资料能不能按需求确认',
@@ -4856,32 +4888,48 @@ Show ${p.firstPoint}, then confirm sample, packaging, MOQ and certification deta
 Send your quantity, size or packaging request, and we will prepare the quote and sample plan.`;
 }
 
-function fallbackStoryboard(duration: number, productInfo = ''): string {
+function fallbackStoryboard(duration: number, productInfo = '', variantSeed = 0): string {
   const p = productBrief(productInfo);
+  const variant = Math.abs(Number(variantSeed) || 0) % 6;
   const pain = buyerPainForBrief(p);
   const total = Math.max(10, Number(duration) || 20);
   const boundaries = [0, 0.18, 0.4, 0.62, 0.82, 1].map(value => +(value * total).toFixed(1));
   const time = (index: number) => `${boundaries[index]}-${boundaries[index + 1]}s`;
   const categoryText = `${p.name} ${p.category}`.toLowerCase();
   const appliance = /榨汁|果汁|搅拌|小家电|blender|juicer|appliance/.test(categoryText);
+  const proofPoints = [
+    [p.firstPoint, p.secondPoint, p.thirdPoint],
+    [p.secondPoint, p.firstPoint, p.thirdPoint],
+    [p.thirdPoint, p.secondPoint, p.firstPoint],
+    [p.firstPoint, p.thirdPoint, p.secondPoint],
+    [p.secondPoint, p.thirdPoint, p.firstPoint],
+    [p.thirdPoint, p.firstPoint, p.secondPoint],
+  ][variant] || [p.firstPoint, p.secondPoint, p.thirdPoint];
   const detailAction = appliance
     ? `手部依次拿起「${p.name}」的杯体和杯盖，镜头停留在参数卡与可拆结构；只呈现资料已确认的${p.firstPoint}和${p.secondPoint}。`
-    : `手部把「${p.name}」移到镜头前，展示${p.firstPoint}和${p.secondPoint}对应的实物或资料卡。`;
+    : `手持「${p.name}」缓慢转动，近拍产品正面与侧面；画面角标逐字标出“${proofPoints[0]}”和“${proofPoints[1]}”。`;
   const proofAction = appliance
     ? `俯拍拆开杯体与刀头组件，再按原方向装回；如果没有真实操作素材，只展示实物与${p.thirdPoint}资料卡，不模拟性能结果。`
-    : `用一个完整、可复现的开合、按压、装配或样品对照动作确认${p.thirdPoint}；没有真实素材时只展示资料卡。`;
+    : `镜头切到“${proofPoints[2]}”：手指停在产品对应细节，无法目测的内容只显示企业中心原始资料文字。`;
   const customization = p.highlightPoints.slice(0, 2).join('、') || '定制项可按需求确认';
   const shortPoint = (value: string, max = 14) => Array.from(String(value || '')).slice(0, max).join('');
-  const openingVoice = appliance ? '榨汁杯好看，不好洗也白搭。' : `${shortPoint(compactBriefCategory(p), 6)}只看图片，真不够。`;
+  const openingVoice = [
+    appliance ? '榨汁杯好看，不好洗也白搭。' : `${shortPoint(compactBriefCategory(p), 6)}只看图片，真不够。`,
+    `先别看宣传，先看${shortPoint(proofPoints[0], 8)}。`,
+    '这款值不值得选？先核对一个细节。',
+    `同类产品很多，${shortPoint(proofPoints[0], 8)}先看清。`,
+    '采购前，我会先把这个细节拍清楚。',
+    `${shortPoint(p.name, 10)}，先从一个真实细节开始。`,
+  ][variant] || `${shortPoint(compactBriefCategory(p), 6)}先看真实细节。`;
   const firstVoice = appliance && /容量\s*420/i.test(p.firstPoint)
     ? '420毫升，通勤一杯刚刚好。'
-    : `${shortPoint(p.firstPoint, 12)}，细节拍给你看。`;
+    : `${shortPoint(proofPoints[1], 12)}，镜头拉近看。`;
   const proofVoice = appliance && /可拆洗|拆洗/.test(`${p.highlights} ${p.thirdPoint}`)
     ? '杯体能拆，清洗不用绕弯。'
-    : /304/.test(p.thirdPoint) ? '刀头用料，拆开给你看。' : `${shortPoint(p.thirdPoint, 10)}，实物更有说服力。`;
+    : /304/.test(proofPoints[2]) ? '刀头用料，拆开给你看。' : `${shortPoint(proofPoints[2], 10)}，这点也看清。`;
   const customizationVoice = /logo|包装|彩盒/i.test(customization)
     ? 'LOGO和彩盒，都能做成你的品牌。'
-    : '想做自己的版本？样品可以先聊。';
+    : `${shortPoint(p.name, 10)}，正侧包装一次看清。`;
   return `[${time(0)}]
 环境：${sceneEnvironmentForBrief(p, 0)}；
 景别：中景；
@@ -4898,7 +4946,7 @@ function fallbackStoryboard(duration: number, productInfo = ''): string {
 画面：${detailAction.replace('；只呈现资料已确认的', '；参数卡同步标出')}
 配乐：口播 + 轻节奏鼓点，细节出现时轻微加强；
 台词：${firstVoice}
-字幕：${appliance ? '420mL · 通勤随行' : `${p.firstPoint} / ${p.secondPoint}`}
+字幕：${appliance ? '420mL · 通勤随行' : `${proofPoints[0]} / ${proofPoints[1]}`}
 
 [${time(2)}]
 环境：${sceneEnvironmentForBrief(p, 2)}；
@@ -4907,25 +4955,28 @@ function fallbackStoryboard(duration: number, productInfo = ''): string {
 画面：${proofAction}
 配乐：口播 + 短促转场音，操作瞬间降低背景音；
 台词：${proofVoice}
-字幕：${appliance ? '可拆杯体 · 清洗省事' : '实物确认 / 支持打样'}
+字幕：${appliance ? '可拆杯体 · 清洗省事' : proofPoints[2]}
 
 [${time(3)}]
 环境：${sceneEnvironmentForBrief(p, 3)}；
 景别：中近景；
 运镜：横向平移扫过选项；
-画面：把已有的包装样和LOGO位置并排放好，手指从产品移到彩盒，镜头跟随横移。
+画面：${/logo|包装|彩盒/i.test(customization) ? '把企业资料已确认的包装样和LOGO位置并排放好，手指从产品移到彩盒，镜头跟随横移。' : `把「${p.name}」正面、侧面和包装连续排开，逐一给出清晰近景。`}
 配乐：口播 + 稳定节奏，配合手指移动做轻快切点；
 台词：${customizationVoice}
-字幕：${/logo|包装|彩盒/i.test(customization) ? 'LOGO / 彩盒定制' : '先看定制样'}
+字幕：${/logo|包装|彩盒/i.test(customization) ? 'LOGO / 彩盒定制' : p.name}
 
 [${time(4)}]
 环境：${sceneEnvironmentForBrief(p, 4)}；
 景别：中景；
 运镜：固定镜头，最后轻推到资料页或询盘窗口；
-画面：展示样品、资料页或包装箱，屏幕短字幕放 MOQ、认证、报价和打样信息，最后停在询盘动作。
+画面：镜头回到「${p.name}」和企业中心已填写的产品资料；只显示已有的${[p.moq ? `MOQ ${p.moq}` : '', p.cert ? `认证 ${p.cert}` : '', p.price ? `价格 ${p.price}` : ''].filter(Boolean).join('、') || '产品名称与已确认卖点'}，最后停在询盘窗口。
 配乐：口播 + 收束感配乐，结尾留出 CTA 停顿；
-台词：想测样？发我数量和市场。
-字幕：${p.moq !== '可按需求确认' ? `发数量 · MOQ ${p.moq}` : '发数量 · 拿样品报价'}`;
+台词：${[
+    '想进一步了解？发我数量和市场。', '想看完整资料？告诉我你的市场。', '需要这款？发我目标市场。',
+    '想核对采购细节？给我留个消息。', '需要产品资料？发我你的需求。', '告诉我采购市场，我把资料发给你。',
+  ][variant] || '发我你的采购需求。'}
+字幕：${p.moq ? `MOQ ${p.moq}` : '发送采购需求'}`;
 }
 
 function fallbackMaterialStoryboard(infos: ScriptMaterialInfo[], duration: number, productInfo = ''): string {
@@ -4978,12 +5029,11 @@ function fallbackMaterialStoryboard(infos: ScriptMaterialInfo[], duration: numbe
           : info.folder === 'factory' ? '样品到大货都能接'
             : info.folder === 'packaging' ? '做成你的品牌'
               : info.folder === 'scene' || info.folder === 'model' ? '让客户看见使用场景'
-              : task;
-    const fittedVoice = fitSpeechToShot(voice, Math.max(0.5, end - start));
+                : task;
     return `[${start}-${Math.max(start + 0.5, end)}s]
 素材：${info.name}
 画面：使用素材《${info.name}》作为「${p}」的${task}，原速截取主体最清楚、动作最完整的位置，并在动作结束点切入下一镜。
-人物说：“${fittedVoice}”
+人物说：“${voice}”
 字幕：${salesSubtitle}`;
   }).join('\n\n');
 }

@@ -28,7 +28,7 @@ import { SocialPlatformIcon } from './SocialPlatformIcon';
 type ViewMode = 'materials' | 'create' | 'publish' | 'accounts';
 type PublishPlatform = 'youtube' | 'tiktok' | 'instagram' | 'facebook';
 
-type PublishDraft = {
+type PublishDraftItem = {
   videoPath?: string;
   previewUrl?: string;
   title: string;
@@ -36,6 +36,10 @@ type PublishDraft = {
   ratio?: string;
   sourceProjectId?: string;
   platform?: PublishPlatform;
+};
+
+type PublishDraft = PublishDraftItem & {
+  items?: PublishDraftItem[];
 };
 
 type PublishAccount = {
@@ -148,7 +152,7 @@ function browserVideoUrl(value: string | undefined): string {
   return '';
 }
 
-function createPublishItem(draft?: PublishDraft | null, targetAccountIds: string[] = []): PublishQueueItem {
+function createPublishItem(draft?: PublishDraftItem | null, targetAccountIds: string[] = []): PublishQueueItem {
   const sourcePlatform = draft?.platform;
   const initialCopy: Record<string, PlatformCopy> = sourcePlatform
     ? {
@@ -178,6 +182,34 @@ function createPublishItem(draft?: PublishDraft | null, targetAccountIds: string
     status: 'draft',
     completedTargets: 0,
   };
+}
+
+function expandPublishDraft(draft?: PublishDraft | null): PublishDraftItem[] {
+  if (!draft) return [];
+  const { items, ...base } = draft;
+  if (!items?.length) return [base];
+  return items.map(item => ({ ...base, ...item }));
+}
+
+function createPublishItems(draft?: PublishDraft | null, targetAccountIds: string[] = []): PublishQueueItem[] {
+  const drafts = expandPublishDraft(draft);
+  return drafts.length
+    ? drafts.map(item => createPublishItem(item, targetAccountIds))
+    : [createPublishItem(null, targetAccountIds)];
+}
+
+function mergePublishItems(previous: PublishQueueItem[], additions: PublishQueueItem[]): PublishQueueItem[] {
+  if (!additions.length) return previous;
+  const onlyBlank = previous.length === 1 && !previous[0].videoPath.trim() && !previous[0].title.trim();
+  const base = onlyBlank ? [] : previous;
+  const existingKeys = new Set(base.map(item => item.videoPath.trim() || item.title.trim()).filter(Boolean));
+  const unique = additions.filter(item => {
+    const key = item.videoPath.trim() || item.title.trim();
+    if (!key || existingKeys.has(key)) return false;
+    existingKeys.add(key);
+    return true;
+  });
+  return unique.length ? [...base, ...unique] : previous;
 }
 
 function dateTimeLocalValue(date: Date): string {
@@ -350,7 +382,7 @@ export default function TrafficPage({
 function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => void; draft?: PublishDraft | null }) {
   const [workspaceTab, setWorkspaceTab] = useState<'schedule' | 'publish'>(() => draft || readStoredPublishDraft() ? 'publish' : 'schedule');
   const [accounts, setAccounts] = useState<PublishAccount[]>([]);
-  const [items, setItems] = useState<PublishQueueItem[]>(() => [createPublishItem(draft || readStoredPublishDraft())]);
+  const [items, setItems] = useState<PublishQueueItem[]>(() => createPublishItems(draft || readStoredPublishDraft()));
   const [activeItemId, setActiveItemId] = useState('');
   const [batchPathsOpen, setBatchPathsOpen] = useState(false);
   const [batchPaths, setBatchPaths] = useState('');
@@ -679,9 +711,9 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
     if (!draft) return;
     const fingerprint = JSON.stringify(draft);
     if (fingerprint === appliedDraftRef.current) return;
-    const next = createPublishItem(draft, connectedAccounts.map(account => account.id));
-    setItems(prev => [...prev, next]);
-    setActiveItemId(next.id);
+    const additions = createPublishItems(draft, connectedAccounts.map(account => account.id));
+    setItems(prev => mergePublishItems(prev, additions));
+    setActiveItemId(additions[0]?.id || '');
     setWorkspaceTab('publish');
     appliedDraftRef.current = fingerprint;
   }, [draft]);
@@ -1110,29 +1142,10 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
         ) : (
         <>
 
-        <section data-lingshu-guide="publishing-workbench" className="rounded-2xl border border-emerald-200 bg-white p-5 shadow-sm ring-2 ring-emerald-50">
-          <div className="flex flex-wrap items-start justify-between gap-4">
-            <div>
-              <div className="flex items-center gap-2">
-                <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-accent-glow text-accent">
-                  <Send size={16} />
-                </span>
-                <div>
-                  <h2 className="text-lg font-bold text-text-primary">一键发布与内容排产</h2>
-                </div>
-              </div>
-            </div>
-            <div className="flex gap-2">
-              <button type="button" onClick={() => void loadAccounts()} disabled={loading} className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-border text-text-muted hover:text-text-primary disabled:opacity-50">
-                <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
-              </button>
-              <button type="button" onClick={() => onNavigate?.('channels')} className="rounded-lg border border-border px-3 py-2 text-xs font-semibold text-text-secondary hover:border-accent hover:text-accent">
-                管理账号授权
-              </button>
-            </div>
-          </div>
-
-          <div className="mt-5 border-t border-border pt-4">
+        <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+          <section className="space-y-4">
+        <section data-lingshu-guide="publishing-workbench" className="rounded-2xl border border-emerald-200 bg-white p-4 shadow-sm ring-1 ring-emerald-50">
+          <div>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 className="text-sm font-bold text-text-primary">发布队列</h3>
@@ -1149,13 +1162,13 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                 />
                 <button type="button" onClick={() => videoInputRef.current?.click()} disabled={uploadingVideos} className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-xs font-bold text-white disabled:opacity-50">
                   {uploadingVideos ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
-                  {uploadingVideos ? '正在加入...' : '选择视频'}
+                  {uploadingVideos ? '加入中' : '选择'}
                 </button>
                 <button type="button" onClick={() => setBatchPathsOpen(open => !open)} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold text-text-secondary hover:border-accent hover:text-accent">
-                  <Film size={13} /> 批量路径
+                  <Film size={13} /> 路径
                 </button>
                 <button type="button" onClick={addPublishItem} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold text-text-secondary hover:border-accent hover:text-accent">
-                  <Plus size={13} /> 添加空白
+                  <Plus size={13} /> 空白
                 </button>
                 <button
                   type="button"
@@ -1164,10 +1177,10 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                   title="复制当前视频的标题、发布配文、分平台文案、首评和询盘追踪设置；不会覆盖视频文件、账号和排期"
                   className="inline-flex items-center gap-1.5 rounded-lg border border-accent/30 bg-accent-glow px-3 py-2 text-xs font-bold text-accent hover:border-accent disabled:cursor-not-allowed disabled:opacity-40"
                 >
-                  <Copy size={13} /> 当前发布内容应用到全部
+                  <Copy size={13} /> 同步内容
                 </button>
                 <button type="button" onClick={toggleAllQueueItems} className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">
-                  {allQueueItemsSelected ? '取消全选素材' : '全选所有素材'}
+                  {allQueueItemsSelected ? '取消全选' : '全选'}
                 </button>
               </div>
             </div>
@@ -1228,7 +1241,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
 
         </section>
 
-        <section data-lingshu-guide="publish-accounts" className="rounded-2xl border border-border bg-white p-5 shadow-sm">
+        <section data-lingshu-guide="publish-accounts" className="rounded-2xl border border-border bg-white p-4 shadow-sm">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h3 className="text-sm font-bold text-text-primary">平台账号选择</h3>
@@ -1248,7 +1261,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
               </div>
             </div>
 
-          <div className="mt-3 grid gap-3 md:grid-cols-4">
+          <div className="mt-3 grid gap-2 md:grid-cols-3">
             {loading ? (
               <div className="col-span-full flex items-center justify-center gap-2 rounded-xl border border-border bg-surface py-10 text-sm text-text-muted">
                 <Loader2 size={16} className="animate-spin" /> 正在读取已授权账号...
@@ -1262,20 +1275,20 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
               const meta = PLATFORM_META[account.platform];
               const active = Boolean(activeItem?.targetAccountIds.includes(account.id));
               return (
-                <button key={account.id} type="button" onClick={() => toggleAccount(account.id)} disabled={account.status !== 'connected'} className={`rounded-xl border p-3 text-left transition-all disabled:cursor-not-allowed disabled:opacity-55 ${active ? 'border-accent bg-accent-glow shadow-sm' : 'border-border bg-surface hover:border-border-bright'}`}>
+                <button key={account.id} type="button" onClick={() => toggleAccount(account.id)} disabled={account.status !== 'connected'} className={`rounded-xl border p-2.5 text-left transition-all disabled:cursor-not-allowed disabled:opacity-55 ${active ? 'border-accent bg-accent-glow shadow-sm' : 'border-border bg-surface hover:border-border-bright'}`}>
                   <div className="flex items-center justify-between gap-3">
                     {account.avatarUrl ? (
                       <img src={account.avatarUrl} alt={account.title} className="h-10 w-10 rounded-xl object-cover" />
                     ) : (
-                      <span className="flex h-10 w-10 items-center justify-center rounded-xl text-white" style={{ background: meta.color }}>
-                        <SocialPlatformIcon platform={account.platform} size={23} />
+                      <span className="flex h-9 w-9 items-center justify-center rounded-xl text-white" style={{ background: meta.color }}>
+                        <SocialPlatformIcon platform={account.platform} size={20} />
                       </span>
                     )}
                     <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${account.status === 'connected' ? 'bg-green-50 text-green-700' : 'bg-slate-100 text-text-muted'}`}>
                       {account.status === 'connected' ? '已连接' : '需重新授权'}
                     </span>
                   </div>
-                  <p className="mt-3 inline-flex items-center gap-1.5 text-sm font-bold text-text-primary"><SocialPlatformIcon platform={account.platform} size={16} /> {meta.label}</p>
+                  <p className="mt-2 inline-flex items-center gap-1.5 text-sm font-bold text-text-primary"><SocialPlatformIcon platform={account.platform} size={16} /> {meta.label}</p>
                   <p className="mt-1 truncate text-xs font-semibold text-text-secondary">{account.handle || account.title}</p>
                   <p className="mt-2 text-xs text-text-muted">{meta.format}</p>
                 </button>
@@ -1284,19 +1297,9 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
           </div>
         </section>
 
-        <div className="grid gap-5 lg:grid-cols-[minmax(0,1fr)_340px]">
-          <section className="space-y-5">
-            <div id="publishing-content-editor" className="scroll-mt-24 rounded-2xl border border-border bg-white p-5 shadow-sm">
+            <div id="publishing-content-editor" className="scroll-mt-24 rounded-2xl border border-border bg-white p-4 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <h3 className="text-sm font-bold text-text-primary">内容编辑</h3>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {activeItem?.sourcePlatform && (
-                    <span className="inline-flex items-center gap-1 rounded-full bg-accent-glow px-2.5 py-1 text-[10px] font-bold text-accent">
-                      <SocialPlatformIcon platform={activeItem.sourcePlatform} size={13} /> AI智能素材 · {PLATFORM_META[activeItem.sourcePlatform].label}
-                    </span>
-                  )}
-                  <span className="rounded-full bg-surface-2 px-2.5 py-1 text-[10px] font-bold text-text-secondary">{activeItem?.ratio || previewRatio}</span>
-                </div>
               </div>
               <div className="mt-4 space-y-3">
                 <label className="block">
@@ -1309,7 +1312,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                 </label>
                 <label className="block">
                   <span className="mb-1.5 block text-[11px] font-semibold text-text-secondary">发布配文</span>
-                  <textarea value={activeItem?.description || ''} onChange={event => activeItem && updateItem(activeItem.id, { description: event.target.value, status: 'draft', error: undefined })} rows={5} placeholder="输入卖点、脚本摘要和 hashtag" className="w-full resize-none rounded-xl border border-border bg-surface px-3 py-2.5 text-sm outline-none focus:border-accent" />
+                  <textarea value={activeItem?.description || ''} onChange={event => activeItem && updateItem(activeItem.id, { description: event.target.value, status: 'draft', error: undefined })} rows={3} placeholder="输入卖点、脚本摘要和 hashtag" className="w-full resize-none rounded-xl border border-border bg-surface px-3 py-2.5 text-sm outline-none focus:border-accent" />
                 </label>
                 <div className="rounded-xl border border-emerald-100 bg-emerald-50/80 p-3">
                   <label className="flex cursor-pointer items-start gap-3">
@@ -1320,15 +1323,38 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                     </span>
                   </label>
                 </div>
+                <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
+                  <p className="text-[11px] text-text-muted">
+                    {activeCalendarPost
+                      ? '保存会同步更新内容日历；保存成功后可在右侧确认并真实发布。'
+                      : '保存后进入待发布队列，可立即发布或排期。'}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => void saveCurrentContent()}
+                    disabled={savingContent || !activeItem || activeItem.status === 'publishing' || activeItem.status === 'scheduled' || activeItem.status === 'published'}
+                    className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-black text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-45"
+                  >
+                    {savingContent ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                    {savingContent
+                      ? '正在保存...'
+                      : activeCalendarPost
+                        ? activeItem?.status === 'ready' ? '日历修改已保存' : '保存日历修改'
+                        : activeItem?.status === 'ready' ? '已保存到待发布内容' : '保存并加入待发布内容'}
+                  </button>
+                </div>
               </div>
             </div>
 
-            <div className="rounded-2xl border border-border bg-white p-5 shadow-sm">
-              <div className="flex items-center justify-between gap-3">
+            <details className="rounded-2xl border border-border bg-white p-4 shadow-sm">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
                 <div>
                   <h3 className="text-sm font-bold text-text-primary">分平台发布内容</h3>
                   <p className="mt-1 text-xs text-text-muted">每个平台文案互不相同，单卡可换一版。</p>
                 </div>
+                <span className="rounded-lg border border-border px-3 py-2 text-xs font-bold text-text-secondary">展开编辑</span>
+              </summary>
+              <div className="mt-4 flex justify-end">
                 <button type="button" onClick={() => void adaptCopy()} disabled={adapting || selectedPlatforms.length === 0} className="inline-flex items-center gap-2 rounded-lg bg-accent px-3 py-2 text-xs font-bold text-white disabled:opacity-50">
                   {adapting ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
                   一键生成
@@ -1357,30 +1383,10 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                   );
                 })}
               </div>
-              <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-                <p className="text-[11px] text-text-muted">
-                  {activeCalendarPost
-                    ? '保存会同步更新内容日历；保存成功后可在右侧确认并真实发布。'
-                    : '保存后才会进入上方“待发布内容”，之后可手动拖入日历或让 AI 排布。'}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => void saveCurrentContent()}
-                  disabled={savingContent || !activeItem || activeItem.status === 'publishing' || activeItem.status === 'scheduled' || activeItem.status === 'published'}
-                  className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-black text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-45"
-                >
-                  {savingContent ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-                  {savingContent
-                    ? '正在保存...'
-                    : activeCalendarPost
-                      ? activeItem?.status === 'ready' ? '日历修改已保存' : '保存日历修改'
-                      : activeItem?.status === 'ready' ? '已保存到待发布内容' : '保存并加入待发布内容'}
-                </button>
-              </div>
-            </div>
+            </details>
           </section>
 
-          <aside ref={publishSettingsRef} className="scroll-mt-24 rounded-2xl border border-border bg-white p-5 shadow-sm">
+          <aside ref={publishSettingsRef} className="scroll-mt-24 rounded-2xl border border-border bg-white p-4 shadow-sm xl:sticky xl:top-4 xl:max-h-[calc(100vh-7rem)] xl:overflow-y-auto">
             <h3 className="text-sm font-bold text-text-primary">发布设置</h3>
             <div data-lingshu-guide="publish-mode" className="mt-4 rounded-2xl border border-border bg-surface p-3">
               <p className="text-[11px] font-bold text-text-secondary">当前视频的发布方式</p>
@@ -1445,7 +1451,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
 
             <label className="mt-4 block">
               <span className="mb-1.5 block text-[11px] font-semibold text-text-secondary">首条评论</span>
-              <textarea value={activeItem?.firstComment || ''} onChange={event => activeItem && updateItem(activeItem.id, { firstComment: event.target.value, status: 'draft' })} rows={4} placeholder="hashtags、wa.me 链接或补充说明。平台不支持时会记录 warning。" className="w-full resize-none rounded-xl border border-border bg-surface px-3 py-2.5 text-xs outline-none focus:border-accent" />
+              <textarea value={activeItem?.firstComment || ''} onChange={event => activeItem && updateItem(activeItem.id, { firstComment: event.target.value, status: 'draft' })} rows={3} placeholder="hashtags、wa.me 链接或补充说明。平台不支持时会记录 warning。" className="w-full resize-none rounded-xl border border-border bg-surface px-3 py-2.5 text-xs outline-none focus:border-accent" />
             </label>
 
             <div className="mt-5 rounded-xl border border-green-100 bg-green-50 p-3">
@@ -1475,9 +1481,6 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                 : activeCalendarPost && activeItem?.deliveryMode === 'now'
                   ? `确认并真实发布 · ${publishableItems.length} 条`
                   : `群发选中素材 · ${publishableItems.length} 条 / ${selectedAssignments} 个账号目标`}
-            </button>
-            <button type="button" onClick={() => setWorkspaceTab('schedule')} className="mt-2 w-full rounded-xl border border-border px-4 py-3 text-sm font-bold text-text-secondary hover:border-accent hover:text-accent">
-              返回顶部内容排产
             </button>
           </aside>
         </div>
