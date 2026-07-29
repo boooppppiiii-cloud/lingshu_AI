@@ -2839,6 +2839,11 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   const sortLabel = sortMode === 'crawlTime' ? '按爬取时间' : '按热度';
   const contentFormatLabel = contentFormat === 'video' ? '视频' : '图文';
 
+  const openMaterialSmartGeneration = () => {
+    window.dispatchEvent(new CustomEvent('lingshu:navigate', { detail: { page: 'traffic', view: 'create' } }));
+    onNavigate?.('traffic');
+  };
+
   useEffect(() => {
     if (selectedVideo) { onScriptPanelOpen?.(); }
     else { onScriptPanelClose?.(); }
@@ -3621,15 +3626,26 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
                   <h3 className="text-base font-bold text-text-primary">社媒素材库</h3>
                   <p className="mt-1 text-sm text-text-muted">本地拍摄、Seedance 2.0 生成、Gemini 生成、官方爆款导入的素材统一保存在这里。</p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => uploadInputRef.current?.click()}
-                  disabled={uploadingMaterial}
-                  className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-bold text-white disabled:opacity-60"
-                >
-                  {uploadingMaterial ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
-                  上传本地素材
-                </button>
+                <div className="flex shrink-0 items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => uploadInputRef.current?.click()}
+                    disabled={uploadingMaterial}
+                    className="inline-flex items-center gap-2 rounded-xl border border-border bg-white px-4 py-2.5 text-sm font-bold text-text-secondary transition hover:border-accent hover:text-accent disabled:opacity-60"
+                  >
+                    {uploadingMaterial ? <Loader2 size={15} className="animate-spin" /> : <Upload size={15} />}
+                    上传本地素材
+                  </button>
+                  <button
+                    type="button"
+                    onClick={openMaterialSmartGeneration}
+                    className="inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-sm font-bold text-white shadow-sm transition hover:brightness-95 active:scale-[0.98]"
+                  >
+                    <Sparkles size={15} />
+                    用素材智能生成
+                    <ArrowRight size={14} />
+                  </button>
+                </div>
               </div>
 
               <div className="space-y-3 rounded-2xl border border-border bg-surface p-4 shadow-sm">
