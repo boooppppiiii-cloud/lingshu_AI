@@ -559,6 +559,13 @@ function selectedProductNames(productInfo: string): string[] {
     .filter(Boolean);
 }
 
+function normalizeProductIdentity(value: string): string {
+  return String(value || '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/[\s\u00a0「」“”"'（）()【】\[\]·•・,，。；;：:!！?？/_-]+/g, '');
+}
+
 function normalizeScriptPart(value: string): string {
   return String(value || '')
     .replace(/\d+(?:\.\d+)?\s*(?:s|秒|天|day|days|%|个|pcs|件|箱|元|美元)?/gi, '#')
@@ -1488,8 +1495,12 @@ Requirements:
       .map(match => match[0])
       .filter(claim => !productSupportsNumericClaim(claim, productInfo));
     const missingProduct = !String(productInfo || '').trim();
+    const normalizedScriptIdentity = normalizeProductIdentity(script);
     const missingSelectedProduct = selectedNames.length > 0
-      && selectedNames.some(name => !script.toLowerCase().includes(name.toLowerCase()));
+      && selectedNames.some(name => {
+        const normalizedName = normalizeProductIdentity(name);
+        return normalizedName.length > 0 && !normalizedScriptIdentity.includes(normalizedName);
+      });
     const speechIssues = storyboardSpeechIssues(script);
     const groundingIssues = generationMode === 'material'
       ? materialGroundingIssues(script, productInfo, structuredMaterials)
