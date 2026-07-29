@@ -3017,6 +3017,39 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
         },
       };
     }), [localMaterials]);
+  const enterMaterialSmartGeneration = (material: Material) => {
+    const platform: TrendVideo['platform'] = /facebook/i.test(material.name) ? 'facebook'
+      : /youtube/i.test(material.name) ? 'youtube' : /instagram/i.test(material.name) ? 'instagram' : 'tiktok';
+    const title = material.name.replace(/\.[a-z0-9]+$/i, '');
+    const video: TrendVideo = {
+      id: `material-${material.id}`,
+      platform,
+      title,
+      thumbnail: material.poster || material.segments?.[0]?.poster || '',
+      duration: material.duration,
+      tags: ['本地素材'],
+      views: '本地素材',
+      trend: 'stable',
+      videoUrl: material.url,
+      status: 'analyzed',
+      crawledAt: material.createdAt,
+      contentFormat: 'video',
+    };
+    onEnterWorkflow?.({
+      source: 'material_library',
+      video,
+      generatedVideo: {
+        id: material.id,
+        title: material.name,
+        url: material.url,
+        poster: material.poster,
+        duration: material.duration,
+        createdAt: material.createdAt,
+        source: 'material_library',
+        material,
+      },
+    });
+  };
   const pinnedTitles = new Set(pinnedMaterialVideos.map(video => video.title.trim().toLowerCase()));
   const allVideos = [...pinnedMaterialVideos, ...crawledVideos.filter(video => !pinnedTitles.has(video.title.trim().toLowerCase()))];
   const accountRecommendationByVideoId = useMemo(() => {
@@ -3699,7 +3732,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
                     <button type="button" onClick={() => { setMaterialSearch(''); setMaterialIndustry('all'); setMaterialFunction('all'); setMaterialApplicability('all'); setMaterialOrientation('all'); setMaterialSource('all'); }} className="mt-2 text-xs font-bold text-accent">清空筛选条件</button>
                   </div>
                 ) : filteredMaterials.map(material => (
-                  <article key={material.id} className="overflow-hidden rounded-2xl border border-border bg-surface">
+                  <article key={material.id} className="group overflow-hidden rounded-2xl border border-border bg-surface">
                     <div className="relative aspect-[9/16] bg-surface-2">
                       {material.type === 'video' ? (
                         <>
@@ -3713,12 +3746,28 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
                             type="button"
                             aria-label={`播放 ${material.name}`}
                             onClick={() => setPreviewMaterial(material)}
-                            className="absolute inset-0 flex items-center justify-center bg-black/0 transition hover:bg-black/20 focus:bg-black/20"
+                            className="absolute inset-0 flex items-center justify-center bg-black/0 transition focus:bg-black/20"
                           >
-                            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/65 text-white shadow-lg">
+                            <span className="flex h-11 w-11 items-center justify-center rounded-full bg-black/65 text-white shadow-lg transition-opacity group-hover:opacity-0">
                               <Play size={19} fill="currentColor" />
                             </span>
                           </button>
+                          <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 bg-black/40 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+                            <button
+                              type="button"
+                              onClick={() => setPreviewMaterial(material)}
+                              className="pointer-events-auto rounded-lg bg-white px-3 py-2 text-xs font-bold text-slate-800 shadow-sm transition hover:bg-slate-100"
+                            >
+                              播放
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => enterMaterialSmartGeneration(material)}
+                              className="pointer-events-auto inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-xs font-bold text-white shadow-sm transition hover:brightness-110"
+                            >
+                              <Sparkles size={14} /> 用此素材生成
+                            </button>
+                          </div>
                         </>
                       ) : material.poster || material.url ? (
                         <img src={material.poster || material.url} alt={material.name} className="h-full w-full object-cover" />
