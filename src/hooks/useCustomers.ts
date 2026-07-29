@@ -3,7 +3,7 @@ import { authHeader } from '../lib/auth';
 import { createMockCustomers } from '../mocks/customerProfiles';
 import type { CustomerProfile, TimelineEvent } from '../types/customer';
 
-const MOCK_STORAGE_KEY = 'lingshu:mock-customer-conversations:v1';
+const MOCK_STORAGE_KEY = 'lingshu:mock-customer-conversations:v2';
 
 function storedMockCustomers(): CustomerProfile[] {
   try {

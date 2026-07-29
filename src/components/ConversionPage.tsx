@@ -257,7 +257,16 @@ function customerConversationLanguage(customer: CustomerProfile): string {
   return replyLanguage(customer);
 }
 
+function isSimpleGreeting(text: string): boolean {
+  return /^(hi|hello|hey|hola|buenas|thanks|thank you|ok|okay|are you there|你好|您好)[\s?!,.。？！]*$/i.test(text.trim());
+}
+
 function fallbackCustomerReply(customer: CustomerProfile): string {
+  if (isSimpleGreeting(latestBuyerMessage(customer))) {
+    if (replyLanguage(customer) === 'Arabic') return 'مرحبًا! شكرًا لتواصلك معنا. ما المنتج أو الطلب الذي يمكنني مساعدتك به؟';
+    if (replyLanguage(customer) === 'Spanish') return '¡Hola! Gracias por contactarnos. ¿En qué producto o necesidad podemos ayudarte?';
+    return 'Hi! Thanks for reaching out. What product or requirement can I help you with?';
+  }
   if (replyLanguage(customer) === 'Arabic') {
     return `شكرًا لرسالتك. هل يمكنك مشاركة الكمية المستهدفة والمواصفات ومتطلبات التغليف الخاصة بـ ${customer.outboundProduct}؟`;
   }
@@ -408,7 +417,7 @@ async function requestDraft(customer: CustomerProfile, instruction?: string, mod
   } catch {
     // Use local fallback when the API is unavailable in local preview.
   }
-  const draft = fallbackCustomerReplyZh(customer);
+  const draft = fallbackCustomerReply(customer);
   return { draft, originalDraft: draft, buyerMessage: latestBuyerText(customer), category: intent };
 }
 
@@ -687,6 +696,23 @@ function DraftSuggestionBar({
   onRegenerate: () => void;
 }) {
   const templateApproved = !isTemplate || templatePlan?.template.status === 'approved';
+  const [chineseDraft, setChineseDraft] = useState(containsChinese(draft) ? draft : '翻译中…');
+
+  useEffect(() => {
+    if (containsChinese(draft)) { setChineseDraft(draft); return; }
+    let cancelled = false;
+    setChineseDraft('翻译中…');
+    void fetch('/api/overseas/plugins/translate/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeader() },
+      body: JSON.stringify({ text: draft, target: '简体中文' }),
+    }).then(async response => {
+      const data = await response.json().catch(() => ({}));
+      if (!cancelled) setChineseDraft(response.ok && data.translatedText ? String(data.translatedText).trim() : '中文翻译暂时不可用');
+    }).catch(() => { if (!cancelled) setChineseDraft('中文翻译暂时不可用'); });
+    return () => { cancelled = true; };
+  }, [draft]);
+
   return (
     <div data-draft-suggestion className="relative ml-auto max-w-[74%] rounded-2xl rounded-tr-sm border border-dashed border-[#0891b2]/35 bg-[#0891b2]/[0.08] px-4 py-3 shadow-sm">
       <button type="button" onClick={onDismiss} className="absolute right-2 top-2 rounded-full p-1 text-text-muted hover:bg-white/70">
@@ -717,7 +743,7 @@ function DraftSuggestionBar({
           </div>
         )}
         <div className="mt-2 rounded-xl border border-[#0891b2]/15 bg-white/70 px-3 py-2 text-xs leading-relaxed text-text-secondary">
-          <span className="font-bold text-text-primary">{'\u4e2d\u6587\u8349\u7a3f\uff1a'}</span>{draft}
+          <span className="font-bold text-text-primary">中文翻译：</span>{chineseDraft}
         </div>
         {!priceRulesReady && (
           <button
@@ -1601,6 +1627,11 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
 
   useEffect(() => {
     if (!selected) return;
+    if (selected.isMock) {
+      setDraftSuggestion(null);
+      setDraftMeta(null);
+      return;
+    }
     const lastBuyer = [...selected.timeline].reverse().find(event => event.type === 'whatsapp' && event.actor === 'buyer');
     if (!lastBuyer) return;
     if (isWaitingForHumanQuote(selected)) {
