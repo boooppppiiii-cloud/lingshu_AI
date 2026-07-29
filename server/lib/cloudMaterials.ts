@@ -16,9 +16,9 @@ export async function listCloudMaterials(): Promise<Array<Record<string, unknown
     size: humanSize(Number(item.sizeBytes || 0)),
     file: String(item.videoFile || ''),
     url: `/cloud-files/${item.id}/media.mp4`,
-    // 始终提供同源封面端点；旧云端素材没有 posterFile 时，路由会从视频
-    // 按需抽帧并缓存，避免浏览器直接读取受保护视频失败后显示灰块。
-    poster: `/api/overseas/studio/materials/pb/${item.id}/poster`,
+    // 封面和视频统一走浏览器友好的媒体命名空间。避免部分浏览器把
+    // `/api/...` 图片当作接口响应拦截，也便于两者复用同一套签名链路。
+    poster: `/cloud-files/${item.id}/poster.jpg`,
     scope: String(item.scope || 'shared'),
     usage: String(item.usage || 'editable'),
     sourceType: String(item.sourceType || 'licensed_upload'),

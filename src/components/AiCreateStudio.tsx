@@ -2253,23 +2253,6 @@ function RealThumb({ clip, onSourceError }: { clip: Clip; onSourceError?: () => 
       )}
       {clip.type === 'video' && (
         <>
-          {capturedPoster
-            ? <img src={capturedPoster} alt={clip.name} className="h-full w-full object-cover" draggable={false} />
-            : <>
-                {!frameReady && <div className="absolute inset-0 animate-pulse bg-slate-200" />}
-                <video
-                  ref={videoRef}
-                  src={clip.url}
-                  muted
-                  playsInline
-                  preload="auto"
-                  className={`h-full w-full object-cover transition-opacity ${frameReady ? 'opacity-100' : 'opacity-0'}`}
-                  onLoadedMetadata={seekThumbnailFrame}
-                  onLoadedData={seekThumbnailFrame}
-                  onSeeked={captureThumbnailFrame}
-                  onError={() => { setFrameReady(true); onSourceError?.(); }}
-                />
-              </>}
           {useServerPoster && (
             <img
               src={clip.poster}
@@ -2280,6 +2263,23 @@ function RealThumb({ clip, onSourceError }: { clip: Clip; onSourceError?: () => 
               onError={() => { setPosterFailed(true); onSourceError?.(); }}
             />
           )}
+          {!useServerPoster && (capturedPoster
+            ? <img src={capturedPoster} alt={clip.name} className="h-full w-full object-cover" draggable={false} />
+            : <>
+                {!frameReady && <div className="absolute inset-0 animate-pulse bg-slate-200" />}
+                <video
+                  ref={videoRef}
+                  src={clip.url}
+                  muted
+                  playsInline
+                  preload="metadata"
+                  className={`h-full w-full object-cover transition-opacity ${frameReady ? 'opacity-100' : 'opacity-0'}`}
+                  onLoadedMetadata={seekThumbnailFrame}
+                  onLoadedData={seekThumbnailFrame}
+                  onSeeked={captureThumbnailFrame}
+                  onError={() => { setFrameReady(true); onSourceError?.(); }}
+                />
+              </>)}
         </>
       )}
       {clip.type === 'audio' && (
