@@ -5096,10 +5096,20 @@ export async function analyzeDownloadedVideoWithFallback(opts: {
           const batch = chunks.slice(offset, offset + concurrency);
           const results = await Promise.all(batch.map(async (file, batchIndex) => {
             const index = offset + batchIndex;
-            const result = await Promise.race([
-              transcribeAudioWithQwen({ audio: fs.readFileSync(path.join(asrDir, file)), fileName: file }),
-              new Promise<{ text: string; segments: [] }>(resolve => setTimeout(() => resolve({ text: '', segments: [] }), asrTimeoutMs)),
-            ]);
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), asrTimeoutMs);
+            let result: { text: string; segments: Array<{ start: number; end: number; text: string }> } = { text: '', segments: [] };
+            try {
+              result = await transcribeAudioWithQwen({
+                audio: fs.readFileSync(path.join(asrDir, file)),
+                fileName: file,
+                signal: controller.signal,
+              });
+            } catch (error) {
+              console.warn(`[videos] Qwen ASR chunk ${index} skipped after ${asrTimeoutMs}ms:`, error instanceof Error ? error.message : error);
+            } finally {
+              clearTimeout(timer);
+            }
             return result.text ? {
               start: index * asrSegmentSeconds,
               end: Math.min(Number(opts.duration) || (index + 1) * asrSegmentSeconds, (index + 1) * asrSegmentSeconds),

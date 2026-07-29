@@ -33,13 +33,13 @@ export interface ImagePostEvidenceAnalysis {
   reusableModules: Array<{ module: string; evidence: string; preserve: string; replace: string; confidence: number }>;
   uncertainties: string[];
 }
-export async function transcribeAudioWithQwen(opts: { audio: Buffer; fileName?: string }): Promise<{ text: string; segments: QwenAsrSegment[] }> {
+export async function transcribeAudioWithQwen(opts: { audio: Buffer; fileName?: string; signal?: AbortSignal }): Promise<{ text: string; segments: QwenAsrSegment[] }> {
   const completion = await client().chat.completions.create({
     model: process.env.QWEN_ASR_MODEL || 'qwen3-asr-flash',
     messages: [{ role: 'user', content: [{ type: 'input_audio', input_audio: { data: `data:audio/mpeg;base64,${opts.audio.toString('base64')}` } }] as any }],
     stream: false,
     asr_options: { enable_itn: true },
-  } as any);
+  } as any, opts.signal ? { signal: opts.signal } : undefined);
   const text = String(completion.choices[0]?.message?.content || '').trim();
   return { text, segments: text ? [{ start: 0, end: 0, text }] : [] };
 }
