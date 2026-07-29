@@ -2717,7 +2717,9 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   const [bgm, setBgm] = useState('');   // 无内置曲库，默认不选
   const [bgmCandidates, setBgmCandidates] = useState<string[]>([]);
   const [platformBgms, setPlatformBgms] = useState<Record<string, string>>({});
+  const [assemblyBgms, setAssemblyBgms] = useState<Record<string, string>>({});
   const [bgmMatchMode, setBgmMatchMode] = useState<'smart' | 'unified'>('smart');
+  const [bgmLibraryOpen, setBgmLibraryOpen] = useState(false);
   const [soundCandidatesPerContent, setSoundCandidatesPerContent] = useState<1 | 2>(1);
   const [bgmVol, setBgmVol] = useState(35);
   const [voiceVol, setVoiceVol] = useState(100);
@@ -5346,7 +5348,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     videoThemeId, themePainPoint, themeConversionGoal,
     selected, scriptRecommendedMaterialIds, storyboardAssignments, storyboardSourcePlans, assemblyName,
     storyboardAssemblies: assembliesForSave, activeAssemblyId, script, scriptType, voice, voiceCandidates,
-    bgm, bgmCandidates, soundCandidatesPerContent, bgmVol, voiceVol, cover, coverTitle, coverStyle, account, caption,
+    bgm, bgmCandidates, platformBgms, assemblyBgms, soundCandidatesPerContent, bgmVol, voiceVol, cover, coverTitle, coverStyle, account, caption,
     subtitlesOn, subMode, clipEdits, voiceoverMode, uploadedVoiceName, customVoiceId, customVoiceName, customVoiceUrl,
     ttsPreset, ttsEmotion, ttsEmotionIntensity, ttsSpeed, ttsPauseStyle, ttsPronunciationText, ttsLanguageSettings, voiceLangs, activeVoiceLang, voiceDrafts, voiceDraftStaleLangs,
     voiceoverAudios, languageRenderOutputs, languageRenderVersions, referenceVoiceStrength, useReferenceVoiceStyle, alignedCuesByLang,
@@ -5434,6 +5436,8 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     if (s.alignedCuesByLang && typeof s.alignedCuesByLang === 'object') setAlignedCuesByLang(s.alignedCuesByLang as Record<string, SubCue[]>);
     if (s.bgm) setBgm(s.bgm as string);
     if (Array.isArray(s.bgmCandidates)) setBgmCandidates(s.bgmCandidates as string[]);
+    if (s.platformBgms && typeof s.platformBgms === 'object') setPlatformBgms(s.platformBgms as Record<string, string>);
+    if (s.assemblyBgms && typeof s.assemblyBgms === 'object') setAssemblyBgms(s.assemblyBgms as Record<string, string>);
     if (s.soundCandidatesPerContent === 1 || s.soundCandidatesPerContent === 2) setSoundCandidatesPerContent(s.soundCandidatesPerContent);
     if (typeof s.bgmVol === 'number') setBgmVol(s.bgmVol);
     if (typeof s.voiceVol === 'number') setVoiceVol(s.voiceVol);
@@ -7428,22 +7432,54 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         const activePlatform = PLATFORMS.find(item => item.id === platform) || PLATFORMS[0];
         const assignBgm = (trackId: string) => {
           setBgm(trackId);
+          setAssemblyBgms(current => ({ ...current, [activeAssemblyId]: trackId }));
           setPlatformBgms(current => bgmMatchMode === 'unified'
             ? Object.fromEntries(PLATFORMS.map(item => [item.id, trackId]))
             : { ...current, [activePlatform.id]: trackId });
         };
-        const switchBgmPlatform = (platformId: string) => {
-          const target = PLATFORMS.find(item => item.id === platformId);
+        const switchBgmAssembly = (targetId: string) => {
+          if (targetId === activeAssemblyId) return;
+          const target = storyboardAssemblies.find(item => item.id === targetId);
           if (!target) return;
-          setPlatform(target.id);
-          setRatio(target.ratio);
-          setBgm(platformBgms[target.id] || '');
+          const current: StoryboardAssembly = { id: activeAssemblyId, name: assemblyName, assignments: storyboardAssignments, sourcePlans: storyboardSourcePlans, selected };
+          setStoryboardAssemblies(items => items.map(item => item.id === activeAssemblyId ? current : item));
+          setActiveAssemblyId(target.id);
+          setAssemblyName(target.name);
+          setStoryboardAssignments(target.assignments);
+          setStoryboardSourcePlans(target.sourcePlans);
+          setSelected(target.selected);
+          setBgm(assemblyBgms[target.id] || '');
+          stopPreview();
+        };
+        const batchAssignBgms = () => {
+          const candidates = (bgmCandidates.length ? bgmCandidates.map(id => bgms.find(track => track.id === id)) : bgms)
+            .filter((track): track is Bgm => Boolean(track));
+          if (!candidates.length) {
+            setModeNotice('配乐库暂无可用音乐，请先展开配乐库并上传音乐。');
+            setBgmLibraryOpen(true);
+            return;
+          }
+          const next = Object.fromEntries(storyboardAssemblies.map((item, index) => [item.id, candidates[index % candidates.length]!.id]));
+          setAssemblyBgms(next);
+          setBgm(next[activeAssemblyId] || candidates[0]!.id);
+          setBgmMatchMode('smart');
+          setPreviewBgmOn(true);
+          setModeNotice(`已按版本节奏为 ${storyboardAssemblies.length} 个素材版本批量匹配配乐；可逐个版本继续手动调整。`);
         };
         return (
-          <div className="grid items-start gap-6 xl:grid-cols-[minmax(520px,760px)_minmax(340px,420px)]">
-          <div className="min-w-0 max-w-2xl">
+          <div className="grid items-start gap-6 xl:grid-cols-[minmax(560px,1fr)_minmax(360px,460px)]">
+          <div className="min-w-0">
+            <div className="mb-4 overflow-hidden rounded-2xl border border-border bg-surface shadow-sm">
+              <button type="button" onClick={() => setBgmLibraryOpen(open => !open)} className="flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left hover:bg-surface-2/60">
+                <span className="min-w-0">
+                  <span className="block text-sm font-black text-text-primary">配乐库</span>
+                  <span className="mt-0.5 block truncate text-[11px] text-text-muted">{selectedBgmTrack ? `当前：${selectedBgmTrack.name}` : `${bgms.length} 首音乐 · 点击展开选择`}</span>
+                </span>
+                <span className="flex shrink-0 items-center gap-2 text-[11px] font-bold text-accent">{bgmLibraryOpen ? '收起乐库' : '展开乐库'}<ChevronDown size={15} className={`transition ${bgmLibraryOpen ? 'rotate-180' : ''}`} /></span>
+              </button>
+              {bgmLibraryOpen && <div className="border-t border-border p-4">
             <div className="flex items-center justify-between mb-4">
-              <SectionTitle title="平台版本配乐" desc={`当前编辑：${activePlatform.label} · ${activePlatform.ratio}；每个版本使用一首主配乐`} noMargin />
+              <SectionTitle title="选择配乐" desc="试听后可应用到当前素材版本，也可加入批量候选" noMargin />
               <input ref={bgmInputRef} type="file" accept="audio/*" className="hidden"
                 onChange={e => { void handleBgmUpload(e.target.files); e.target.value = ''; }} />
               <button onClick={() => bgmInputRef.current?.click()} disabled={bgmUploading}
@@ -7476,7 +7512,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                 <button onClick={() => bgmInputRef.current?.click()} className="text-xs font-semibold mt-2" style={{ color: TRAFFIC_GREEN }}>上传一首</button>
               </div>
             )}
-            <div className="space-y-2 mb-7">
+            <div className="max-h-[430px] space-y-2 overflow-y-auto pr-1">
               <button onClick={() => { assignBgm(''); setBgmCandidates([]); if (audioRef.current) audioRef.current.pause(); setPlayingBgm(null); }}
                 className="card !rounded-xl w-full p-3 flex items-center gap-3 text-left"
                 style={!bgm ? { borderColor: TRAFFIC_GREEN, boxShadow: `0 0 0 1px ${TRAFFIC_GREEN}` } : undefined}>
@@ -7558,6 +7594,61 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                 );
               })}
             </div>
+              </div>}
+            </div>
+            <section className="mb-5 rounded-2xl border border-border bg-surface p-4 shadow-sm">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-black text-text-primary">素材版本管理</p>
+                  <p className="mt-1 text-[11px] text-text-muted">展示上一步的全部视频版本；点击版本即可手动配乐并同步右侧预览。</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="rounded-md bg-accent-glow px-2 py-1 text-[10px] font-black text-accent">{storyboardAssemblies.filter(item => assemblyBgms[item.id]).length}/{storyboardAssemblies.length} 已配乐</span>
+                  <button type="button" onClick={batchAssignBgms} className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-[11px] font-black text-white">
+                    <Sparkles size={12} />一键批量配乐
+                  </button>
+                </div>
+              </div>
+              <div className="mt-4 space-y-2">
+                {storyboardAssemblies.map((item, index) => {
+                  const active = item.id === activeAssemblyId;
+                  const itemAssignments = active ? storyboardAssignments : item.assignments;
+                  const itemSelected = active ? selected : item.selected;
+                  const matched = storyboardSlots.filter(slot => Boolean(itemAssignments[slot.id])).length;
+                  const trackId = assemblyBgms[item.id] || '';
+                  const track = bgms.find(candidate => candidate.id === trackId);
+                  const firstClipId = storyboardSlots.map(slot => itemAssignments[slot.id]).find(Boolean) || itemSelected[0];
+                  const firstClip = firstClipId ? materialById.get(firstClipId) : undefined;
+                  return (
+                    <div key={item.id} className={`rounded-xl border p-3 transition ${active ? 'border-accent bg-accent/5 shadow-[0_0_0_1px_var(--color-accent)]' : 'border-border bg-white hover:border-border-bright'}`}>
+                      <button type="button" onClick={() => switchBgmAssembly(item.id)} className="flex w-full items-center gap-3 text-left">
+                        <span className="relative flex h-12 w-16 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-surface-2">
+                          {firstClip?.poster ? <img src={firstClip.poster} alt="" className="h-full w-full object-cover" /> : <Film size={17} className="text-text-muted" />}
+                          <span className="absolute bottom-1 right-1 rounded bg-black/55 px-1 text-[8px] font-bold text-white">{index + 1}</span>
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="flex items-center gap-2"><span className="text-xs font-black text-text-primary">{active ? assemblyName : item.name}</span><span className="text-[9px] font-bold text-text-muted">{matched}/{storyboardSlots.length} 分镜</span></span>
+                          <span className="mt-1 block truncate text-[10px] text-text-muted">{track ? `当前配乐：${track.name}` : '尚未配乐'}</span>
+                        </span>
+                        {active && <span className="rounded-md bg-accent px-2 py-1 text-[9px] font-black text-white">预览中</span>}
+                      </button>
+                      <div className="mt-3 flex items-center gap-2 border-t border-border/70 pt-3">
+                        <Music size={13} className="shrink-0 text-text-muted" />
+                        <select value={trackId} onClick={event => event.stopPropagation()} onChange={event => {
+                          const nextTrackId = event.target.value;
+                          setAssemblyBgms(current => ({ ...current, [item.id]: nextTrackId }));
+                          if (active) { setBgm(nextTrackId); setPreviewBgmOn(Boolean(nextTrackId)); }
+                        }} className="min-w-0 flex-1 rounded-lg border border-border bg-white px-2.5 py-2 text-[11px] font-bold text-text-secondary outline-none focus:border-accent">
+                          <option value="">不配乐</option>
+                          {bgms.map(trackItem => <option key={trackItem.id} value={trackItem.id}>{trackItem.name} · {trackItem.mood}</option>)}
+                        </select>
+                        <button type="button" onClick={() => { switchBgmAssembly(item.id); setBgmLibraryOpen(true); }} className="rounded-lg border border-border px-2.5 py-2 text-[10px] font-black text-accent hover:border-accent">打开乐库</button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
             <div data-lingshu-guide="ai-voice" className="mb-5 rounded-xl border border-accent/20 bg-accent/5 p-3">
               <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="text-xs font-black text-text-primary">声音方案</p><p className="mt-1 text-[10px] font-bold text-text-muted">{voiceCandidates.length} 个音色 · {bgmCandidates.length || 1} 个配乐方向</p></div>
                 <div className="inline-flex rounded-lg border border-border bg-white p-1">{([1, 2] as const).map(count => <button key={count} type="button" onClick={() => setSoundCandidatesPerContent(count)} className={`rounded-md px-2.5 py-1 text-[10px] font-bold ${soundCandidatesPerContent === count ? 'bg-accent text-white' : 'text-text-muted'}`}>每套保留 {count} 个</button>)}</div>
@@ -7591,39 +7682,10 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
             </div>
           </div>
           <aside className="sticky top-4 rounded-2xl border border-border bg-surface p-4 shadow-sm">
-            <div className="mb-4 border-b border-border pb-4">
-              <div className="flex items-start justify-between gap-3">
-                <div>
-                  <p className="text-sm font-black text-text-primary">多版本管理</p>
-                  <p className="mt-0.5 text-[11px] text-text-muted">灵枢已接入的 4 个海外社媒平台</p>
-                </div>
-                <span className="rounded-md bg-accent-glow px-2 py-1 text-[10px] font-black text-accent">{PLATFORMS.filter(item => platformBgms[item.id]).length}/4 已配乐</span>
-              </div>
-              <div className="mt-3 grid grid-cols-2 gap-2 rounded-xl bg-surface-2 p-1">
-                <button type="button" onClick={() => setBgmMatchMode('smart')} className={`rounded-lg px-2 py-2 text-[10px] font-black transition ${bgmMatchMode === 'smart' ? 'bg-white text-accent shadow-sm' : 'text-text-muted'}`}>每版智能匹配</button>
-                <button type="button" onClick={() => { setBgmMatchMode('unified'); setPlatformBgms(Object.fromEntries(PLATFORMS.map(item => [item.id, bgm]))); }} className={`rounded-lg px-2 py-2 text-[10px] font-black transition ${bgmMatchMode === 'unified' ? 'bg-white text-accent shadow-sm' : 'text-text-muted'}`}>全部统一配乐</button>
-              </div>
-              <div className="mt-3 space-y-2">
-                {PLATFORMS.map(item => {
-                  const trackId = platformBgms[item.id] || '';
-                  const track = bgms.find(candidate => candidate.id === trackId);
-                  const active = item.id === activePlatform.id;
-                  return <button key={item.id} type="button" onClick={() => switchBgmPlatform(item.id)} className={`flex w-full items-center gap-3 rounded-xl border p-2.5 text-left transition ${active ? 'border-accent bg-accent/5 shadow-[0_0_0_1px_var(--color-accent)]' : 'border-border hover:border-border-bright'}`}>
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-white"><SocialPlatformIcon platform={item.id} size={19} /></span>
-                    <span className="min-w-0 flex-1">
-                      <span className="flex items-center gap-2"><span className="text-xs font-black text-text-primary">{item.label}</span><span className="text-[9px] font-bold text-text-muted">{item.ratio}</span></span>
-                      <span className="mt-0.5 block truncate text-[10px] text-text-muted">{track ? `${track.name} · AI 已适配` : '待选择配乐'}</span>
-                    </span>
-                    {track ? <Check size={14} className="text-accent" /> : <span className="text-[10px] font-black text-amber-500">待处理</span>}
-                  </button>;
-                })}
-              </div>
-              <p className="mt-3 text-[10px] leading-relaxed text-text-muted">AI 会按各平台版本的时长与镜头节奏自动裁切、循环、淡入淡出，并在口播区间降低音乐音量。</p>
-            </div>
             <div className="mb-3 flex items-start justify-between gap-3">
               <div>
-                <p className="text-sm font-black text-text-primary">实时混剪预览</p>
-                <p className="mt-0.5 text-[11px] leading-relaxed text-text-muted">低清草稿 · 切换配乐后立即试听，不生成正式文件</p>
+                <p className="text-sm font-black text-text-primary">实时混剪预览 · {assemblyName}</p>
+                <p className="mt-0.5 text-[11px] leading-relaxed text-text-muted">切换左侧素材版本或配乐后立即同步试听，不生成正式文件</p>
               </div>
               <span className="shrink-0 rounded-md bg-accent-glow px-2 py-1 text-[10px] font-black text-accent">草稿</span>
             </div>
