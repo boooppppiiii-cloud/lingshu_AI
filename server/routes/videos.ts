@@ -2548,9 +2548,11 @@ async function releaseStalledExactAnalysis(): Promise<number> {
   if (!candidates.length) return 0;
 
   // 运维队列里还在排队/处理中的不抢，交给 worker 继续跑完。
-  const inFlight = new Set(loadCrawlerOpsTasks()
-    .filter(task => ['queued', 'pushed', 'processing'].includes(task.status))
-    .map(task => task.recordId));
+  const inFlight = process.env.CRAWLER_OPS_WORKER_ENABLED === '0'
+    ? new Set<string>()
+    : new Set(loadCrawlerOpsTasks()
+      .filter(task => ['queued', 'pushed', 'processing'].includes(task.status))
+      .map(task => task.recordId));
 
   let released = 0;
   for (const record of candidates) {
@@ -3041,6 +3043,31 @@ async function analyzeSourceVideoJobInner(input: {
       const previous = parseJsonRecord<Record<string, unknown>>(latest?.aiAnalysis ?? input.record?.aiAnalysis, {});
       const compactError = compactVideoPipelineError(errorMessage);
       const compactReason = compactVideoPipelineError(failureReason, 360);
+      const opsWorkerEnabled = process.env.CRAWLER_OPS_WORKER_ENABLED !== '0';
+      if (!opsWorkerEnabled && previous.requestedAnalysisMode === 'exact') {
+        // Production may intentionally pause the historical crawler-ops worker.
+        // In that mode a retryable exact-analysis failure must become a visible,
+        // retryable failure instead of entering a queue that nobody consumes.
+        await store.update(COL, recordId, {
+          status: 'analyzed' as VideoStatus,
+          aiAnalysis: JSON.stringify({
+            ...previous,
+            requestedAnalysisMode: undefined,
+            analysisMode: previous.analysisMode === 'exact' ? 'exact' : 'strategy',
+            downloadStatus: previous.analysisQuality === 'video' ? 'analyzed' : 'manual_required',
+            videoFetchStatus: previous.analysisQuality === 'video' ? 'fetched' : 'manual_required',
+            geminiStatus: previous.analysisQuality === 'video' ? 'analyzed' : 'video_failed',
+            crawlerOpsStatus: 'failed',
+            crawlerOpsReason: compactReason,
+            analysisError: compactError,
+            analysisRetryable: true,
+            analysisFailureKind: 'quality_or_timeout',
+            videoLevelFailureStatus: '全片精确分析失败，可重试',
+            downloadError: compactError,
+          }),
+        });
+        throw e;
+      }
       const opsTask = input.suppressOpsRequeue
         ? updateCrawlerOpsTask(input.opsTaskId || '', {
           status: 'failed',
