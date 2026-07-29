@@ -2188,10 +2188,9 @@ function RealThumb({ clip, onSourceError }: { clip: Clip; onSourceError?: () => 
         <img src={clip.url} alt={clip.name} className="w-full h-full object-cover" loading="lazy" onError={() => { setPosterFailed(true); onSourceError?.(); }} />
       )}
       {clip.type === 'video' && (
-        useServerPoster
-          ? <img src={clip.poster} alt={clip.name} className="w-full h-full object-cover" loading="lazy" draggable={false} onError={() => { setPosterFailed(true); onSourceError?.(); }} />
-          : capturedPoster
-            ? <img src={capturedPoster} alt={clip.name} className="w-full h-full object-cover" draggable={false} />
+        <>
+          {capturedPoster
+            ? <img src={capturedPoster} alt={clip.name} className="h-full w-full object-cover" draggable={false} />
             : <>
                 {!frameReady && <div className="absolute inset-0 animate-pulse bg-slate-200" />}
                 <video
@@ -2206,7 +2205,18 @@ function RealThumb({ clip, onSourceError }: { clip: Clip; onSourceError?: () => 
                   onSeeked={captureThumbnailFrame}
                   onError={() => { setFrameReady(true); onSourceError?.(); }}
                 />
-              </>
+              </>}
+          {useServerPoster && (
+            <img
+              src={clip.poster}
+              alt={clip.name}
+              className="absolute inset-0 h-full w-full object-cover"
+              loading="lazy"
+              draggable={false}
+              onError={() => { setPosterFailed(true); onSourceError?.(); }}
+            />
+          )}
+        </>
       )}
       {clip.type === 'audio' && (
         <div className="w-full h-full flex items-center justify-center"><Music size={20} className="text-text-muted" /></div>
