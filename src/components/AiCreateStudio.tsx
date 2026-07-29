@@ -3865,21 +3865,37 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       const preferred = selected.length
         ? selected
         : pool.filter(item => ['presenter', 'product', 'factory', 'scene', 'model', 'detail', 'upload'].includes(item.folder)).slice(0, 6).map(item => item.id);
-      const selectResp = pickMaterialClipsLocally(pool, duration, preferred);
+      const hookOnly = hookMaterialId && pool.some(item => item.id === hookMaterialId);
+      const selectResp = hookOnly ? { selectedIds: [hookMaterialId] } : pickMaterialClipsLocally(pool, duration, preferred);
       const nextSelected = (selectResp.selectedIds || []).filter(id => pool.some(item => item.id === id));
       const finalSelected = nextSelected.length ? nextSelected : (preferred.length ? preferred : pool.slice(0, 4).map(item => item.id));
       const selectedMaterialsForScript = finalSelected.map(id => pool.find(item => item.id === id)).filter(Boolean) as Clip[];
       if (hookMaterialId) selectedMaterialsForScript.sort((a, b) => Number(b.id === hookMaterialId) - Number(a.id === hookMaterialId));
       const names = selectedMaterialsForScript.map(item => item.name);
       const materialInfos = buildMaterialInfosForScript(selectedMaterialsForScript, duration, hookMaterialId);
+      if (hookOnly && materialInfos.length && materialInfos[0]!.targetEnd < duration - 0.5) {
+        let cursor = materialInfos[0]!.targetEnd;
+        let index = 2;
+        while (cursor < duration - 0.1) {
+          const end = Math.min(duration, cursor + 3);
+          materialInfos.push({
+            name: `待匹配素材（分镜${index}）`, type: 'video', folder: 'recommend', duration: end - cursor,
+            effectiveDuration: end - cursor, role: '后续分镜待匹配', targetStart: cursor, targetEnd: end,
+            observations: ['本步骤不选择素材；只定义镜头功能，下一步再从素材库匹配'],
+          });
+          cursor = end;
+          index += 1;
+        }
+      }
       const coveredDuration = materialInfos.at(-1)?.targetEnd || 0;
-      const autoAddedCount = finalSelected.filter(id => !selected.includes(id)).length;
       const outputs: ModeScriptOutput[] = [];
       const count = Math.max(1, Math.min(5, cloneCount));
       let usedLocalFallback = false;
       const fallbackDetails: string[] = [];
       for (let i = 0; i < count; i += 1) {
-        setModeActionStatus(`正在分析 ${finalSelected.length} 个推荐素材并生成脚本${count > 1 ? ` ${i + 1}/${count}` : ''}…`);
+        setModeActionStatus(hookOnly
+          ? `正在分析钩子素材并规划后续分镜${count > 1 ? ` ${i + 1}/${count}` : ''}…`
+          : `正在分析 ${finalSelected.length} 个推荐素材并生成脚本${count > 1 ? ` ${i + 1}/${count}` : ''}…`);
         let nextScript = '';
         let generatedByFallback = false;
         if (!generatedByFallback) {
@@ -3928,9 +3944,9 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         });
       }
       const sceneCount = outputs[0] ? parseStoryboardSlots(outputs[0].script, duration).length : finalSelected.length;
-      const sceneMatchedResp = pool.length ? pickMaterialClipsLocally(pool, duration, finalSelected, Math.max(1, sceneCount)) : { selectedIds: [], reason: '' };
+      const sceneMatchedResp = !hookOnly && pool.length ? pickMaterialClipsLocally(pool, duration, finalSelected, Math.max(1, sceneCount)) : { selectedIds: [], reason: '' };
       const recommendedIds = (sceneMatchedResp.selectedIds || []).filter(id => pool.some(item => item.id === id));
-      setScriptRecommendedMaterialIds(recommendedIds.length ? recommendedIds : finalSelected);
+      setScriptRecommendedMaterialIds(hookOnly ? [hookMaterialId] : (recommendedIds.length ? recommendedIds : finalSelected));
       setLang('zh');
       setScriptType('storyboard');
       if (outputs[0]) {
@@ -3946,9 +3962,11 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       setProjectTitle(projectTitle === '未命名草稿' ? '素材库智能素材 · 中文口播脚本' : projectTitle);
       setModeNotice(usedLocalFallback
         ? `AI脚本未通过检查，已打开安全兜底稿：${Array.from(new Set(fallbackDetails)).slice(0, 3).join('；') || '模型或素材信息不足'}。共 ${Math.max(1, sceneCount)} 个分镜，可继续编辑。`
+        : hookOnly
+          ? `已仅根据钩子素材生成分镜规划；本步骤未补充其他素材，下一步将从第二个分镜开始匹配。`
         : coveredDuration + 0.1 < duration
           ? `当前素材有效动作约 ${coveredDuration.toFixed(1)} 秒，短于目标 ${duration} 秒；已按真实可用时长生成分镜，请补充素材后再完成成片。`
-          : `已生成中文口播脚本，并按 ${Math.max(1, sceneCount)} 个分镜准备了 ${recommendedIds.length || finalSelected.length} 个素材候选${autoAddedCount ? `（为覆盖目标时长自动补充 ${autoAddedCount} 条）` : ''}，下一步可确认。`);
+          : `已生成中文口播脚本，并按 ${Math.max(1, sceneCount)} 个分镜准备了 ${recommendedIds.length || finalSelected.length} 个素材候选，下一步可确认。`);
       autoGen.current = true;
     } catch (err: any) {
       setModeNotice(err?.message || '素材库生成失败，请稍后重试。');
