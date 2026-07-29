@@ -85,6 +85,51 @@ function langName(code: string): string {
   return LANG_NAME[code] ?? 'English';
 }
 
+type ReferenceTimelineRange = { start: number; end: number };
+
+function referenceTimelineQuality(referenceAnalysis: unknown, requestedDuration: unknown): {
+  valid: boolean;
+  issues: string[];
+  ranges: ReferenceTimelineRange[];
+  duration: number;
+} {
+  const raw = String(referenceAnalysis || '');
+  // Only treat a line-leading range as a shot. Beat timestamps embedded inside
+  // the shot description must not inflate density or create false overlaps.
+  const ranges = Array.from(raw.matchAll(/^\s*\[\s*(\d+(?:\.\d+)?)\s*(?:s|秒)?\s*[-–—~至]\s*(\d+(?:\.\d+)?)\s*(?:s|秒)?\s*\]/gim))
+    .map(match => ({ start: Number(match[1]), end: Number(match[2]) }))
+    .filter(item => Number.isFinite(item.start) && Number.isFinite(item.end) && item.end > item.start)
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+  const requested = Number(requestedDuration || 0);
+  const analyzedEnd = ranges.reduce((max, item) => Math.max(max, item.end), 0);
+  // The source duration is normally reflected by the last exact-analysis range.
+  // Do not let the studio's default target duration make a shorter source look incomplete.
+  const duration = analyzedEnd > 0 ? analyzedEnd : Math.max(0, requested);
+  const issues: string[] = [];
+  if (!ranges.length) issues.push('缺少可解析的逐镜时间戳');
+  if (ranges.length && ranges[0]!.start > 0.75) issues.push(`时间线未从片头开始（首段 ${ranges[0]!.start.toFixed(1)}s）`);
+  for (let index = 0; index < ranges.length; index += 1) {
+    const item = ranges[index]!;
+    if (item.end - item.start > 5.5) issues.push(`存在过长分镜 [${item.start}-${item.end}s]`);
+    const next = ranges[index + 1];
+    if (next && next.start - item.end > 0.75) issues.push(`时间线存在空档 ${item.end.toFixed(1)}-${next.start.toFixed(1)}s`);
+    if (next && item.end - next.start > 0.75) issues.push(`时间线存在重叠 ${next.start.toFixed(1)}-${item.end.toFixed(1)}s`);
+  }
+  const minShots = duration > 0 ? Math.ceil(duration / 5) : 1;
+  if (ranges.length < minShots) issues.push(`分镜密度不足（${ranges.length} 段，至少需要 ${minShots} 段）`);
+  if (/人工复核[：:]\s*是|needsReview["']?\s*[：:]\s*true|分析超时|待人工复核|缺少真实片段/.test(raw)) {
+    issues.push('分析包含超时、降级或待人工复核片段');
+  }
+  return { valid: issues.length === 0, issues: [...new Set(issues)], ranges, duration };
+}
+
+function analysisDetailsTimelineQuality(details: unknown, duration: unknown) {
+  const rows = Array.isArray(details)
+    ? details.map(item => `[${String((item as { time?: unknown })?.time || '').replace(/^\s*\[|\]\s*$/g, '')}]`).join('\n')
+    : '';
+  return referenceTimelineQuality(rows, duration);
+}
+
 const GENERATED_MEDIA_DIR = path.join(__dirname, '../../data/media/generated');
 const GEMINI_VIDEO_WORKER = path.join(__dirname, '../../scripts/gemini-video-worker.mjs');
 const SEEDANCE_BASE_URL = 'https://ark.ap-southeast.bytepluses.com/api/v3';
@@ -1099,10 +1144,13 @@ studioRouter.post('/script', async (req, res) => {
     audience = '',
     sellingPoints = '',
     tone = 'high-converting',
+    videoTheme = {},
     referenceTitle = '',
     referenceAnalysis = '',
     referenceHighlights = [],
     materialInfos = [],
+    existingScripts = [],
+    variantSeed = 0,
     provider,
   } = req.body ?? {};
   const lang = langName(language);
@@ -1114,6 +1162,19 @@ studioRouter.post('/script', async (req, res) => {
   // beat, dialogue and sound cue is serialized. Preserve the full working
   // timeline instead of silently dropping the latter half before generation.
   const reference = String(referenceAnalysis || '').slice(0, 40_000) || '(no detailed reference analysis provided)';
+  if (generationMode === 'clone') {
+    const timelineQuality = referenceTimelineQuality(referenceAnalysis, duration);
+    if (!timelineQuality.valid) {
+      res.status(422).json({
+        ok: false,
+        error: `对标逐镜分析不满足脚本生成标准：${timelineQuality.issues.join('；')}。请先完成全片精确分析。`,
+        code: 'REFERENCE_EXACT_ANALYSIS_REQUIRED',
+        requiresExactAnalysis: true,
+        validationIssues: timelineQuality.issues,
+      });
+      return;
+    }
+  }
   const highlights = Array.isArray(referenceHighlights) && referenceHighlights.length
     ? referenceHighlights.slice(0, 8).map((item: unknown) => `- ${String(item).slice(0, 180)}`).join('\n')
     : '- No reliable highlights. Infer a simple product-first structure from title, platform, and product info.';
@@ -1127,6 +1188,34 @@ studioRouter.post('/script', async (req, res) => {
   const providerOpt = effectiveProvider === 'qwen' || effectiveProvider === 'gemini' ? effectiveProvider : undefined;
   const selectedProductBrief = productBrief(productInfo);
   const selectedProductCategory = selectedProductBrief.category || compactBriefCategory(selectedProductBrief);
+  const normalizedVideoTheme = typeof videoTheme === 'object' && videoTheme ? videoTheme as Record<string, unknown> : {};
+  const videoThemeId = String(normalizedVideoTheme.id || 'buyer_pain');
+  const videoThemeTitle = String(normalizedVideoTheme.title || '买家痛点');
+  const videoThemePainPoint = String(normalizedVideoTheme.painPoint || '').trim();
+  const videoThemeConversionGoal = String(normalizedVideoTheme.conversionGoal || '').trim();
+  const themeDirectives: Record<string, string> = {
+    buyer_pain: '以一个具体的买家顾虑开场，后续至少两个镜头必须用可见证据回应同一个顾虑。',
+    product_proof: '先提出“仅凭图片难判断”的问题，再用规格、包装、细节或真实素材逐项建立证据。',
+    use_case: '只围绕一个已被资料或素材支持的使用场景，用动作解释产品价值，不能虚构效果。',
+    supplier_capability: '围绕批量供货或质量稳定顾虑，只使用已有工厂、产线、质检、产能和交付证据。',
+    customization: '围绕品牌适配顾虑，只展示资料明确提供的包装、标识、规格或定制选项。',
+    faq: '用一个真实采购问题作为开场，每段只回答一个相关信息点，答案必须来自企业资料。',
+    comparison: '使用统一、可验证的维度帮助选型，不贬低竞品，不引入资料外参数。',
+    customer_case: '仅使用已确认并可公开的客户问题、过程和结果；缺少案例证据时不得编造故事。',
+    trend: '趋势只作为切入角度，必须有输入来源；产品结论仍只能来自企业资料和素材证据。',
+  };
+  const videoThemeRules = `本条视频主题（系统已自动匹配脚本策略，不要在输出中解释）：
+- 主题：${videoThemeTitle}
+- 潜在客户痛点：${videoThemePainPoint || '根据企业资料做保守判断，不得虚构市场结论'}
+- 转化目标：${videoThemeConversionGoal || '使用一个低门槛、不过度承诺的会话式行动'}
+- 主题叙事要求：${themeDirectives[videoThemeId] || themeDirectives.buyer_pain}
+- 痛点必须由后续证据回应，不能只出现在第一句；CTA必须承接同一问题。`;
+  const humanVoiceRules = `真人表达规则（仅作用于台词、口播和字幕，不改变时间轴及机器字段）：
+- 像一个懂产品的人对一个具体买家说话，一句话只完成一个沟通动作；中文优先短句，英文通常每句7-16词。
+- 先说买家在意的判断，再说产品；不要朗读资料表，不要连续使用“先看、再看、最后”。
+- 禁止“革命性、颠覆、卓越解决方案、Meet our、Are you ready、Look no further、Contact us today”等模板广告腔。
+- 不得把“未提供、待确认、没有素材、资料不足、系统检查”等内部审核语言说给客户；未知信息直接省略。
+- CTA像正常商务邀请，只保留一个动作，不虚构样品、MOQ、库存、交期或经销政策。`;
   const cloneMigrationMode = String(tone).includes('高保真复刻')
     ? 'fidelity'
     : String(tone).includes('机制借鉴')
@@ -1148,6 +1237,12 @@ studioRouter.post('/script', async (req, res) => {
 7. 不得把分析中的表达意图、改编建议、未展示因果写进实际画面；只允许使用原分析记录的可见、可听内容。
 8. 缺失信息用“无”或“沿用原片”表达，禁止用想象补齐。分析缺少逐镜详情时应拒绝生成，不得降级为自由创作。
 9. 输出必须干净：只输出时间戳分镜成稿，不输出标题、前言、总结、映射表、自检、Markdown、代码围栏或分析说明。`;
+  const previousCloneScripts = Array.isArray(existingScripts)
+    ? existingScripts.map(item => String(item || '').trim()).filter(Boolean).slice(-4)
+    : [];
+  const cloneDiversityRules = previousCloneScripts.length
+    ? `\n当前生成第 ${Math.max(1, Number(variantSeed) + 1)} 版。以下是已经生成的版本，仅用于排重，严禁复制：\n${previousCloneScripts.map((item, index) => `--- 已有版本 ${index + 1} ---\n${item.slice(0, 6000)}`).join('\n')}\n新版本必须保持原片时间轴和镜头功能，但至少改变以下三项：开场呈现动作、产品证明动作、场景陈设、镜头内产品顺序、台词句式、字幕表达。不得只替换同义词。`
+    : '';
 
   const productDuration = Math.max(10, Number(duration) || 20);
   const productBoundaries = [0, .18, .4, .62, .82, 1].map(value => +(value * productDuration).toFixed(1));
@@ -1217,6 +1312,10 @@ ${productTimeline}
   const prompt = generationMode === 'material'
     ? `${materialScriptRules}
 
+${videoThemeRules}
+
+${humanVoiceRules}
+
 素材清单：
 ${structuredMaterials || '无可用素材。请拒绝生成，并提示先上传素材。'}
 
@@ -1231,6 +1330,10 @@ ${product || '未选择产品。只能围绕素材做保守剪辑建议，不得
 请直接输出按素材逐段绑定的时间戳脚本。`
     : generationMode === 'product'
     ? `${productScriptRules}
+
+${videoThemeRules}
+
+${humanVoiceRules}
 
 	产品信息：
 	${product || '未选择产品。请拒绝生成具体产品脚本。'}
@@ -1261,6 +1364,12 @@ ${highlights}
 ${forbiddenLine}
 
 ${cloneFusionRules}
+${cloneDiversityRules}
+
+${videoThemeRules}
+注意：爆款裂变中，主题只能适配原片已有的钩子、口播、字幕和证明位置；不得为了套主题新增镜头、CTA或改变原片爆点机制。
+
+${humanVoiceRules}
 
 每个场景必须严格对应“对标视频脚本详析”的同一时间段，不要合并、跳段或擅自重排。使用以下固定格式，不要 markdown 符号，不要缺字段：
 [start-end s]
@@ -1303,6 +1412,10 @@ ${reference}
 Reference highlights to reuse:
 ${highlights}
 ${forbiddenLine}
+
+${videoThemeRules}
+
+${humanVoiceRules}
 
 Requirements:
 - Exactly three sections, each on its own block, labelled like "[Hook · 0-3s]", "[Body · 3-${duration - 5}s]", "[CTA · ${duration - 5}-${duration}s]".
@@ -2497,16 +2610,23 @@ async function analyzeMaterialVideo(videoPath: string, buffer: Buffer, duration:
     const frames = await extractQwenAnalysisFrames(videoPath, 30, duration);
     if (frames.length) {
       const strategy = await analyzeVideoFramesWithQwen({ frames, duration, analysisMode: 'strategy' });
-      if ((strategy.scriptDetails15s || []).length) return strategy;
-      console.warn('[studio] 策略档未返回时间轴，改用精确档重试');
+      const strategyQuality = analysisDetailsTimelineQuality(strategy.scriptDetails15s, duration);
+      if (strategyQuality.valid) return strategy;
+      console.warn(`[studio] 策略档时间轴不合格，改用精确档重试：${strategyQuality.issues.join('；')}`);
       const exact = await analyzeVideoFramesWithQwen({ frames, duration, analysisMode: 'exact' });
-      if ((exact.scriptDetails15s || []).length) return exact;
-      console.warn('[studio] 千问两档均未返回时间轴，回退 Gemini');
+      const exactQuality = analysisDetailsTimelineQuality(exact.scriptDetails15s, duration);
+      if (exactQuality.valid) return exact;
+      console.warn(`[studio] 千问精确档时间轴仍不合格，回退 Gemini：${exactQuality.issues.join('；')}`);
     } else {
       console.warn('[studio] 抽帧为空，回退 Gemini 分析素材片段');
     }
   }
-  return await analyzeVideo({ videoBase64: buffer.toString('base64'), mimeType: 'video/mp4' });
+  const gemini = await analyzeVideo({ videoBase64: buffer.toString('base64'), mimeType: 'video/mp4' });
+  const geminiQuality = analysisDetailsTimelineQuality(gemini.scriptDetails15s, duration);
+  if (!geminiQuality.valid) {
+    throw new Error(`素材逐镜分析未达到可匹配标准：${geminiQuality.issues.join('；')}`);
+  }
+  return gemini;
 }
 
 /**

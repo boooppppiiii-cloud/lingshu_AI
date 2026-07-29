@@ -308,7 +308,7 @@ function cleanAnalysisTimestamp(value: unknown): string {
 function isUnusableAnalysisText(value: unknown): boolean {
   const text = cleanAnalysisText(value);
   return !text
-    || /字幕待|待 Gemini|待真实视频|视频下载并分析完成后|视频级分析会补充|无法确认/i.test(text);
+    || /字幕待|待 Gemini|待真实视频|视频下载并分析完成后|视频级分析会补充|无法确认|分析超时|待人工复核|降级结果/i.test(text);
 }
 
 function cleanScriptDetailField(value: unknown, field: 'visual' | 'subtitle' | 'audio' | 'note'): string {
@@ -337,6 +337,38 @@ function hasCompleteGeminiAnalysis(gemini?: GeminiVideoAnalysis): boolean {
     && firstTenCount >= 3
     && coarseCount >= 2
     && detailCount >= 2;
+}
+
+interface AnalysisQualityGate {
+  ready: boolean;
+  reason: string;
+  requiredFrames: number;
+  actualFrames: number;
+}
+
+function exactAnalysisQuality(video: TrendVideo): AnalysisQualityGate {
+  const payload = video.aiAnalysis;
+  const details = payload?.gemini?.scriptDetails15s || [];
+  const duration = Math.max(0, Number(video.duration || 0));
+  const requiredFrames = duration > 0 ? Math.max(2, Math.ceil(duration / 5)) : 2;
+  const parsed = details.map(item => {
+    const values = String(item.time || item.timestamp || '').match(/\d+(?:\.\d+)?/g)?.map(Number) || [];
+    return { item, start: values[0], end: values[1] };
+  });
+  const valid = parsed.filter(item => Number.isFinite(item.start) && Number.isFinite(item.end) && item.end! > item.start!);
+
+  if (payload?.requestedAnalysisMode === 'exact') return { ready: false, reason: '全片精确分析正在排队或生成中', requiredFrames, actualFrames: valid.length };
+  if (payload?.analysisMode !== 'exact') return { ready: false, reason: '当前仅有策略级分析，需先完成全片精确分析', requiredFrames, actualFrames: valid.length };
+  if (payload.videoLevelFailureStatus || payload.analysisError) return { ready: false, reason: '精确分析未完成或已失败，请重试', requiredFrames, actualFrames: valid.length };
+  if (valid.length < requiredFrames) return { ready: false, reason: `分镜密度不足：需至少 ${requiredFrames} 段，当前 ${valid.length} 段`, requiredFrames, actualFrames: valid.length };
+  if (valid.some(({ item }) => item.needsReview || isUnusableAnalysisText(item.visual))) return { ready: false, reason: '存在超时降级或待复核分镜，请重试精确分析', requiredFrames, actualFrames: valid.length };
+  const ordered = [...valid].sort((a, b) => a.start! - b.start!);
+  if (ordered.some(item => item.end! - item.start! > 5.5)) return { ready: false, reason: '存在超过 5.5 秒的粗分镜，无法可靠按时间戳匹配', requiredFrames, actualFrames: valid.length };
+  if (ordered[0]!.start! > 0.75 || ordered.some((item, index) => index > 0 && Math.abs(item.start! - ordered[index - 1]!.end!) > 0.75)) {
+    return { ready: false, reason: '分镜时间线存在空档或重叠，请重试精确分析', requiredFrames, actualFrames: valid.length };
+  }
+  if (duration > 0 && ordered[ordered.length - 1]!.end! + 0.75 < duration) return { ready: false, reason: '分镜尚未覆盖视频结尾，请重试精确分析', requiredFrames, actualFrames: valid.length };
+  return { ready: true, reason: '精确分析已通过分镜密度与时间线校验', requiredFrames, actualFrames: valid.length };
 }
 
 function isDisplayableVideoAnalysis(analysis?: VideoAnalysisPayload, status?: TrendVideo['status']): boolean {
@@ -1548,6 +1580,8 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, onExactAnalysis, acti
   const showStrategyProgress = video.contentFormat === 'video'
     && needsVideoEnhancement(video)
     && strategyPipelineState.spinning;
+  const analysisQuality = exactAnalysisQuality(video);
+  const videoGenerationBlocked = video.contentFormat === 'video' && !analysisQuality.ready;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-lingshu-guide="analysis-evidence">
@@ -1780,19 +1814,20 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, onExactAnalysis, acti
       <div className="flex-shrink-0 border-t border-border bg-surface p-4 shadow-[0_-10px_24px_rgba(15,23,42,0.04)]">
         {video.contentFormat !== 'image' && <div className="mb-3 rounded-xl border border-accent/20 bg-accent/5 p-3">
           <div className="flex items-center justify-between gap-3">
-            <p className="text-[11px] font-black text-text-primary">{video.aiAnalysis?.analysisMode === 'exact' ? '全片精确分析版' : showStrategyProgress ? '自动策略分析处理中' : '全片策略分析版'}</p>
-            {video.aiAnalysis?.analysisMode !== 'exact' && <button type="button" onClick={onExactAnalysis} disabled={video.aiAnalysis?.requestedAnalysisMode === 'exact'} className="shrink-0 rounded-lg border border-accent bg-white px-2.5 py-1.5 text-[10px] font-black text-accent hover:bg-accent/5 disabled:cursor-wait disabled:opacity-50">{video.aiAnalysis?.requestedAnalysisMode === 'exact' ? '精确分析生成中…' : '生成全片精确分析'}</button>}
+            <p className="text-[11px] font-black text-text-primary">{analysisQuality.ready ? '全片精确分析版 · 质量校验通过' : video.aiAnalysis?.requestedAnalysisMode === 'exact' ? '全片精确分析排队中' : video.aiAnalysis?.analysisMode === 'exact' ? '全片精确分析未通过校验' : showStrategyProgress ? '自动策略分析处理中' : '全片策略分析版'}</p>
+            {!analysisQuality.ready && <button type="button" onClick={onExactAnalysis} disabled={video.aiAnalysis?.requestedAnalysisMode === 'exact'} className="shrink-0 rounded-lg border border-accent bg-white px-2.5 py-1.5 text-[10px] font-black text-accent hover:bg-accent/5 disabled:cursor-wait disabled:opacity-50">{video.aiAnalysis?.requestedAnalysisMode === 'exact' ? '精确分析生成中…' : video.aiAnalysis?.analysisMode === 'exact' ? '重试全片精确分析' : '生成全片精确分析'}</button>}
           </div>
           {actionNotice && <p role="status" aria-live="polite" className="mt-2 rounded-lg border border-accent/20 bg-white px-2.5 py-2 text-[10px] font-semibold leading-relaxed text-text-secondary">{actionNotice}</p>}
           {video.aiAnalysis?.videoLevelFailureStatus && !video.aiAnalysis?.requestedAnalysisMode && <p role="status" aria-live="polite" className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[10px] font-semibold leading-relaxed text-amber-700">全片精确分析未完成，已保留原分析。可稍后重试，或换用可直接下载的公开素材。</p>}
+          {videoGenerationBlocked && <p role="status" aria-live="polite" className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[10px] font-semibold leading-relaxed text-amber-700">暂不能生成脚本或进入素材匹配：{analysisQuality.reason}。</p>}
         </div>}
         {video.contentFormat === 'image' && !hasTrustedImageAnalysis && <button type="button" onClick={() => void reanalyzeImage()} disabled={reanalyzingImage} className="mb-2 flex w-full items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 py-2 text-xs font-black text-emerald-700 disabled:opacity-50">{reanalyzingImage ? <Loader2 size={13} className="animate-spin"/> : <Images size={13}/>}重新分析完整轮播</button>}
         {analysisSaveNotice && video.contentFormat === 'image' && <p className="mb-2 text-center text-[10px] text-red-500">{analysisSaveNotice}</p>}
-        <button onClick={() => onGenerateScript(analysis || undefined)} disabled={video.contentFormat === 'image' && !hasTrustedImageAnalysis}
+        <button onClick={() => onGenerateScript(analysis || undefined)} disabled={(video.contentFormat === 'image' && !hasTrustedImageAnalysis) || videoGenerationBlocked}
           className="flex w-full items-center justify-center gap-2 rounded-2xl py-3 text-sm font-black text-white transition-all enabled:hover:scale-[1.01] enabled:active:scale-[0.99] disabled:cursor-not-allowed disabled:opacity-50"
           style={{ background: 'linear-gradient(135deg, #16a34a, #059669)', boxShadow: '0 10px 24px rgba(22,163,74,0.26)' }}>
           <Sparkles size={16} />
-          {video.contentFormat === 'image' ? (hasTrustedImageAnalysis ? '套用企业资料生成获客内容包' : '先完成图片分析') : 'AI一键爆款迭代'}
+          {video.contentFormat === 'image' ? (hasTrustedImageAnalysis ? '套用企业资料生成获客内容包' : '先完成图片分析') : videoGenerationBlocked ? '先完成合格的全片精确分析' : 'AI一键爆款迭代'}
           <ChevronRight size={15} />
         </button>
       </div>
@@ -2792,6 +2827,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   const [showAccountsModal, setShowAccountsModal] = useState(false);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const videoRequestRef = useRef(0);
+  const autoExactRequestedRef = useRef(new Set<string>());
   const platformLabel = PLATFORM_FILTERS.find(f => f.id === platform)?.label ?? '全部平台';
   const sortLabel = sortMode === 'crawlTime' ? '按爬取时间' : '按热度';
   const contentFormatLabel = contentFormat === 'video' ? '视频' : '图文';
@@ -3336,6 +3372,28 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
       setTimeout(() => setMaterialMessage(''), 3500);
     }
   };
+
+  useEffect(() => {
+    if (contentFormat !== 'video') return;
+    const candidate = crawledVideos.find(item => {
+      const payload = item.aiAnalysis;
+      const running = ['queued', 'downloading', 'analyzing', 'download_retrying', 'ops_queued'].includes(String(payload?.downloadStatus || ''));
+      return Boolean(item.recordId)
+        && item.status !== 'failed'
+        && payload?.analysisMode !== 'exact'
+        && payload?.requestedAnalysisMode !== 'exact'
+        && !payload?.videoLevelFailureStatus
+        && !payload?.analysisError
+        && !running
+        && hasCompleteGeminiAnalysis(payload?.gemini)
+        && !autoExactRequestedRef.current.has(item.id);
+    });
+    if (!candidate) return;
+    // Mark synchronously before dispatching so state refreshes cannot enqueue
+    // the same record twice. A failed automatic attempt remains a manual retry.
+    autoExactRequestedRef.current.add(candidate.id);
+    void requestExactFullAnalysis(candidate);
+  }, [crawledVideos, contentFormat]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="relative">

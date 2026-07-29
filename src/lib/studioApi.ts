@@ -1,12 +1,13 @@
 /* 混剪工作台 AI 接口封装 */
 import { authHeader } from './auth';
 
-async function post<T>(path: string, body: unknown, fallback: T): Promise<T & { source?: string }> {
+async function post<T>(path: string, body: unknown, fallback: T, signal?: AbortSignal): Promise<T & { source?: string }> {
   try {
     const r = await fetch(`/api/overseas/studio/${path}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeader() },
       body: JSON.stringify(body),
+      signal,
     });
     if (r.status === 402 || r.status === 429) {
       const j = await r.json().catch(() => ({}));
@@ -401,11 +402,14 @@ export const studioApi = {
     audience?: string;
     sellingPoints?: string;
     tone?: string;
+    videoTheme?: { id: string; title: string; painPoint: string; conversionGoal: string };
     referenceTitle?: string;
     referenceAnalysis?: string;
     referenceHighlights?: string[];
-  }, fb: string) =>
-    post<{ script: string; source?: 'ai' | 'fallback' | 'local'; fallbackReason?: string; validationIssues?: string[] }>('script', b, { script: fb }),
+    existingScripts?: string[];
+    variantSeed?: number;
+  }, fb: string, options?: { signal?: AbortSignal }) =>
+    post<{ script: string; source?: 'ai' | 'fallback' | 'local'; fallbackReason?: string; validationIssues?: string[] }>('script', b, { script: fb }, options?.signal),
 
   covers: (b: { script?: string; productInfo?: string; language: string; provider?: 'gemini' | 'qwen'; tone?: string }, fb: string[]) =>
     post<{ covers: string[] }>('covers', b, { covers: fb }),
