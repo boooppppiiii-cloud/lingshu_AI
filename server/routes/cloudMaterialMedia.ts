@@ -22,9 +22,13 @@ cloudMaterialMediaRouter.use(async (req, res, next) => {
     await requireAuth(req, res, next);
     return;
   }
-  const identity = await assetIdentity(req);
   const originalPath = `${req.baseUrl}/${signedMatch[1]}/${signedMatch[3]}`;
-  const signed = identity ? null : verifyAssetToken(signedMatch[2], originalPath);
+  // Signed media URLs must win over the browser's asset-session cookie. If the
+  // cookie is resolved first, entitlementGate sees a normal user but media
+  // elements still have no Authorization header, which incorrectly becomes
+  // a 401 even though the URL signature is valid.
+  const signed = verifyAssetToken(signedMatch[2], originalPath);
+  const identity = signed ? null : await assetIdentity(req);
   if (!identity && !signed) {
     res.status(401).end();
     return;
