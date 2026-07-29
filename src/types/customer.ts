@@ -21,6 +21,7 @@ export interface TimelineEvent {
   body: string;
   translatedBody?: string;
   time: string;
+  timestamp?: number;
   autoSent?: boolean;
   sendStatus?: 'draft' | 'queued' | 'sent' | 'delivered' | 'failed';
   sendMode?: 'free_text' | 'template';
@@ -81,6 +82,7 @@ export interface CustomerProfile {
   priority: number;
   inboxReason?: 'call' | 'large' | 'draft' | 'overdue' | 'reply';
   lastActive: string;
+  lastActiveAt?: number;
   localTime: string;
   orders: OrderRecord[];
   tags: string[];

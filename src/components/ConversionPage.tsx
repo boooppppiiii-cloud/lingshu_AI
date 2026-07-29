@@ -201,7 +201,10 @@ function filterCustomers(view: CustomerView, customers: CustomerProfile[]) {
 }
 
 function messageTimestamp(customer: CustomerProfile): number {
-  const value = String(customer.timeline[customer.timeline.length - 1]?.time || customer.lastActive || '').trim();
+  const latestEvent = customer.timeline[customer.timeline.length - 1];
+  if (Number.isFinite(latestEvent?.timestamp)) return latestEvent.timestamp as number;
+  if (Number.isFinite(customer.lastActiveAt)) return customer.lastActiveAt as number;
+  const value = String(latestEvent?.time || customer.lastActive || '').trim();
   const parsed = Date.parse(value);
   if (Number.isFinite(parsed)) return parsed;
   const clock = value.match(/^(\d{1,2}):(\d{2})$/);
@@ -210,7 +213,8 @@ function messageTimestamp(customer: CustomerProfile): number {
   if (/分钟前|min/i.test(value)) return Date.now() - amount * 60_000;
   if (/小时前|hour|\bh\b/i.test(value)) return Date.now() - amount * 3_600_000;
   if (/天前|day|\bd\b/i.test(value)) return Date.now() - amount * 86_400_000;
-  if (/刚刚|now/i.test(value)) return Date.now();
+  // “刚刚” is a display label, not sortable data. Mapping it to Date.now()
+  // on every render makes an old conversation permanently float to the top.
   return 0;
 }
 
@@ -1465,7 +1469,8 @@ function createMessageEvent(
   actor: 'seller' | 'buyer' | 'ai',
   extra: Partial<TimelineEvent> = {},
 ): TimelineEvent {
-  const time = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const timestamp = Date.now();
+  const time = new Date(timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   return {
     id: `${customerId}-${Date.now()}-${actor}`,
     type: 'whatsapp',
@@ -1473,6 +1478,7 @@ function createMessageEvent(
     title: actor === 'buyer' ? '客户消息' : actor === 'ai' ? 'AI 回复' : '我的回复',
     body,
     time,
+    timestamp,
     ...extra,
   };
 }
@@ -1738,8 +1744,9 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
       pushBuyerMessage: (customerId: string, text: string) => {
         const body = text.trim();
         if (!customerId || !body) return;
-        appendTimelineEvent(customerId, createMessageEvent(customerId, body, 'buyer'));
-        updateCustomer(customerId, { hasUnread: true, lastActive: '刚刚' });
+        const event = createMessageEvent(customerId, body, 'buyer');
+        appendTimelineEvent(customerId, event);
+        updateCustomer(customerId, { hasUnread: true, lastActive: '刚刚', lastActiveAt: event.timestamp });
       },
     };
 
@@ -1769,7 +1776,7 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
     const buyerEvent = createMessageEvent(selected.id, text.trim(), 'buyer');
     const customerWithMessage = { ...selected, timeline: [...selected.timeline, buyerEvent] };
     appendTimelineEvent(selected.id, buyerEvent);
-    updateCustomer(selected.id, { hasUnread: true, lastActive: '刚刚', inboxReason: 'reply' });
+    updateCustomer(selected.id, { hasUnread: true, lastActive: '刚刚', lastActiveAt: buyerEvent.timestamp, inboxReason: 'reply' });
     setLastDraftKey(`${selected.id}:${buyerEvent.id}`);
     setDraftSuggestion(null);
     setDraftMeta(null);

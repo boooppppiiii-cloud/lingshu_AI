@@ -1166,6 +1166,7 @@ export function getWhatsAppCustomers(tenantId?: string): any[] {
         title: item.type === 'msg_in' ? '客户消息' : item.type === 'msg_out_ai' ? 'AI 自动回复' : item.type === 'system' ? '系统记录' : '销售回复',
         body: item.body,
         time: new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        timestamp: item.timestamp,
         autoSent: item.autoSent,
         audit: item.audit,
       }));
@@ -1206,6 +1207,7 @@ export function getWhatsAppCustomers(tenantId?: string): any[] {
       priority,
       inboxReason: customer.handlingMode === 'human_needed' ? 'reply' : customer.handlingMode === 'ai_draft' ? 'draft' : 'reply',
       lastActive: '刚刚',
+      lastActiveAt: customer.lastActiveAt,
       localTime: new Date(customer.lastActiveAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       orders: [],
       tags: [customer.source && customer.source !== 'whatsapp' ? '社媒商机' : '真实WhatsApp', customer.handlingMode === 'ai_auto' ? 'AI接待' : '待处理'],
