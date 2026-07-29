@@ -5684,7 +5684,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                 ))}
               </div>
             </Field>
-            <div className="mb-7 mt-4 grid min-w-0 grid-cols-1 gap-3 lg:grid-cols-2 2xl:grid-cols-3">
+            <div className="mb-7 mt-4 grid min-w-0 grid-cols-1 gap-3 md:grid-cols-3">
               {visibleModes.map(m => {
                 const on = mode === m.id;
                 return (
