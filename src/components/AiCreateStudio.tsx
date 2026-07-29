@@ -1870,7 +1870,7 @@ function materialRoleLabel(clip: Pick<Clip, 'folder' | 'type'>): string {
   return '产品展示素材';
 }
 
-function buildMaterialInfosForScript(clips: Clip[], totalDuration: number) {
+function buildMaterialInfosForScript(clips: Clip[], totalDuration: number, hookMaterialId = '') {
   const usable = clips.filter(item => item.type !== 'audio');
   let cursor = 0;
   const result = usable.reduce<Array<{
@@ -1878,7 +1878,10 @@ function buildMaterialInfosForScript(clips: Clip[], totalDuration: number) {
     targetStart: number; targetEnd: number; industry?: string; shotFunction?: string; tags?: string; observations?: string[];
   }>>((result, clip) => {
     if (cursor >= totalDuration) return result;
-    const effectiveDuration = Math.min(effectiveClipDuration(clip), totalDuration - cursor);
+    const effectiveDuration = Math.min(
+      clip.id === hookMaterialId && clip.type === 'video' ? Math.max(0.5, clip.duration) : effectiveClipDuration(clip),
+      totalDuration - cursor,
+    );
     const targetStart = +cursor.toFixed(1);
     const targetEnd = +Math.min(totalDuration, cursor + effectiveDuration).toFixed(1);
     const observations = (clip.segments || []).slice(0, 4).map(segment => [
@@ -3866,8 +3869,9 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       const nextSelected = (selectResp.selectedIds || []).filter(id => pool.some(item => item.id === id));
       const finalSelected = nextSelected.length ? nextSelected : (preferred.length ? preferred : pool.slice(0, 4).map(item => item.id));
       const selectedMaterialsForScript = finalSelected.map(id => pool.find(item => item.id === id)).filter(Boolean) as Clip[];
+      if (hookMaterialId) selectedMaterialsForScript.sort((a, b) => Number(b.id === hookMaterialId) - Number(a.id === hookMaterialId));
       const names = selectedMaterialsForScript.map(item => item.name);
-      const materialInfos = buildMaterialInfosForScript(selectedMaterialsForScript, duration);
+      const materialInfos = buildMaterialInfosForScript(selectedMaterialsForScript, duration, hookMaterialId);
       const coveredDuration = materialInfos.at(-1)?.targetEnd || 0;
       const autoAddedCount = finalSelected.filter(id => !selected.includes(id)).length;
       const outputs: ModeScriptOutput[] = [];

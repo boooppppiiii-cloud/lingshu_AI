@@ -649,6 +649,50 @@ function storyboardSpeechIssues(script: string): string[] {
   return issues;
 }
 
+function fitSpeechToShot(value: string, duration: number): string {
+  const text = String(value || '').replace(/[“”"]/g, '').replace(/\s+/g, ' ').trim();
+  if (!text || text === '无') return '无';
+  const hasCjk = /[\u3400-\u9fff]/.test(text);
+  if (!hasCjk) {
+    const maxWords = Math.max(1, Math.floor(Math.max(0.5, duration - 0.6) * 2.3));
+    return text.split(/\s+/).slice(0, maxWords).join(' ');
+  }
+  const maxChars = Math.max(2, Math.floor(Math.max(0.5, duration - 0.6) * 4));
+  const chars = Array.from(text);
+  if (chars.filter(char => !/[\s，。！？、；：,.!?;:“”"'（）()]/.test(char)).length <= maxChars) return text;
+  let count = 0;
+  let result = '';
+  for (const char of chars) {
+    if (!/[\s，。！？、；：,.!?;:“”"'（）()]/.test(char)) count += 1;
+    if (count > maxChars) break;
+    result += char;
+  }
+  return result.replace(/[，、；：,.!?！？。]+$/g, '').trim() || '无';
+}
+
+function repairMaterialScript(script: string, productInfo: string, materialsText: string): string {
+  let repaired = String(script || '');
+  repaired = repaired.replace(
+    /(\[\s*(\d+(?:\.\d+)?)\s*(?:s|秒)?\s*[-–]\s*(\d+(?:\.\d+)?)\s*(?:s|秒)?\s*\][\s\S]*?)(人物说|台词|Voiceover|VO|口播)(\s*[：:]\s*[“"]?)([^\n”"]+)([”"]?)/gi,
+    (full, prefix, start, end, label, separator, voice, quote) => `${prefix}${label}${separator}${fitSpeechToShot(voice, Math.max(0.5, Number(end) - Number(start)))}${quote}`,
+  );
+  const unsupportedNumbers = Array.from(repaired.matchAll(/\d+(?:\.\d+)?\s*(?:瓶|ml|ML|毫升|kg|KG|g|克|斤|cm|厘米|mm|毫米|天|day|days|Days|秒|%|个|pcs|件|箱|元|美元)/g))
+    .map(match => match[0])
+    .filter(claim => !productSupportsNumericClaim(claim, productInfo));
+  for (const claim of unsupportedNumbers) repaired = repaired.replaceAll(claim, '');
+  const evidence = `${productInfo}\n${materialsText}`.toLowerCase();
+  const unsupportedEffects: Array<[RegExp, string[], string]> = [
+    [/迅速吸收|快速吸收|瞬时渗透|即时渗透|一触即融|吸收|渗透/g, ['迅速吸收', '快速吸收', '瞬时渗透', '即时渗透', '一触即融', '吸收', '渗透'], '质地细节'],
+    [/淡纹|去皱|紧致|抗衰|抗老/g, ['淡纹', '去皱', '紧致', '抗衰', '抗老'], '产品细节'],
+    [/美白|提亮|祛斑/g, ['美白', '提亮', '祛斑'], '外观表现'],
+    [/祛痘|抗炎|修复屏障|无刺激|敏感肌可用/g, ['祛痘', '抗炎', '修复屏障', '无刺激', '敏感肌可用'], '使用展示'],
+  ];
+  for (const [pattern, terms, neutral] of unsupportedEffects) {
+    if (!terms.some(term => evidence.includes(term.toLowerCase()))) repaired = repaired.replace(pattern, neutral);
+  }
+  return repaired.replace(/[：:]\s*([，。；,.!?！？])+/g, '：无').replace(/[ ]{2,}/g, ' ').trim();
+}
+
 function materialGroundingIssues(script: string, productInfo: string, materialsText: string): string[] {
   const evidence = `${productInfo}\n${materialsText}`.toLowerCase();
   const claimGroups = [
@@ -1199,10 +1243,10 @@ studioRouter.post('/script', async (req, res) => {
     use_case: '只围绕一个已被资料或素材支持的使用场景，用动作解释产品价值，不能虚构效果。',
     supplier_capability: '围绕批量供货或质量稳定顾虑，只使用已有工厂、产线、质检、产能和交付证据。',
     customization: '围绕品牌适配顾虑，只展示资料明确提供的包装、标识、规格或定制选项。',
-    faq: '用一个真实采购问题作为开场，每段只回答一个相关信息点，答案必须来自企业资料。',
     comparison: '使用统一、可验证的维度帮助选型，不贬低竞品，不引入资料外参数。',
     customer_case: '仅使用已确认并可公开的客户问题、过程和结果；缺少案例证据时不得编造故事。',
     trend: '趋势只作为切入角度，必须有输入来源；产品结论仍只能来自企业资料和素材证据。',
+    talking_head: '以已识别的真人出镜素材为主体，台词必须像自然讲解；人物动作、口型时长和每镜信息量必须匹配。',
   };
   const videoThemeRules = `本条视频主题（系统已自动匹配脚本策略，不要在输出中解释）：
 - 主题：${videoThemeTitle}
@@ -1298,9 +1342,16 @@ ${productTimeline}
 6. 口播必须承接该素材的角色并形成连续销售逻辑：第一段让人停留，中段把可见细节变成购买理由，最后一段只给一个低门槛行动。不能每段复用同一句式。
 7. 如果素材信息不足，只能写“按该素材可见内容剪辑”，不能伪装已经识别出画面。尤其禁止从液体滴落推断吸收、渗透、淡纹、美白、祛痘或其它功效。
 8. “按可见内容剪辑、不得推断、资料可确认”只能写进画面字段，禁止出现在人物说中。禁止口播“先看素材、这段只按可见内容、逐项确认”等制作/审核腔。
-9. 中文口播按每秒约4-5字并预留0.5秒停顿；优先使用短反问、短判断和自然停顿，让相邻台词有因果承接。
-10. 必须严格按素材顺序生成 ${Math.max(1, normalizedMaterialInfos.length)} 段左右，时间段必须使用“建议时间段”，不得把单一动作擅自扩写到整个目标时长。
-11. 输出只给成稿，不解释规则。
+9. 中文口播按每秒4字并至少预留0.6秒停顿。下面每个时间段的“口播最多字数”是硬上限，不含标点；宁可写“无”也不得超出。
+10. 必须恰好生成 ${Math.max(1, normalizedMaterialInfos.length)} 段，逐行使用下方时间段和对应素材，不得改时间、交换素材、合并或增加分镜。
+${normalizedMaterialInfos.map((info, index) => {
+  const start = Number(info.targetStart || 0);
+  const end = Number(info.targetEnd || start + 0.5);
+  const maxChars = Math.max(2, Math.floor(Math.max(0.5, end - start - 0.6) * 4));
+  return `- 第${index + 1}段：[${start}-${end}s]；素材《${info.name}》；中文口播最多${maxChars}字`;
+}).join('\n')}
+11. 数字、单位、规格、功效和认证只能逐字来自产品信息；素材名里的数字不能自动视为产品事实，也不能写进台词或字幕。
+12. 输出前内部执行三次检查：时间轴连续；每段素材名正确；逐段口播字数不超限。只输出通过检查的成稿，不解释规则。
 
 固定格式：
 [start-end s]
@@ -1430,7 +1481,8 @@ Requirements:
 
   try {
     const text = await callLLM(prompt, { backend: providerOpt, systemPrompt: await enterpriseCtx() || undefined });
-    const script = normalizeScriptTimestamps(enforceProductNameInScript(stripScriptAnalysisSummary(text), productInfo));
+    let script = normalizeScriptTimestamps(enforceProductNameInScript(stripScriptAnalysisSummary(text), productInfo));
+    if (generationMode === 'material') script = repairMaterialScript(script, productInfo, structuredMaterials);
     const selectedNames = selectedProductNames(productInfo);
     const unsupportedNumberClaims = Array.from(script.matchAll(/\d+(?:\.\d+)?\s*(?:瓶|ml|ML|毫升|kg|KG|g|克|斤|cm|厘米|mm|毫米|天|day|days|Days|秒|%|个|pcs|件|箱|元|美元)/g))
       .map(match => match[0])
@@ -4826,11 +4878,12 @@ function fallbackMaterialStoryboard(infos: ScriptMaterialInfo[], duration: numbe
           : info.folder === 'factory' ? '样品到大货都能接'
             : info.folder === 'packaging' ? '做成你的品牌'
               : info.folder === 'scene' || info.folder === 'model' ? '让客户看见使用场景'
-                : task;
+              : task;
+    const fittedVoice = fitSpeechToShot(voice, Math.max(0.5, end - start));
     return `[${start}-${Math.max(start + 0.5, end)}s]
 素材：${info.name}
 画面：使用素材《${info.name}》作为「${p}」的${task}，原速截取主体最清楚、动作最完整的位置，并在动作结束点切入下一镜。
-人物说：“${voice}”
+人物说：“${fittedVoice}”
 字幕：${salesSubtitle}`;
   }).join('\n\n');
 }
