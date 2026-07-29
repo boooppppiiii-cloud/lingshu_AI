@@ -8273,7 +8273,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
 
       {/* ── ③ 对标内容 / 产品信息右侧栏 ────────────────── */}
       {step === 'mode' && (
-        <aside data-studio-context-rail="true" className="hidden w-[360px] flex-shrink-0 overflow-y-auto border-l border-border bg-surface-2/30 p-4 xl:block 2xl:w-[400px]">
+        <aside data-studio-context-rail="true" className="hidden w-[280px] flex-shrink-0 overflow-y-auto border-l border-border bg-surface-2/30 p-3 lg:block xl:w-[360px] xl:p-4 2xl:w-[400px]">
           {mode === 'product'
             ? <ProductInfoPreview products={selectedProductOptions} />
             : <BenchmarkVideoPreview kickoff={videoKickoff} onOpenMaterialLibrary={openInspirationMaterialLibrary} />}
