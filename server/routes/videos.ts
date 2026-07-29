@@ -2528,9 +2528,9 @@ const EXACT_ANALYSIS_STALL_MS = Math.max(
 // 卡住的记录是少数，但分布在整个库里，只扫第一页会漏。全量翻页，靠节流控制开销。
 let lastStallSweepAt = 0;
 
-async function releaseStalledExactAnalysis(): Promise<number> {
+async function releaseStalledExactAnalysis(forceInterrupted = false): Promise<number> {
   const now = Date.now();
-  if (now - lastStallSweepAt < Math.max(60_000, Math.floor(EXACT_ANALYSIS_STALL_MS / 6))) return 0;
+  if (!forceInterrupted && now - lastStallSweepAt < Math.max(60_000, Math.floor(EXACT_ANALYSIS_STALL_MS / 6))) return 0;
   lastStallSweepAt = now;
 
   const candidates: Record<string, unknown>[] = [];
@@ -2560,7 +2560,10 @@ async function releaseStalledExactAnalysis(): Promise<number> {
     if (!recordId || inFlight.has(recordId)) continue;
     const analysis = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
     const startedAt = Date.parse(String(analysis.reanalyzeQueuedAt || record.updated || ''));
-    if (Number.isFinite(startedAt) && now - startedAt < EXACT_ANALYSIS_STALL_MS) continue;
+    // On process startup no in-process analysis can still be alive. Release the
+    // persisted lock immediately so a container restart never leaves the UI in
+    // "generating" for the normal 30-minute stall window.
+    if (!forceInterrupted && Number.isFinite(startedAt) && now - startedAt < EXACT_ANALYSIS_STALL_MS) continue;
     await store.update(COL, recordId, {
       aiAnalysis: JSON.stringify({
         ...analysis,
@@ -2572,7 +2575,7 @@ async function releaseStalledExactAnalysis(): Promise<number> {
       }),
     });
     released += 1;
-    console.warn(`[videos] exact analysis stalled, released for retry: ${recordId}`);
+    console.warn(`[videos] exact analysis ${forceInterrupted ? 'interrupted by restart' : 'stalled'}, released for retry: ${recordId}`);
   }
   return released;
 }
@@ -7047,7 +7050,12 @@ export function initCrawlerOpsWorker(): void {
       console.warn('[videos] stalled exact-analysis sweep failed:', error instanceof Error ? error.message : error);
     });
     stalledExactSweepTimer = setInterval(sweep, intervalMs);
-    sweep();
+    // Every requested exact analysis belongs to the previous process at this
+    // point. Clear those locks now; waiting for the age threshold creates a
+    // false permanent queue after deployments or crashes.
+    void releaseStalledExactAnalysis(true).catch(error => {
+      console.warn('[videos] interrupted exact-analysis recovery failed:', error instanceof Error ? error.message : error);
+    });
     console.log(`[videos] stalled exact-analysis sweep enabled, interval=${intervalMs}ms`);
   }
   if (crawlerOpsWorkerTimer || workerFlag === '0') return;
