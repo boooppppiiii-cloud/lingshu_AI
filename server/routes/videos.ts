@@ -254,6 +254,36 @@ function hasCompleteVideoGeminiAnalysis(gemini: unknown, duration = 0): boolean 
     && coversFullVideo;
 }
 
+function analysisTimelineQualityError(analysis: VideoAiAnalysis, duration: number, mode: 'strategy' | 'exact'): string | null {
+  const details = (analysis.scriptDetails15s || [])
+    .map(detail => ({ detail, range: parseAnalysisTimeRange(String(detail.time || detail.timestamp || '')) }))
+    .filter((item): item is { detail: NonNullable<VideoAiAnalysis['scriptDetails15s']>[number]; range: { start: number; end: number } } => Boolean(item.range))
+    .sort((a, b) => a.range.start - b.range.start);
+  if (!details.length) return 'no_valid_storyboard_segments';
+  if (details.some(({ detail }) => detail.needsReview || Number(detail.confidence ?? 1) < 0.5)) return 'contains_unverified_segments';
+
+  const effectiveDuration = duration > 0 ? duration : details[details.length - 1].range.end;
+  const requiredSegments = effectiveDuration > 5 ? Math.max(2, Math.ceil(effectiveDuration / 5)) : 1;
+  if (details.length < requiredSegments) return `insufficient_segment_density_${details.length}_of_${requiredSegments}`;
+
+  const boundaryTolerance = mode === 'exact' ? 0.75 : 1.25;
+  const maxSegmentSeconds = mode === 'exact' ? 5.5 : 6.25;
+  if (details[0].range.start > boundaryTolerance) return `timeline_starts_at_${details[0].range.start.toFixed(2)}s`;
+  for (let index = 0; index < details.length; index += 1) {
+    const { start, end } = details[index].range;
+    if (end <= start) return `invalid_segment_${index + 1}`;
+    if (end - start > maxSegmentSeconds) return `segment_${index + 1}_too_long_${(end - start).toFixed(2)}s`;
+    if (index > 0) {
+      const previousEnd = details[index - 1].range.end;
+      if (start - previousEnd > boundaryTolerance) return `timeline_gap_at_${previousEnd.toFixed(2)}s`;
+      if (previousEnd - start > boundaryTolerance) return `timeline_overlap_at_${start.toFixed(2)}s`;
+    }
+  }
+  const analyzedUntil = details[details.length - 1].range.end;
+  if (duration > 0 && analyzedUntil + boundaryTolerance < duration) return `timeline_ends_at_${analyzedUntil.toFixed(2)}s_of_${duration.toFixed(2)}s`;
+  return null;
+}
+
 function canPromoteExistingAnalysisToExact(gemini: unknown, duration = 0): boolean {
   if (!hasCompleteVideoGeminiAnalysis(gemini, 0)) return false;
   const analysis = objectRecord(gemini);
@@ -287,26 +317,31 @@ function isPublicTestTenantVideo(record: Record<string, unknown>): boolean {
   return isVideoLevelAnalysis(analysis);
 }
 
-/**
- * A crawl result and a finished video-level analysis are two different states.
- * The inspiration list must expose genuine crawl results while their media is
- * still downloading/analyzing; otherwise a successful scheduled crawl looks
- * like it returned nothing.  Keep the stricter isPublicTestTenantVideo check
- * for workflows that specifically require complete Gemini evidence.
- */
 function isDisplayableTestTenantVideo(record: Record<string, unknown>): boolean {
   const analysis = videoAnalysisOf(record);
-  if (analysis.contentFormat === 'image') return false;
-  if (String(record.status || '') === 'failed') return false;
+  if (analysis.contentFormat === 'image' || String(record.status || '') === 'failed') return false;
+  if (analysis.adminOnlyVideoFailure || analysis.userVisible === true) {
+    return analysis.userVisible === true && isPublicTestTenantVideo(record);
+  }
   const downloadStatus = String(analysis.downloadStatus || '');
+  const videoFetchStatus = String(analysis.videoFetchStatus || '');
   const geminiStatus = String(analysis.geminiStatus || '');
-  // Explicit terminal failures stay out of the inspiration feed. userVisible=false
-  // alone is not terminal: the analysis queue sets it while genuine videos are
-  // queued/downloading, and those crawl results must still be shown to the user.
-  if (downloadStatus === 'manual_required' || downloadStatus === 'failed' || geminiStatus === 'video_failed') return false;
+  const terminalFailures = new Set([
+    'failed', 'download_failed', 'manual_required', 'metadata_only',
+    'unavailable', 'url_failed', 'ops_failed', 'video_failed', 'metadata_fallback',
+  ]);
+  if ([downloadStatus, videoFetchStatus, geminiStatus].some(status => terminalFailures.has(status))) return false;
   const sourceUrl = String(record.sourceUrl || '').trim();
-  const title = String(record.title || '').trim();
-  return /^https?:\/\//i.test(sourceUrl) && Boolean(title);
+  const platform = (record.platform || inferPlatformFromUrl(sourceUrl)) as Platform;
+  const thumbnailUrl = String(record.thumbnailUrl || '').trim();
+  const pendingStatuses = new Set([
+    'queued', 'downloading', 'download_retrying', 'ops_queued',
+    'ops_processing', 'analyzing', 'waiting_for_video',
+  ]);
+  return isPlatformUrl(sourceUrl, platform)
+    && Boolean(String(record.title || '').trim())
+    && hasRealThumbnail({ thumbnailUrl } as CrawledVideo)
+    && [downloadStatus, videoFetchStatus, geminiStatus].some(status => pendingStatuses.has(status));
 }
 
 function compareCrawledAtDesc(a: Record<string, unknown>, b: Record<string, unknown>): number {
@@ -1086,6 +1121,13 @@ export async function crawlVideosForTenant(input: CrawlVideosInput): Promise<Cra
     seenKeys.add(key);
     return true;
   });
+  if (platform === 'youtube' && items.length > 0 && orderedItems.length === 0) {
+    console.warn('[videos] YouTube candidates rejected before import', {
+      candidates: items.length,
+      sampleSourceUrl: items[0]?.sourceUrl || '',
+      samplePlatform: items[0]?.platform || '',
+    });
+  }
 
   for (const item of orderedItems) {
     const existingByUrl = await store.list(COL, {
@@ -1097,7 +1139,6 @@ export async function crawlVideosForTenant(input: CrawlVideosInput): Promise<Cra
     if (existingRecord) {
       skipped += 1;
       skippedExisting += 1;
-      if (testTenant) continue;
       const existingAnalysis = parseJsonRecord<Record<string, unknown>>(existingRecord.aiAnalysis, {});
       const refreshedRecord = {
         ...existingRecord,
@@ -1178,7 +1219,15 @@ export async function crawlVideosForTenant(input: CrawlVideosInput): Promise<Cra
   let returnedExisting = Math.max(0, resultRecords.length - returnedNew);
   let visibleNewCount = 0;
   if (testTenant) {
-    resultRecords = await analyzeFreshCrawledRecordsForTestTenant(records, target);
+    // A repeated keyword commonly finds URLs that were inserted by an earlier
+    // run but whose video-level analysis did not finish.  They are still real
+    // crawl candidates and must be resumed instead of being silently skipped.
+    // analyzeFreshCrawledRecordsForTestTenant only returns records that pass the
+    // strict video-level evidence gate, so failed/metadata-only rows stay hidden.
+    resultRecords = await analyzeFreshCrawledRecordsForTestTenant(
+      [...records, ...existingRecords].slice(0, target),
+      target,
+    );
     visibleNewCount = resultRecords.length;
     returnedExisting = 0;
     if (visibleNewCount < target && !input.disableBackfill) {
@@ -1229,8 +1278,39 @@ export async function crawlVideosForTenant(input: CrawlVideosInput): Promise<Cra
 async function analyzeFreshCrawledRecordsForTestTenant(records: unknown[], target: number): Promise<Record<string, unknown>[]> {
   const out: Record<string, unknown>[] = [];
   const seenSourceUrls = new Set<string>();
-  const syncYouTubeAttempts = Math.max(0, Math.min(10, Number(process.env.VIDEO_CRAWL_SYNC_URL_ANALYSIS_ATTEMPTS || 0)));
+  const configuredSyncAttempts = process.env.VIDEO_CRAWL_SYNC_URL_ANALYSIS_ATTEMPTS;
+  const syncYouTubeAttempts = Math.max(0, Math.min(
+    10,
+    configuredSyncAttempts === undefined ? Math.min(target, 3) : Number(configuredSyncAttempts),
+  ));
   let attemptedYouTube = 0;
+
+  // Publish the whole real candidate batch as "analysis queued" before doing
+  // synchronous work.  Otherwise candidate 2/3 stay as metadata-only rows
+  // while candidate 1 downloads, so the user sees only one result even though
+  // all three were retrieved and are scheduled for automatic analysis.
+  for (const raw of records.slice(0, target)) {
+    const record = raw as Record<string, unknown>;
+    const id = String(record.id || '');
+    const sourceUrl = String(record.sourceUrl || '').trim();
+    const platform = (record.platform || inferPlatformFromUrl(sourceUrl)) as Platform;
+    if (!id || !isPlatformUrl(sourceUrl, platform) || !hasRealThumbnail({ thumbnailUrl: String(record.thumbnailUrl || '') } as CrawledVideo)) continue;
+    const latest = await store.getById<Record<string, unknown>>(COL, id);
+    if (!latest || isPublicTestTenantVideo(latest) || !shouldQueueVideoAnalysis(latest)) continue;
+    const analysis = videoAnalysisOf(latest);
+    await store.update(COL, id, {
+      status: 'pending' as VideoStatus,
+      aiAnalysis: JSON.stringify({
+        ...analysis,
+        userVisible: false,
+        downloadStatus: 'queued',
+        videoFetchStatus: 'queued',
+        geminiStatus: 'waiting_for_video',
+        crawlerOpsStatus: 'queued',
+        analysisQueuedAt: new Date().toISOString(),
+      }),
+    });
+  }
 
   for (const raw of records) {
     const record = raw as Record<string, unknown>;
@@ -2837,8 +2917,9 @@ async function analyzeSourceVideoJobInner(input: {
     // that passes video-level analysis is also guaranteed to play in-app.
     if (recordId) {
       if (!await stillOwnsRun()) return null;
-      const previewPath = await compressPocketBasePreview(downloaded.filePath);
+      let previewPath = '';
       try {
+        previewPath = await compressPocketBasePreview(downloaded.filePath);
         const pocketBaseFilename = await uploadCrawlerCosObject(recordId, 'video', fs.readFileSync(previewPath), 'video/mp4');
         if (!pocketBaseFilename) throw new Error('PocketBase analysis preview persistence failed');
         const latest = await store.getById(COL, recordId);
@@ -2853,8 +2934,16 @@ async function analyzeSourceVideoJobInner(input: {
             previewPersistedAt: new Date().toISOString(),
           }),
         });
+      } catch (error) {
+        // A preview is an optional playback optimization. The source permalink
+        // remains playable, and the downloaded file is still valid input for
+        // Gemini. Do not turn a successful crawl into a failed analysis merely
+        // because ffmpeg/COS preview persistence failed.
+        console.warn('[videos] analysis preview persistence skipped:', error instanceof Error ? error.message : error);
       } finally {
-        try { fs.unlinkSync(previewPath); } catch { /* best effort */ }
+        if (previewPath) {
+          try { fs.unlinkSync(previewPath); } catch { /* best effort */ }
+        }
       }
     }
     if (recordId) {
@@ -2974,9 +3063,9 @@ async function analyzeSourceVideoJobInner(input: {
         status: 'analyzed' as VideoStatus,
         aiAnalysis: JSON.stringify({
           ...previous,
-          gemini: previous.gemini || fallback,
-          analysisSource: previous.gemini ? previous.analysisSource || 'metadata-fallback' : 'metadata-fallback',
-          analysisQuality: previous.gemini ? previous.analysisQuality || 'metadata' : 'metadata',
+          ...(previous.gemini ? { gemini: previous.gemini } : isRetryableAnalysisFailure(e) ? { gemini: undefined } : { gemini: fallback }),
+          analysisSource: previous.gemini ? previous.analysisSource || 'metadata-fallback' : isRetryableAnalysisFailure(e) ? 'analysis-pending' : 'metadata-fallback',
+          analysisQuality: previous.gemini ? previous.analysisQuality || 'metadata' : isRetryableAnalysisFailure(e) ? 'pending' : 'metadata',
           videoAnalysisAttemptedAt: new Date().toISOString(),
           downloadStatus: 'ops_queued',
           videoFetchStatus: 'ops_queued',
@@ -2984,9 +3073,9 @@ async function analyzeSourceVideoJobInner(input: {
           crawlerOpsTaskId: opsTask?.id || input.opsTaskId || previous.crawlerOpsTaskId,
           crawlerOpsStatus: opsTask?.status || 'failed',
           crawlerOpsReason: compactReason,
-          analysisError: /fetch failed|GEMINI_API_KEY|Gemini/i.test(e instanceof Error ? e.message : String(e))
-            ? compactError
-            : previous.analysisError,
+          analysisError: compactError,
+          analysisRetryable: isRetryableAnalysisFailure(e),
+          analysisFailureKind: isRetryableAnalysisFailure(e) ? 'quality_or_timeout' : previous.analysisFailureKind,
           downloadError: compactError,
         }),
       });
@@ -3266,6 +3355,21 @@ async function analyzeDownloadedMaterial(recordId: string, filePath: string, mat
       return;
     }
     const platform = (latest?.platform || inferPlatformFromUrl(String(latest?.sourceUrl || ''))) as Platform;
+    if (latest && isRetryableAnalysisFailure(e)) {
+      await store.update(COL, recordId, {
+        status: 'analyzed' as VideoStatus,
+        aiAnalysis: JSON.stringify({
+          ...previous,
+          requestedAnalysisMode: undefined,
+          geminiStatus: 'analysis_retryable',
+          analysisRetryable: true,
+          analysisFailureKind: 'quality_or_timeout',
+          analysisError: compactVideoPipelineError(e instanceof Error ? e.message : String(e)),
+          videoLevelFailureStatus: '分析未完成，可重试',
+        }),
+      });
+      return;
+    }
     const fallback = metadataFallbackAnalysis({
       platform,
       title: String(latest?.title || material.name),
@@ -4694,6 +4798,11 @@ function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promi
   });
 }
 
+function isRetryableAnalysisFailure(error: unknown): boolean {
+  return /analysis_quality_retryable|analysis_retryable|chunk_quality_failed|video_analysis_hard_timeout|exact_chunk_timeout/i
+    .test(error instanceof Error ? error.message : String(error));
+}
+
 function parseAnalysisTimeRange(value: string): { start: number; end: number } | null {
   const numbers = String(value || '').match(/\d+(?:\.\d+)?/g)?.map(Number) || [];
   if (!numbers.length) return null;
@@ -4714,7 +4823,7 @@ function lockAsrTimeline(analysis: VideoAiAnalysis, transcript?: { text: string;
   };
 }
 
-export async function extractQwenAnalysisFrames(filePath: string, maxFrames = 30, duration = 0): Promise<Array<{ base64: string; mimeType: string; timeLabel: string }>> {
+export async function extractQwenAnalysisFrames(filePath: string, maxFrames = 30, duration = 0, analysisMode: 'strategy' | 'exact' = 'exact'): Promise<Array<{ base64: string; mimeType: string; timeLabel: string }>> {
   if (!ffmpegBin) throw new Error('ffmpeg is not available for Qwen frame analysis');
   if (!fs.existsSync(ANALYSIS_DIR)) fs.mkdirSync(ANALYSIS_DIR, { recursive: true });
 
@@ -4725,20 +4834,27 @@ export async function extractQwenAnalysisFrames(filePath: string, maxFrames = 30
     // frame from the first four seconds at 3 fps; similarity de-duplication here
     // previously erased the exact motion boundary that the director needs.
     const densePattern = path.join(frameDir, 'dense-%02d.jpg');
-    const denseFps = maxFrames <= 24 ? 2 : 3;
+    const denseFps = analysisMode === 'exact' ? (maxFrames <= 24 ? 2 : 3) : 0;
     const denseCount = denseFps * 4;
-    await execFileAsync(ffmpegBin, [
-      '-hide_banner',
-      '-loglevel', 'error',
-      '-i', filePath,
-      '-vf', `trim=duration=4,fps=${denseFps},scale=384:-1`,
-      '-frames:v', String(denseCount),
-      '-q:v', '4',
-      densePattern,
-    ], { timeout: 90_000 });
+    if (denseCount) {
+      await execFileAsync(ffmpegBin, [
+        '-hide_banner',
+        '-loglevel', 'error',
+        '-i', filePath,
+        '-vf', `trim=duration=4,fps=${denseFps},scale=384:-1`,
+        '-frames:v', String(denseCount),
+        '-q:v', '4',
+        densePattern,
+      ], { timeout: 90_000 });
+    }
     const uniformPattern = path.join(frameDir, 'uniform-%02d.jpg');
-    const uniformCount = Math.max(8, Math.min(42, Math.ceil((maxFrames - denseCount) * 0.6)));
-    const uniformInterval = duration > 4 ? Math.max(1, (duration - 1) / Math.max(1, uniformCount - 1)) : 4;
+    const strategyInterval = 5;
+    const uniformCount = analysisMode === 'strategy'
+      ? Math.max(1, Math.min(maxFrames, Math.ceil(Math.max(duration, 1) / strategyInterval) + 1))
+      : Math.max(8, Math.min(42, Math.ceil((maxFrames - denseCount) * 0.6)));
+    const uniformInterval = analysisMode === 'strategy'
+      ? strategyInterval
+      : duration > 4 ? Math.max(1, (duration - 1) / Math.max(1, uniformCount - 1)) : 4;
     await execFileAsync(ffmpegBin, [
       '-hide_banner',
       '-loglevel', 'error',
@@ -4751,6 +4867,7 @@ export async function extractQwenAnalysisFrames(filePath: string, maxFrames = 30
     const scenePattern = path.join(frameDir, 'scene-%02d.jpg');
     let sceneTimes: number[] = [];
     try {
+      if (analysisMode !== 'exact') throw new Error('scene extraction disabled for strategy analysis');
       const sceneCount = Math.max(6, maxFrames - denseCount - uniformCount);
       const sceneRun = await execFileAsync(ffmpegBin, ['-hide_banner', '-loglevel', 'info', '-i', filePath, '-vf', "select='gt(scene,0.16)',showinfo,scale=384:-1", '-fps_mode', 'vfr', '-frames:v', String(sceneCount), '-q:v', '4', scenePattern], { timeout: 90_000, maxBuffer: 8 * 1024 * 1024 });
       sceneTimes = Array.from(sceneRun.stderr.matchAll(/pts_time:([0-9.]+)/g)).map(match => Number(match[1])).filter(Number.isFinite).slice(0, sceneCount);
@@ -4758,7 +4875,7 @@ export async function extractQwenAnalysisFrames(filePath: string, maxFrames = 30
     const denseRows = fs.readdirSync(frameDir)
       .filter(file => /^dense-\d+\.jpg$/i.test(file))
       .sort()
-      .map((file, index) => ({ file, time: index / denseFps, dense: true }));
+      .map((file, index) => ({ file, time: denseFps ? index / denseFps : 0, dense: true }));
     const supplementalRows = [
       ...fs.readdirSync(frameDir).filter(file => /^uniform-\d+\.jpg$/i.test(file)).sort().map((file, index) => ({ file, time: index * uniformInterval, dense: false })),
       ...fs.readdirSync(frameDir).filter(file => /^scene-\d+\.jpg$/i.test(file)).sort().map((file, index) => ({ file, time: sceneTimes[index] ?? index * 3, dense: false })),
@@ -4816,6 +4933,7 @@ async function analyzeExactLongVideoChunks(input: {
   views?: string;
   tags?: string[];
   transcript?: Awaited<ReturnType<typeof transcribeAudioWithQwen>>;
+  analysisMode?: 'strategy' | 'exact';
 }): Promise<VideoAiAnalysis> {
   const chunkSeconds = Math.max(30, Number(process.env.VIDEO_EXACT_CHUNK_SECONDS || 45));
   const inferredDuration = Math.max(input.duration, ...input.frames.map(frame => qwenFrameSeconds(frame.timeLabel) + 3), 3);
@@ -4846,60 +4964,26 @@ async function analyzeExactLongVideoChunks(input: {
       views: input.views,
       tags: input.tags,
       transcript: localSegments.length ? { text: localSegments.map(item => item.text).join(''), segments: localSegments } : undefined,
-      analysisMode: 'exact',
+      analysisMode: input.analysisMode || 'exact',
     });
+    const localQualityError = analysisTimelineQualityError(result, localDuration, input.analysisMode || 'exact');
+    if (localQualityError) throw new Error(`${input.analysisMode || 'exact'}_chunk_quality_failed_${chunk.start.toFixed(0)}_${localQualityError}`);
     const details = (result.scriptDetails15s || []).map(detail => ({ ...detail, time: shiftedTimelineLabel(String(detail.time || detail.timestamp || ''), chunk.start, localDuration) }));
-    const coveredUntil = videoAnalysisTimelineEnd({ ...result, scriptDetails15s: details }) - chunk.start;
-    if (coveredUntil + 1 < localDuration) {
-      const gapStart = Math.max(0, coveredUntil);
-      details.push({
-        time: shiftedTimelineLabel(`${gapStart}-${localDuration}s`, chunk.start, localDuration),
-        environment: '', shot: '', camera: '', purpose: '补齐全片时间线',
-        visual: '该区间由均匀关键帧覆盖，未确认到新的主体动作或场景变化。',
-        dialogue: '', onScreenText: '', ambientSound: '', bgm: '', soundEffects: [], beats: [], persistentState: '', authenticity: '',
-        observedFacts: '均匀关键帧未显示可确认的新变化', inferredIntent: '', causalGap: '',
-        omniPrompt: 'Hold the last verified composition without introducing new actions or objects.',
-        omniNegativePrompt: 'No invented motion, no new objects, no camera movement, no UI overlays.',
-        confidence: 0.45, needsReview: true, subtitle: '', audio: '', note: '长镜头时间线补齐，建议人工抽查。',
-      });
-    }
     return {
       ...result,
       coarseStructure: (result.coarseStructure || []).map(item => ({ ...item, time: shiftedTimelineLabel(String(item.time || ''), chunk.start, localDuration) })),
       scriptDetails15s: details,
     };
   };
-  const fallbackChunk = (chunk: { start: number; end: number }): VideoAiAnalysis => ({
-    theme: input.title || '长视频内容', hooks: [], sellingPoints: [], mood: '', structure: '分段分析',
-    firstTenSeconds: {
-      atmosphere: '均匀关键帧已覆盖该时段，模型结构化分析超时，保留原片氛围待复核。',
-      audioVisual: '原视频画面与音轨保持不变，不补写未确认信息。',
-      camera: '镜头运动未确认，需人工抽查原片。',
-      visuals: '仅确认该时段存在有效视频帧。',
-      voiceMusic: '音频内容未确认，需人工抽查原片。',
-    },
-    recommendedScriptType: 'storyboard',
-    coarseStructure: [{ time: `${chunk.start}s–${chunk.end}s`, label: '待复核区间', description: '该分段在时限内未返回，已保留全片时间线。' }],
-    scriptDetails15s: [{
-      time: `${chunk.start}s–${chunk.end}s`, purpose: '保留全片时间线', visual: '该区间分析超时，不编造未确认的动作。',
-      observedFacts: '分段模型未在限时内返回', inferredIntent: '', causalGap: '需要人工复核或单段重试',
-      omniPrompt: 'Preserve the verified source footage for this interval without inventing actions.',
-      omniNegativePrompt: 'No invented motion, dialogue, objects, camera movement, or UI.',
-      confidence: 0.2, needsReview: true, subtitle: '', audio: '', note: '分段超时，已自动降级。',
-    }],
-  });
   const chunkTimeoutMs = Math.max(20_000, Number(process.env.VIDEO_EXACT_CHUNK_TIMEOUT_MS || 90_000));
   const settled = await Promise.allSettled(chunks.map(chunk => Promise.race([
     analyzeChunk(chunk),
     new Promise<VideoAiAnalysis>((_, reject) => setTimeout(() => reject(new Error('exact_chunk_timeout')), chunkTimeoutMs)),
   ])));
-  const successful = settled.flatMap(result => result.status === 'fulfilled' ? [result.value] : []);
-  const results = settled.map((result, index) => result.status === 'fulfilled' ? result.value : fallbackChunk(chunks[index]));
-  // Even a short clip can occasionally time out before Qwen returns its first
-  // structured segment. We still have uniformly sampled full-video frames, so
-  // retain a conservative, review-marked timeline instead of turning an
-  // otherwise playable record into a permanent video_failed item.
-  const first = successful[0] || results[0];
+  const failure = settled.find((result): result is PromiseRejectedResult => result.status === 'rejected');
+  if (failure) throw new Error(`${input.analysisMode || 'exact'}_analysis_retryable: ${failure.reason instanceof Error ? failure.reason.message : String(failure.reason)}`);
+  const results = settled.map(result => (result as PromiseFulfilledResult<VideoAiAnalysis>).value);
+  const first = results[0];
   const unique = (values: string[]) => [...new Set(values.filter(Boolean))];
   return {
     ...first,
@@ -4927,12 +5011,13 @@ export async function analyzeDownloadedVideoWithFallback(opts: {
     // frames made long-video requests time out without materially improving the
     // Eighteen frames combine a dense opening with uniform and scene-change
     // evidence across the full duration, small enough for a reliable request.
-    const exactFrameCount = Math.max(12, Math.min(30, Number(process.env.VIDEO_QWEN_EXACT_FRAME_COUNT || 18)));
-    const strategyFrameCount = Math.max(12, Math.min(24, Number(process.env.VIDEO_QWEN_FRAME_COUNT || 18)));
+    const exactFrameCount = Math.max(24, Math.min(72, Number(process.env.VIDEO_QWEN_EXACT_FRAME_COUNT || 42)));
+    const strategyFrameCount = Math.max(3, Math.min(24, Number(process.env.VIDEO_QWEN_FRAME_COUNT || Math.ceil(Math.max(Number(opts.duration || 0), 10) / 5) + 1)));
     const frames = await extractQwenAnalysisFrames(
       opts.filePath,
       opts.analysisMode === 'exact' ? exactFrameCount : strategyFrameCount,
       Number(opts.duration || 0),
+      opts.analysisMode === 'exact' ? 'exact' : 'strategy',
     );
     let transcript: Awaited<ReturnType<typeof transcribeAudioWithQwen>> | undefined;
     const asrDir = path.join(ANALYSIS_DIR, `qwen-asr-${Date.now()}-${randomUUID()}`);
@@ -4966,13 +5051,12 @@ export async function analyzeDownloadedVideoWithFallback(opts: {
       }
     } catch (error) { console.warn('[videos] Qwen ASR unavailable, continuing with frames:', error instanceof Error ? error.message : error); }
     finally { try { for (const file of fs.readdirSync(asrDir)) fs.unlinkSync(path.join(asrDir, file)); fs.rmdirSync(asrDir); } catch { /* best effort */ } }
-    // Exact mode always uses the chunk path, including short clips. Besides
-    // splitting long videos, that path conservatively fills a missing tail (or
-    // a zero-length model timeline) from the uniformly sampled frame evidence.
-    // This prevents a valid 6–15 second TikTok clip from failing solely because
-    // Qwen omitted time labels in an otherwise usable response.
+    // Exact mode always uses the chunk path, including short clips. Strategy
+    // mode also chunks longer clips so each request stays bounded. Missing or
+    // low-quality timelines now fail as retryable instead of being padded with
+    // invented tail segments.
     const qwenAnalysis = opts.analysisMode === 'exact' || Number(opts.duration || 0) > 15
-      ? await analyzeExactLongVideoChunks({ frames, title: opts.title, platform: opts.platform, duration: Number(opts.duration), views: opts.views, tags: opts.tags, transcript })
+      ? await analyzeExactLongVideoChunks({ frames, title: opts.title, platform: opts.platform, duration: Number(opts.duration), views: opts.views, tags: opts.tags, transcript, analysisMode: opts.analysisMode || 'strategy' })
       : await analyzeVideoFramesWithQwen({
         frames,
         title: opts.title,
@@ -4985,6 +5069,8 @@ export async function analyzeDownloadedVideoWithFallback(opts: {
       });
     const analysis = lockAsrTimeline(qwenAnalysis, transcript);
     assertFullVideoTimeline(analysis, Number(opts.duration || 0), 'qwen');
+    const qualityError = analysisTimelineQualityError(analysis, Number(opts.duration || 0), opts.analysisMode || 'strategy');
+    if (qualityError) throw new Error(`analysis_quality_retryable_${qualityError}`);
     return { analysis, source: 'qwen-frame-video' };
   };
 
@@ -5004,6 +5090,8 @@ export async function analyzeDownloadedVideoWithFallback(opts: {
       ? await withTimeout(geminiPromise, qwenFallbackTimeoutMs(), 'Gemini analysis timed out before Qwen fallback')
       : await geminiPromise;
     assertFullVideoTimeline(analysis, Number(opts.duration || 0), 'gemini');
+    const qualityError = analysisTimelineQualityError(analysis, Number(opts.duration || 0), opts.analysisMode || 'strategy');
+    if (qualityError) throw new Error(`analysis_quality_retryable_${qualityError}`);
     return { analysis, source: opts.sourceLabel };
   } catch (e) {
     if (shouldRetryGeminiWithNormalizedVideo(e)) {
@@ -5017,6 +5105,8 @@ export async function analyzeDownloadedVideoWithFallback(opts: {
             analysisMode: opts.analysisMode || 'strategy',
           });
           assertFullVideoTimeline(analysis, Number(opts.duration || 0), 'gemini_normalized');
+          const qualityError = analysisTimelineQualityError(analysis, Number(opts.duration || 0), opts.analysisMode || 'strategy');
+          if (qualityError) throw new Error(`analysis_quality_retryable_${qualityError}`);
           return { analysis, source: `${opts.sourceLabel}-normalized` };
         } catch (normalizedError) {
           console.warn('[videos] Gemini normalized video analysis failed:', normalizedError instanceof Error ? normalizedError.message : normalizedError);
@@ -6011,12 +6101,18 @@ function youtubeThumbnailFromUrl(url: string): string {
 }
 
 function youtubeVideoId(url: string): string {
+  const trimmed = String(url || '').trim();
+  // yt-dlp --flat-playlist returns the bare 11-character video id in `url`
+  // instead of a watch URL. Treat it as a real YouTube id before URL parsing;
+  // otherwise keyword-search candidates are normalized to non-HTTP strings and
+  // are all discarded by isPlatformUrl().
+  if (/^[A-Za-z0-9_-]{11}$/.test(trimmed)) return trimmed;
   try {
-    const parsed = new URL(url);
+    const parsed = new URL(trimmed);
     if (parsed.hostname.includes('youtu.be')) return parsed.pathname.replace(/^\//, '');
     return parsed.searchParams.get('v') || parsed.pathname.match(/\/(?:shorts|embed)\/([^/?#]+)/)?.[1] || '';
   } catch {
-    return url.match(/(?:v=|youtu\.be\/|\/shorts\/)([A-Za-z0-9_-]{6,})/)?.[1] || '';
+    return trimmed.match(/(?:v=|youtu\.be\/|\/shorts\/)([A-Za-z0-9_-]{6,})/)?.[1] || '';
   }
 }
 
@@ -6413,7 +6509,9 @@ function filterRealMediaItems(items: CrawledVideo[]): CrawledVideo[] {
 
 function hasRealThumbnail(item: CrawledVideo): boolean {
   const thumbnail = item.thumbnailUrl.trim();
-  return /^https?:\/\//i.test(thumbnail) || thumbnail.startsWith('/media/');
+  return /^https?:\/\//i.test(thumbnail)
+    || thumbnail.startsWith('/media/')
+    || /^\/api\/overseas\/videos\/[^/]+\/thumbnail(?:\?|$)/.test(thumbnail);
 }
 
 const PLATFORM_LABEL: Partial<Record<Platform, string>> = {

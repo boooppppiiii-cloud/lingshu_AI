@@ -134,7 +134,7 @@ competitorAccountsRouter.post('/:id/crawl', async (req, res) => {
     res.status(404).json({ error: 'Not found' });
     return;
   }
-  const limit = Math.min(30, Math.max(1, Number((req.body as { limit?: number })?.limit) || 10));
+  const limit = Math.min(30, Math.max(1, Number((req.body as { limit?: number })?.limit) || 3));
 
   try {
     if (record.platform === 'youtube' || record.platform === 'tiktok') {

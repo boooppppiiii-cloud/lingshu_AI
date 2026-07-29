@@ -26,7 +26,7 @@ const PLATFORM_META: Record<AccountPlatform, { label: string }> = {
   facebook: { label: 'Facebook' },
 };
 
-const CRAWL_COUNT = 10;
+const CRAWL_COUNT = 3;
 
 function formatTime(iso: string): string {
   if (!iso) return '';
