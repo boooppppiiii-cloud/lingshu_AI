@@ -6111,8 +6111,10 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         const q = search.trim().toLowerCase();
         const matchSearch = (c: Clip) => q === '' || [c.name, folderName(c.folder), c.industry, c.shotFunction, c.applicability, c.tags]
           .filter(Boolean).some(value => String(value).toLowerCase().includes(q));
-        // 「当前选择」只展示本次草稿中用户已经选入的素材，不承载推荐或自动跳转逻辑。
-        const recommendationSource = selected;
+        // 「当前选择」跟随当前视频版本的分镜分配，不能读取跨版本的全局勾选状态。
+        // 同一素材若用于多个分镜，只在素材网格中展示一次，并保持首次出现顺序。
+        const currentVersionMaterialIds = [...new Set(assignedOrderedIds)];
+        const recommendationSource = storyboardSlots.length > 0 ? currentVersionMaterialIds : selected;
         const recommended = recommendationSource
           .map(id => materialById.get(id))
           .filter((item): item is Clip => Boolean(item && item.type !== 'audio'));
@@ -6560,7 +6562,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
 	              )}
 	              <div className="flex items-center gap-3 px-5 py-3 border-b border-border flex-shrink-0">
 		                <span className="text-sm font-semibold text-text-primary">{folderName(activeFolder)}</span>
-		                {activeFolder === 'recommend' && <span className="text-[11px] text-text-muted">查看本次草稿已经选择的视频素材</span>}
+		                {activeFolder === 'recommend' && <span className="text-[11px] text-text-muted">查看当前视频版本全部分镜使用的素材</span>}
 		                {activeFolder === 'hot' && <span className="text-[11px] text-text-muted">官方实时更新</span>}
 	                {activeFolder === 'presenter' && <span className="text-[11px] text-text-muted">上传真人实拍视频，或生成数字人口播</span>}
 	                <input ref={fileInputRef} type="file" multiple accept={activeFolder === 'presenter' ? 'video/*' : 'video/*,image/*,audio/*'} className="hidden"
@@ -6579,7 +6581,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
 		                  className="btn-ghost ml-auto !px-3 !py-1.5 !text-xs flex items-center gap-1.5 disabled:opacity-60">
 		                  {uploading ? <Loader2 size={12} className="animate-spin" /> : <Upload size={12} />} {uploading ? '上传中…' : '上传'}
 		                </button>
-	                <span className="text-xs text-text-muted">已选 {selected.length}</span>
+	                <span className="text-xs text-text-muted">已选 {activeFolder === 'recommend' ? recommendationSource.length : selected.length}</span>
 	              </div>
 
 	              <div className="flex-1 overflow-y-auto p-5">
@@ -6608,8 +6610,9 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
 	                )}
 	                <div className="grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
 	                  {visible.map(c => {
-                    const on = selected.includes(c.id);
-                    const idx = selected.indexOf(c.id);
+                    const displaySelection = activeFolder === 'recommend' ? recommendationSource : selected;
+                    const on = displaySelection.includes(c.id);
+                    const idx = displaySelection.indexOf(c.id);
 	                    return (
 	                      <div key={c.id}
 	                        role="button"
@@ -6689,7 +6692,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                   <div className="text-center py-16">
                     <Upload size={26} className="mx-auto text-text-muted mb-3 opacity-30" />
 		                    <p className="text-sm text-text-muted">
-		                      {search.trim() ? '没有匹配的素材' : activeFolder === 'recommend' ? '当前草稿还没有选择视频；请从其他文件夹选择或拖入分镜' : activeFolder === 'hot' ? '爆款素材库更新中，敬请期待' : activeFolder === 'presenter' ? '还没有真人口播素材' : '这个文件夹还没有素材'}
+		                      {search.trim() ? '没有匹配的素材' : activeFolder === 'recommend' ? '当前视频版本还没有匹配分镜素材；请从其他文件夹选择或拖入分镜' : activeFolder === 'hot' ? '爆款素材库更新中，敬请期待' : activeFolder === 'presenter' ? '还没有真人口播素材' : '这个文件夹还没有素材'}
 		                    </p>
 		                    {activeFolder !== 'hot' && activeFolder !== 'recommend' && !search.trim() && (
 	                      <div className="mt-2 space-y-2">
