@@ -13,7 +13,7 @@ import { store } from '../storage/index.js';
 import { fetchFile } from '../storage/files.js';
 import { objectStorageEnabled, r2Download, r2GetObject, r2Head, r2Upload } from '../storage/r2.js';
 import { analyzeImagePostEvidenceWithGemini, analyzeVideo, analyzeYouTubeUrl } from '../agents/gemini.js';
-import { analyzeImagePostEvidenceWithQwen, analyzeVideoFramesWithQwen, analyzeVideoTimelineDetailsWithQwen, detectVideoTimelineWithQwen, transcribeAudioWithQwen, type ImagePostEvidenceAnalysis, type QwenTimelinePlan } from '../agents/qwen.js';
+import { analyzeImagePostEvidenceWithQwen, analyzeVideoFramesWithQwen, analyzeVideoTimelineDetailsWithQwen, transcribeAudioWithQwen, type ImagePostEvidenceAnalysis, type QwenTimelinePlan } from '../agents/qwen.js';
 import type { Platform, VideoAiAnalysis, VideoStatus } from '../types/index.js';
 import { isDemoMode } from '../lib/demo.js';
 import { recordVideoAdminAlert, updateVideoAdminAlertByRecordId } from '../lib/videoAdminAlerts.js';
@@ -4830,7 +4830,7 @@ function videoAnalysisHardTimeoutMs(analysisMode: 'strategy' | 'exact' = 'strate
   // Bound the complete frame extraction + ASR + VL request, not only the
   // individual OpenAI-compatible HTTP call.  Otherwise a record can remain in
   // `analyzing` forever when one of the preparatory stages stalls.
-  const fallback = analysisMode === 'exact' ? 480_000 : 150_000;
+  const fallback = analysisMode === 'exact' ? 720_000 : 150_000;
   return Math.max(30_000, Number(process.env.VIDEO_ANALYSIS_HARD_TIMEOUT_MS || fallback));
 }
 
@@ -5028,14 +5028,22 @@ async function analyzeExactLongVideoChunks(input: {
     const localSegments = (input.transcript?.segments || [])
       .filter(segment => segment.end > chunk.start && segment.start < chunk.end)
       .map(segment => ({ ...segment, start: Math.max(0, segment.start - chunk.start), end: Math.min(localDuration, segment.end - chunk.start) }));
-    console.log(`[videos] exact timeline ${chunk.start.toFixed(0)}-${chunk.end.toFixed(0)}s started, frames=${localFrames.length}`);
-    const timeline = await detectVideoTimelineWithQwen({
-      frames: localFrames,
-      title: input.title,
-      platform: input.platform,
-      duration: localDuration,
-      signal,
-    });
+    // Stage 1 is deterministic: lock continuous observation windows to the
+    // real video clock. This is not a claim that every boundary is a cut; the
+    // model only describes visible content inside each server-owned window.
+    const observationSeconds = Math.max(2, Math.min(5, Number(process.env.VIDEO_EXACT_OBSERVATION_SECONDS || 4)));
+    const timeline: QwenTimelinePlan = {
+      theme: String(input.title || '真实视频画面分析'),
+      hooks: [], sellingPoints: [], mood: '', structure: '', baseRequirements: '',
+      firstTenSeconds: {}, coarseStructure: [], scriptSummary15s: {}, recommendedScriptType: 'storyboard',
+      boundaries: Array.from({ length: Math.ceil(localDuration / observationSeconds) }, (_, index) => ({
+        id: `b${index + 1}`,
+        start: index * observationSeconds,
+        end: Math.min(localDuration, (index + 1) * observationSeconds),
+        reason: '连续观察窗口',
+        evidence: '由真实视频时间轴锁定，画面内容由关键帧分析填写',
+      })),
+    };
     const planError = timelinePlanError(timeline, localDuration);
     if (planError) throw new Error(`exact_timeline_quality_failed_${chunk.start.toFixed(0)}_${planError}`);
     console.log(`[videos] exact details ${chunk.start.toFixed(0)}-${chunk.end.toFixed(0)}s started, boundaries=${timeline.boundaries.length}`);
@@ -5057,7 +5065,7 @@ async function analyzeExactLongVideoChunks(input: {
   // A schema-complete director storyboard commonly needs more than one minute
   // even for a short clip. 110s remains bounded, while allowing the smaller
   // retry to finish instead of aborting a healthy generation at 60s.
-  const chunkTimeoutMs = Math.max(20_000, Number(process.env.VIDEO_EXACT_CHUNK_TIMEOUT_MS || 110_000));
+  const chunkTimeoutMs = Math.max(20_000, Number(process.env.VIDEO_EXACT_CHUNK_TIMEOUT_MS || 150_000));
   const primaryFrameLimit = Math.max(8, Math.min(20, Number(process.env.VIDEO_EXACT_CHUNK_FRAME_LIMIT || 12)));
   const retryFrameLimit = Math.max(6, Math.min(primaryFrameLimit, Number(process.env.VIDEO_EXACT_RETRY_FRAME_LIMIT || 8)));
   const runWithTimeout = async (chunk: { start: number; end: number }, frameLimit: number, attempt: number) => {
