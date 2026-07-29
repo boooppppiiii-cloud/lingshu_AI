@@ -3217,8 +3217,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   const canNext = contentMode === 'video' && step === 'material'
     ? (mode === 'clone'
       ? storyboardSlots.length > 0 && assignedCount === storyboardSlots.length
-      : (storyboardSlots.length > 0 ? assignedCount === storyboardSlots.length : selected.length > 0)
-        && (mode !== 'material' || !script.trim() || storyboardTimelineEnd + 0.1 >= duration))
+      : (storyboardSlots.length > 0 ? assignedCount === storyboardSlots.length : selected.length > 0))
     : true;
   useEffect(() => {
     if (!assignedOrderedIds.length) return;
@@ -8485,7 +8484,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                 ? scriptStageTab === 'theme' ? '确认主题并进入分镜生成' : voiceoverMode === 'none' ? '确认字幕并进入素材匹配' : '试听确认并进入素材匹配'
                 : step === 'material' && contentMode === 'video'
                   ? canNext
-                    ? '完成选材并进入配音'
+                    ? '完成选材并进入配乐'
                     : `还需放入 ${Math.max(0, storyboardSlots.length - assignedCount)} 个分镜视频`
                   : '下一步'} <ChevronRight size={15} />
             </button>
