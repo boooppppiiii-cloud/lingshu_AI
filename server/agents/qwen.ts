@@ -142,6 +142,9 @@ ${modeInstruction}
       image_url: { url: `data:${frame.mimeType};base64,${frame.base64}` },
     })),
   ];
+  const outputTokens = opts.analysisMode === 'exact' && Number(opts.duration || 0) <= 15
+    ? 3000
+    : Number(opts.duration || 0) > 60 ? 8000 : 4500;
 
   const completion = await client().chat.completions.create({
     model: opts.analysisMode === 'exact' ? QWEN_EXACT_VL_MODEL() : QWEN_VL_MODEL(),
@@ -150,7 +153,7 @@ ${modeInstruction}
       { role: 'user', content: content as any },
     ],
     response_format: { type: 'json_object' },
-    max_tokens: Number(opts.duration || 0) > 60 ? 8000 : 4500,
+    max_tokens: outputTokens,
   }, { signal: opts.signal });
 
   const raw = completion.choices[0]?.message?.content ?? '';
@@ -164,7 +167,7 @@ ${modeInstruction}
         { role: 'user', content: content as any },
       ],
       response_format: { type: 'json_object' },
-      max_tokens: Number(opts.duration || 0) > 60 ? 8000 : 4500,
+      max_tokens: outputTokens,
     }, { signal: opts.signal });
     const repaired = parseJson<Partial<VideoAiAnalysis>>(repair.choices[0]?.message?.content ?? '', {});
     normalized = normalizeVideoAnalysis({ ...parsed, scriptDetails15s: repaired.scriptDetails15s });

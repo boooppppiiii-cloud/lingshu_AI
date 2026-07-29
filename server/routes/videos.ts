@@ -4970,7 +4970,7 @@ async function analyzeExactLongVideoChunks(input: {
   // Keep each VL request small enough to finish reliably. The previous 45s
   // default put nearly all 42 exact frames into the first request of a 50s
   // video, which repeatedly hit the 90s request timeout.
-  const chunkSeconds = Math.max(12, Math.min(30, Number(process.env.VIDEO_EXACT_CHUNK_SECONDS || 20)));
+  const chunkSeconds = Math.max(10, Math.min(30, Number(process.env.VIDEO_EXACT_CHUNK_SECONDS || 12)));
   const inferredDuration = Math.max(input.duration, ...input.frames.map(frame => qwenFrameSeconds(frame.timeLabel) + 3), 3);
   const chunks = Array.from({ length: Math.ceil(inferredDuration / chunkSeconds) }, (_, index) => ({
     start: index * chunkSeconds,
@@ -5020,8 +5020,8 @@ async function analyzeExactLongVideoChunks(input: {
   // even for a short clip. 110s remains bounded, while allowing the smaller
   // retry to finish instead of aborting a healthy generation at 60s.
   const chunkTimeoutMs = Math.max(20_000, Number(process.env.VIDEO_EXACT_CHUNK_TIMEOUT_MS || 110_000));
-  const primaryFrameLimit = Math.max(8, Math.min(20, Number(process.env.VIDEO_EXACT_CHUNK_FRAME_LIMIT || 16)));
-  const retryFrameLimit = Math.max(6, Math.min(primaryFrameLimit, Number(process.env.VIDEO_EXACT_RETRY_FRAME_LIMIT || 10)));
+  const primaryFrameLimit = Math.max(8, Math.min(20, Number(process.env.VIDEO_EXACT_CHUNK_FRAME_LIMIT || 12)));
+  const retryFrameLimit = Math.max(6, Math.min(primaryFrameLimit, Number(process.env.VIDEO_EXACT_RETRY_FRAME_LIMIT || 8)));
   const runWithTimeout = async (chunk: { start: number; end: number }, frameLimit: number, attempt: number) => {
     const startedAt = Date.now();
     const controller = new AbortController();
