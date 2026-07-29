@@ -1,10 +1,60 @@
 import { Router } from 'express';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
-import { getTenantPlatformApp } from '../lib/tenantPlatformApps.js';
+import {
+  getTenantPlatformApp,
+  publicTenantPlatformApp,
+  upsertTenantPlatformApp,
+} from '../lib/tenantPlatformApps.js';
+import { getPublicOrigin } from '../lib/oauthConfig.js';
 
 export const platformIntegrationsRouter = Router();
 
 const SUPPORTED = ['shopify', 'tiktok', 'instagram', 'facebook', 'youtube', 'whatsapp'] as const;
+
+platformIntegrationsRouter.get('/oauth-config', requireAuth, async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const [google, meta, tiktok] = await Promise.all([
+    getTenantPlatformApp(tenantId, 'google'),
+    getTenantPlatformApp(tenantId, 'meta'),
+    getTenantPlatformApp(tenantId, 'tiktok'),
+  ]);
+  const origin = getPublicOrigin(req);
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({
+    callbacks: {
+      youtube: `${origin}/api/overseas/youtube/oauth/callback`,
+      instagram: `${origin}/api/overseas/social/oauth/instagram/callback`,
+      facebook: `${origin}/api/overseas/social/oauth/facebook/callback`,
+      tiktok: `${origin}/api/overseas/social/oauth/tiktok/callback`,
+    },
+    apps: {
+      google: google ? publicTenantPlatformApp(req, google) : null,
+      meta: meta ? publicTenantPlatformApp(req, meta) : null,
+      tiktok: tiktok ? publicTenantPlatformApp(req, tiktok) : null,
+    },
+  });
+});
+
+platformIntegrationsRouter.put('/oauth-config', requireAuth, async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const text = (value: unknown) => typeof value === 'string' ? value.trim() : '';
+  const existing = await Promise.all([
+    getTenantPlatformApp(tenantId, 'google'),
+    getTenantPlatformApp(tenantId, 'meta'),
+    getTenantPlatformApp(tenantId, 'tiktok'),
+  ]);
+  const entries = [
+    { platform: 'google' as const, appId: text(req.body?.youtubeOAuthClientId), appSecret: text(req.body?.youtubeOAuthClientSecret) },
+    { platform: 'meta' as const, appId: text(req.body?.metaSocialAppId), appSecret: text(req.body?.metaSocialAppSecret) },
+    { platform: 'tiktok' as const, appId: text(req.body?.tiktokClientKey), appSecret: text(req.body?.tiktokClientSecret) },
+  ];
+  await Promise.all(entries.filter((entry, index) => existing[index] || entry.appId || entry.appSecret).map(entry => upsertTenantPlatformApp({
+    tenantId,
+    ...entry,
+  })));
+  res.setHeader('Cache-Control', 'no-store');
+  res.json({ ok: true });
+});
 
 platformIntegrationsRouter.get('/providers', (_req, res) => {
   res.json({
