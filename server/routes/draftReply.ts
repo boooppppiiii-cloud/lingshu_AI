@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { callLLM } from '../agents/llm.js';
+import { conciseGreetingReply, conversationToneGuidance, hasPreviousConversation, isSimpleGreetingMessage } from '../agents/conversationTone.js';
 import { isGreetingOrProcessIntent, retrieveContext, type RetrievedContext } from '../knowledge/retrieve.js';
 import { buildKnowledgePromptBlock } from '../knowledge/promptBlocks.js';
 import { buildStyleMemoryPromptBlock, retrieveStyleMemories } from '../knowledge/styleMemory.js';
@@ -25,7 +26,11 @@ Use the Product field as the customer-facing product name. Treat Internal produc
 For a greeting or vague opener, never assume a product, SKU, quantity, specification, packaging requirement, or purchasing intent. Greet naturally and ask what product or need the customer would like help with.
 Enterprise knowledge is the only source of company and product facts. Never use a product merely because it appears in a test customer profile when the buyer has not mentioned it.
 If the customer asks for a call, confirm manager follow-up and ask for the best time.
-If details are missing, ask one or two concrete qualification questions.
+Always continue from the recent timeline. Never ask again for information the buyer already provided.
+If this is an existing conversation, do not introduce the company again and do not repeat the previous reply.
+Use a natural chat tone. Default to one or two short sentences, no more than thirty-five words total, and at most one question.
+For a simple greeting, use no more than twelve words. Avoid formal filler, sales slogans, and “happy to assist”.
+If details are missing, ask only one concrete qualification question.
 The Language field is mandatory. Always write in that language and never switch based on recent customer messages.`;
 
 const HANDOFF_SYSTEM_PROMPT = `You are Lingshu AI's handoff summarizer.
@@ -45,7 +50,7 @@ function cleanDraft(raw: string): string {
 draftReplyRouter.post('/conversion/draft', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
   const body = req.body ?? {};
-  const timeline = Array.isArray(body.timeline) ? body.timeline.slice(-8) : [];
+  const timeline = Array.isArray(body.timeline) ? body.timeline.slice(-20) : [];
   const intent = normalizeIntent(body.intent || body.mode);
   const language = String(body.language ?? '').trim() || 'English';
   const latestMessage = latestBuyerMessage(timeline) || String(body.message || body.instruction || body.product || '');
@@ -97,6 +102,7 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
     `Intent: ${intent}`,
     body.mode ? `Mode: ${String(body.mode)}` : '',
     intentInstruction(intent),
+    conversationToneGuidance(timeline, latestMessage),
     buildKnowledgePromptBlock(context),
     buildStrategyPromptBlock(strategies),
     buildSalesStyleProfilePromptBlock(salesStyleProfile),
@@ -109,7 +115,9 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
       const actor = String(event?.actor ?? 'unknown');
       const type = String(event?.type ?? 'message');
       const text = String(event?.body ?? '');
-      return `- ${actor}/${type}: ${text}`;
+      const rawTimestamp = Number(event?.timestamp);
+      const time = Number.isFinite(rawTimestamp) ? new Date(rawTimestamp).toISOString() : String(event?.time || '');
+      return `- ${time ? `[${time}] ` : ''}${actor}/${type}: ${text}`;
     }).join('\n'),
     '',
     intent === 'handoff_summary'
@@ -134,10 +142,17 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
       sellerInstruction: String(body.instruction || ''),
       fallback: () => sanitizeDraft(fallbackDraft(body, intent, suppressPrice), body, intent, suppressPrice, hardNoPriceDigits),
     });
-    const finalDraft = sanitizeDraft(verification.draft, body, intent, suppressPrice, hardNoPriceDigits);
+    const contextualDraft = intent === 'reply' && isSimpleGreetingMessage(latestMessage)
+      ? conciseGreetingReply(language, hasPreviousConversation(timeline))
+      : verification.draft;
+    const finalDraft = sanitizeDraft(contextualDraft, body, intent, suppressPrice, hardNoPriceDigits);
     const finalVerification: DraftVerification = finalDraft === verification.draft
       ? verification
-      : { draft: finalDraft, status: 'safe_fallback', issues: [...verification.issues, '报价规则拦截了未经允许的价格内容'] };
+      : {
+          draft: finalDraft,
+          status: 'revised',
+          issues: [...verification.issues, '已按连续对话规则缩短问候，避免重复自我介绍'],
+        };
     res.json({
       draft: finalVerification.draft,
       evidence: [...context.evidence, ...strategyEvidence(strategies), verificationEvidence(finalVerification)],
@@ -156,8 +171,11 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
       verification: { status: finalVerification.status, issues: finalVerification.issues },
     });
   } catch (error) {
+    const safeDraft = intent === 'reply' && isSimpleGreetingMessage(latestMessage)
+      ? conciseGreetingReply(language, hasPreviousConversation(timeline))
+      : fallbackDraft(body, intent, suppressPrice);
     res.json({
-      draft: sanitizeDraft(fallbackDraft(body, intent, suppressPrice), body, intent, suppressPrice, hardNoPriceDigits),
+      draft: sanitizeDraft(safeDraft, body, intent, suppressPrice, hardNoPriceDigits),
       evidence: [...context.evidence, ...strategyEvidence(strategies)],
       products: context.products,
       knowledgeMiss: context.knowledgeMiss,
@@ -381,13 +399,13 @@ function noPriceFallback(body: any, intent: ReturnType<typeof normalizeIntent>):
 }
 
 function fallbackDraft(body: any, intent: ReturnType<typeof normalizeIntent>, suppressPrice = false): string {
-  if (suppressPrice && intent !== 'handoff_summary') return noPriceFallback(body, intent);
   if (intent === 'reply' && isGreetingOrProcessIntent(String(body.__latestMessage || ''))) {
     const language = normalizeLanguage(body.language);
     if (language === 'arabic') return 'مرحبًا! شكرًا لتواصلك معنا. ما المنتج أو الطلب الذي يمكنني مساعدتك به؟';
     if (language === 'spanish') return '¡Hola! Gracias por contactarnos. ¿En qué producto o necesidad podemos ayudarte?';
     return 'Hi! Thanks for reaching out. What product or requirement can I help you with?';
   }
+  if (suppressPrice && intent !== 'handoff_summary') return noPriceFallback(body, intent);
   const product = String(body.product ?? 'the product');
   if (intent === 'handoff_summary') {
     return [

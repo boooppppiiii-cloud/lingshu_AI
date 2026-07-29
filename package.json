@@ -25,6 +25,7 @@
     "demo:seed": "tsx scripts/demo-seed.ts",
     "demo:reset": "tsx scripts/demo-reset.ts",
     "test:outbound-guard": "tsx server/autonomy/outboundGuard.test.ts",
+    "test:conversation-tone": "tsx server/agents/conversationTone.test.ts",
     "test:autonomy": "tsx server/autonomy/actionRules.test.ts",
     "test:knowledge-policy": "tsx server/knowledge/retrieve.test.ts",
     "test:strategy-policy": "tsx server/knowledge/strategyRetrieve.test.ts",

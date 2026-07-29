@@ -265,11 +265,18 @@ function isSimpleGreeting(text: string): boolean {
   return /^(hi|hello|hey|hola|buenas|thanks|thank you|ok|okay|are you there|你好|您好)[\s?!,.。？！]*$/i.test(text.trim());
 }
 
+function hasPreviousSellerReply(customer: CustomerProfile): boolean {
+  const latestBuyerIndex = customer.timeline.map(event => event.actor === 'buyer').lastIndexOf(true);
+  const beforeLatest = latestBuyerIndex >= 0 ? customer.timeline.slice(0, latestBuyerIndex) : customer.timeline;
+  return beforeLatest.some(event => event.type === 'whatsapp' && (event.actor === 'seller' || event.actor === 'ai'));
+}
+
 function fallbackCustomerReply(customer: CustomerProfile): string {
   if (isSimpleGreeting(latestBuyerMessage(customer))) {
-    if (replyLanguage(customer) === 'Arabic') return 'مرحبًا! شكرًا لتواصلك معنا. ما المنتج أو الطلب الذي يمكنني مساعدتك به؟';
-    if (replyLanguage(customer) === 'Spanish') return '¡Hola! Gracias por contactarnos. ¿En qué producto o necesidad podemos ayudarte?';
-    return 'Hi! Thanks for reaching out. What product or requirement can I help you with?';
+    const returningCustomer = hasPreviousSellerReply(customer);
+    if (replyLanguage(customer) === 'Arabic') return returningCustomer ? 'مرحبًا مجددًا! كيف يمكنني مساعدتك اليوم؟' : 'مرحبًا! كيف يمكنني مساعدتك؟';
+    if (replyLanguage(customer) === 'Spanish') return returningCustomer ? '¡Hola de nuevo! ¿En qué puedo ayudarte hoy?' : '¡Hola! ¿En qué puedo ayudarte?';
+    return returningCustomer ? 'Hi again! How can I help today?' : 'Hi! How can I help?';
   }
   if (replyLanguage(customer) === 'Arabic') {
     return `شكرًا لرسالتك. هل يمكنك مشاركة الكمية المستهدفة والمواصفات ومتطلبات التغليف الخاصة بـ ${customer.outboundProduct}؟`;
@@ -376,7 +383,7 @@ async function requestDraft(customer: CustomerProfile, instruction?: string, mod
       headers: { 'Content-Type': 'application/json', ...authHeader() },
       body: JSON.stringify({
         customerId: customer.id,
-        timeline: customer.timeline.slice(-8),
+        timeline: customer.timeline.slice(-20),
         product: customer.outboundProduct,
         internalProduct: customer.product,
         language: customer.language,
@@ -440,7 +447,7 @@ async function requestHandoffSummary(customer: CustomerProfile): Promise<string>
       headers: { 'Content-Type': 'application/json', ...authHeader() },
       body: JSON.stringify({
         customerId: customer.id,
-        timeline: customer.timeline.slice(-8),
+        timeline: customer.timeline.slice(-20),
         product: customer.outboundProduct,
         internalProduct: customer.product,
         language: customer.language,
