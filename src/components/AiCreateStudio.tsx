@@ -5511,8 +5511,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       case 'mode':
         const visibleModes = contentMode === 'poster' ? POSTER_MODES : MODES;
         return (
-          <div className="grid items-start gap-6 xl:grid-cols-[minmax(0,48rem)_minmax(280px,1fr)]">
-          <div className="min-w-0">
+          <div className="min-w-0 max-w-6xl">
             <SectionTitle title="选择生成模式" desc="先选择内容形态，再确定 AI 从哪里取信息和素材" />
             <Field label="内容形态">
               <div className="inline-flex rounded-xl border border-border bg-surface-2 p-1">
@@ -5816,10 +5815,6 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                 </div>
               )}
             </div>
-          </div>
-          {mode === 'product'
-            ? <ProductInfoPreview products={selectedProductOptions} />
-            : <BenchmarkVideoPreview kickoff={videoKickoff} />}
           </div>
         );
 
@@ -8253,6 +8248,15 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
           )}
         </div>
       </div>
+
+      {/* ── ③ 对标内容 / 产品信息右侧栏 ────────────────── */}
+      {step === 'mode' && (
+        <aside data-studio-context-rail="true" className="hidden w-[320px] flex-shrink-0 overflow-y-auto border-l border-border bg-surface-2/30 p-4 xl:block 2xl:w-[360px]">
+          {mode === 'product'
+            ? <ProductInfoPreview products={selectedProductOptions} />
+            : <BenchmarkVideoPreview kickoff={videoKickoff} />}
+        </aside>
+      )}
 
       </div>
 
