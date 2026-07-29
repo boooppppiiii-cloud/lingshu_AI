@@ -259,13 +259,19 @@ observedFacts仅写真实可见内容；推断只写inferredIntent；缺失因�
     max_tokens: Math.max(1800, Math.min(2800, boundaries.length * 520 + 700)),
   } as any, { signal: opts.signal });
   const parsed = parseJson<{ summary?: Partial<VideoAiAnalysis>; shots?: Array<Record<string, unknown>> }>(completion.choices[0]?.message?.content || '', {});
-  const byId = new Map((parsed.shots || []).map(shot => [String(shot.boundaryId || ''), shot]));
-  if (byId.size !== boundaries.length || boundaries.some(item => !byId.has(item.id))) {
+  const returnedShots = Array.isArray(parsed.shots) ? parsed.shots : [];
+  const byId = new Map(returnedShots.map(shot => [String(shot.boundaryId || ''), shot]));
+  const hasExactIds = byId.size === boundaries.length && boundaries.every(item => byId.has(item.id));
+  // Some compatible VL gateways preserve the requested array order but omit or
+  // rewrite our opaque boundaryId values. The server, not the model, owns the
+  // observation windows, so a complete ordered array is still safe to bind by
+  // position. Never accept a partial array: that would manufacture coverage.
+  if (!hasExactIds && returnedShots.length !== boundaries.length) {
     throw new Error(`exact_detail_boundary_mismatch_${byId.size}_of_${boundaries.length}`);
   }
-  const scriptDetails15s = boundaries.map(boundary => {
-    const shot = byId.get(boundary.id)!;
-    return { ...shot, time: `${boundary.start.toFixed(2)}-${boundary.end.toFixed(2)}s` };
+  const scriptDetails15s = boundaries.map((boundary, index) => {
+    const shot = hasExactIds ? byId.get(boundary.id)! : returnedShots[index];
+    return { ...shot, boundaryId: boundary.id, time: `${boundary.start.toFixed(2)}-${boundary.end.toFixed(2)}s` };
   });
   return normalizeVideoAnalysis({
     ...opts.timeline,
