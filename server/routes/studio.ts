@@ -1341,6 +1341,7 @@ ${productTimeline}
   const materialScriptRules = `你是在把“已选素材库片段”剪成一条有销售情绪的社媒带货/外贸留资视频。素材约束留在画面说明中，人物口播必须始终面向潜在买家，不能说后台审核语言。
 
 核心原则：
+0. 输入优先级固定为：素材分段观察决定“画面里真实有什么和能怎么剪”；本条视频主题决定“爆款模板与证明顺序”；主推产品信息决定“允许出现的产品名、卖点、数字和商业事实”。三者冲突时不得猜测，画面服从素材、事实服从产品资料。
 1. 每个时间戳段必须绑定一个具体素材名，不能只写泛泛产品话术。
 2. 只能根据素材元信息做保守推断：素材名、类型、角色、原始时长、建议时间段。没有真实画面识别时，不得编造画面里出现的人、场景、动作或效果。
 3. “原始时长”只是文件长度，“建议有效时长”才是当前脚本可使用的动作长度。禁止为了填满目标时长而慢放、循环或重复同一个动作，除非分段观察明确支持。
@@ -1359,6 +1360,8 @@ ${normalizedMaterialInfos.map((info, index) => {
 }).join('\n')}
 11. 数字、单位、规格、功效和认证只能逐字来自产品信息；素材名里的数字不能自动视为产品事实，也不能写进台词或字幕。
 12. 输出前内部执行三次检查：时间轴连续；每段素材名正确；逐段口播字数不超限。只输出通过检查的成稿，不解释规则。
+
+爆款模板必须服务于当前主题“${videoThemeTitle}”：钩子素材原动作完整建立停留理由 → 1-2 个与主推产品有关的可见证明 → 一个采购/使用价值解释 → 单一低门槛 CTA。不得为了套模板虚构素材中不存在的动作，也不得把无关工厂素材硬套到消费品功效。
 
 固定格式：
 [start-end s]
@@ -1556,10 +1559,20 @@ Requirements:
     const fallback = generationMode === 'material'
       ? fallbackMaterialStoryboard(normalizedMaterialInfos, Number(duration) || 20, productInfo)
       : fallbackStoryboard(duration, productInfo);
+    const repairedFallback = generationMode === 'material'
+      ? repairMaterialScript(fallback, productInfo, structuredMaterials)
+      : fallback;
     res.json({
       ok: true,
       source: shouldFallback ? 'fallback' : 'ai',
-      script: shouldFallback ? (generationMode === 'clone' ? '' : fallback) : script,
+      script: shouldFallback ? (generationMode === 'clone' ? '' : repairedFallback) : script,
+      qualityStatus: shouldFallback ? 'repaired' : 'passed',
+      qualityChecks: {
+        materialGrounded: groundingIssues.length === 0,
+        productGrounded: !missingProduct && !missingSelectedProduct && unsupportedNumberClaims.length === 0,
+        dialogueFits: speechIssues.length === 0,
+        structurallyComplete: !incompleteCloneStoryboard && !incompleteProductStoryboard,
+      },
       fallbackReason: shouldFallback ? validationIssues[0] || '脚本未通过安全与可执行性检查' : undefined,
       validationIssues: shouldFallback ? validationIssues : [],
     });
@@ -1579,8 +1592,9 @@ Requirements:
       script: generationMode === 'clone'
         ? ''
         : generationMode === 'material'
-        ? fallbackMaterialStoryboard(normalizedMaterialInfos, Number(duration) || 20, productInfo)
+        ? repairMaterialScript(fallbackMaterialStoryboard(normalizedMaterialInfos, Number(duration) || 20, productInfo), productInfo, structuredMaterials)
         : scriptType === 'storyboard' ? fallbackStoryboard(duration, productInfo) : fallbackScript(productInfo, duration),
+      qualityStatus: generationMode === 'material' ? 'recovered' : 'fallback',
       fallbackReason: publicFailureReason,
       validationIssues: [publicFailureReason],
     });

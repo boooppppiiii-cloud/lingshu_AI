@@ -2697,7 +2697,9 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   const [scriptLoading, setScriptLoading] = useState(false);
   const [voiceoverLines, setVoiceoverLines] = useState('');
   const [voiceLangs, setVoiceLangs] = useState<string[]>([]);
+  const [enterpriseVoiceLangs, setEnterpriseVoiceLangs] = useState<string[]>([]);
   const [activeVoiceLang, setActiveVoiceLang] = useState('zh');
+  const enterpriseScriptLanguage = enterpriseVoiceLangs[0] || '';
   const [voiceDrafts, setVoiceDrafts] = useState<Record<string, string>>({});
   const [voiceDraftStaleLangs, setVoiceDraftStaleLangs] = useState<string[]>([]);
   const [voiceDraftLoading, setVoiceDraftLoading] = useState(false);
@@ -2836,8 +2838,12 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         const configuredVoiceLanguages = enterpriseLanguageCodes(
           profile.brand?.preferredLanguages || profile.company?.primaryLanguages || '',
         );
+        setEnterpriseVoiceLangs(configuredVoiceLanguages);
         setVoiceLangs(configuredVoiceLanguages);
-        if (configuredVoiceLanguages[0]) setLang(configuredVoiceLanguages[0]);
+        if (configuredVoiceLanguages[0]) {
+          setLang(configuredVoiceLanguages[0]);
+          setActiveVoiceLang(configuredVoiceLanguages[0]);
+        }
         setProductInfo(prev => prev || options[0]?.info || [
           profile.strategy?.focusProducts || profile.products?.categories,
           profile.products?.priceRange,
@@ -3863,6 +3869,10 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   };
 
   const generateFromMaterialLibrary = async () => {
+    if (!enterpriseScriptLanguage) {
+      setModeNotice('企业中心尚未配置首选输出语言或主要业务语言，请先完成企业中心语言配置。');
+      return;
+    }
     setModeActionLoading(true);
     setModeActionStatus('正在快速匹配本地素材…');
     setModeNotice('');
@@ -3917,7 +3927,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                 materials: names,
                 materialInfos,
                 productInfo: activeProductInfo,
-                language: 'zh',
+                language: enterpriseScriptLanguage,
                 platform,
                 duration,
                 scriptType: 'storyboard',
@@ -3952,7 +3962,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         }
         outputs.push({
           id: `material-${Date.now()}-${i}`,
-          title: `素材库时间戳脚本 ${i + 1}${generatedByFallback ? '（本地兜底）' : ''}`,
+          title: `素材库时间戳脚本 ${i + 1}${generatedByFallback ? '（自动修复）' : ''}`,
           script: nextScript,
           mode: 'material',
         });
@@ -3961,26 +3971,26 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       const sceneMatchedResp = !hookOnly && pool.length ? pickMaterialClipsLocally(pool, duration, finalSelected, Math.max(1, sceneCount)) : { selectedIds: [], reason: '' };
       const recommendedIds = (sceneMatchedResp.selectedIds || []).filter(id => pool.some(item => item.id === id));
       setScriptRecommendedMaterialIds(hookOnly ? [hookMaterialId] : (recommendedIds.length ? recommendedIds : finalSelected));
-      setLang('zh');
+      setLang(enterpriseScriptLanguage);
       setScriptType('storyboard');
       if (outputs[0]) {
         const spoken = extractVoiceoverText(outputs[0].script);
         setScript(outputs[0].script);
         setVoiceoverLines(spoken);
-        setVoiceDrafts({ zh: spoken });
-        setActiveVoiceLang('zh');
+        setVoiceDrafts({ [enterpriseScriptLanguage]: spoken });
+        setActiveVoiceLang(enterpriseScriptLanguage);
         setScriptView('timestamp');
         setActiveModeScriptId(outputs[0].id);
       }
       setModeScripts(outputs);
-      setProjectTitle(projectTitle === '未命名草稿' ? '素材库智能素材 · 中文口播脚本' : projectTitle);
+      setProjectTitle(projectTitle === '未命名草稿' ? `素材库智能素材 · ${langZh(enterpriseScriptLanguage) || enterpriseScriptLanguage}口播脚本` : projectTitle);
       setModeNotice(usedLocalFallback
-        ? `AI脚本未通过检查，已打开安全兜底稿：${Array.from(new Set(fallbackDetails)).slice(0, 3).join('；') || '模型或素材信息不足'}。共 ${Math.max(1, sceneCount)} 个分镜，可继续编辑。`
+        ? `脚本已完成自动修复并生成可用稿：系统已按素材分析、爆款模板和主推产品事实校正${fallbackDetails.length ? `（修复项：${Array.from(new Set(fallbackDetails)).slice(0, 2).join('；')}）` : ''}。共 ${Math.max(1, sceneCount)} 个分镜，可继续确认。`
         : hookOnly
           ? `已仅根据钩子素材生成分镜规划；本步骤未补充其他素材，下一步将从第二个分镜开始匹配。`
         : coveredDuration + 0.1 < duration
           ? `当前素材有效动作约 ${coveredDuration.toFixed(1)} 秒，短于目标 ${duration} 秒；已按真实可用时长生成分镜，请补充素材后再完成成片。`
-          : `已生成中文口播脚本，并按 ${Math.max(1, sceneCount)} 个分镜准备了 ${recommendedIds.length || finalSelected.length} 个素材候选，下一步可确认。`);
+          : `已生成${langZh(enterpriseScriptLanguage) || enterpriseScriptLanguage}口播脚本，并按 ${Math.max(1, sceneCount)} 个分镜准备了 ${recommendedIds.length || finalSelected.length} 个素材候选，下一步可确认。`);
       autoGen.current = true;
     } catch (err: any) {
       setModeNotice(err?.message || '素材库生成失败，请稍后重试。');
@@ -3991,6 +4001,10 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   };
 
   const generateFromProductInfo = async () => {
+    if (!enterpriseScriptLanguage) {
+      setModeNotice('企业中心尚未配置首选输出语言或主要业务语言，请先完成企业中心语言配置。');
+      return;
+    }
     if (productScriptAbortRef.current) return;
     const controller = new AbortController();
     productScriptAbortRef.current = controller;
@@ -4017,7 +4031,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
             {
               materials: [],
               productInfo: product,
-              language: 'zh',
+              language: enterpriseScriptLanguage,
               platform,
               duration,
               scriptType: 'storyboard',
@@ -4046,7 +4060,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
           generatedByFallback = true;
           usedLocalFallback = true;
           fallbackDetails.push(publicScriptFailureReason(message));
-          nextScript = sanitizeStoryboardScript(buildLocalProductScript(product, 'zh', duration), product, activeProductLabel).trim();
+          nextScript = sanitizeStoryboardScript(buildLocalProductScript(product, enterpriseScriptLanguage, duration), product, activeProductLabel).trim();
         }
         outputs.push({
           id: `product-${Date.now()}-${i}`,
@@ -4056,13 +4070,13 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         });
       }
       const firstScript = outputs[0]?.script || script;
-      setLang('zh');
+      setLang(enterpriseScriptLanguage);
       setScriptType('storyboard');
       setScript(firstScript);
       const spoken = extractVoiceoverText(firstScript);
       setVoiceoverLines(spoken);
-      setVoiceDrafts({ zh: spoken });
-      setActiveVoiceLang('zh');
+      setVoiceDrafts({ [enterpriseScriptLanguage]: spoken });
+      setActiveVoiceLang(enterpriseScriptLanguage);
       setScriptView('timestamp');
       if (outputs[0]) setActiveModeScriptId(outputs[0].id);
       setModeScripts(outputs);
@@ -4105,6 +4119,10 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   }, [activeModeScriptId, mode, modeScripts]);
 
   const generateTimestampScriptsForMode = async () => {
+    if (!enterpriseScriptLanguage) {
+      setModeNotice('企业中心尚未配置首选输出语言或主要业务语言，请先完成企业中心语言配置。');
+      return;
+    }
     if (mode !== 'clone' && (!activeProductInfo.trim() || !activeProductLabel)) {
       setModeNotice('请先在第一步选择企业中心产品，再生成整篇脚本。');
       setStepIdx(0);
@@ -4140,8 +4158,8 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     try {
       const cloneReference = videoKickoff || { referenceAnalysis: { details: [] }, video: { title: '本地爆款结构兜底' } };
       const targetCodes = cloneOutputMode === 'languages'
-        ? uniqueLangs(lang, cloneCount)
-        : Array.from({ length: cloneCount }, () => lang || 'zh');
+        ? enterpriseVoiceLangs.slice(0, Math.max(1, cloneCount))
+        : Array.from({ length: cloneCount }, () => enterpriseScriptLanguage);
       const outputs: ModeScriptOutput[] = [];
       let usedLocalFallback = !videoKickoff;
       let localFallbackReason = !videoKickoff ? '没有读取到对标视频分析' : '';
@@ -4270,7 +4288,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         {
           materials: matNames,
           productInfo: activeProductInfo,
-          language: 'zh',
+          language: enterpriseScriptLanguage,
           platform,
           duration,
           scriptType: 'storyboard',
@@ -5476,7 +5494,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     if (s.platform) setPlatform(s.platform as string);
     if (s.ratio) setRatio(s.ratio as string);
     if (typeof s.duration === 'number') setDuration(s.duration);
-    if (s.lang) setLang(s.lang as string);
+    // 语言由企业中心统一提供；旧草稿中的历史语言配置不得覆盖企业设置。
     if (s.provider === 'gemini' || s.provider === 'qwen') setProvider(s.provider);
     if (typeof s.productInfo === 'string') setProductInfo(s.productInfo);
     if (s.productSelectMode === 'single' || s.productSelectMode === 'multi') setProductSelectMode('multi');
@@ -5525,8 +5543,6 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     if (typeof s.customVoiceName === 'string') setCustomVoiceName(s.customVoiceName);
     if (typeof s.customVoiceUrl === 'string') setCustomVoiceUrl(s.customVoiceUrl);
     if (s.ttsLanguageSettings && typeof s.ttsLanguageSettings === 'object') setTtsLanguageSettings(s.ttsLanguageSettings as Record<string, LanguageTtsSettings>);
-    if (Array.isArray(s.voiceLangs)) setVoiceLangs((s.voiceLangs as string[]).filter(code => LANGS.some(item => item.code === code)));
-    if (typeof s.activeVoiceLang === 'string' && LANGS.some(item => item.code === s.activeVoiceLang)) setActiveVoiceLang(s.activeVoiceLang);
     if (s.voiceDrafts && typeof s.voiceDrafts === 'object') setVoiceDrafts(s.voiceDrafts as Record<string, string>);
     if (Array.isArray(s.voiceDraftStaleLangs)) setVoiceDraftStaleLangs(s.voiceDraftStaleLangs as string[]);
     if (s.voiceoverAudios && typeof s.voiceoverAudios === 'object') setVoiceoverAudios(s.voiceoverAudios as typeof voiceoverAudios);

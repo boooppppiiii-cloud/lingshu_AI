@@ -429,7 +429,15 @@ export const studioApi = {
     existingScripts?: string[];
     variantSeed?: number;
   }, fb: string, options?: { signal?: AbortSignal }) =>
-    post<{ script: string; source?: 'ai' | 'fallback' | 'local'; fallbackReason?: string; validationIssues?: string[]; error?: string }>('script', b, { script: fb }, options?.signal),
+    post<{
+      script: string;
+      source?: 'ai' | 'fallback' | 'local';
+      qualityStatus?: 'passed' | 'repaired' | 'recovered' | 'fallback';
+      qualityChecks?: { materialGrounded?: boolean; productGrounded?: boolean; dialogueFits?: boolean; structurallyComplete?: boolean };
+      fallbackReason?: string;
+      validationIssues?: string[];
+      error?: string;
+    }>('script', b, { script: fb }, options?.signal),
 
   covers: (b: { script?: string; productInfo?: string; language: string; provider?: 'gemini' | 'qwen'; tone?: string }, fb: string[]) =>
     post<{ covers: string[] }>('covers', b, { covers: fb }),
