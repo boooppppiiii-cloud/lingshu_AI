@@ -30,6 +30,7 @@ type PublishPlatform = 'youtube' | 'tiktok' | 'instagram' | 'facebook';
 
 type PublishDraft = {
   videoPath?: string;
+  previewUrl?: string;
   title: string;
   description: string;
   ratio?: string;
@@ -72,6 +73,7 @@ type PublishQueueItem = {
   id: string;
   selected: boolean;
   videoPath: string;
+  previewUrl?: string;
   title: string;
   description: string;
   ratio?: string;
@@ -139,6 +141,13 @@ function titleFromVideoPath(videoPath: string) {
   return filename.replace(/\.(mp4|mov|webm|mkv|avi)$/i, '') || '未命名视频';
 }
 
+function browserVideoUrl(value: string | undefined): string {
+  const candidate = String(value || '').trim();
+  if (/^(?:https?:\/\/|blob:|data:video\/)/i.test(candidate)) return candidate;
+  if (/^\/(?:api\/|media\/|covers\/|generated\/)/i.test(candidate)) return candidate;
+  return '';
+}
+
 function createPublishItem(draft?: PublishDraft | null, targetAccountIds: string[] = []): PublishQueueItem {
   const sourcePlatform = draft?.platform;
   const initialCopy: Record<string, PlatformCopy> = sourcePlatform
@@ -154,6 +163,7 @@ function createPublishItem(draft?: PublishDraft | null, targetAccountIds: string
     id: publishItemId(),
     selected: true,
     videoPath: draft?.videoPath || '',
+    previewUrl: draft?.previewUrl || browserVideoUrl(draft?.videoPath),
     title: draft?.title || '',
     description: draft?.description || '',
     ratio: draft?.ratio,
@@ -346,7 +356,9 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
   const [batchPaths, setBatchPaths] = useState('');
   const [loading, setLoading] = useState(true);
   const [uploadingVideos, setUploadingVideos] = useState(false);
+  const [savingContent, setSavingContent] = useState(false);
   const [publishing, setPublishing] = useState(false);
+  const [publishConfirmationOpen, setPublishConfirmationOpen] = useState(false);
   const [adapting, setAdapting] = useState(false);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -359,6 +371,8 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
 
   const connectedAccounts = accounts.filter(account => account.status === 'connected');
   const activeItem = items.find(item => item.id === activeItemId) || items[0] || null;
+  const activePreviewUrl = activeItem?.previewUrl || browserVideoUrl(activeItem?.videoPath);
+  const activeCalendarPost = Boolean(activeItem?.calendarPostIds?.length);
   const pendingCalendarItems = items
     .filter(item => (
       ['ready', 'partial', 'failed'].includes(item.status) &&
@@ -399,6 +413,10 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
   ));
   const immediateItems = publishableItems.filter(item => item.deliveryMode === 'now');
   const scheduledItems = publishableItems.filter(item => item.deliveryMode === 'schedule' && Boolean(item.scheduledAt));
+  const publishableAssignments = publishableItems.reduce(
+    (sum, item) => sum + item.targetAccountIds.filter(id => connectedAccountIds.has(id)).length,
+    0,
+  );
 
   const updateItem = (id: string, patch: Partial<PublishQueueItem>) => {
     setItems(prev => prev.map(item => item.id === id ? { ...item, ...patch } : item));
@@ -454,13 +472,49 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
     window.setTimeout(() => document.getElementById('publishing-content-editor')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60);
   };
 
-  const saveCurrentContent = () => {
+  const saveCurrentContent = async () => {
     if (!activeItem) return;
     const targets = connectedAccounts.filter(account => activeItem.targetAccountIds.includes(account.id));
     if (!activeItem.videoPath.trim()) { setError('请先上传视频'); return; }
     if (!targets.length) { setError('请先选择至少一个发布平台账号'); return; }
     if (!activeItem.title.trim()) { setError('请填写视频标题'); return; }
     if (!activeItem.description.trim()) { setError('请填写发布文案'); return; }
+    if (activeItem.calendarPostIds?.length) {
+      const calendarPlatform = activeItem.sourcePlatform || selectedPlatforms[0];
+      const platformTargets = calendarPlatform
+        ? targets.filter(account => account.platform === calendarPlatform)
+        : targets;
+      const copy = calendarPlatform ? activeItem.platformCopy[calendarPlatform] : undefined;
+      setSavingContent(true);
+      setError('');
+      try {
+        await Promise.all(activeItem.calendarPostIds.map(postId => fetchJson(`/api/overseas/publishing/calendar/${postId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            title: calendarPlatform ? platformTitle(calendarPlatform, copy, activeItem.title.trim()) : activeItem.title.trim(),
+            description: calendarPlatform ? platformBody(calendarPlatform, copy, activeItem.description.trim()) : activeItem.description.trim(),
+            firstComment: copy?.firstComment || activeItem.firstComment,
+            videoPath: activeItem.videoPath.trim(),
+            targetAccountIds: platformTargets.map(account => account.id),
+            targetAccountLabels: platformTargets.map(account => account.handle || account.title),
+            trackWaLink: activeItem.trackWaLink,
+          }),
+        })));
+        updateItem(activeItem.id, {
+          status: 'ready',
+          deliveryMode: 'now',
+          error: undefined,
+        });
+        setCalendarRefreshKey(value => value + 1);
+        setNotice(`“${activeItem.title.trim()}”的日历内容已保存，可以确认真实发布。`);
+      } catch (saveError) {
+        setError(saveError instanceof Error ? saveError.message : '保存日历内容失败');
+      } finally {
+        setSavingContent(false);
+      }
+      return;
+    }
     const scheduledAt = activeItem.scheduledAt || nextScheduleValue();
     updateItem(activeItem.id, {
       status: 'ready',
@@ -527,17 +581,24 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
   };
 
   const openCalendarPost = (post: CalendarPost) => {
+    if (post.platformPostId || post.status === 'published') {
+      setError('这条内容已经发布，不能再次提交平台');
+      setWorkspaceTab('publish');
+      return;
+    }
     const fallbackTargetIds = connectedAccounts
       .filter(account => account.platform === post.platform)
       .map(account => account.id);
     const targetAccountIds = (post.targetAccountIds || []).filter(id => connectedAccountIds.has(id));
     const patch: Partial<PublishQueueItem> = {
       videoPath: post.videoPath || '',
+      previewUrl: post.videoPreviewUrl || post.videoUrl || browserVideoUrl(post.videoPath),
       title: post.title,
       description: post.description || '',
       sourcePlatform: post.platform in PLATFORM_META ? post.platform as PublishPlatform : undefined,
       targetAccountIds: targetAccountIds.length ? targetAccountIds : fallbackTargetIds,
       firstComment: post.firstComment || '',
+      trackWaLink: post.trackWaLink !== false,
       deliveryMode: 'now',
       scheduledAt: dateTimeLocalValue(new Date(post.publishedAt)),
       calendarPostIds: [post.id],
@@ -780,10 +841,11 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
           },
           body: file,
         });
-        const data = await response.json().catch(() => ({})) as { video?: { videoPath?: string }; error?: string };
+        const data = await response.json().catch(() => ({})) as { video?: { videoPath?: string; previewUrl?: string }; error?: string };
         if (!response.ok || !data.video?.videoPath) throw new Error(data.error || '视频接收失败');
         additions.push(createPublishItem({
           videoPath: data.video.videoPath,
+          previewUrl: data.video.previewUrl,
           title: titleFromVideoPath(file.name),
           description: activeItem?.description || '',
           ratio: activeItem?.ratio,
@@ -799,7 +861,9 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
         return onlyBlank ? additions : [...prev, ...additions];
       });
       setActiveItemId(additions[0].id);
-      setNotice(`已选择并加入 ${additions.length} 条视频。`);
+      setWorkspaceTab('publish');
+      setNotice(`已加入 ${additions.length} 条视频，发布预览已启动。`);
+      window.setTimeout(() => document.getElementById('publishing-video-preview')?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 80);
     }
     if (failures.length) setError(failures.join('；'));
     setUploadingVideos(false);
@@ -834,11 +898,22 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
     }
   };
 
-  const publish = async () => {
+  const requestPublishConfirmation = () => {
     if (!publishableItems.length) {
       setError('请至少配置一条含视频路径、标题和发布账号的视频');
       return;
     }
+    setError('');
+    setPublishConfirmationOpen(true);
+  };
+
+  const publishConfirmed = async () => {
+    if (!publishableItems.length) {
+      setPublishConfirmationOpen(false);
+      setError('没有可发布的内容，请重新检查视频、标题和账号');
+      return;
+    }
+    setPublishConfirmationOpen(false);
     setPublishing(true);
     setNotice('');
     setError('');
@@ -1268,14 +1343,23 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                 })}
               </div>
               <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
-                <p className="text-[11px] text-text-muted">保存后才会进入上方“待发布内容”，之后可手动拖入日历或让 AI 排布。</p>
+                <p className="text-[11px] text-text-muted">
+                  {activeCalendarPost
+                    ? '保存会同步更新内容日历；保存成功后可在右侧确认并真实发布。'
+                    : '保存后才会进入上方“待发布内容”，之后可手动拖入日历或让 AI 排布。'}
+                </p>
                 <button
                   type="button"
-                  onClick={saveCurrentContent}
-                  disabled={!activeItem || activeItem.status === 'publishing' || activeItem.status === 'scheduled' || activeItem.status === 'published'}
+                  onClick={() => void saveCurrentContent()}
+                  disabled={savingContent || !activeItem || activeItem.status === 'publishing' || activeItem.status === 'scheduled' || activeItem.status === 'published'}
                   className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-black text-white shadow-sm hover:bg-emerald-700 disabled:cursor-not-allowed disabled:opacity-45"
                 >
-                  <CheckCircle2 size={14} /> {activeItem?.status === 'ready' ? '已保存到待发布内容' : '保存并加入待发布内容'}
+                  {savingContent ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                  {savingContent
+                    ? '正在保存...'
+                    : activeCalendarPost
+                      ? activeItem?.status === 'ready' ? '日历修改已保存' : '保存日历修改'
+                      : activeItem?.status === 'ready' ? '已保存到待发布内容' : '保存并加入待发布内容'}
                 </button>
               </div>
             </div>
@@ -1314,15 +1398,32 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                 </label>
               )}
             </div>
-            <div className="mt-4 rounded-2xl border border-border bg-surface p-3">
+            <div id="publishing-video-preview" className="mt-4 scroll-mt-24 rounded-2xl border border-border bg-surface p-3">
               <div className="mb-3 flex items-center justify-between gap-2">
                 <span className="text-xs font-bold text-text-primary">发布预览</span>
                 <span className="rounded-full bg-white px-2 py-0.5 text-[10px] font-bold text-accent shadow-sm">{previewRatio}</span>
               </div>
               <div className="flex justify-center">
-                <div className="relative w-full overflow-hidden rounded-xl border border-border bg-white shadow-inner" style={{ aspectRatio: previewRatio === '16:9' ? '16 / 9' : '9 / 16', maxWidth: previewRatio === '16:9' ? 260 : 150 }}>
-                  <div className="absolute inset-0 bg-[linear-gradient(135deg,rgba(22,163,74,0.12),rgba(15,23,42,0.04))]" />
-                  <PlayCircle size={22} className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 text-accent" />
+                <div className="relative w-full overflow-hidden rounded-xl border border-border bg-black shadow-inner" style={{ aspectRatio: previewRatio === '16:9' ? '16 / 9' : '9 / 16', maxWidth: previewRatio === '16:9' ? 260 : 150 }}>
+                  {activePreviewUrl ? (
+                    <video
+                      key={activePreviewUrl}
+                      src={activePreviewUrl}
+                      autoPlay
+                      muted
+                      loop
+                      controls
+                      playsInline
+                      preload="metadata"
+                      onLoadedData={event => { void event.currentTarget.play().catch(() => undefined); }}
+                      className="h-full w-full object-contain"
+                    />
+                  ) : (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-950 text-white/70">
+                      <PlayCircle size={22} />
+                      <span className="mt-2 text-[10px] font-bold">上传视频后自动预览</span>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -1352,15 +1453,41 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
             {notice && <div className="mt-4 flex items-start gap-2 rounded-xl border border-green-100 bg-green-50 px-3 py-2 text-xs text-green-700"><CheckCircle2 size={14} className="mt-0.5 flex-shrink-0" /><span>{notice}</span></div>}
             {error && <div className="mt-4 flex items-start gap-2 rounded-xl border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-600"><AlertCircle size={14} className="mt-0.5 flex-shrink-0" /><span>{error}</span></div>}
 
-            <button type="button" onClick={() => void publish()} disabled={publishing || loading || publishableItems.length === 0} className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 text-sm font-bold text-white shadow-sm hover:brightness-95 disabled:opacity-50">
+            <button type="button" onClick={requestPublishConfirmation} disabled={publishing || loading || publishableItems.length === 0} className="mt-5 flex w-full items-center justify-center gap-2 rounded-xl bg-accent px-4 py-3 text-sm font-bold text-white shadow-sm hover:brightness-95 disabled:opacity-50">
               {publishing ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
-              {publishing ? '正在遍历账号群发...' : `群发选中素材 · ${publishableItems.length} 条 / ${selectedAssignments} 个账号目标`}
+              {publishing
+                ? '正在遍历账号群发...'
+                : activeCalendarPost && activeItem?.deliveryMode === 'now'
+                  ? `确认并真实发布 · ${publishableItems.length} 条`
+                  : `群发选中素材 · ${publishableItems.length} 条 / ${selectedAssignments} 个账号目标`}
             </button>
             <button type="button" onClick={() => setWorkspaceTab('schedule')} className="mt-2 w-full rounded-xl border border-border px-4 py-3 text-sm font-bold text-text-secondary hover:border-accent hover:text-accent">
               返回顶部内容排产
             </button>
           </aside>
         </div>
+        {publishConfirmationOpen && (
+          <div className="fixed inset-0 z-[180] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="publish-confirmation-title">
+            <div className="w-full max-w-md rounded-2xl border border-border bg-white p-5 shadow-2xl">
+              <div className="flex items-start gap-3">
+                <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700"><Send size={18} /></span>
+                <div>
+                  <h3 id="publish-confirmation-title" className="text-base font-black text-text-primary">确认发布这些内容？</h3>
+                  <p className="mt-1 text-xs leading-5 text-text-muted">立即发布会直接调用已授权平台账号，不是模拟操作；成功后平台内容将真实公开。</p>
+                </div>
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-2">
+                <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3"><p className="text-[10px] font-bold text-emerald-700">立即真实发布</p><p className="mt-1 text-lg font-black text-emerald-900">{immediateItems.length} 条</p></div>
+                <div className="rounded-xl border border-violet-100 bg-violet-50 p-3"><p className="text-[10px] font-bold text-violet-700">保存到内容日历</p><p className="mt-1 text-lg font-black text-violet-900">{scheduledItems.length} 条</p></div>
+              </div>
+              <p className="mt-3 rounded-xl bg-surface px-3 py-2 text-[11px] leading-5 text-text-secondary">共 {publishableAssignments} 个账号目标。部分平台可能因审核、权限或素材规范拒绝发布，失败项会保留在队列中供修改后重试。</p>
+              <div className="mt-5 flex justify-end gap-2">
+                <button type="button" onClick={() => setPublishConfirmationOpen(false)} className="rounded-xl border border-border px-4 py-2.5 text-xs font-black text-text-secondary hover:bg-surface">返回检查</button>
+                <button type="button" onClick={() => void publishConfirmed()} className="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-4 py-2.5 text-xs font-black text-white hover:bg-emerald-700"><CheckCircle2 size={14} /> 确认真实发布</button>
+              </div>
+            </div>
+          </div>
+        )}
         </>
         )}
       </div>

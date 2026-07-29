@@ -5,11 +5,14 @@ import { randomUUID } from 'node:crypto';
 import { pipeline } from 'node:stream/promises';
 import { callLLM } from '../agents/llm.js';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
+import { signAssetUrl } from '../lib/assetAccess.js';
 import { getBestTimeScores } from '../publishing/bestTime.js';
 import { createTrackedPostDraft, type PostRecord } from '../publishing/waLink.js';
 import { store } from '../storage/index.js';
 
 export const publishingRouter = Router();
+
+const PUBLISH_VIDEO_EXTENSIONS = new Set(['.mp4', '.mov', '.webm', '.mkv', '.avi']);
 
 type PlatformCopy = {
   title?: string;
@@ -68,6 +71,28 @@ function parseJson<T>(value: unknown, fallback: T): T {
   return fallback;
 }
 
+function publishingUploadDir(tenantId: string): string {
+  const tenantFolder = String(tenantId || 'local').replace(/[^\w.-]+/g, '-');
+  return path.resolve(process.cwd(), 'data', 'publishing-uploads', tenantFolder);
+}
+
+function localPublishingVideo(tenantId: string, videoPath: unknown): string | null {
+  const requested = text(videoPath);
+  if (!requested) return null;
+  const uploadDir = publishingUploadDir(tenantId);
+  const resolved = path.resolve(requested);
+  if (!resolved.startsWith(`${uploadDir}${path.sep}`)) return null;
+  if (!PUBLISH_VIDEO_EXTENSIONS.has(path.extname(resolved).toLowerCase())) return null;
+  return resolved;
+}
+
+function publishingPreviewUrl(tenantId: string, videoPath: unknown): string {
+  const localVideo = localPublishingVideo(tenantId, videoPath);
+  if (!localVideo) return '';
+  const route = `/api/overseas/publishing/local-videos/${encodeURIComponent(path.basename(localVideo))}`;
+  return signAssetUrl(route, tenantId, 24 * 60 * 60 * 1000);
+}
+
 function publicPost(post: PostRecord) {
   const stats = parseJson<Record<string, unknown>>(post.stats, {});
   return {
@@ -88,6 +113,8 @@ function publicPost(post: PostRecord) {
     duration: numberValue(stats.duration),
     firstComment: text(stats.firstComment),
     videoPath: text(stats.videoPath),
+    videoPreviewUrl: publishingPreviewUrl(post.tenant_id, stats.videoPath) || text(stats.videoPreviewUrl),
+    trackWaLink: stats.trackWaLink !== false,
     targetAccountIds: Array.isArray(stats.targetAccountIds) ? stats.targetAccountIds.map(String).map(text).filter(Boolean) : [],
     targetAccountLabels: Array.isArray(stats.targetAccountLabels) ? stats.targetAccountLabels.map(String).map(text).filter(Boolean) : [],
     warnings: Array.isArray(stats.warnings) ? stats.warnings : [],
@@ -187,6 +214,18 @@ function fallbackQueueSuggestion(input: {
 
 publishingRouter.use(requireAuth);
 
+publishingRouter.get('/local-videos/:filename', (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const filename = path.basename(String(req.params.filename || ''));
+  const filePath = localPublishingVideo(tenantId, path.join(publishingUploadDir(tenantId), filename));
+  if (!filePath || !fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+    res.status(404).json({ error: 'video_not_found' });
+    return;
+  }
+  res.setHeader('Cache-Control', 'private, max-age=300');
+  res.sendFile(filePath);
+});
+
 publishingRouter.post('/local-videos', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
   const encodedName = text(req.headers['x-file-name']);
@@ -198,7 +237,7 @@ publishingRouter.post('/local-videos', async (req, res) => {
   }
   originalName = path.basename(originalName).replace(/[^\w.\-\u4e00-\u9fff]+/g, '-');
   const ext = path.extname(originalName).toLowerCase();
-  if (!['.mp4', '.mov', '.webm', '.mkv', '.avi'].includes(ext)) {
+  if (!PUBLISH_VIDEO_EXTENSIONS.has(ext)) {
     res.status(400).json({ error: '仅支持 mp4、mov、webm、mkv、avi 视频文件' });
     return;
   }
@@ -208,8 +247,7 @@ publishingRouter.post('/local-videos', async (req, res) => {
     res.status(413).json({ error: `视频不能超过 ${Math.round(maxBytes / 1024 / 1024)}MB` });
     return;
   }
-  const tenantFolder = String(tenantId || 'local').replace(/[^\w.-]+/g, '-');
-  const outputDir = path.resolve(process.cwd(), 'data', 'publishing-uploads', tenantFolder);
+  const outputDir = publishingUploadDir(tenantId);
   const outputPath = path.join(outputDir, `${randomUUID()}-${originalName}`);
   fs.mkdirSync(outputDir, { recursive: true });
   let receivedBytes = 0;
@@ -225,7 +263,12 @@ publishingRouter.post('/local-videos', async (req, res) => {
     if (!receivedBytes) throw new Error('empty_video');
     res.status(201).json({
       ok: true,
-      video: { name: originalName, videoPath: outputPath, size: receivedBytes },
+      video: {
+        name: originalName,
+        videoPath: outputPath,
+        previewUrl: publishingPreviewUrl(tenantId, outputPath),
+        size: receivedBytes,
+      },
     });
   } catch (error: any) {
     try { fs.rmSync(outputPath, { force: true }); } catch { /* ignore */ }
@@ -342,6 +385,7 @@ publishingRouter.post('/calendar', async (req, res) => {
       description: text(req.body?.description),
       firstComment: text(req.body?.firstComment),
       videoPath: text(req.body?.videoPath),
+      trackWaLink: req.body?.trackWaLink !== false,
       targetAccountIds: Array.isArray(req.body?.targetAccountIds)
         ? req.body.targetAccountIds.map(String).map(text).filter(Boolean)
         : [],
@@ -381,12 +425,51 @@ publishingRouter.patch('/calendar/:id', async (req, res) => {
     res.status(409).json({ error: 'published_post_cannot_be_rescheduled' });
     return;
   }
-  const scheduledAt = text(req.body?.scheduledAt);
-  if (!scheduledAt) {
-    res.status(400).json({ error: 'scheduled_at_required' });
+  const currentStats = parseJson<Record<string, unknown>>(post.stats, {});
+  const update: Record<string, unknown> = {};
+  const stats = { ...currentStats };
+  let changed = false;
+  if (Object.prototype.hasOwnProperty.call(req.body || {}, 'scheduledAt')) {
+    const scheduledAt = text(req.body?.scheduledAt);
+    if (!scheduledAt || !Number.isFinite(Date.parse(scheduledAt))) {
+      res.status(400).json({ error: 'valid_scheduled_at_required' });
+      return;
+    }
+    update.published_at = scheduledAt;
+    changed = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(req.body || {}, 'title')) {
+    const title = text(req.body?.title);
+    if (!title) {
+      res.status(400).json({ error: 'title_required' });
+      return;
+    }
+    update.title = title;
+    changed = true;
+  }
+  for (const field of ['description', 'firstComment', 'coverUrl', 'videoPath'] as const) {
+    if (!Object.prototype.hasOwnProperty.call(req.body || {}, field)) continue;
+    stats[field] = text(req.body?.[field]);
+    changed = true;
+  }
+  for (const field of ['targetAccountIds', 'targetAccountLabels'] as const) {
+    if (!Object.prototype.hasOwnProperty.call(req.body || {}, field)) continue;
+    stats[field] = Array.isArray(req.body?.[field])
+      ? req.body[field].map(String).map(text).filter(Boolean)
+      : [];
+    changed = true;
+  }
+  if (Object.prototype.hasOwnProperty.call(req.body || {}, 'trackWaLink')) {
+    stats.trackWaLink = req.body?.trackWaLink !== false;
+    changed = true;
+  }
+  if (!changed) {
+    res.status(400).json({ error: 'calendar_update_required' });
     return;
   }
-  await store.update('posts', post.id, { published_at: scheduledAt });
+  stats.status = 'scheduled';
+  update.stats = stats;
+  await store.update('posts', post.id, update);
   const saved = await store.getById<PostRecord>('posts', post.id);
   res.json({ item: saved ? publicPost(saved) : null });
 });

@@ -41,6 +41,8 @@ export type CalendarPost = {
   contentId?: string;
   firstComment?: string;
   videoPath?: string;
+  videoPreviewUrl?: string;
+  trackWaLink?: boolean;
   targetAccountIds?: string[];
   targetAccountLabels?: string[];
   inquiries: number;
@@ -731,8 +733,8 @@ export function CalendarPlanner({
             return (
               <>
                 <div className="relative flex aspect-video items-center justify-center overflow-hidden bg-gradient-to-br from-slate-900 via-slate-800 to-emerald-950">
-                  {post.videoUrl ? (
-                    <video src={post.videoUrl} poster={post.coverUrl} autoPlay muted loop playsInline className="h-full w-full object-cover" />
+                  {post.videoPreviewUrl || post.videoUrl ? (
+                    <video src={post.videoPreviewUrl || post.videoUrl} poster={post.coverUrl} autoPlay muted loop playsInline className="h-full w-full object-cover" />
                   ) : post.coverUrl ? (
                     <img src={post.coverUrl} alt="" className="h-full w-full object-cover" />
                   ) : (
