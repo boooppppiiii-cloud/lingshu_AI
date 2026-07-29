@@ -23,7 +23,7 @@ cloudMaterialMediaRouter.use(async (req, res, next) => {
     return;
   }
   const identity = await assetIdentity(req);
-  const originalPath = `/cloud-files/${signedMatch[1]}/${signedMatch[3]}`;
+  const originalPath = `${req.baseUrl}/${signedMatch[1]}/${signedMatch[3]}`;
   const signed = identity ? null : verifyAssetToken(signedMatch[2], originalPath);
   if (!identity && !signed) {
     res.status(401).end();

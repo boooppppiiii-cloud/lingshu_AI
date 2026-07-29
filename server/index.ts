@@ -234,6 +234,8 @@ const privateAssetHeaders = (res: express.Response) => {
   res.setHeader('Vary', 'Cookie, Authorization');
 };
 app.use('/cloud-files', cloudMaterialMediaRouter);
+// Neutral alias for browsers/extensions that block paths containing "cloud-files".
+app.use('/studio-media', cloudMaterialMediaRouter);
 app.use('/media', requireScopedAsset, express.static(mediaDir, {
   setHeaders: privateAssetHeaders,
 }));

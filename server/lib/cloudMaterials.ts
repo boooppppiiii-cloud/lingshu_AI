@@ -15,10 +15,10 @@ export async function listCloudMaterials(): Promise<Array<Record<string, unknown
     duration: Number(item.duration || 0),
     size: humanSize(Number(item.sizeBytes || 0)),
     file: String(item.videoFile || ''),
-    url: `/cloud-files/${item.id}/media.mp4`,
-    // 封面和视频统一走浏览器友好的媒体命名空间。避免部分浏览器把
-    // `/api/...` 图片当作接口响应拦截，也便于两者复用同一套签名链路。
-    poster: `/cloud-files/${item.id}/poster.jpg`,
+    // 使用中性的同源媒体路径。部分隐私/广告拦截器会直接阻止
+    // `/cloud-files/.../signed/...`，表现为封面灰块且视频 0:00。
+    url: `/studio-media/${item.id}/media.mp4`,
+    poster: `/studio-media/${item.id}/poster.jpg`,
     scope: String(item.scope || 'shared'),
     usage: String(item.usage || 'editable'),
     sourceType: String(item.sourceType || 'licensed_upload'),

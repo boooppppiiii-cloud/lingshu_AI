@@ -2397,14 +2397,14 @@ async function signedMaterialObjectUrl(key?: string): Promise<string | undefined
 async function materialResponse(material: Material, tenantId: string): Promise<Material> {
   const url = material.objectKey
     ? await signedMaterialObjectUrl(material.objectKey)
-    : /^\/cloud-files\//.test(material.url)
+    : /^\/(?:cloud-files|studio-media)\//.test(material.url)
       // Studio workflows often span script, material, music and render steps.
       // Keep the protected playback URL valid for the whole editing session.
       ? signPathAssetUrl(material.url, tenantId, 24 * 60 * 60 * 1000)
       : /^\/(?:media|api\/overseas\/studio\/materials\/pb)\//.test(material.url) ? signAssetUrl(material.url, tenantId) : material.url;
   const poster = material.posterObjectKey
     ? await signedMaterialObjectUrl(material.posterObjectKey)
-    : material.poster && /^\/cloud-files\//.test(material.poster)
+    : material.poster && /^\/(?:cloud-files|studio-media)\//.test(material.poster)
       ? signPathAssetUrl(material.poster, tenantId, 24 * 60 * 60 * 1000)
       : material.poster && /^\/(?:media|api\/overseas\/studio\/materials\/pb)\//.test(material.poster)
         ? signAssetUrl(material.poster, tenantId, 24 * 60 * 60 * 1000)
