@@ -19,6 +19,7 @@ export interface TimelineEvent {
   actor: 'buyer' | 'seller' | 'ai' | 'owner';
   title: string;
   body: string;
+  translatedBody?: string;
   time: string;
   autoSent?: boolean;
   sendStatus?: 'draft' | 'queued' | 'sent' | 'delivered' | 'failed';
@@ -71,6 +72,7 @@ export interface CustomerProfile {
   needCall?: boolean;
   hasUnread?: boolean;
   isReal?: boolean;
+  isMock?: boolean;
   waNumber?: string;
   newProductMatch?: boolean;
   blockedAutoReplyReason?: string;

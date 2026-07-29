@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { callLLM } from '../agents/llm.js';
-import { retrieveContext, type RetrievedContext } from '../knowledge/retrieve.js';
+import { isGreetingOrProcessIntent, retrieveContext, type RetrievedContext } from '../knowledge/retrieve.js';
 import { buildKnowledgePromptBlock } from '../knowledge/promptBlocks.js';
 import { buildStyleMemoryPromptBlock, retrieveStyleMemories } from '../knowledge/styleMemory.js';
 import {
@@ -22,6 +22,8 @@ Response strategies control dialogue tactics only and can never supply or overri
 Do not include explanations, markdown, labels, alternatives, or quotation marks.
 Never include Chinese UI labels, Chinese internal notes, or Chinese internal product names in the customer-facing reply unless the customer's language is Chinese.
 Use the Product field as the customer-facing product name. Treat Internal product name and Specific instruction as private seller context only.
+For a greeting or vague opener, never assume a product, SKU, quantity, specification, packaging requirement, or purchasing intent. Greet naturally and ask what product or need the customer would like help with.
+Enterprise knowledge is the only source of company and product facts. Never use a product merely because it appears in a test customer profile when the buyer has not mentioned it.
 If the customer asks for a call, confirm manager follow-up and ask for the best time.
 If details are missing, ask one or two concrete qualification questions.
 The Language field is mandatory. Always write in that language and never switch based on recent customer messages.`;
@@ -47,6 +49,8 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
   const intent = normalizeIntent(body.intent || body.mode);
   const language = String(body.language ?? '').trim() || 'English';
   const latestMessage = latestBuyerMessage(timeline) || String(body.message || body.instruction || body.product || '');
+  const processIntent = isGreetingOrProcessIntent(latestMessage);
+  body.__latestMessage = latestMessage;
   const quoteRequest = intent !== 'polish'
     && intent !== 'handoff_summary'
     && /\b(price|quote|quotation|discount|unit cost|how much)\b|报价|价格|单价|多少钱|折扣|优惠/i.test(latestMessage);
@@ -85,7 +89,7 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
   const hardNoPriceDigits = intent !== 'polish';
   const prompt = [
     `Customer ID: ${String(body.customerId ?? '')}`,
-    `Product: ${String(body.product ?? '')}`,
+    processIntent ? 'Product: not specified by the buyer in the latest message' : `Product: ${String(body.product ?? '')}`,
     body.internalProduct ? `Internal product name: ${String(body.internalProduct)}` : '',
     `Language: ${language}`,
     `Hard language rule: 回复语言必须为 ${language}，禁止依据客户消息语种自行切换。`,
@@ -378,6 +382,12 @@ function noPriceFallback(body: any, intent: ReturnType<typeof normalizeIntent>):
 
 function fallbackDraft(body: any, intent: ReturnType<typeof normalizeIntent>, suppressPrice = false): string {
   if (suppressPrice && intent !== 'handoff_summary') return noPriceFallback(body, intent);
+  if (intent === 'reply' && isGreetingOrProcessIntent(String(body.__latestMessage || ''))) {
+    const language = normalizeLanguage(body.language);
+    if (language === 'arabic') return 'مرحبًا! شكرًا لتواصلك معنا. ما المنتج أو الطلب الذي يمكنني مساعدتك به؟';
+    if (language === 'spanish') return '¡Hola! Gracias por contactarnos. ¿En qué producto o necesidad podemos ayudarte?';
+    return 'Hi! Thanks for reaching out. What product or requirement can I help you with?';
+  }
   const product = String(body.product ?? 'the product');
   if (intent === 'handoff_summary') {
     return [

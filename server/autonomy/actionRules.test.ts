@@ -4,6 +4,9 @@ import { decideAction } from './actionRules.js';
 assert.equal(decideAction('auto_faq_reply', 'remind').decision, 'remind');
 assert.equal(decideAction('auto_faq_reply', 'draft').decision, 'draft');
 assert.equal(decideAction('auto_faq_reply', 'auto').decision, 'auto');
+assert.equal(decideAction('draft_greeting', 'auto').decision, 'auto');
+assert.equal(decideAction('draft_catalog_recommend', 'auto').decision, 'auto');
+assert.equal(decideAction('draft_greeting', 'draft').decision, 'draft');
 
 for (const action of ['auto_logistics_update', 'auto_send_catalog', 'auto_aftersale_confirm']) {
   assert.equal(decideAction(action, 'auto').decision, 'draft', `${action} requires real business evidence`);

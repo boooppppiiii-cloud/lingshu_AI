@@ -45,7 +45,10 @@ export function decideAction(action: string, autonomy: AutonomyLevel = 'draft'):
   const rule = findActionRule(action);
   if (rule.risk === 'L1') return { decision: 'remind', rule };
   if (rule.risk === 'L4') return { decision: autonomy === 'remind' ? 'remind' : 'draft', rule };
-  if (rule.risk === 'L2') return { decision: autonomy === 'remind' ? 'remind' : 'draft', rule };
+  if (rule.risk === 'L2') {
+    const safeConversationAction = action.startsWith('draft_');
+    return { decision: autonomy === 'auto' && safeConversationAction ? 'auto' : autonomy === 'remind' ? 'remind' : 'draft', rule };
+  }
   if (rule.risk === 'L3') {
     if (autonomy === 'remind') return { decision: 'remind', rule };
     return { decision: autonomy === 'auto' ? 'auto' : 'draft', rule };

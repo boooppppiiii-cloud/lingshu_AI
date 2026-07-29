@@ -16,10 +16,6 @@ const STATUS_LABEL: Record<OrderRecord['status'], string> = {
   pending: '待处理',
 };
 
-function actionSoon(action: string, orderId: string) {
-  console.log(`[orders] ${action} clicked for ${orderId}: coming soon`);
-}
-
 function OrderDetail({ customer, order }: { customer: CustomerProfile; order: OrderRecord }) {
   return (
     <div className="mt-3 rounded-xl border border-border bg-white p-3 shadow-sm">
@@ -31,22 +27,6 @@ function OrderDetail({ customer, order }: { customer: CustomerProfile; order: Or
         <span className={`rounded-full border px-2 py-0.5 text-[10px] font-bold ${STATUS_STYLE[order.status]}`}>
           {STATUS_LABEL[order.status]}
         </span>
-      </div>
-
-      <div className="mt-3 flex gap-1.5">
-        {['退款', '取消', '编辑'].map(action => (
-          <button
-            key={action}
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              actionSoon(action, order.id);
-            }}
-            className="rounded-lg border border-border bg-surface px-2.5 py-1.5 text-[11px] font-bold text-text-secondary hover:bg-surface-2"
-          >
-            {action}
-          </button>
-        ))}
       </div>
 
       <div className="mt-3 grid gap-2 rounded-lg bg-surface-2 p-3 text-xs">

@@ -1020,6 +1020,12 @@ export default function EnterprisePage() {
     }
   };
 
+  useEffect(() => {
+    if (loading || saving || !hasUnsavedChanges) return;
+    const timer = window.setTimeout(() => { void handleSave(); }, 900);
+    return () => window.clearTimeout(timer);
+  }, [profile, loading, saving, hasUnsavedChanges]);
+
   const rotateProductApiKey = async () => {
     const next = await fetch('/api/overseas/enterprise/product-api/rotate', {
       method: 'POST',

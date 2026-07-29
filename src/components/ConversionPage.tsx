@@ -28,6 +28,7 @@ import {
   RefreshCw,
   Send,
   Sparkles,
+  UserRound,
   Users,
   X,
 } from 'lucide-react';
@@ -193,10 +194,28 @@ function readWidgetOrder(): CustomerWidgetId[] {
 }
 
 function filterCustomers(view: CustomerView, customers: CustomerProfile[]) {
-  if (view === 'inbox') return sortCustomersByPriority(customers.filter(customer => customer.inboxReason));
+  if (view === 'inbox') return sortCustomersByLatestMessage(customers.filter(customer => customer.inboxReason));
   if (view === 'leads') return customers.filter(customer => ['lead', 'inquiry', 'quoted'].includes(customer.stage)).sort((a, b) => b.intentScore - a.intentScore);
   if (view === 'won') return customers.filter(customer => customer.stage === 'won');
   return sortCustomersByPriority(customers.filter(customer => customer.stage === 'silent30' || customer.stage === 'silent60'));
+}
+
+function messageTimestamp(customer: CustomerProfile): number {
+  const value = String(customer.timeline[customer.timeline.length - 1]?.time || customer.lastActive || '').trim();
+  const parsed = Date.parse(value);
+  if (Number.isFinite(parsed)) return parsed;
+  const clock = value.match(/^(\d{1,2}):(\d{2})$/);
+  if (clock) return new Date().setHours(Number(clock[1]), Number(clock[2]), 0, 0);
+  const amount = Number(value.match(/\d+/)?.[0] || 0);
+  if (/分钟前|min/i.test(value)) return Date.now() - amount * 60_000;
+  if (/小时前|hour|\bh\b/i.test(value)) return Date.now() - amount * 3_600_000;
+  if (/天前|day|\bd\b/i.test(value)) return Date.now() - amount * 86_400_000;
+  if (/刚刚|now/i.test(value)) return Date.now();
+  return 0;
+}
+
+function sortCustomersByLatestMessage<T extends CustomerProfile>(customers: T[]): T[] {
+  return [...customers].sort((a, b) => messageTimestamp(b) - messageTimestamp(a));
 }
 
 function applyCustomerListFilters(customers: CustomerProfile[], filters: CustomerListFilters) {
@@ -291,12 +310,7 @@ function containsChinese(text: string): boolean {
 }
 
 function normalizeDraftForChineseEditing(draft: string, customer: CustomerProfile): string {
-  if (containsChinese(draft)) return draft;
-  const normalized = draft.toLowerCase();
-  if (normalized.includes('call') || normalized.includes('manager')) {
-    return fallbackCustomerReplyZh(customer);
-  }
-  return fallbackCustomerReplyZh(customer);
+  return draft.trim() || fallbackCustomerReplyZh(customer);
 }
 
 function translateChineseReplyForCustomer(customer: CustomerProfile, text: string): string {
@@ -492,7 +506,6 @@ function CompactCustomerList({
   onOpen: (id: string) => void;
   onViewChange: (view: CustomerView) => void;
 }) {
-  const [aiAutoExpanded, setAiAutoExpanded] = useState(false);
   const [filterOpen, setFilterOpen] = useState(false);
   const [filters, setFilters] = useState<CustomerListFilters>(EMPTY_CUSTOMER_FILTERS);
   const baseList = filterCustomers(view, customers);
@@ -552,6 +565,7 @@ function CompactCustomerList({
             <div className="flex items-start justify-between gap-3">
               <div className="flex min-w-0 items-center gap-1.5">
                 <p className="truncate text-sm font-bold text-text-primary">{customer.name}</p>
+                {customer.isMock && <span className="rounded bg-cyan-50 px-1.5 py-0.5 text-[9px] font-black text-cyan-700">MOCK</span>}
                 <SourceIcon source={customer.source} size={11} />
               </div>
               <span className="shrink-0 text-[11px] font-medium text-text-muted">{lastMessage?.time || customer.lastActive}</span>
@@ -562,14 +576,6 @@ function CompactCustomerList({
       </button>
     );
   };
-  const inboxGroups = [
-    { key: 'human_needed', label: '需要你处理', items: list.filter(customer => customer.handlingMode === 'human_needed') },
-    { key: 'ai_draft', label: '等你确认', items: list.filter(customer => customer.handlingMode === 'ai_draft') },
-    { key: 'ai_auto', label: 'AI 接待中', items: list.filter(customer => customer.handlingMode === 'ai_auto') },
-  ] as const;
-  const aiAutoCount = inboxGroups[2].items.length;
-  const aiAutoReplies = inboxGroups[2].items.reduce((sum, customer) => sum + (customer.aiAutoCount ?? 0), 0);
-
   return (
     <aside className="flex h-full w-80 shrink-0 flex-col overflow-hidden border-r border-border bg-white">
       <div className="border-b border-border px-4 py-3">
@@ -651,33 +657,7 @@ function CompactCustomerList({
         </div>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
-        {view !== 'inbox' && list.map(renderCustomer)}
-        {view === 'inbox' && (
-          <div>
-            <div className="border-b border-border bg-surface-2 px-4 py-2">
-              <div className="flex items-center justify-between gap-2">
-                <p className="text-[11px] font-black text-text-secondary">需要你处理</p>
-                <span className="min-w-5 rounded-full bg-red-600 px-1.5 py-0.5 text-center text-[10px] font-black text-white">{inboxGroups[0].items.length}</span>
-              </div>
-            </div>
-            {inboxGroups[0].items.map(renderCustomer)}
-
-            <div className="border-b border-border bg-surface-2 px-4 py-2">
-              <p className="text-[11px] font-black text-text-secondary">等你确认</p>
-            </div>
-            {inboxGroups[1].items.map(renderCustomer)}
-
-            <button
-              type="button"
-              onClick={() => setAiAutoExpanded(open => !open)}
-              className="flex w-full items-center justify-between border-b border-border bg-surface-2 px-4 py-2 text-left"
-            >
-              <span className="text-[11px] font-black text-text-secondary">AI 正在接待 {aiAutoCount} 位客户 · 今日已自动回复 {aiAutoReplies} 条</span>
-              <ChevronDown size={14} className={`text-text-muted transition-transform ${aiAutoExpanded ? 'rotate-180' : ''}`} />
-            </button>
-            {aiAutoExpanded && inboxGroups[2].items.map(renderCustomer)}
-          </div>
-        )}
+        {list.map(renderCustomer)}
       </div>
     </aside>
   );
@@ -835,6 +815,7 @@ function ChatThread({
   onManualActive,
   priceRulesReady,
   knowledgeMiss,
+  onMockBuyerMessage,
 }: {
   customer: CustomerProfile | null;
   draftSuggestion: string | null;
@@ -855,9 +836,11 @@ function ChatThread({
   onManualActive: () => void;
   priceRulesReady: boolean;
   knowledgeMiss?: boolean;
+  onMockBuyerMessage: (text: string) => void;
 }) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [mockInput, setMockInput] = useState('');
   const composerState = draftSuggestion ? 'draft' : input.trim() ? 'typing' : 'idle';
   const isOutsideWindow = customer ? timelineEventAgeHours(lastBuyerEvent(customer)) > 24 : false;
   const templatePlan = customer && draftSuggestion ? buildTemplatePlan(customer, templates, draftSuggestion) : null;
@@ -905,6 +888,16 @@ function ChatThread({
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
         <div className="mx-auto max-w-3xl space-y-4">
+          {customer.isMock && (
+            <form onSubmit={event => { event.preventDefault(); const value = mockInput.trim(); if (!value) return; onMockBuyerMessage(value); setMockInput(''); }} className="rounded-2xl border border-cyan-200 bg-cyan-50/70 p-4">
+              <div className="flex items-center gap-2 text-xs font-black text-cyan-800"><UserRound size={14} />模拟客户输入</div>
+              <p className="mt-1 text-[11px] text-cyan-700">从第一句话开始模拟。这里输入的是客户可能会说的话，不会发送到 WhatsApp。</p>
+              <div className="mt-3 flex gap-2">
+                <input value={mockInput} onChange={event => setMockInput(event.target.value)} placeholder="例如：Hi, can you customize the logo?" className="min-w-0 flex-1 rounded-xl border border-cyan-200 bg-white px-3 py-2 text-sm outline-none focus:border-cyan-500" />
+                <button type="submit" disabled={!mockInput.trim()} className="rounded-xl bg-cyan-700 px-4 py-2 text-xs font-black text-white disabled:opacity-40">模拟发送</button>
+              </div>
+            </form>
+          )}
           {customer.timeline.map(event => {
             if (event.type !== 'whatsapp') {
               return (
@@ -919,7 +912,7 @@ function ChatThread({
             }
             const isBuyer = event.actor === 'buyer';
             const isAi = event.actor === 'ai';
-            const translation = chineseMessageTranslation(event.body, customer);
+            const translation = event.translatedBody || chineseMessageTranslation(event.body, customer);
             return (
               <div key={event.id} className={`flex ${isBuyer ? 'justify-start' : 'justify-end'}`}>
                 <div className={`relative max-w-[74%] rounded-2xl px-4 py-3 shadow-sm ${isBuyer ? 'rounded-tl-sm border border-border bg-surface-2 text-text-primary' : 'rounded-tr-sm bg-[#0891b2] text-white'}`}>
@@ -1451,7 +1444,7 @@ function createMessageEvent(
     id: `${customerId}-${Date.now()}-${actor}`,
     type: 'whatsapp',
     actor,
-    title: actor === 'buyer' ? '????' : actor === 'ai' ? 'AI ??' : '????',
+    title: actor === 'buyer' ? '客户消息' : actor === 'ai' ? 'AI 回复' : '我的回复',
     body,
     time,
     ...extra,
@@ -1459,6 +1452,7 @@ function createMessageEvent(
 }
 
 async function sendCustomerOutbox(customer: CustomerProfile, body: string, outsideWindow: boolean, templatePlan?: TemplatePlan | null, styleMemory?: StyleMemoryPayload | null) {
+  if (customer.isMock) return { status: 'delivered' as const, outboxId: `mock-${Date.now()}` };
   const resp = await fetch(`/api/overseas/customers/${encodeURIComponent(customer.id)}/outbox`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeader() },
@@ -1473,7 +1467,7 @@ async function sendCustomerOutbox(customer: CustomerProfile, body: string, outsi
 
 export default function ConversionPage({ onLeaveConversation: _onLeaveConversation, isDemo = false }: Props) {
   const [view, setView] = useState<CustomerView>('inbox');
-  const { customers, updateCustomer, appendTimelineEvent, updateTimelineEvent, removeTimelineEvent } = useCustomers();
+  const { customers, updateCustomer, appendTimelineEvent, updateTimelineEvent, removeTimelineEvent } = useCustomers(0, true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [autonomyLevel, setAutonomyLevel] = useState<AutonomyLevel>('draft');
   const [dailyBriefingOpen, setDailyBriefingOpen] = useState(false);
@@ -1533,6 +1527,15 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
         if (value === 'auto') setAutonomyLevel(approvedFaqCount >= 5 ? 'auto' : 'draft');
         else if (value === 'remind' || value === 'draft') setAutonomyLevel(value);
         setPriceRulesReady(Boolean(data?.bizRules?.quoteMode && data?.bizRules?.samplePolicy && data?.bizRules?.paymentTerms));
+        const firstProduct = Array.isArray(data?.products?.items)
+          ? data.products.items.find((item: any) => String(item?.name || '').trim())
+          : null;
+        const enterpriseProduct = String(firstProduct?.name || data?.products?.categories || data?.company?.industry || '').trim();
+        updateCustomer('mock-customer-conversation', {
+          product: enterpriseProduct,
+          outboundProduct: enterpriseProduct,
+          summary: `当前绑定企业：${String(data?.company?.name || '当前企业')}；主营：${enterpriseProduct || '等待客户说明具体需求'}`,
+        });
       })
       .catch(() => {});
     fetch('/api/overseas/enterprise/knowledge-completion', { headers: authHeader() })
@@ -1544,7 +1547,7 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
         }
       })
       .catch(() => {});
-  }, []);
+  }, [updateCustomer]);
 
   useEffect(() => {
     fetch('/api/overseas/customers/templates', { headers: authHeader() })
@@ -1574,6 +1577,27 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
     setInput('');
     setTranslatedInput('');
   }, [selectedId]);
+
+  useEffect(() => {
+    if (!selected) return;
+    const untranslated = selected.timeline.filter(event => event.type === 'whatsapp' && !/[\u4e00-\u9fff]/.test(event.body) && !event.translatedBody);
+    if (!untranslated.length) return;
+    let cancelled = false;
+    void Promise.all(untranslated.map(async event => {
+      try {
+        const response = await fetch('/api/overseas/plugins/translate/run', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeader() },
+          body: JSON.stringify({ text: event.body, target: '简体中文' }),
+        });
+        const data = await response.json();
+        if (!cancelled && response.ok && data.translatedText) {
+          updateTimelineEvent(selected.id, event.id, { translatedBody: String(data.translatedText).trim() });
+        }
+      } catch { /* 翻译为辅助信息，失败时保留原文。 */ }
+    }));
+    return () => { cancelled = true; };
+  }, [selected?.id, selected?.timeline, updateTimelineEvent]);
 
   useEffect(() => {
     if (!selected) return;
@@ -1707,6 +1731,27 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
       aiAutoCount: mode === 'ai_auto' ? customer.aiAutoCount ?? 0 : customer.aiAutoCount,
       todoCompletedAt: mode === 'ai_auto' ? new Date().toISOString() : undefined,
     }));
+  };
+
+  const pushMockBuyerMessage = async (text: string) => {
+    if (!selected?.isMock || !text.trim()) return;
+    const buyerEvent = createMessageEvent(selected.id, text.trim(), 'buyer');
+    const customerWithMessage = { ...selected, timeline: [...selected.timeline, buyerEvent] };
+    appendTimelineEvent(selected.id, buyerEvent);
+    updateCustomer(selected.id, { hasUnread: true, lastActive: '刚刚', inboxReason: 'reply' });
+    setLastDraftKey(`${selected.id}:${buyerEvent.id}`);
+    setDraftSuggestion(null);
+    setDraftMeta(null);
+    const result = await requestDraft(customerWithMessage);
+    if (result.handoffRequired || !result.draft.trim()) {
+      updateCustomer(selected.id, { handlingMode: 'human_needed', handlingReason: result.handlingReason || '该消息需要人工接待' });
+      setDraftMeta(result);
+      showToast(result.handlingReason || '该消息已转人工处理');
+      return;
+    }
+    const reply = translateChineseReplyForCustomer(customerWithMessage, result.draft);
+    appendTimelineEvent(selected.id, createMessageEvent(selected.id, reply, 'ai', { autoSent: true, sendStatus: 'delivered' }));
+    updateCustomer(selected.id, { handlingMode: 'ai_auto', handlingReason: 'Mock 智能客服已自动接待', hasUnread: false, aiAutoCount: (selected.aiAutoCount ?? 0) + 1 });
   };
 
   const markMessageStatus = (customerId: string, messageId: string, status: TimelineEvent['sendStatus']) => {
@@ -1931,6 +1976,7 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
           onManualActive={reportManualActive}
           priceRulesReady={priceRulesReady}
           knowledgeMiss={Boolean(draftMeta?.knowledgeMiss)}
+          onMockBuyerMessage={pushMockBuyerMessage}
         />
         <CustomerInfoRail
           customer={selected}
