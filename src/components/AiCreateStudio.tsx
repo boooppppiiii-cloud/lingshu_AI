@@ -363,6 +363,14 @@ function matchMaterialsToStoryboardLocally(
   previousAssignments.forEach(plan => Object.values(plan).forEach(clipId => {
     globalUsage.set(clipId, (globalUsage.get(clipId) || 0) + 1);
   }));
+  const previousMaterialIds = new Set(globalUsage.keys());
+  const availableFreshCount = pool.filter(clip => !previousMaterialIds.has(clip.id)).length;
+  // A/B 流量测试要求“组合本身”有差异，而不只是把同一组素材换个顺序。
+  // 素材充足时，每个新版本至少 60% 使用此前方案未出现过的素材。
+  const minimumFreshCount = previousAssignments.length
+    ? Math.min(Math.ceil(slots.length * 0.6), availableFreshCount)
+    : 0;
+  let freshAssignedCount = 0;
   const variantTieBreak = (value: string) => {
     let hash = 2166136261 ^ (variantIndex + 1);
     for (let i = 0; i < value.length; i += 1) hash = Math.imul(hash ^ value.charCodeAt(i), 16777619);
@@ -383,7 +391,18 @@ function matchMaterialsToStoryboardLocally(
   slots.forEach((slot, slotIndex) => {
     const slotText = `${slot.title} ${slot.detail}`.toLowerCase();
     const targetDuration = Math.max(0.5, slot.end - slot.start);
-    const candidates = pool.map(clip => {
+    const remainingSlots = slots.length - slotIndex;
+    const freshStillNeeded = Math.max(0, minimumFreshCount - freshAssignedCount);
+    const uniquePool = unused.size ? pool.filter(clip => unused.has(clip.id)) : pool;
+    const freshUniquePool = uniquePool.filter(clip => !previousMaterialIds.has(clip.id));
+    const mustChooseFresh = freshStillNeeded >= remainingSlots && freshUniquePool.length > 0;
+    const eligiblePool = mustChooseFresh ? freshUniquePool : uniquePool;
+    const openingRoleOrder = [
+      ['detail', 'product', 'presenter'],
+      ['presenter', 'model', 'scene'],
+      ['product', 'detail', 'scene'],
+    ][variantIndex % 3] || ['detail', 'product', 'presenter'];
+    const candidates = eligiblePool.map(clip => {
       const clipText = `${clip.name} ${clip.folder} ${clip.industry || ''} ${clip.shotFunction || ''} ${clip.applicability || ''} ${clip.tags || ''}`.toLowerCase();
       let score = 0;
       if (unused.has(clip.id)) score += 18;
@@ -394,19 +413,23 @@ function matchMaterialsToStoryboardLocally(
       score += Math.min(24, slotTerms.filter(term => clipText.includes(term.toLowerCase())).length * 6);
       score += Math.max(0, 12 - Math.abs(effectiveClipDuration(clip) - targetDuration) * 2);
       if (slotIndex === 0 && (clip.folder === 'detail' || clip.folder === 'product' || clip.folder === 'presenter')) score += 8;
+      if (slotIndex === 0 && openingRoleOrder.includes(clip.folder)) score += Math.max(4, 14 - openingRoleOrder.indexOf(clip.folder) * 4);
       if (slotIndex === slots.length - 1 && (clip.folder === 'product' || clip.folder === 'factory' || clip.folder === 'packaging')) score += 6;
-      // 不牺牲脚本语义匹配的前提下，强制不同视频方案优先采用不同素材组合。
-      // 同一分镜在旧方案中用过的素材重罚；全局高频素材轻罚；稳定散列负责打破同分候选顺序。
+      // 先保证分镜语义，再让新方案使用真正不同的素材集合。
       const sameSlotUsage = previousAssignments.filter(plan => plan[slot.id] === clip.id).length;
-      score -= sameSlotUsage * 42;
-      score -= (globalUsage.get(clip.id) || 0) * 7;
-      score += variantTieBreak(`${slot.id}:${clip.id}`) * 5;
+      const priorUsage = globalUsage.get(clip.id) || 0;
+      score -= sameSlotUsage * 55;
+      score -= priorUsage * 18;
+      if (previousAssignments.length && priorUsage === 0) score += 34;
+      if (slotIndex === 0 && previousAssignments.length && priorUsage === 0) score += 20;
+      score += variantTieBreak(`${slot.id}:${clip.id}`) * 8;
       return { clip, score };
     }).sort((a, b) => b.score - a.score);
     const chosen = candidates[0]?.clip;
     if (!chosen) return;
     assignments[slot.id] = chosen.id;
     unused.delete(chosen.id);
+    if (!previousMaterialIds.has(chosen.id)) freshAssignedCount += 1;
   });
   return assignments;
 }
@@ -3739,10 +3762,13 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       setScriptRecommendedMaterialIds([...new Set(orderedIds)]);
       setActiveFolder('recommend');
       setActiveStoryboardSlotId(storyboardSlots.find(slot => !assignments[slot.id])?.id || storyboardSlots[0]?.id || '');
-      const differsFromPrevious = previousAssignments.length === 0 || previousAssignments.every(previous =>
-        storyboardSlots.some(slot => previous[slot.id] !== assignments[slot.id]),
-      );
-      setModeNotice(`已按“脚本语义 + 镜头角色 + 有效时长 + 版本去重”完成 ${orderedIds.length}/${storyboardSlots.length} 个分镜匹配${differsFromPrevious ? '，当前素材顺序和组合与已有视频方案不同' : ''}。可逐镜替换后继续。`);
+      const previousMaterialIds = new Set(previousAssignments.flatMap(plan => Object.values(plan)));
+      const freshCount = orderedIds.filter(id => !previousMaterialIds.has(id)).length;
+      const freshRatio = orderedIds.length ? Math.round(freshCount / orderedIds.length * 100) : 0;
+      const diversityMessage = previousAssignments.length
+        ? `；其中 ${freshCount}/${orderedIds.length} 条为新素材（差异率 ${freshRatio}%），开场和素材顺序已按流量测试策略变化`
+        : '';
+      setModeNotice(`已按“脚本语义 + 镜头角色 + 有效时长 + 版本差异”完成 ${orderedIds.length}/${storyboardSlots.length} 个分镜匹配${diversityMessage}。可逐镜替换后继续。`);
     } catch (error) {
       setModeNotice(error instanceof Error ? `智能选材失败：${error.message}` : '智能选材失败，请重试。');
     } finally {
