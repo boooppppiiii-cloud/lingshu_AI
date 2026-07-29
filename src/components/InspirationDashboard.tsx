@@ -2827,7 +2827,6 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   const [showAccountsModal, setShowAccountsModal] = useState(false);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
   const videoRequestRef = useRef(0);
-  const autoExactRequestedRef = useRef(new Set<string>());
   const platformLabel = PLATFORM_FILTERS.find(f => f.id === platform)?.label ?? '全部平台';
   const sortLabel = sortMode === 'crawlTime' ? '按爬取时间' : '按热度';
   const contentFormatLabel = contentFormat === 'video' ? '视频' : '图文';
@@ -3372,28 +3371,6 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
       setTimeout(() => setMaterialMessage(''), 3500);
     }
   };
-
-  useEffect(() => {
-    if (contentFormat !== 'video') return;
-    const candidate = crawledVideos.find(item => {
-      const payload = item.aiAnalysis;
-      const running = ['queued', 'downloading', 'analyzing', 'download_retrying', 'ops_queued'].includes(String(payload?.downloadStatus || ''));
-      return Boolean(item.recordId)
-        && item.status !== 'failed'
-        && payload?.analysisMode !== 'exact'
-        && payload?.requestedAnalysisMode !== 'exact'
-        && !payload?.videoLevelFailureStatus
-        && !payload?.analysisError
-        && !running
-        && hasCompleteGeminiAnalysis(payload?.gemini)
-        && !autoExactRequestedRef.current.has(item.id);
-    });
-    if (!candidate) return;
-    // Mark synchronously before dispatching so state refreshes cannot enqueue
-    // the same record twice. A failed automatic attempt remains a manual retry.
-    autoExactRequestedRef.current.add(candidate.id);
-    void requestExactFullAnalysis(candidate);
-  }, [crawledVideos, contentFormat]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <div className="relative">
