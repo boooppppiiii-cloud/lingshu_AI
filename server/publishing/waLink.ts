@@ -110,9 +110,13 @@ export function appendTrackedWaLink(platform: string, description: string, waLin
 }
 
 export async function finalizeTrackedPost(postId: string, patch: { platformPostId?: string; stats?: Record<string, unknown>; title?: string }): Promise<void> {
+  const current = await store.getById<PostRecord>('posts', postId);
+  const currentStats = current?.stats && typeof current.stats === 'object' && !Array.isArray(current.stats)
+    ? current.stats
+    : {};
   const update: Record<string, unknown> = {
     platform_post_id: text(patch.platformPostId),
-    stats: patch.stats ?? {},
+    stats: { ...currentStats, ...(patch.stats ?? {}), status: text(patch.stats?.status) || 'published' },
     published_at: new Date().toISOString(),
   };
   const title = text(patch.title);

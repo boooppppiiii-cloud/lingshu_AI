@@ -45,6 +45,9 @@ export type CalendarPost = {
   trackWaLink?: boolean;
   targetAccountIds?: string[];
   targetAccountLabels?: string[];
+  publishError?: string;
+  publishAttempts?: number;
+  nextPublishAttemptAt?: string;
   inquiries: number;
   isRecycle?: boolean;
   platformPostId?: string;
@@ -152,6 +155,15 @@ function statusMeta(item: CalendarPost): { label: string; className: string; Ico
   }
   if (item.status === 'scheduled') {
     return { label: '已排期', className: 'border-sky-200 bg-sky-50 text-sky-700', Icon: CalendarClock };
+  }
+  if (item.status === 'publishing') {
+    return { label: '正在发布', className: 'border-amber-200 bg-amber-50 text-amber-700', Icon: RefreshCw };
+  }
+  if (item.status === 'failed') {
+    return { label: '发布失败', className: 'border-red-200 bg-red-50 text-red-700', Icon: Flag };
+  }
+  if (item.status === 'partial') {
+    return { label: '部分发布', className: 'border-orange-200 bg-orange-50 text-orange-700', Icon: Flag };
   }
   return { label: item.status || '草稿', className: 'border-slate-200 bg-slate-50 text-slate-600', Icon: Clock };
 }
@@ -311,9 +323,11 @@ export function CalendarPlanner({
     return groups;
   }, [marketingEvents, dateKey(today)]);
 
-  const load = async () => {
-    setLoading(true);
-    setError('');
+  const load = async (silent = false) => {
+    if (!silent) {
+      setLoading(true);
+      setError('');
+    }
     try {
       const weekdays = Array.from(new Set(days.slice(0, 7).map(day => day.getDay())));
       const [calendar, scoreRows] = await Promise.all([
@@ -328,14 +342,16 @@ export function CalendarPlanner({
       setScores(Object.fromEntries(scoreRows.map(row => [row.weekday, row.scores])));
       setScoreSource(scoreRows.some(row => row.source === 'account_history') ? '账号真实数据' : '平台参考');
     } catch (loadError) {
-      setError(loadError instanceof Error ? loadError.message : 'load_failed');
+      if (!silent) setError(loadError instanceof Error ? loadError.message : 'load_failed');
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   };
 
   useEffect(() => {
     void load();
+    const timer = window.setInterval(() => void load(true), 30_000);
+    return () => window.clearInterval(timer);
   }, [range.from.toISOString(), range.to.toISOString(), mode, selectedPlatform, utcOffset, refreshKey]);
 
   const itemsByDay = useMemo(() => {
@@ -760,6 +776,7 @@ export function CalendarPlanner({
                     <span>{post.isRecycle ? '循环发布' : '单次内容'}</span>
                     <span className="font-black text-emerald-700">{post.inquiries || 0} 条询盘</span>
                   </div>
+                  {post.publishError && <p className="mt-2 rounded-lg bg-red-50 px-2.5 py-2 text-[9px] leading-relaxed text-red-700">{post.publishError}</p>}
                   {post.firstComment && <p className="mt-2 line-clamp-2 text-[9px] leading-relaxed text-text-muted">首评：{post.firstComment}</p>}
                 </div>
               </>
