@@ -3166,6 +3166,13 @@ const TTS_VOICE_MAP: Record<string, string> = {
   v3: 'Aoede',   // 女声 · 温暖
 };
 
+// 工作台音色 → Qwen3-TTS 系统人声。三种音色均支持中、英、西、法等主要语种。
+const QWEN_TTS_VOICE_MAP: Record<string, string> = {
+  v1: 'Cherry', // 女声 · 亲和自然
+  v2: 'Ethan',  // 男声 · 阳光沉稳
+  v3: 'Serena', // 女声 · 温柔
+};
+
 const MINIMAX_VOICE_MAP: Record<string, Record<string, string>> = {
   zh: {
     v1: 'Chinese (Mandarin)_Warm_Bestie',
@@ -3814,6 +3821,64 @@ async function generateLocalSayTts(text: string, voice: string, language: string
   return { url: scopedStudioAssetUrl('tts', aiffFile), duration: durationFromText(text), source: 'local_say' };
 }
 
+function qwenTtsLanguageType(language: string): string {
+  const map: Record<string, string> = {
+    zh: 'Chinese', en: 'English', es: 'Spanish', ar: 'Arabic', pt: 'Portuguese',
+    id: 'Indonesian', fr: 'French', de: 'German', ja: 'Japanese', ko: 'Korean',
+    ru: 'Russian', it: 'Italian',
+  };
+  return map[normalizeTtsLanguage(language)] || 'Chinese';
+}
+
+function wavDurationFromBytes(bytes: Buffer): number {
+  if (bytes.length < 44 || bytes.subarray(0, 4).toString('ascii') !== 'RIFF' || bytes.subarray(8, 12).toString('ascii') !== 'WAVE') return 0;
+  const byteRate = bytes.readUInt32LE(28);
+  if (!byteRate) return 0;
+  const dataMarker = bytes.indexOf(Buffer.from('data'), 12);
+  const dataStart = dataMarker >= 0 ? dataMarker + 8 : 44;
+  return Math.max(0, (bytes.length - dataStart) / byteRate);
+}
+
+async function generateQwenTts(text: string, voice: string, language: string): Promise<{ url: string; duration: number; source: string } | null> {
+  const apiKey = String(process.env.DASHSCOPE_API_KEY || '').trim();
+  if (!apiKey) return null;
+  const endpoint = process.env.DASHSCOPE_TTS_ENDPOINT
+    || 'https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation';
+  const model = process.env.QWEN_TTS_MODEL || 'qwen3-tts-flash';
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model,
+      input: {
+        text: text.slice(0, 5000),
+        voice: process.env[`QWEN_TTS_VOICE_${String(voice || 'v1').toUpperCase()}`] || QWEN_TTS_VOICE_MAP[voice] || 'Cherry',
+        language_type: qwenTtsLanguageType(language),
+      },
+    }),
+    signal: AbortSignal.timeout(Number(process.env.QWEN_TTS_TIMEOUT_MS || 90_000)),
+  });
+  const json = await response.json().catch(() => ({} as any)) as any;
+  if (!response.ok || json?.code) {
+    throw new Error(`Qwen TTS ${json?.code || `HTTP ${response.status}`}: ${String(json?.message || 'request failed').slice(0, 240)}`);
+  }
+  const remoteUrl = String(json?.output?.audio?.url || '').trim();
+  if (!/^https?:\/\//i.test(remoteUrl)) throw new Error('Qwen TTS did not return an audio URL');
+  const audioResponse = await fetch(remoteUrl, { signal: AbortSignal.timeout(Number(process.env.QWEN_TTS_DOWNLOAD_TIMEOUT_MS || 60_000)) });
+  if (!audioResponse.ok) throw new Error(`Qwen TTS audio download HTTP ${audioResponse.status}`);
+  const bytes = Buffer.from(await audioResponse.arrayBuffer());
+  if (bytes.length < 1000 || bytes.subarray(0, 4).toString('ascii') !== 'RIFF') throw new Error('Qwen TTS returned invalid WAV audio');
+  try { fs.mkdirSync(scopedStudioAssetDir(TTS_ROOT), { recursive: true }); } catch { /* ignore */ }
+  const file = `${randomUUID()}.wav`;
+  fs.writeFileSync(path.join(scopedStudioAssetDir(TTS_ROOT), file), bytes);
+  const measuredDuration = wavDurationFromBytes(bytes);
+  return {
+    url: scopedStudioAssetUrl('tts', file),
+    duration: Math.max(1, Math.round(measuredDuration || durationFromText(text))),
+    source: 'qwen_tts',
+  };
+}
+
 async function generateTtsAudio(spoken: string, voice: string, language = 'zh', style: TtsStyleOptions = {}): Promise<{ ok: boolean; source: string; url?: string; duration?: number; error?: string; customVoiceStatus?: 'activated'; cues?: AlignedCue[]; alignmentSource?: 'minimax_native' }> {
   if (String(voice || '').startsWith('custom:')) {
     let minimaxError = '';
@@ -3866,6 +3931,13 @@ async function generateTtsAudio(spoken: string, voice: string, language = 'zh', 
     aiError = `MiniMax: ${String(e?.message ?? e).slice(0, 200)}`;
   }
 
+  try {
+    const qwen = await generateQwenTts(spoken, voice, language);
+    if (qwen) return { ok: true, ...qwen };
+  } catch (e: any) {
+    aiError = [aiError, `Qwen: ${String(e?.message ?? e).slice(0, 200)}`].filter(Boolean).join('；');
+  }
+
   if (apiKey) {
     try {
       const ai = new GoogleGenAI({ apiKey });
@@ -3896,8 +3968,11 @@ async function generateTtsAudio(spoken: string, voice: string, language = 'zh', 
   const local = await generateLocalSayTts(spoken, voice, language);
   if (local) return { ok: true, ...local, error: aiError };
 
-  const tone = fallbackToneWav(spoken);
-  return { ok: true, source: 'local_tone', url: scopedStudioAssetUrl('tts', tone.file), duration: tone.duration, error: aiError || 'local speech unavailable' };
+  return {
+    ok: false,
+    source: 'tts_unavailable',
+    error: aiError || '没有可用的真人语音合成服务，请检查 DashScope、MiniMax 或 Gemini TTS 配置。',
+  };
 }
 
 function splitSubtitleText(text: string): string[] {
