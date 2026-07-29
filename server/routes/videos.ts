@@ -4809,11 +4809,12 @@ function qwenFallbackTimeoutMs(): number {
   return Math.max(3000, Number(process.env.QWEN_VIDEO_FALLBACK_TIMEOUT_MS || 12000));
 }
 
-function videoAnalysisHardTimeoutMs(): number {
+function videoAnalysisHardTimeoutMs(analysisMode: 'strategy' | 'exact' = 'strategy'): number {
   // Bound the complete frame extraction + ASR + VL request, not only the
   // individual OpenAI-compatible HTTP call.  Otherwise a record can remain in
   // `analyzing` forever when one of the preparatory stages stalls.
-  return Math.max(30_000, Number(process.env.VIDEO_ANALYSIS_HARD_TIMEOUT_MS || 150_000));
+  const fallback = analysisMode === 'exact' ? 240_000 : 150_000;
+  return Math.max(30_000, Number(process.env.VIDEO_ANALYSIS_HARD_TIMEOUT_MS || fallback));
 }
 
 function withTimeout<T>(promise: Promise<T>, ms: number, message: string): Promise<T> {
@@ -4963,13 +4964,20 @@ async function analyzeExactLongVideoChunks(input: {
   transcript?: Awaited<ReturnType<typeof transcribeAudioWithQwen>>;
   analysisMode?: 'strategy' | 'exact';
 }): Promise<VideoAiAnalysis> {
-  const chunkSeconds = Math.max(30, Number(process.env.VIDEO_EXACT_CHUNK_SECONDS || 45));
+  // Keep each VL request small enough to finish reliably. The previous 45s
+  // default put nearly all 42 exact frames into the first request of a 50s
+  // video, which repeatedly hit the 90s request timeout.
+  const chunkSeconds = Math.max(12, Math.min(30, Number(process.env.VIDEO_EXACT_CHUNK_SECONDS || 20)));
   const inferredDuration = Math.max(input.duration, ...input.frames.map(frame => qwenFrameSeconds(frame.timeLabel) + 3), 3);
   const chunks = Array.from({ length: Math.ceil(inferredDuration / chunkSeconds) }, (_, index) => ({
     start: index * chunkSeconds,
     end: Math.min(inferredDuration, (index + 1) * chunkSeconds),
   }));
-  const analyzeChunk = async (chunk: { start: number; end: number }) => {
+  const sampleFrames = <T,>(values: T[], limit: number): T[] => {
+    if (values.length <= limit) return values;
+    return Array.from({ length: limit }, (_, index) => values[Math.round(index * (values.length - 1) / Math.max(1, limit - 1))]!);
+  };
+  const analyzeChunk = async (chunk: { start: number; end: number }, frameLimit: number) => {
     const localDuration = chunk.end - chunk.start;
     let selected = input.frames.filter(frame => {
       const time = qwenFrameSeconds(frame.timeLabel);
@@ -4980,6 +4988,7 @@ async function analyzeExactLongVideoChunks(input: {
         Math.abs(qwenFrameSeconds(frame.timeLabel) - chunk.start) < Math.abs(qwenFrameSeconds(nearest.timeLabel) - chunk.start) ? frame : nearest
       )];
     }
+    selected = sampleFrames(selected, frameLimit);
     const localFrames = selected.map(frame => ({ ...frame, timeLabel: `${Math.max(0, qwenFrameSeconds(frame.timeLabel) - chunk.start).toFixed(2)}s` }));
     const localSegments = (input.transcript?.segments || [])
       .filter(segment => segment.end > chunk.start && segment.start < chunk.end)
@@ -5003,11 +5012,35 @@ async function analyzeExactLongVideoChunks(input: {
       scriptDetails15s: details,
     };
   };
-  const chunkTimeoutMs = Math.max(20_000, Number(process.env.VIDEO_EXACT_CHUNK_TIMEOUT_MS || 90_000));
-  const settled = await Promise.allSettled(chunks.map(chunk => Promise.race([
-    analyzeChunk(chunk),
-    new Promise<VideoAiAnalysis>((_, reject) => setTimeout(() => reject(new Error('exact_chunk_timeout')), chunkTimeoutMs)),
-  ])));
+  const chunkTimeoutMs = Math.max(20_000, Number(process.env.VIDEO_EXACT_CHUNK_TIMEOUT_MS || 60_000));
+  const primaryFrameLimit = Math.max(8, Math.min(20, Number(process.env.VIDEO_EXACT_CHUNK_FRAME_LIMIT || 16)));
+  const retryFrameLimit = Math.max(6, Math.min(primaryFrameLimit, Number(process.env.VIDEO_EXACT_RETRY_FRAME_LIMIT || 10)));
+  const runWithTimeout = async (chunk: { start: number; end: number }, frameLimit: number, attempt: number) => {
+    const startedAt = Date.now();
+    try {
+      const result = await Promise.race([
+        analyzeChunk(chunk, frameLimit),
+        new Promise<VideoAiAnalysis>((_, reject) => setTimeout(() => reject(new Error(`exact_chunk_timeout_${chunk.start.toFixed(0)}_${chunk.end.toFixed(0)}`)), chunkTimeoutMs)),
+      ]);
+      console.log(`[videos] exact chunk ${chunk.start.toFixed(0)}-${chunk.end.toFixed(0)}s completed in ${Date.now() - startedAt}ms, frames=${frameLimit}, attempt=${attempt}`);
+      return result;
+    } catch (error) {
+      console.warn(`[videos] exact chunk ${chunk.start.toFixed(0)}-${chunk.end.toFixed(0)}s failed in ${Date.now() - startedAt}ms, frames=${frameLimit}, attempt=${attempt}:`, error instanceof Error ? error.message : error);
+      throw error;
+    }
+  };
+  const analyzeWithRetry = async (chunk: { start: number; end: number }) => {
+    try {
+      return await runWithTimeout(chunk, primaryFrameLimit, 1);
+    } catch {
+      return await runWithTimeout(chunk, retryFrameLimit, 2);
+    }
+  };
+  const settled: PromiseSettledResult<VideoAiAnalysis>[] = [];
+  const concurrency = Math.max(1, Math.min(3, Number(process.env.VIDEO_EXACT_CHUNK_CONCURRENCY || 2)));
+  for (let offset = 0; offset < chunks.length; offset += concurrency) {
+    settled.push(...await Promise.allSettled(chunks.slice(offset, offset + concurrency).map(analyzeWithRetry)));
+  }
   const failure = settled.find((result): result is PromiseRejectedResult => result.status === 'rejected');
   if (failure) throw new Error(`${input.analysisMode || 'exact'}_analysis_retryable: ${failure.reason instanceof Error ? failure.reason.message : String(failure.reason)}`);
   const results = settled.map(result => (result as PromiseFulfilledResult<VideoAiAnalysis>).value);
@@ -5104,7 +5137,7 @@ export async function analyzeDownloadedVideoWithFallback(opts: {
 
   if (shouldUseQwenFirst()) {
     if (!isQwenConfigured()) throw new Error('DASHSCOPE_API_KEY is not set');
-    return withTimeout(runQwen(), videoAnalysisHardTimeoutMs(), 'video_analysis_hard_timeout');
+    return withTimeout(runQwen(), videoAnalysisHardTimeoutMs(opts.analysisMode), 'video_analysis_hard_timeout');
   }
 
   try {
@@ -5145,7 +5178,7 @@ export async function analyzeDownloadedVideoWithFallback(opts: {
     }
     if (!isQwenConfigured()) throw e;
     console.warn('[videos] Gemini video analysis failed, falling back to Qwen frames:', e instanceof Error ? e.message : e);
-    return withTimeout(runQwen(), videoAnalysisHardTimeoutMs(), 'video_analysis_hard_timeout');
+    return withTimeout(runQwen(), videoAnalysisHardTimeoutMs(opts.analysisMode), 'video_analysis_hard_timeout');
   }
 }
 
