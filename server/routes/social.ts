@@ -1,10 +1,6 @@
 import { Router, type Request } from 'express';
-import fs from 'node:fs';
-import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 import { store } from '../storage/index.js';
-import { r2Upload } from '../storage/r2.js';
 import {
   exchangeMetaCode,
   exchangeTikTokCode,
@@ -19,9 +15,6 @@ import {
   getMetaPages,
   getTikTokUser,
   getTikTokVideos,
-  publishInstagramReel,
-  uploadFacebookVideo,
-  uploadTikTokVideo,
   type SocialPlatform,
   type SocialUploadInput,
 } from '../integrations/social.js';
@@ -31,8 +24,7 @@ import {
   getTenantAwareTikTokOAuthClient,
 } from '../lib/oauthConfig.js';
 import { parseOAuthState, signOAuthState } from '../lib/tenantPlatformApps.js';
-import { recordSuccessfulPublish } from '../lib/publishHistory.js';
-import { appendTrackedWaLink, createTrackedPostDraft, finalizeTrackedPost } from '../publishing/waLink.js';
+import { publishVideoToAccount } from '../publishing/platformPublisher.js';
 
 const COL = 'social_accounts';
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
@@ -773,59 +765,6 @@ socialRouter.get('/accounts/:id/video/:videoId/comments', async (req, res) => {
   }
 });
 
-function normalizeVideoPath(input: string) {
-  const raw = input.trim();
-  return raw.startsWith('file://') ? fileURLToPath(raw) : path.resolve(raw);
-}
-
-function socialVideoContentType(filePath: string) {
-  const ext = path.extname(filePath).toLowerCase();
-  if (ext === '.mov') return 'video/quicktime';
-  if (ext === '.webm') return 'video/webm';
-  return 'video/mp4';
-}
-
-function validateSocialUploadInput(account: SocialAccountRecord, input: SocialUploadInput) {
-  if (!['private', 'unlisted', 'public', undefined].includes(input.privacyStatus)) {
-    throw Object.assign(new Error('发布可见性只能是 private、unlisted 或 public'), { statusCode: 400 });
-  }
-
-  if (account.platform !== 'instagram' || !input.videoUrl) {
-    if (!input.filePath) {
-      throw Object.assign(new Error(`${account.platform} 发布需要本地成片文件，请先完成合成`), { statusCode: 400 });
-    }
-    if (!fs.existsSync(input.filePath)) {
-      throw Object.assign(new Error('成片文件不存在，请先重新合成后再发布'), { statusCode: 404 });
-    }
-    const stat = fs.statSync(input.filePath);
-    if (!stat.isFile()) {
-      throw Object.assign(new Error('成片路径不是文件，请重新合成后再发布'), { statusCode: 400 });
-    }
-    const ext = path.extname(input.filePath).toLowerCase();
-    if (!['.mp4', '.mov', '.webm'].includes(ext)) {
-      throw Object.assign(new Error('社交平台发布仅支持 MP4、MOV 或 WebM 视频'), { statusCode: 400 });
-    }
-    const maxMb = Number(process.env.SOCIAL_MAX_UPLOAD_MB ?? 2048);
-    if (stat.size > maxMb * 1024 * 1024) {
-      throw Object.assign(new Error(`视频超过 ${maxMb}MB，请压缩后再发布`), { statusCode: 413 });
-    }
-  }
-
-  if (account.platform === 'instagram' && !input.videoUrl && !process.env.R2_PUBLIC_URL?.trim()) {
-    throw Object.assign(new Error('Instagram 发布需要公开视频地址。请先配置 R2_PUBLIC_URL，或传入 videoUrl。'), { statusCode: 400 });
-  }
-}
-
-async function publicVideoUrlIfNeeded(filePath: string | undefined) {
-  if (!filePath) return undefined;
-  const publicBase = process.env.R2_PUBLIC_URL?.trim();
-  if (!publicBase) return undefined;
-  const resolved = normalizeVideoPath(filePath);
-  if (!fs.existsSync(resolved)) return undefined;
-  const key = `social-publish/${Date.now()}-${path.basename(resolved).replace(/[^\w.-]+/g, '-')}`;
-  return r2Upload({ key, body: fs.readFileSync(resolved), contentType: socialVideoContentType(resolved) });
-}
-
 socialRouter.post('/accounts/:id/upload', async (req, res) => {
   const account = await getAccount(req, res);
   if (!account) {
@@ -841,57 +780,27 @@ socialRouter.post('/accounts/:id/upload', async (req, res) => {
     res.status(400).json({ error: 'title and videoPath/videoUrl are required' });
     return;
   }
-  const input: SocialUploadInput = {
-    filePath: body.videoPath ? normalizeVideoPath(body.videoPath) : undefined,
-    videoUrl: body.videoUrl,
-    title: body.title,
-    description: body.description,
-    privacyStatus: body.privacyStatus,
-  };
   try {
-    const trackedPost = await createTrackedPostDraft(account.tenantId, {
-      contentId: body.contentId,
-      platform: account.platform,
-      title: input.title,
-      language: body.language,
-      enabled: body.trackWaLink !== false,
-    });
-    input.description = appendTrackedWaLink(account.platform, input.description || '', trackedPost.wa_link || '');
-    validateSocialUploadInput(account, input);
-    let video;
-    if (account.platform === 'tiktok') video = await uploadTikTokVideo(account.accessToken, input);
-    if (account.platform === 'facebook') video = await uploadFacebookVideo(account.providerAccountId, account.accessToken, graphVersion(), input);
-    if (account.platform === 'instagram') {
-      video = await publishInstagramReel(account.providerAccountId, account.accessToken, graphVersion(), {
-        ...input,
-        videoUrl: input.videoUrl || await publicVideoUrlIfNeeded(input.filePath),
-      });
-    }
-    if (!video) throw new Error('不支持的平台');
-    await finalizeTrackedPost(trackedPost.id, {
-      platformPostId: String((video as any)?.id || ''),
-      title: input.title,
-      stats: {},
-    });
-    await store.update(COL, account.id, { lastSyncAt: new Date().toISOString(), status: 'connected' });
-    const publishRecord = recordSuccessfulPublish({
+    const result = await publishVideoToAccount({
       tenantId: account.tenantId,
-      platform: account.platform,
       accountId: account.id,
-      platformContentId: String((video as any)?.id || (video as any)?.videoId || (video as any)?.publishId || '') || undefined,
+      platform: account.platform,
+      videoPath: body.videoPath,
+      videoUrl: body.videoUrl,
+      title: body.title,
+      description: body.description,
+      privacyStatus: body.privacyStatus,
       projectId: body.projectId,
       generationVersionId: body.generationVersionId,
-      title: body.title,
-      description: body.description || '',
-      videoPath: body.videoPath,
       ratio: body.ratio,
+      contentId: body.contentId,
       language: body.language,
+      trackWaLink: body.trackWaLink,
     });
-    res.status(201).json({ ok: true, video, tracking: trackedPost, publishRecord });
+    res.status(201).json({ ok: true, video: result.video, tracking: result.tracking, publishRecord: result.publishRecord });
   } catch (error: any) {
     console.error(`${account.platform} upload error:`, error?.response?.data ?? error?.message ?? error);
     const status = error?.statusCode || error?.response?.status || 500;
-    if (status === 401 || status === 403) await store.update(COL, account.id, { status: 'error' });
     res.status(status).json({ ok: false, error: readableSocialError(error) });
   }
 });

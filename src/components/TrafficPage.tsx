@@ -586,6 +586,21 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
       setWorkspaceTab('publish');
       return;
     }
+    if (post.status === 'publishing') {
+      setError('这条内容正在提交平台，请等待发布结果，避免重复发布');
+      setWorkspaceTab('publish');
+      return;
+    }
+    if (post.status === 'partial') {
+      void fetchJson<{ item: CalendarPost }>(`/api/overseas/publishing/calendar/${post.id}/retry`, { method: 'POST' })
+        .then(() => {
+          setNotice(`“${post.title}”会仅重试尚未成功的账号，已发布账号不会重复提交。`);
+          setCalendarRefreshKey(value => value + 1);
+        })
+        .catch(retryError => setError(retryError instanceof Error ? retryError.message : '重试发布失败'));
+      setWorkspaceTab('publish');
+      return;
+    }
     const fallbackTargetIds = connectedAccounts
       .filter(account => account.platform === post.platform)
       .map(account => account.id);
@@ -1054,7 +1069,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
     setCalendarRefreshKey(value => value + 1);
     if (failedTargets || skippedItems) setError(`${failedTargets} 个发布目标失败，${skippedItems} 条视频配置不完整；可在队列中查看并修改。`);
     if (successfulTargets) setNotice(`已完成 ${successfulTargets} 个账号发布，每条发布均生成独立追踪码。`);
-    if (scheduledTargets) setNotice(previous => `${previous ? `${previous} ` : ''}已将 ${scheduledTargets} 个账号任务加入内容日历；到期前可继续调整，提交平台仍需在灵枢确认。`);
+    if (scheduledTargets) setNotice(previous => `${previous ? `${previous} ` : ''}已将 ${scheduledTargets} 个账号任务加入内容日历；系统会在设定时间自动发布到已选账号。`);
   };
 
   const previewRatio = activeItem?.ratio || (selectedPlatforms.length > 0 && selectedPlatforms.every(platform => platform === 'youtube') ? '16:9' : '9:16');
@@ -1473,12 +1488,12 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                 <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700"><Send size={18} /></span>
                 <div>
                   <h3 id="publish-confirmation-title" className="text-base font-black text-text-primary">确认发布这些内容？</h3>
-                  <p className="mt-1 text-xs leading-5 text-text-muted">立即发布会直接调用已授权平台账号，不是模拟操作；成功后平台内容将真实公开。</p>
+                  <p className="mt-1 text-xs leading-5 text-text-muted">立即发布会直接调用已授权平台账号；排期内容会在设定时间自动提交。两种方式都是真实发布，不是模拟操作。</p>
                 </div>
               </div>
               <div className="mt-4 grid grid-cols-2 gap-2">
                 <div className="rounded-xl border border-emerald-100 bg-emerald-50 p-3"><p className="text-[10px] font-bold text-emerald-700">立即真实发布</p><p className="mt-1 text-lg font-black text-emerald-900">{immediateItems.length} 条</p></div>
-                <div className="rounded-xl border border-violet-100 bg-violet-50 p-3"><p className="text-[10px] font-bold text-violet-700">保存到内容日历</p><p className="mt-1 text-lg font-black text-violet-900">{scheduledItems.length} 条</p></div>
+                <div className="rounded-xl border border-violet-100 bg-violet-50 p-3"><p className="text-[10px] font-bold text-violet-700">定时自动发布</p><p className="mt-1 text-lg font-black text-violet-900">{scheduledItems.length} 条</p></div>
               </div>
               <p className="mt-3 rounded-xl bg-surface px-3 py-2 text-[11px] leading-5 text-text-secondary">共 {publishableAssignments} 个账号目标。部分平台可能因审核、权限或素材规范拒绝发布，失败项会保留在队列中供修改后重试。</p>
               <div className="mt-5 flex justify-end gap-2">

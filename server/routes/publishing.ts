@@ -118,10 +118,28 @@ function publicPost(post: PostRecord) {
     targetAccountIds: Array.isArray(stats.targetAccountIds) ? stats.targetAccountIds.map(String).map(text).filter(Boolean) : [],
     targetAccountLabels: Array.isArray(stats.targetAccountLabels) ? stats.targetAccountLabels.map(String).map(text).filter(Boolean) : [],
     warnings: Array.isArray(stats.warnings) ? stats.warnings : [],
+    publishError: text(stats.publishError),
+    publishAttempts: numberValue(stats.publishAttempts),
+    nextPublishAttemptAt: text(stats.nextPublishAttemptAt),
     isRecycle: Boolean(stats.isRecycle),
     inquiries: numberValue(post.inquiries),
     deals: numberValue(post.deals),
   };
+}
+
+function hasPublishedTargets(post: PostRecord): boolean {
+  if (text(post.platform_post_id)) return true;
+  const stats = parseJson<Record<string, unknown>>(post.stats, {});
+  const results = stats.publishResults;
+  if (!results || typeof results !== 'object' || Array.isArray(results)) return false;
+  return Object.values(results).some(result => {
+    return Boolean(result && typeof result === 'object' && text((result as Record<string, unknown>).status) === 'published');
+  });
+}
+
+function isPublishingPost(post: PostRecord): boolean {
+  const stats = parseJson<Record<string, unknown>>(post.stats, {});
+  return text(stats.status) === 'publishing';
 }
 
 function platformCopyFallback(platform: string, title: string, description: string): PlatformCopy {
@@ -392,11 +410,41 @@ publishingRouter.post('/calendar', async (req, res) => {
       targetAccountLabels: Array.isArray(req.body?.targetAccountLabels)
         ? req.body.targetAccountLabels.map(String).map(text).filter(Boolean)
         : [],
+      publishAttempts: 0,
+      publishResults: {},
+      publishError: '',
+      nextPublishAttemptAt: '',
       warnings: [],
     },
   });
   const saved = await store.getById<PostRecord>('posts', tracked.id);
   res.status(201).json({ item: saved ? publicPost(saved) : publicPost(tracked) });
+});
+
+publishingRouter.post('/calendar/:id/retry', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const post = await store.getById<PostRecord>('posts', String(req.params.id));
+  if (!post || post.tenant_id !== tenantId) {
+    res.status(404).json({ error: 'post_not_found' });
+    return;
+  }
+  const stats = parseJson<Record<string, unknown>>(post.stats, {});
+  if (!['failed', 'partial'].includes(text(stats.status))) {
+    res.status(409).json({ error: 'post_is_not_retryable' });
+    return;
+  }
+  await store.update('posts', post.id, {
+    stats: {
+      ...stats,
+      status: 'failed',
+      publishAttempts: 0,
+      publishError: '',
+      nextPublishAttemptAt: new Date().toISOString(),
+      warnings: [],
+    },
+  });
+  const saved = await store.getById<PostRecord>('posts', post.id);
+  res.json({ item: saved ? publicPost(saved) : null });
 });
 
 publishingRouter.delete('/calendar/:id', async (req, res) => {
@@ -406,8 +454,12 @@ publishingRouter.delete('/calendar/:id', async (req, res) => {
     res.status(404).json({ error: 'post_not_found' });
     return;
   }
-  if (post.platform_post_id) {
+  if (hasPublishedTargets(post)) {
     res.status(409).json({ error: 'published_post_cannot_be_removed' });
+    return;
+  }
+  if (isPublishingPost(post)) {
+    res.status(409).json({ error: 'publishing_post_cannot_be_removed' });
     return;
   }
   await store.delete('posts', post.id);
@@ -421,8 +473,12 @@ publishingRouter.patch('/calendar/:id', async (req, res) => {
     res.status(404).json({ error: 'post_not_found' });
     return;
   }
-  if (post.platform_post_id) {
+  if (hasPublishedTargets(post)) {
     res.status(409).json({ error: 'published_post_cannot_be_rescheduled' });
+    return;
+  }
+  if (isPublishingPost(post)) {
+    res.status(409).json({ error: 'publishing_post_cannot_be_rescheduled' });
     return;
   }
   const currentStats = parseJson<Record<string, unknown>>(post.stats, {});
@@ -468,6 +524,11 @@ publishingRouter.patch('/calendar/:id', async (req, res) => {
     return;
   }
   stats.status = 'scheduled';
+  stats.publishAttempts = 0;
+  stats.publishResults = {};
+  stats.publishError = '';
+  stats.nextPublishAttemptAt = '';
+  stats.warnings = [];
   update.stats = stats;
   await store.update('posts', post.id, update);
   const saved = await store.getById<PostRecord>('posts', post.id);

@@ -15,7 +15,6 @@ import {
   getChannelCommentsByApiKey,
   getVideoCommentsByApiKey,
   getChannelIdByHandle,
-  uploadVideoToYouTube,
   exchangeYouTubeOAuthCode,
   type YouTubeConfig,
 } from '../integrations/youtube.js';
@@ -24,8 +23,7 @@ import {
   getTenantAwareGoogleOAuthClient,
 } from '../lib/oauthConfig.js';
 import { parseOAuthState, signOAuthState } from '../lib/tenantPlatformApps.js';
-import { recordSuccessfulPublish } from '../lib/publishHistory.js';
-import { appendTrackedWaLink, createTrackedPostDraft, finalizeTrackedPost } from '../publishing/waLink.js';
+import { publishVideoToAccount } from '../publishing/platformPublisher.js';
 
 const YOUTUBE_API_KEY = process.env.YOUTUBE_API_KEY || '';
 const GOOGLE_OAUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
@@ -69,15 +67,6 @@ interface YouTubeAccountRecord {
   lastSyncAt?: string;
   isMonetized: boolean;
   status: 'connected' | 'error' | 'expired';
-}
-
-function youtubeConfig(record: YouTubeAccountRecord): YouTubeConfig {
-  return {
-    clientId: record.clientId,
-    clientSecret: record.clientSecret,
-    refreshToken: record.refreshToken,
-    accessToken: record.accessToken,
-  };
 }
 
 async function getOAuthClient(tenantId?: string) {
@@ -267,16 +256,6 @@ async function upsertYouTubeAccount(input: {
 function normalizeVideoPath(input: string) {
   const raw = input.trim();
   return raw.startsWith('file://') ? fileURLToPath(raw) : path.resolve(raw);
-}
-
-function parseTags(tags: unknown, description: string) {
-  if (Array.isArray(tags)) {
-    return tags.map(String).map(t => t.replace(/^#/, '').trim()).filter(Boolean);
-  }
-  if (typeof tags === 'string') {
-    return tags.split(/[\s,，]+/).map(t => t.replace(/^#/, '').trim()).filter(Boolean);
-  }
-  return Array.from(description.matchAll(/#([\p{L}\p{N}_-]+)/gu)).map(m => m[1]);
 }
 
 function readableYouTubeError(error: any) {
@@ -734,53 +713,27 @@ youtubeRouter.post('/accounts/:id/upload', async (req, res) => {
   }
 
   try {
-    const trackedPost = await createTrackedPostDraft(tenantId, {
-      contentId,
-      platform: 'youtube',
-      title,
-      language,
-      enabled: trackWaLink !== false,
-    });
-    const finalDescription = appendTrackedWaLink('youtube', description, trackedPost.wa_link || '');
-    const result = await uploadVideoToYouTube(youtubeConfig(record), {
-      filePath: resolvedPath,
-      title,
-      description: finalDescription,
-      tags: parseTags(tags, finalDescription),
-      privacyStatus,
-      madeForKids,
-    });
-    await finalizeTrackedPost(trackedPost.id, {
-      platformPostId: result.id,
-      title: result.title || title,
-      stats: {},
-    });
-
-    await store.update(COL, req.params.id, {
-      lastSyncAt: new Date().toISOString(),
-      status: 'connected',
-    });
-
-    const publishRecord = recordSuccessfulPublish({
+    const result = await publishVideoToAccount({
       tenantId,
-      platform: 'youtube',
       accountId: req.params.id,
-      platformContentId: String((result as any)?.id || (result as any)?.videoId || '') || undefined,
-      projectId,
-      generationVersionId,
+      platform: 'youtube',
+      videoPath,
       title,
       description,
-      videoPath,
+      tags,
+      privacyStatus,
+      madeForKids,
+      projectId,
+      generationVersionId,
       ratio,
       language,
+      contentId,
+      trackWaLink,
     });
-    res.status(201).json({ ok: true, video: result, tracking: trackedPost, publishRecord });
+    res.status(201).json({ ok: true, video: result.video, tracking: result.tracking, publishRecord: result.publishRecord });
   } catch (error: any) {
     console.error('YouTube upload error:', error?.response?.data ?? error);
-    const status = error?.response?.status === 401 ? 401 : error?.response?.status === 403 ? 403 : 500;
-    if (status === 401 || status === 403) {
-      await store.update(COL, req.params.id, { status: 'error' });
-    }
+    const status = error?.statusCode || (error?.response?.status === 401 ? 401 : error?.response?.status === 403 ? 403 : 500);
     res.status(status).json({ ok: false, error: readableYouTubeError(error) });
   }
 });

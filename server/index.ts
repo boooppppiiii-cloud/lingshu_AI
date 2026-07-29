@@ -37,6 +37,7 @@ import { assistLinksRouter } from './routes/assistLinks.js';
 import { initWhatsAppCustomerMaintenance } from './whatsapp/historyImport.js';
 import { whatsappOAuthRouter } from './routes/whatsappOAuth.js';
 import { publishingRouter } from './routes/publishing.js';
+import { initScheduledPublisher } from './publishing/scheduledPublisher.js';
 import { backfillTrendVideoContentFormat, ensureDeliveryCollections, ensureTrendVideoAnalysisCapacity } from './storage/ensureDeliveryCollections.js';
 import { supportAccessRouter } from './routes/supportAccess.js';
 import { crawlWorkerRouter, initCrawlWorkerCloudFallback } from './routes/crawlWorker.js';
@@ -219,6 +220,7 @@ app.use('/api/v1/products', productApiRouter);
 app.use('/api/webhooks', webhookRouter);
 
 await initScheduler();
+initScheduledPublisher();
 initCrawlerOpsWorker();
 initPocketBaseVideoBackfill();
 initCrawlWorkerCloudFallback();
