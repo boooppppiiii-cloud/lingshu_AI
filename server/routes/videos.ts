@@ -734,6 +734,7 @@ async function createAndAnalyzeFreshBackfillVideo(input: {
 const DEFAULT_CRAWL_KEYWORDS = 'amazon gadgets product review';
 let crawlerOpsWorkerTimer: NodeJS.Timeout | null = null;
 let crawlerOpsWorkerActive = false;
+let stalledExactSweepTimer: NodeJS.Timeout | null = null;
 let runtimeCrawlerProxy = '';
 
 export interface CrawlVideosInput {
@@ -6970,8 +6971,16 @@ function enqueueCrawlerOpsTask(input: {
 
 export function initCrawlerOpsWorker(): void {
   const workerFlag = process.env.CRAWLER_OPS_WORKER_ENABLED;
-  if (crawlerOpsWorkerTimer || workerFlag === '0') return;
   const intervalMs = Math.max(5_000, Number(process.env.CRAWLER_OPS_WORKER_INTERVAL_MS || 30_000));
+  if (!stalledExactSweepTimer) {
+    const sweep = () => void releaseStalledExactAnalysis().catch(error => {
+      console.warn('[videos] stalled exact-analysis sweep failed:', error instanceof Error ? error.message : error);
+    });
+    stalledExactSweepTimer = setInterval(sweep, intervalMs);
+    sweep();
+    console.log(`[videos] stalled exact-analysis sweep enabled, interval=${intervalMs}ms`);
+  }
+  if (crawlerOpsWorkerTimer || workerFlag === '0') return;
   crawlerOpsWorkerTimer = setInterval(() => {
     void runCrawlerOpsWorkerOnce().then(logCrawlerOpsWorkerResult).catch((e) => {
       console.warn('[crawler-ops] worker tick failed:', e instanceof Error ? e.message : e);
