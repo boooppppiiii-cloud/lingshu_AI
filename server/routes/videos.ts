@@ -2058,9 +2058,19 @@ async function triggerVideoAnalysis(
   try {
     const record = await store.getById<Record<string, unknown>>(COL, recordId);
     const previousRecordAnalysis = parseJsonRecord<Record<string, unknown>>(record?.aiAnalysis, {});
-    const dl = previousRecordAnalysis.videoObjectKey
+    let dl = previousRecordAnalysis.videoObjectKey
       ? await r2Download(String(previousRecordAnalysis.videoObjectKey))
       : await fetchFile(COL, recordId, filename);
+    // COS/S3-compatible storage can briefly return an empty/not-found response
+    // while HEAD succeeds (gateway propagation or a transient upstream miss).
+    // Retry the same immutable object key twice before surfacing a real failure.
+    if (!dl && previousRecordAnalysis.videoObjectKey) {
+      for (const delayMs of [500, 1500]) {
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+        dl = await r2Download(String(previousRecordAnalysis.videoObjectKey));
+        if (dl) break;
+      }
+    }
     if (!dl) throw new Error('video file fetch failed');
 
     if (!fs.existsSync(ANALYSIS_DIR)) fs.mkdirSync(ANALYSIS_DIR, { recursive: true });
@@ -2142,6 +2152,7 @@ async function triggerVideoAnalysis(
         downloadStatus: 'manual_upload_analyze_failed',
         videoFetchStatus: 'manual_upload',
         geminiStatus: 'video_failed',
+        requestedAnalysisMode: undefined,
         analysisError: compactError,
         videoLevelFailureStatus: '视频级失败/需人工处理',
         manualRequiredReason: 'manual_upload_analysis_failed',
