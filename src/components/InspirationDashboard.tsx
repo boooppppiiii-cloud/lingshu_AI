@@ -361,7 +361,7 @@ function exactAnalysisQuality(video: TrendVideo): AnalysisQualityGate {
   if (payload?.analysisMode !== 'exact') return { ready: false, reason: '当前仅有策略级分析，需先完成全片精确分析', requiredFrames, actualFrames: valid.length };
   if (payload.videoLevelFailureStatus || payload.analysisError) return { ready: false, reason: '精确分析未完成或已失败，请重试', requiredFrames, actualFrames: valid.length };
   if (valid.length < requiredFrames) return { ready: false, reason: `分镜密度不足：需至少 ${requiredFrames} 段，当前 ${valid.length} 段`, requiredFrames, actualFrames: valid.length };
-  if (valid.some(({ item }) => item.needsReview || isUnusableAnalysisText(item.visual))) return { ready: false, reason: '存在超时降级或待复核分镜，请重试精确分析', requiredFrames, actualFrames: valid.length };
+  if (valid.some(({ item }) => isUnusableAnalysisText(item.visual) || Number(item.confidence ?? 1) < 0.5)) return { ready: false, reason: '存在低置信度或不可用分镜，请重试精确分析', requiredFrames, actualFrames: valid.length };
   const ordered = [...valid].sort((a, b) => a.start! - b.start!);
   if (ordered.some(item => item.end! - item.start! > 5.5)) return { ready: false, reason: '存在超过 5.5 秒的粗分镜，无法可靠按时间戳匹配', requiredFrames, actualFrames: valid.length };
   if (ordered[0]!.start! > 0.75 || ordered.some((item, index) => index > 0 && Math.abs(item.start! - ordered[index - 1]!.end!) > 0.75)) {
