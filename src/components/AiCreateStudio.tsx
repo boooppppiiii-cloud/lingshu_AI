@@ -898,6 +898,15 @@ function languageTextToCode(text = '') {
   return LANG_ALIASES[first] ?? LANG_ALIASES[normalized] ?? 'en';
 }
 
+function enterpriseLanguageCodes(text = ''): string[] {
+  return [...new Set(text
+    .split(/[、,，/|;；\n]+/)
+    .map(item => item.trim())
+    .filter(Boolean)
+    .map(item => LANG_ALIASES[item] ?? LANG_ALIASES[item.toLowerCase()] ?? '')
+    .filter(code => code && LANGS.some(language => language.code === code)))];
+}
+
 interface EnterpriseProfileLite {
   company?: { industry?: string; mainMarkets?: string; primaryLanguages?: string };
   products?: {
@@ -2687,7 +2696,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   const [voiceCandidates, setVoiceCandidates] = useState<string[]>(['v1']);
   const [scriptLoading, setScriptLoading] = useState(false);
   const [voiceoverLines, setVoiceoverLines] = useState('');
-  const [voiceLangs, setVoiceLangs] = useState<string[]>(['zh', 'en', 'es']);
+  const [voiceLangs, setVoiceLangs] = useState<string[]>([]);
   const [activeVoiceLang, setActiveVoiceLang] = useState('zh');
   const [voiceDrafts, setVoiceDrafts] = useState<Record<string, string>>({});
   const [voiceDraftStaleLangs, setVoiceDraftStaleLangs] = useState<string[]>([]);
@@ -2824,7 +2833,11 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
           return [...preserved, ...options.filter(item => !seen.has(item.id))];
         });
         if (options[0]) setSelectedProductIds(current => current.length ? current : [options[0]!.id]);
-        setLang('zh');
+        const configuredVoiceLanguages = enterpriseLanguageCodes(
+          profile.brand?.preferredLanguages || profile.company?.primaryLanguages || '',
+        );
+        setVoiceLangs(configuredVoiceLanguages);
+        if (configuredVoiceLanguages[0]) setLang(configuredVoiceLanguages[0]);
         setProductInfo(prev => prev || options[0]?.info || [
           profile.strategy?.focusProducts || profile.products?.categories,
           profile.products?.priceRange,
