@@ -153,7 +153,7 @@ const STEPS: { id: StepId; label: string; icon: typeof LayoutGrid; hint: string 
   { id: 'preview',  label: '成片预览', icon: Play,       hint: '确认成片并进入发布' },
 ];
 
-type VideoThemeId = 'buyer_pain' | 'product_proof' | 'use_case' | 'supplier_capability' | 'customization' | 'faq' | 'comparison' | 'customer_case' | 'trend';
+type VideoThemeId = 'buyer_pain' | 'product_proof' | 'use_case' | 'supplier_capability' | 'customization' | 'comparison' | 'customer_case' | 'trend' | 'talking_head';
 type VideoTheme = {
   id: VideoThemeId;
   title: string;
@@ -169,11 +169,28 @@ const VIDEO_THEMES: VideoTheme[] = [
   { id: 'use_case', title: '使用场景', description: '围绕一个具体场景展示产品如何被使用或呈现。', painPoint: '买家看不出产品在真实场景中的使用方式', conversionGoal: '咨询适用方案', requires: ['material'] },
   { id: 'supplier_capability', title: '供应能力', description: '用工厂、质检、产能或交付证据降低供应风险。', painPoint: '买家担心批量供货、质量稳定性和交付可靠性', conversionGoal: '提交数量并确认供应方案', requires: ['factory'] },
   { id: 'customization', title: '定制能力', description: '展示已确认的包装、品牌或规格定制能力。', painPoint: '买家不确定产品能否适配自己的品牌和渠道', conversionGoal: '发送定制需求', requires: ['product'] },
-  { id: 'faq', title: '采购FAQ', description: '用一个真实高频问题开场，给出简短、可验证的回答。', painPoint: '采购关键信息分散，买家需要快速得到明确答复', conversionGoal: '继续询问具体采购条件', requires: ['product'] },
   { id: 'comparison', title: '选型对比', description: '按统一维度比较不同产品或方案，帮助买家选型。', painPoint: '相似产品看起来接近，买家难以判断适用差异', conversionGoal: '说明需求并获取选型建议', requires: ['comparison'] },
   { id: 'customer_case', title: '客户案例', description: '用已授权的客户问题、过程和结果建立信任。', painPoint: '买家缺少相似客户的合作与落地参考', conversionGoal: '索取相关案例资料', requires: ['case'] },
   { id: 'trend', title: '趋势热点', description: '用有来源的市场变化切入，再连接到企业产品证据。', painPoint: '买家需要判断当前趋势是否值得进入或备货', conversionGoal: '获取趋势对应的产品方案', requires: ['trend'] },
+  { id: 'talking_head', title: '真人口播', description: '以真人出镜讲解、演示或推荐为核心，围绕人物表达组织分镜。', painPoint: '买家需要更直接、可信的人物讲解来理解产品价值', conversionGoal: '通过真人讲解引导咨询产品方案', requires: ['material'] },
 ];
+
+function inferVideoThemeFromMaterial(material: Pick<Material, 'name' | 'folder' | 'shotFunction' | 'tags' | 'segments'>): VideoThemeId {
+  const segmentText = (material.segments || []).flatMap(segment => [
+    segment.action, segment.environment, segment.shot, ...segment.subject, ...segment.recommendedFunctions,
+  ]).join(' ');
+  const text = [material.name, material.folder, material.shotFunction, material.tags, segmentText].filter(Boolean).join(' ').toLowerCase();
+  const hasPerson = (material.segments || []).some(segment => segment.hasPerson);
+  if (hasPerson || /真人|人物|口播|主播|讲解|出镜|presenter|talking.?head|spokesperson|host/.test(text)) return 'talking_head';
+  if (/对比|比较|选型|差异|before.?after|comparison|versus|\bvs\b/.test(text)) return 'comparison';
+  if (/客户案例|合作案例|案例结果|反馈|testimonial|customer.?case|case.?study/.test(text)) return 'customer_case';
+  if (/趋势|热点|热销|爆款|trend|viral|hot.?selling/.test(text)) return 'trend';
+  if (/工厂|产线|生产|质检|仓库|物流|交付|设备|factory|production|quality.?control|warehouse|logistics/.test(text)) return 'supplier_capability';
+  if (/定制|包装|彩盒|贴牌|logo|品牌|custom|oem|odm|packaging|branding/.test(text)) return 'customization';
+  if (/使用|涂抹|体验|操作|场景|护理|application|usage|lifestyle|treatment/.test(text)) return 'use_case';
+  if (/产品|质地|细节|成分|特写|展示|product|texture|ingredient|detail|close.?up/.test(text)) return 'product_proof';
+  return 'buyer_pain';
+}
 const POSTER_STEPS: { id: StepId; label: string; icon: typeof LayoutGrid; hint: string }[] = [
   { id: 'mode',     label: '选模式',   icon: LayoutGrid, hint: '确认图文生成渠道、平台和产品' },
   { id: 'material', label: '选产品/素材', icon: ImageIcon,  hint: '确认产品并选择产品图、工厂图、包装图和证书图' },
@@ -2554,6 +2571,13 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   const [variationBatches, setVariationBatches] = useState<VariationBatch[]>([]);
   const splitVariations = (value: string) => value.split(/[，,\n]/).map(item => item.trim()).filter(Boolean);
   const activeVideoTheme = VIDEO_THEMES.find(item => item.id === videoThemeId) || VIDEO_THEMES[0]!;
+  const applyInferredMaterialTheme = (material: Pick<Material, 'name' | 'folder' | 'shotFunction' | 'tags' | 'segments'>) => {
+    const inferredId = inferVideoThemeFromMaterial(material);
+    const inferred = VIDEO_THEMES.find(item => item.id === inferredId) || VIDEO_THEMES[0]!;
+    setVideoThemeId(inferred.id);
+    setThemePainPoint(inferred.painPoint);
+    setThemeConversionGoal(inferred.conversionGoal);
+  };
   const videoThemePayload = {
     id: activeVideoTheme.id,
     title: activeVideoTheme.title,
@@ -3317,7 +3341,10 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       return [clip, ...prev];
     });
     setSelected([clip.id]);
-    if (videoKickoff.materialRole === 'hook' || videoKickoff.source === 'material_library') setHookMaterialId(clip.id);
+    if (videoKickoff.materialRole === 'hook' || videoKickoff.source === 'material_library') {
+      setHookMaterialId(clip.id);
+      applyInferredMaterialTheme(generated.material || clip);
+    }
   }, [duration, videoKickoff]);
 
   useEffect(() => {
@@ -3350,7 +3377,10 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     const matched = materials.find(m => (materialUrl && m.url === materialUrl) || (title && m.name.includes(title.slice(0, 40))));
     if (matched) {
       setSelected([matched.id]);
-      if (videoKickoff.materialRole === 'hook' || videoKickoff.source === 'material_library') setHookMaterialId(matched.id);
+      if (videoKickoff.materialRole === 'hook' || videoKickoff.source === 'material_library') {
+        setHookMaterialId(matched.id);
+        applyInferredMaterialTheme(matched);
+      }
     }
   }, [materials, videoKickoff]);
 
@@ -6901,7 +6931,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
 
             <div className="mb-4 grid gap-2 md:grid-cols-4">
               {([
-                { id: 'theme' as const, number: 1, title: '选择视频主题', desc: `${activeVideoTheme.title} · 系统静默匹配脚本策略`, done: Boolean(videoThemeId) },
+                { id: 'theme' as const, number: 1, title: mode === 'material' ? '判定素材类型' : '选择视频主题', desc: `${activeVideoTheme.title} · 系统静默匹配脚本策略`, done: Boolean(videoThemeId) },
                 { id: 'script' as const, number: 2, title: '确认可执行分镜', desc: '按主题与企业证据生成场景和动作', done: hasTimestampScript },
                 { id: 'voiceover' as const, number: 3, title: '选择声音策略', desc: '保留无口播，或提取台词做多语适配', done: voiceoverMode === 'none' || hasRequestedVoiceDrafts },
                 { id: 'audio' as const, number: 4, title: '生成/确认声音', desc: voiceoverMode === 'none' ? '原片无口播，保留低信息噪声节奏' : '按真实音频校准时间轴', done: voiceoverMode === 'none' || hasRequestedVoiceovers || (voiceoverMode === 'upload' && Boolean(voiceoverUrl)) },
@@ -6923,10 +6953,10 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
               <div className="mb-4 rounded-2xl border border-border bg-surface p-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div>
-                    <p className="text-sm font-black text-text-primary">选择本条视频的核心主题</p>
-                    <p className="mt-1 text-xs leading-relaxed text-text-muted">系统会结合当前生成模式、企业事实和可用素材静默调用对应脚本策略；这里不需要手动选择 Skill。</p>
+                    <p className="text-sm font-black text-text-primary">{mode === 'material' ? '当前钩子素材的内容类型' : '选择本条视频的核心主题'}</p>
+                    <p className="mt-1 text-xs leading-relaxed text-text-muted">{mode === 'material' ? '系统根据钩子素材的分类、人物和镜头内容自动判定类型，并调用对应脚本策略。' : '系统会结合当前生成模式、企业事实和可用素材静默调用对应脚本策略；这里不需要手动选择 Skill。'}</p>
                   </div>
-                  <span className="rounded-lg bg-accent/10 px-2.5 py-1.5 text-[10px] font-black text-accent">AI策略已自动匹配</span>
+                  <span className="rounded-lg bg-accent/10 px-2.5 py-1.5 text-[10px] font-black text-accent">{mode === 'material' ? '已按素材自动判定' : 'AI策略已自动匹配'}</span>
                 </div>
                 <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                   {VIDEO_THEMES.map(theme => {
