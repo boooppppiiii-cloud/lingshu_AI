@@ -3041,6 +3041,8 @@ studioRouter.get('/private-assets/:namespace/:file', async (req, res) => {
   if (!object) { res.status(404).end(); return; }
   res.setHeader('Content-Type', object.contentType);
   res.setHeader('Cache-Control', 'private, max-age=300');
+  res.setHeader('Accept-Ranges', object.acceptRanges || 'bytes');
+  res.setHeader('Content-Disposition', 'inline');
   if (object.contentLength !== undefined) res.setHeader('Content-Length', String(object.contentLength));
   if (object.contentRange) { res.status(206); res.setHeader('Content-Range', object.contentRange); }
   for await (const chunk of object.body) res.write(chunk);

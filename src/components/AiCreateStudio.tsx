@@ -26,6 +26,52 @@ const INSPIRATION_INITIAL_VIEW_KEY = 'lingshu:inspiration:initial-view';
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
+const PLAYABLE_AUDIO_BLOB_CACHE = new Map<string, string>();
+
+async function authenticatedAudioBlobUrl(sourceUrl: string): Promise<string> {
+  if (/^(?:blob:|data:)/i.test(sourceUrl)) return sourceUrl;
+  const cached = PLAYABLE_AUDIO_BLOB_CACHE.get(sourceUrl);
+  if (cached) return cached;
+  const response = await fetch(sourceUrl, { headers: authHeader(), credentials: 'same-origin' });
+  if (!response.ok) throw new Error(`音频请求失败（HTTP ${response.status}）`);
+  const blob = await response.blob();
+  if (!blob.size) throw new Error('服务器返回了空音频');
+  const contentType = String(response.headers.get('content-type') || blob.type || '').toLowerCase();
+  if (contentType && !contentType.startsWith('audio/') && contentType !== 'application/octet-stream') {
+    throw new Error(`服务器返回的不是音频（${contentType}）`);
+  }
+  const playableBlob = blob.type.startsWith('audio/') ? blob : new Blob([blob], { type: 'audio/wav' });
+  const blobUrl = URL.createObjectURL(playableBlob);
+  PLAYABLE_AUDIO_BLOB_CACHE.set(sourceUrl, blobUrl);
+  return blobUrl;
+}
+
+async function playAudioWithAuthenticatedFallback(
+  element: HTMLAudioElement,
+  sourceUrl: string,
+  volume: number,
+): Promise<void> {
+  const absoluteSource = new URL(sourceUrl, window.location.href).href;
+  element.pause();
+  if (element.src !== absoluteSource && element.dataset.sourceUrl !== sourceUrl) {
+    element.src = sourceUrl;
+    element.dataset.sourceUrl = sourceUrl;
+    element.load();
+  }
+  if (element.ended || !Number.isFinite(element.currentTime)) element.currentTime = 0;
+  element.volume = Math.max(0, Math.min(1, volume));
+  try {
+    await element.play();
+  } catch {
+    const blobUrl = await authenticatedAudioBlobUrl(sourceUrl);
+    element.src = blobUrl;
+    element.dataset.sourceUrl = sourceUrl;
+    element.load();
+    element.currentTime = 0;
+    await element.play();
+  }
+}
+
 const mediaType = (f: File): 'video' | 'image' | 'audio' =>
   f.type.startsWith('video') ? 'video' : f.type.startsWith('audio') ? 'audio' : 'image';
 
@@ -5167,10 +5213,13 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     setVoiceoverDur(audio.duration);
     const el = ttsAudioRef.current;
     if (!el) return;
-    el.pause();
-    el.src = audio.url;
-    el.currentTime = 0;
-    void el.play().then(() => setTtsPlaying(true)).catch(() => setTtsPlaying(false));
+    void playAudioWithAuthenticatedFallback(el, audio.url, voiceVol / 100)
+      .then(() => setTtsPlaying(true))
+      .catch((error: unknown) => {
+        setTtsPlaying(false);
+        const message = error instanceof Error ? error.message : String(error || '浏览器未能加载音频');
+        setTtsNotice(`配音播放失败：${message}。请重新生成配音后再试。`);
+      });
   };
 	  const toggleTts = () => {
 	    const el = ttsAudioRef.current;
@@ -5186,14 +5235,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       setTtsNotice('配音试听已暂停。');
       return;
     }
-    const resolvedUrl = new URL(currentVoiceUrl, window.location.href).href;
-    if (el.src !== resolvedUrl) {
-      el.src = currentVoiceUrl;
-      el.load();
-    }
-    if (el.ended || !Number.isFinite(el.currentTime)) el.currentTime = 0;
-    el.volume = Math.max(0, Math.min(1, voiceVol / 100));
-    void el.play().then(() => {
+    void playAudioWithAuthenticatedFallback(el, currentVoiceUrl, voiceVol / 100).then(() => {
       setTtsPlaying(true);
       setTtsNotice('正在试听当前语种配音。');
     }).catch((error: unknown) => {
@@ -5219,15 +5261,8 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     setVoicePreviewIdx(0);
     const el = ttsAudioRef.current;
     if (el) {
-      el.pause();
-      if (el.src !== new URL(currentVoiceUrl, window.location.href).href) {
-        el.src = currentVoiceUrl;
-        el.load();
-      }
-      el.currentTime = 0;
-      el.volume = Math.max(0, Math.min(1, voiceVol / 100));
       // 必须在点击事件的用户手势中直接 play，不能等 React effect，否则浏览器会按自动播放拦截。
-      void el.play().then(() => {
+      void playAudioWithAuthenticatedFallback(el, currentVoiceUrl, voiceVol / 100).then(() => {
         setTtsPlaying(true);
         setTtsNotice('配音预览播放中。');
       }).catch((error: unknown) => {
