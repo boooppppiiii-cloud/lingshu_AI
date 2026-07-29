@@ -4980,7 +4980,7 @@ async function analyzeExactLongVideoChunks(input: {
     if (values.length <= limit) return values;
     return Array.from({ length: limit }, (_, index) => values[Math.round(index * (values.length - 1) / Math.max(1, limit - 1))]!);
   };
-  const analyzeChunk = async (chunk: { start: number; end: number }, frameLimit: number) => {
+  const analyzeChunk = async (chunk: { start: number; end: number }, frameLimit: number, signal: AbortSignal) => {
     const localDuration = chunk.end - chunk.start;
     let selected = input.frames.filter(frame => {
       const time = qwenFrameSeconds(frame.timeLabel);
@@ -5005,6 +5005,7 @@ async function analyzeExactLongVideoChunks(input: {
       tags: input.tags,
       transcript: localSegments.length ? { text: localSegments.map(item => item.text).join(''), segments: localSegments } : undefined,
       analysisMode: input.analysisMode || 'exact',
+      signal,
     });
     const localQualityError = analysisTimelineQualityError(result, localDuration, input.analysisMode || 'exact');
     if (localQualityError) throw new Error(`${input.analysisMode || 'exact'}_chunk_quality_failed_${chunk.start.toFixed(0)}_${localQualityError}`);
@@ -5020,16 +5021,20 @@ async function analyzeExactLongVideoChunks(input: {
   const retryFrameLimit = Math.max(6, Math.min(primaryFrameLimit, Number(process.env.VIDEO_EXACT_RETRY_FRAME_LIMIT || 10)));
   const runWithTimeout = async (chunk: { start: number; end: number }, frameLimit: number, attempt: number) => {
     const startedAt = Date.now();
+    const controller = new AbortController();
+    const timeoutError = `exact_chunk_timeout_${chunk.start.toFixed(0)}_${chunk.end.toFixed(0)}`;
+    const timeout = setTimeout(() => controller.abort(), chunkTimeoutMs);
     try {
-      const result = await Promise.race([
-        analyzeChunk(chunk, frameLimit),
-        new Promise<VideoAiAnalysis>((_, reject) => setTimeout(() => reject(new Error(`exact_chunk_timeout_${chunk.start.toFixed(0)}_${chunk.end.toFixed(0)}`)), chunkTimeoutMs)),
-      ]);
+      console.log(`[videos] exact chunk ${chunk.start.toFixed(0)}-${chunk.end.toFixed(0)}s started, frames=${frameLimit}, attempt=${attempt}`);
+      const result = await analyzeChunk(chunk, frameLimit, controller.signal);
       console.log(`[videos] exact chunk ${chunk.start.toFixed(0)}-${chunk.end.toFixed(0)}s completed in ${Date.now() - startedAt}ms, frames=${frameLimit}, attempt=${attempt}`);
       return result;
     } catch (error) {
-      console.warn(`[videos] exact chunk ${chunk.start.toFixed(0)}-${chunk.end.toFixed(0)}s failed in ${Date.now() - startedAt}ms, frames=${frameLimit}, attempt=${attempt}:`, error instanceof Error ? error.message : error);
-      throw error;
+      const failure = controller.signal.aborted ? new Error(timeoutError) : error;
+      console.warn(`[videos] exact chunk ${chunk.start.toFixed(0)}-${chunk.end.toFixed(0)}s failed in ${Date.now() - startedAt}ms, frames=${frameLimit}, attempt=${attempt}:`, failure instanceof Error ? failure.message : failure);
+      throw failure;
+    } finally {
+      clearTimeout(timeout);
     }
   };
   const analyzeWithRetry = async (chunk: { start: number; end: number }) => {

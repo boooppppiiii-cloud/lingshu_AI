@@ -93,6 +93,7 @@ export async function analyzeVideoFramesWithQwen(opts: {
   tags?: string[];
   transcript?: { text: string; segments: QwenAsrSegment[] };
   analysisMode?: 'strategy' | 'exact';
+  signal?: AbortSignal;
 }): Promise<VideoAiAnalysis> {
   if (opts.frames.length === 0) throw new Error('Qwen frame analysis requires at least one frame');
 
@@ -147,7 +148,7 @@ ${modeInstruction}
     ],
     response_format: { type: 'json_object' },
     max_tokens: Number(opts.duration || 0) > 60 ? 8000 : 4500,
-  });
+  }, { signal: opts.signal });
 
   const raw = completion.choices[0]?.message?.content ?? '';
   const parsed = parseJson<Partial<VideoAiAnalysis>>(raw, {});
@@ -161,7 +162,7 @@ ${modeInstruction}
       ],
       response_format: { type: 'json_object' },
       max_tokens: Number(opts.duration || 0) > 60 ? 8000 : 4500,
-    });
+    }, { signal: opts.signal });
     const repaired = parseJson<Partial<VideoAiAnalysis>>(repair.choices[0]?.message?.content ?? '', {});
     normalized = normalizeVideoAnalysis({ ...parsed, scriptDetails15s: repaired.scriptDetails15s });
   }
