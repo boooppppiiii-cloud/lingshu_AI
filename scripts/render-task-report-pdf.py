@@ -26,6 +26,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 FONT = "ReportCJK"
 FONT_CANDIDATES = [
     os.environ.get("REPORT_PDF_FONT", ""),
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
     "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
     "/System/Library/Fonts/Supplemental/AppleGothic.ttf",
 ]

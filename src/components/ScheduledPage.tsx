@@ -211,6 +211,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
   const [resultTaskId, setResultTaskId] = useState<string | null>(null);
   const [workspaceMessage, setWorkspaceMessage] = useState('');
   const [exportingId, setExportingId] = useState<string | null>(null);
+  const [exportNotice, setExportNotice] = useState<{ taskId: string; message: string; error: boolean } | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
   const [videoStats, setVideoStats] = useState<VideoStatsPayload | null>(null);
   const didAutoOpenDemoTask = useRef(false);
@@ -390,19 +391,48 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
 
   const exportPdf = async (task: ScheduledTask) => {
     setExportingId(task.id);
+    setExportNotice(null);
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), 30_000);
     try {
-      const res = await fetch(`/api/overseas/scheduler/${task.id}/export-pdf`, { headers: authHeader() });
-      if (!res.ok) throw new Error('PDF 导出失败');
+      const res = await fetch(`/api/overseas/scheduler/${task.id}/export-pdf`, {
+        headers: authHeader(),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => null) as { error?: string } | null;
+        const message = body?.error === 'task_has_no_result'
+          ? '任务执行完成后即可导出本周报告'
+          : body?.error === 'not found'
+            ? '当前任务已更新，请刷新页面后重试'
+            : res.status >= 500
+              ? '报告生成服务暂时不可用，请稍后重试'
+              : `PDF 导出未完成（${res.status}）`;
+        throw new Error(message);
+      }
       const blob = await res.blob();
+      if (!blob.size || !String(res.headers.get('content-type') || '').includes('application/pdf')) {
+        throw new Error('服务器没有返回有效的 PDF 文件');
+      }
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
       link.download = `${task.name}-任务报告.pdf`;
+      link.style.display = 'none';
       document.body.appendChild(link);
       link.click();
       link.remove();
-      URL.revokeObjectURL(url);
+      // Safari/WebKit may start reading the Blob after click() returns. Revoking
+      // immediately can silently cancel the download, so release it later.
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      setExportNotice({ taskId: task.id, message: 'PDF 已生成，下载已开始', error: false });
+    } catch (error) {
+      const message = error instanceof DOMException && error.name === 'AbortError'
+        ? 'PDF 生成超时，请稍后重试'
+        : error instanceof Error ? error.message : 'PDF 导出失败，请稍后重试';
+      setExportNotice({ taskId: task.id, message, error: true });
     } finally {
+      window.clearTimeout(timeout);
       setExportingId(null);
     }
   };
@@ -1169,6 +1199,12 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
                   <X size={16} />
                 </button>
               </div>
+
+              {exportNotice?.taskId === resultTask.id && (
+                <div role="status" aria-live="polite" className={`mx-5 mt-3 rounded-lg border px-3 py-2 text-xs font-medium ${exportNotice.error ? 'border-red-200 bg-red-50 text-red-700' : 'border-green-200 bg-green-50 text-green-700'}`}>
+                  {exportNotice.message}
+                </div>
+              )}
 
               <div className="flex-1 overflow-y-auto p-5 space-y-5">
                 {resultWorkspace && (

@@ -905,7 +905,7 @@ schedulerRouter.get('/:id/export-pdf', async (req: Request, res: Response) => {
     res.send(pdf);
   } catch (e) {
     console.error('[scheduler] export pdf failed:', e);
-    res.status(500).json({ error: e instanceof Error ? e.message : 'PDF export failed' });
+    res.status(500).json({ error: 'pdf_render_unavailable' });
   }
 });
 
