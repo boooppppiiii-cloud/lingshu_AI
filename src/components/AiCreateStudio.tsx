@@ -7469,7 +7469,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         return (
           <div className="grid items-start gap-6 xl:grid-cols-[minmax(560px,1fr)_minmax(360px,460px)]">
           <div className="min-w-0">
-            <div className="mb-4 overflow-hidden rounded-2xl border border-border bg-surface shadow-sm">
+            <div className="relative z-30 mb-4 rounded-2xl border border-border bg-surface shadow-sm">
               <button type="button" onClick={() => setBgmLibraryOpen(open => !open)} className="flex w-full items-center justify-between gap-3 px-4 py-3.5 text-left hover:bg-surface-2/60">
                 <span className="min-w-0">
                   <span className="block text-sm font-black text-text-primary">配乐库</span>
@@ -7477,7 +7477,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                 </span>
                 <span className="flex shrink-0 items-center gap-2 text-[11px] font-bold text-accent">{bgmLibraryOpen ? '收起乐库' : '展开乐库'}<ChevronDown size={15} className={`transition ${bgmLibraryOpen ? 'rotate-180' : ''}`} /></span>
               </button>
-              {bgmLibraryOpen && <div className="border-t border-border p-4">
+              {bgmLibraryOpen && <div className="absolute inset-x-0 top-full z-40 mt-2 max-h-[min(540px,calc(100vh-220px))] overflow-y-auto overscroll-contain rounded-2xl border border-border bg-surface p-4 shadow-2xl">
             <div className="flex items-center justify-between mb-4">
               <SectionTitle title="选择配乐" desc="试听后可应用到当前素材版本，也可加入批量候选" noMargin />
               <input ref={bgmInputRef} type="file" accept="audio/*" className="hidden"
@@ -7512,7 +7512,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                 <button onClick={() => bgmInputRef.current?.click()} className="text-xs font-semibold mt-2" style={{ color: TRAFFIC_GREEN }}>上传一首</button>
               </div>
             )}
-            <div className="max-h-[430px] space-y-2 overflow-y-auto pr-1">
+            <div className="space-y-2 pr-1">
               <button onClick={() => { assignBgm(''); setBgmCandidates([]); if (audioRef.current) audioRef.current.pause(); setPlayingBgm(null); }}
                 className="card !rounded-xl w-full p-3 flex items-center gap-3 text-left"
                 style={!bgm ? { borderColor: TRAFFIC_GREEN, boxShadow: `0 0 0 1px ${TRAFFIC_GREEN}` } : undefined}>
