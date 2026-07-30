@@ -25,29 +25,34 @@ export function hasPreviousConversation(timeline: TimelineLike[]): boolean {
   return beforeLatest.some(event => isSeller(event) && String(event.body || '').trim());
 }
 
-export function conciseGreetingReply(language: unknown, returningCustomer: boolean): string {
+export function conciseGreetingReply(language: unknown, returningCustomer: boolean, rememberedTopic = ''): string {
   const normalized = String(language || '').toLowerCase();
+  const topic = String(rememberedTopic || '').trim();
   if (normalized.includes('arabic') || normalized.includes('阿拉伯')) {
-    return returningCustomer ? 'مرحبًا مجددًا! كيف يمكنني مساعدتك اليوم؟' : 'مرحبًا! كيف يمكنني مساعدتك؟';
+    if (returningCustomer && topic) return `أهلًا من جديد! هل ما زلت مهتمًا بـ ${topic}؟`;
+    return returningCustomer ? 'أهلًا من جديد! قل لي، أين نكمل اليوم؟' : 'أهلًا! قل لي، ماذا تبحث عنه؟';
   }
   if (normalized.includes('spanish') || normalized.includes('español') || normalized.includes('西语')) {
-    return returningCustomer ? '¡Hola de nuevo! ¿En qué puedo ayudarte hoy?' : '¡Hola! ¿En qué puedo ayudarte?';
+    if (returningCustomer && topic) return `¡Qué gusto verte de nuevo! ¿Sigues mirando ${topic}?`;
+    return returningCustomer ? '¡Qué gusto verte de nuevo! Cuéntame, ¿por dónde seguimos?' : '¡Hola! Cuéntame, ¿qué estás buscando?';
   }
-  return returningCustomer ? 'Hi again! How can I help today?' : 'Hi! How can I help?';
+  if (returningCustomer && topic) return `Hey, good to hear from you again! Still looking at ${topic}?`;
+  return returningCustomer ? 'Hey, good to hear from you again! What are we working on today?' : 'Hey! What are you looking for today?';
 }
 
 export function conversationToneGuidance(timeline: TimelineLike[], latestMessage: string): string {
   const returningCustomer = hasPreviousConversation(timeline);
   const latestIsGreeting = isSimpleGreetingMessage(latestMessage);
   return [
-    `Conversation status: ${returningCustomer ? 'continuing conversation with an existing customer' : 'first contact with this customer'}.`,
+    `Relationship context: ${returningCustomer ? 'this is an ongoing conversation with a customer you already know' : 'this is the first conversation with this customer'}.`,
     returningCustomer
-      ? 'Continue from the timeline. Do not introduce the company again, repeat the previous reply, or say “thanks for reaching out”.'
-      : 'This is the first contact. Keep any greeting welcoming but do not recite a company profile.',
+      ? 'Talk like someone who remembers this buyer. Pick up naturally from what they already asked about, viewed, needed, or agreed to, so the next reply feels like the same person continuing the same deal.'
+      : 'Make the first contact warm and easy to answer, like an experienced salesperson opening a real chat rather than delivering a company introduction.',
     latestIsGreeting
-      ? `The latest message is only a greeting. Reply casually in no more than twelve words. ${returningCustomer ? 'Acknowledge that they are back and ask how you can help today.' : 'Greet them and ask how you can help.'}`
-      : 'Answer the latest message using relevant earlier details; do not restart qualification questions that the buyer already answered.',
-    'Human tone rules: use one or two short sentences, no more than thirty-five words total, and at most one question. Avoid formal filler, sales slogans, and phrases such as “happy to assist”.',
+      ? `The buyer only sent a greeting. Keep the reply light, natural, and easy to continue. ${returningCustomer ? 'Let the warmth show that you recognize them and gently reconnect with the unfinished topic when the timeline provides one.' : 'Open the door for them to say what they need without sounding like a scripted receptionist.'}`
+      : 'Use the relevant details already present in the conversation and move the deal one natural step forward. Ask for information only when it is genuinely the next missing piece.',
+    'Match the length to the moment: a casual one-line question deserves a short reply; a serious product question can take a little more space to explain clearly. Keep the warmth that belongs in the situation, and leave out anything that does not help the buyer or move the conversation forward.',
+    'Chat like a capable trading partner on WhatsApp or WeChat: friendly when friendliness helps, direct when the next step is clear, and always natural in the buyer’s language.',
   ].join('\n');
 }
 

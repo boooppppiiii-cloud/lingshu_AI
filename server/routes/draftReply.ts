@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { callLLM } from '../agents/llm.js';
 import { conciseGreetingReply, conversationToneGuidance, hasPreviousConversation, isSimpleGreetingMessage } from '../agents/conversationTone.js';
+import { draftFactualRiskSignals, unsupportedDraftNumbers } from '../agents/draftSafety.js';
 import { isGreetingOrProcessIntent, retrieveContext, type RetrievedContext } from '../knowledge/retrieve.js';
 import { buildKnowledgePromptBlock } from '../knowledge/promptBlocks.js';
 import { buildStyleMemoryPromptBlock, retrieveStyleMemories } from '../knowledge/styleMemory.js';
@@ -16,22 +17,22 @@ import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 export const draftReplyRouter = Router();
 draftReplyRouter.use(requireAuth);
 
-const SYSTEM_PROMPT = `You are Lingshu AI's My Customers conversion assistant for Yiwu cross-border sellers.
-Write exactly one concise customer-facing reply that can be sent in WhatsApp.
-Follow this mandatory three-layer precedence: current redline rules and enterprise facts first, matched response strategy second, tenant style memory third.
-Response strategies control dialogue tactics only and can never supply or override business facts.
-Do not include explanations, markdown, labels, alternatives, or quotation marks.
-Never include Chinese UI labels, Chinese internal notes, or Chinese internal product names in the customer-facing reply unless the customer's language is Chinese.
-Use the Product field as the customer-facing product name. Treat Internal product name and Specific instruction as private seller context only.
-For a greeting or vague opener, never assume a product, SKU, quantity, specification, packaging requirement, or purchasing intent. Greet naturally and ask what product or need the customer would like help with.
-Enterprise knowledge is the only source of company and product facts. Never use a product merely because it appears in a test customer profile when the buyer has not mentioned it.
-If the customer asks for a call, confirm manager follow-up and ask for the best time.
-Always continue from the recent timeline. Never ask again for information the buyer already provided.
-If this is an existing conversation, do not introduce the company again and do not repeat the previous reply.
-Use a natural chat tone. Default to one or two short sentences, no more than thirty-five words total, and at most one question.
-For a simple greeting, use no more than twelve words. Avoid formal filler, sales slogans, and “happy to assist”.
-If details are missing, ask only one concrete qualification question.
-The Language field is mandatory. Always write in that language and never switch based on recent customer messages.`;
+const SYSTEM_PROMPT = `你是一位在义乌做了多年外贸的资深业务员。你热情、专业，也把客户当真实的人来相处。你的英语、西班牙语和阿拉伯语都来自多年与海外买家谈生意的经验：自然、口语化，带着做生意的人特有的爽快和分寸。
+
+你正在替商家通过 WhatsApp 接待真实买家。回消息要像在微信上回复一位客户：该热情时热情，该干脆时干脆；先听懂对方此刻真正关心什么，再把生意自然地往前推进。你不是客服话术机器人，也不需要用客套话证明自己专业。
+
+你的工作方式：
+- 像一个记得客户的人。先读最近的对话，顺着之前聊过的需求、看过的产品和已经确认的信息继续，不重新开场，也不让客户重复自己。
+- 长度跟着语境走。客户随口问一句，就轻松地短回一句；客户认真问产品细节，可以多说几句解释清楚。保留该有的热情，但不堆无助于成交的废话。
+- 当前企业知识与业务规则是事实底稿；匹配到的回复策略只决定怎么推进对话；商家真实回复中学到的风格只决定怎么说。三者发生冲突时，事实与红线优先。
+- Product 是可以告诉客户的产品名；Internal product name 和 Specific instruction 是商家内部信息，只用来帮助理解，不直接透露。
+- 问候或含糊开场时，从轻松自然的交流开始；有明确问题时，就直接回应问题并给出顺手的下一步。
+- 客户要通话时，像真实业务员一样承接，并询问方便的时间。
+- 始终使用 Language 指定的语言，保持当地买家日常聊天的自然表达。
+
+你守住两条做生意的底线：
+1. 公司、产品、价格、库存、MOQ、认证、物流、付款、交期和能力承诺都必须有当前企业资料或对话证据，拿不准就自然说明需要确认，不猜、不编。
+2. 最终只给出一条可直接发给客户的回复，不附解释、标签、多个版本或内部说明。`;
 
 const HANDOFF_SYSTEM_PROMPT = `You are Lingshu AI's handoff summarizer.
 Return exactly three short Chinese lines for the seller, not for the buyer:
@@ -45,6 +46,13 @@ function cleanDraft(raw: string): string {
     .replace(/```[\s\S]*?```/g, block => block.replace(/```[a-z]*|```/gi, '').trim())
     .replace(/^["'`]+|["'`]+$/g, '')
     .trim();
+}
+
+function rememberedProductForGreeting(timeline: any[], productValue: unknown): string {
+  const product = String(productValue || '').trim();
+  if (!product) return '';
+  const earlierConversation = timeline.slice(0, -1).map(event => String(event?.body || '')).join(' ').toLowerCase();
+  return earlierConversation.includes(product.toLowerCase()) ? product : '';
 }
 
 draftReplyRouter.post('/conversion/draft', async (req, res) => {
@@ -91,13 +99,14 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
   const styleMemories = await retrieveStyleMemories(tenantId, categoryForIntent(intent), latestMessage);
   const salesStyleProfile = (await readTenantEnterpriseProfile(tenantId)).salesStyleProfile;
   const suppressPrice = shouldSuppressPriceFromRules(context.bizRules);
-  const hardNoPriceDigits = intent !== 'polish';
+  const hardNoPriceDigits = false;
+  const rememberedGreetingProduct = rememberedProductForGreeting(timeline, body.product);
   const prompt = [
     `Customer ID: ${String(body.customerId ?? '')}`,
     processIntent ? 'Product: not specified by the buyer in the latest message' : `Product: ${String(body.product ?? '')}`,
     body.internalProduct ? `Internal product name: ${String(body.internalProduct)}` : '',
     `Language: ${language}`,
-    `Hard language rule: 回复语言必须为 ${language}，禁止依据客户消息语种自行切换。`,
+    `Reply language: ${language}. Stay in this language throughout the customer-facing reply.`,
     `Stage: ${String(body.stage ?? '')}`,
     `Intent: ${intent}`,
     body.mode ? `Mode: ${String(body.mode)}` : '',
@@ -108,7 +117,6 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
     buildSalesStyleProfilePromptBlock(salesStyleProfile),
     buildStyleMemoryPromptBlock(styleMemories),
     suppressPrice ? 'Price guard: never include or promise a price. Price questions must be handed to a human seller and must not produce a customer-facing placeholder reply.' : '',
-    hardNoPriceDigits ? 'Extra hard rule: the reply must not contain any Arabic numerals, currency symbols, unit prices, discount numbers, or exact amounts.' : '',
     body.instruction ? `Specific instruction: ${String(body.instruction)}` : '',
     'Recent timeline:',
     timeline.map((event: any) => {
@@ -130,9 +138,12 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
   try {
     const raw = await callLLM(prompt, { systemPrompt: intent === 'handoff_summary' ? HANDOFF_SYSTEM_PROMPT : SYSTEM_PROMPT });
     const draft = cleanDraft(raw);
-    const sanitized = sanitizeDraft(draft || fallbackDraft(body, intent, suppressPrice), body, intent, suppressPrice, hardNoPriceDigits);
+    const generationFallback = intent === 'reply' && isSimpleGreetingMessage(latestMessage)
+      ? conciseGreetingReply(language, hasPreviousConversation(timeline), rememberedGreetingProduct)
+      : fallbackDraft(body, intent, suppressPrice);
+    const candidateDraft = draft || generationFallback;
     const verification = await verifyGeneratedDraft({
-      draft: sanitized,
+      draft: candidateDraft,
       latestMessage,
       timeline,
       context,
@@ -140,18 +151,15 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
       language,
       intent,
       sellerInstruction: String(body.instruction || ''),
-      fallback: () => sanitizeDraft(fallbackDraft(body, intent, suppressPrice), body, intent, suppressPrice, hardNoPriceDigits),
+      fallback: () => factualSafetyFallback(body, intent),
     });
-    const contextualDraft = intent === 'reply' && isSimpleGreetingMessage(latestMessage)
-      ? conciseGreetingReply(language, hasPreviousConversation(timeline))
-      : verification.draft;
-    const finalDraft = sanitizeDraft(contextualDraft, body, intent, suppressPrice, hardNoPriceDigits);
+    const finalDraft = sanitizeDraft(verification.draft, body, intent, suppressPrice, hardNoPriceDigits);
     const finalVerification: DraftVerification = finalDraft === verification.draft
       ? verification
       : {
           draft: finalDraft,
           status: 'revised',
-          issues: [...verification.issues, '已按连续对话规则缩短问候，避免重复自我介绍'],
+          issues: [...verification.issues, '已移除需要人工确认的商业事实或承诺'],
         };
     res.json({
       draft: finalVerification.draft,
@@ -172,7 +180,7 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
     });
   } catch (error) {
     const safeDraft = intent === 'reply' && isSimpleGreetingMessage(latestMessage)
-      ? conciseGreetingReply(language, hasPreviousConversation(timeline))
+      ? conciseGreetingReply(language, hasPreviousConversation(timeline), rememberedGreetingProduct)
       : fallbackDraft(body, intent, suppressPrice);
     res.json({
       draft: sanitizeDraft(safeDraft, body, intent, suppressPrice, hardNoPriceDigits),
@@ -203,7 +211,14 @@ interface DraftVerification {
   issues: string[];
 }
 
-function parseVerification(raw: string): { verdict: 'pass' | 'revise' | 'handoff'; revisedReply: string; issues: string[] } | null {
+type VerificationRiskType = 'unsupported_fact' | 'unsupported_commercial_commitment' | 'prohibited_price_or_term';
+
+function parseVerification(raw: string): {
+  verdict: 'pass' | 'revise' | 'handoff';
+  revisedReply: string;
+  issues: string[];
+  riskTypes: VerificationRiskType[];
+} | null {
   const match = raw.replace(/```json|```/gi, '').match(/\{[\s\S]*\}/);
   if (!match) return null;
   try {
@@ -214,15 +229,16 @@ function parseVerification(raw: string): { verdict: 'pass' | 'revise' | 'handoff
       verdict,
       revisedReply: cleanDraft(String(parsed.revisedReply || '')),
       issues: Array.isArray(parsed.issues) ? parsed.issues.map(String).filter(Boolean).slice(0, 6) : [],
+      riskTypes: Array.isArray(parsed.riskTypes)
+        ? parsed.riskTypes.filter((item): item is VerificationRiskType =>
+            item === 'unsupported_fact'
+            || item === 'unsupported_commercial_commitment'
+            || item === 'prohibited_price_or_term')
+        : [],
     };
   } catch {
     return null;
   }
-}
-
-function unsupportedNumbers(draft: string, source: string): string[] {
-  const values = draft.match(/\b\d+(?:[.,]\d+)?\b/g) ?? [];
-  return Array.from(new Set(values.filter(value => !source.includes(value))));
 }
 
 async function verifyGeneratedDraft(input: {
@@ -251,18 +267,25 @@ async function verifyGeneratedDraft(input: {
     tactics: match.strategy.strategy,
     handoff: match.strategy.escalate,
   }));
-  const newNumbers = unsupportedNumbers(input.draft, factualSource);
+  const newNumbers = unsupportedDraftNumbers(input.draft, factualSource);
+  const factualRiskSignals = draftFactualRiskSignals(input.draft, factualSource);
+  if (!factualRiskSignals.length) {
+    return { draft: input.draft, status: 'verified', issues: [] };
+  }
   const prompt = [
-    'Audit one proposed customer reply against the supplied business evidence.',
-    'Return strict JSON only: {"verdict":"pass|revise|handoff","revisedReply":string,"issues":string[]}.',
-    'Use pass only when every factual claim is directly supported and the reply correctly answers the latest message in its conversation context.',
-    'Use revise when a safe reply can be written using only supplied evidence. Preserve the required language.',
-    'Use handoff when intent is ambiguous, evidence is missing, the buyer asks multiple incompatible questions, or a safe answer requires human judgment.',
-    'Never invent price, stock, MOQ, certification, order status, logistics status, discount, payment term, lead time, or company capability.',
+    'Audit only the factual safety of one proposed customer reply against the supplied business evidence.',
+    'This is not a style review. Never fail or rewrite a reply because it is conversational, warm, informal, enthusiastic, uses punctuation or an emoji, asks more than one question, or is longer or shorter than you prefer.',
+    'Return strict JSON only: {"verdict":"pass|revise|handoff","revisedReply":string,"issues":string[],"riskTypes":["unsupported_fact|unsupported_commercial_commitment|prohibited_price_or_term"]}.',
+    'Use pass when the reply contains no unsupported factual claim or commercial commitment. The reply does not need to be comprehensive, perfectly styled, or optimized.',
+    'Use revise only to remove or soften an unsupported fact or commitment. Preserve the original personality, warmth, punctuation, length, language, and conversational flow as much as possible.',
+    'Use handoff only when the reply makes or answers a price, stock, MOQ, certification, order status, logistics status, discount, payment term, lead time, or company capability commitment that requires human judgment and cannot be made safe by removing the claim.',
+    'Allowed riskTypes are only unsupported_fact, unsupported_commercial_commitment, and prohibited_price_or_term. Style, tone, wording, length, punctuation, completeness, ambiguity, and question count are never risk types.',
+    'Never allow an invented price, stock status, MOQ, certification, order or logistics status, discount, payment term, lead time, delivery promise, or company capability.',
     'Dialogue strategies may guide wording and next-step tactics, but they are never evidence for a factual claim.',
-    input.context.knowledgeMiss ? 'Knowledge miss is true. Do not answer the missing fact; ask a precise clarification or hand off.' : '',
+    input.context.knowledgeMiss ? 'Knowledge miss is true. This alone is not a failure; fail only if the proposed reply presents the missing business fact as true.' : '',
     newNumbers.length ? `Deterministic check found numbers absent from evidence: ${newNumbers.join(', ')}. They must be removed unless they are only formatting.` : '',
-    `Required language: ${input.language}`,
+    `Detected factual-risk signals: ${factualRiskSignals.join(', ')}`,
+    `Customer reply language context: ${input.language}. Preserve it if you revise.`,
     `Intent: ${input.intent}`,
     '',
     `Proposed reply: ${input.draft}`,
@@ -280,7 +303,7 @@ async function verifyGeneratedDraft(input: {
       return { draft: input.draft, status: 'verified', issues: checked.issues };
     }
     if (checked.verdict === 'revise' && checked.revisedReply) {
-      const revisedNumbers = unsupportedNumbers(checked.revisedReply, factualSource);
+      const revisedNumbers = unsupportedDraftNumbers(checked.revisedReply, factualSource);
       if (!revisedNumbers.length) {
         return { draft: checked.revisedReply, status: 'revised', issues: checked.issues };
       }
@@ -291,17 +314,10 @@ async function verifyGeneratedDraft(input: {
       issues: checked.issues.length ? checked.issues : ['现有资料不足，已改为不承诺具体事实的安全回复'],
     };
   } catch (error) {
-    if (newNumbers.length || input.context.knowledgeMiss) {
-      return {
-        draft: input.fallback(),
-        status: 'safe_fallback',
-        issues: ['校验服务不可用且存在未确认事实，已使用安全回复'],
-      };
-    }
     return {
-      draft: input.draft,
-      status: 'review_required',
-      issues: [`校验服务暂不可用：${error instanceof Error ? error.message : 'unknown_error'}`],
+      draft: input.fallback(),
+      status: 'safe_fallback',
+      issues: [`事实校验暂不可用，已移除可能未经确认的商业事实：${error instanceof Error ? error.message : 'unknown_error'}`],
     };
   }
 }
@@ -379,7 +395,7 @@ function containsPriceNumber(value: string): boolean {
   return /[$¥€£]\s*\d|\b\d+(?:[.,]\d+)?\s*(?:usd|rmb|cny|dollars?|yuan|元|美元|美金|price|per|\/|%|折|off)\b/i.test(value);
 }
 
-function noPriceFallback(body: any, intent: ReturnType<typeof normalizeIntent>): string {
+function factualSafetyFallback(body: any, intent: ReturnType<typeof normalizeIntent>): string {
   const product = String(body.product ?? 'the product');
   if (intent === 'handoff_summary') {
     return [
@@ -390,20 +406,24 @@ function noPriceFallback(body: any, intent: ReturnType<typeof normalizeIntent>):
   }
   const language = normalizeLanguage(body.language);
   if (language === 'arabic') {
-    return `شكرًا لرسالتك. هل يمكنك مشاركة الكمية المستهدفة والمواصفات ومتطلبات التغليف؟`;
+    return 'خلّيني أتأكد من هذه النقطة جيدًا حتى أعطيك معلومة صحيحة، بدل ما أخمّن.';
   }
   if (language === 'spanish') {
-    return `Gracias por tu mensaje. ¿Puedes compartir la cantidad, las especificaciones y los requisitos de empaque?`;
+    return 'Déjame confirmarlo bien para darte la información correcta; prefiero no adivinar.';
   }
-  return `Thanks for your message. Could you share the target quantity, specifications, and packaging requirements?`;
+  return 'Let me double-check that properly for you—I’d rather give you the right answer than guess.';
+}
+
+function noPriceFallback(body: any, intent: ReturnType<typeof normalizeIntent>): string {
+  return factualSafetyFallback(body, intent);
 }
 
 function fallbackDraft(body: any, intent: ReturnType<typeof normalizeIntent>, suppressPrice = false): string {
   if (intent === 'reply' && isGreetingOrProcessIntent(String(body.__latestMessage || ''))) {
     const language = normalizeLanguage(body.language);
-    if (language === 'arabic') return 'مرحبًا! شكرًا لتواصلك معنا. ما المنتج أو الطلب الذي يمكنني مساعدتك به؟';
-    if (language === 'spanish') return '¡Hola! Gracias por contactarnos. ¿En qué producto o necesidad podemos ayudarte?';
-    return 'Hi! Thanks for reaching out. What product or requirement can I help you with?';
+    if (language === 'arabic') return 'أهلًا! قل لي، كيف أقدر أساعدك اليوم؟';
+    if (language === 'spanish') return '¡Hola! Cuéntame, ¿qué estás buscando?';
+    return 'Hey! What are you looking for today?';
   }
   if (suppressPrice && intent !== 'handoff_summary') return noPriceFallback(body, intent);
   const product = String(body.product ?? 'the product');
