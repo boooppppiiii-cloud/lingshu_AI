@@ -5,8 +5,8 @@ import { fileURLToPath } from 'node:url';
 import type { Request } from 'express';
 import { store } from '../storage/index.js';
 import { getPublicOrigin, getMetaOAuthClient, getTikTokOAuthClient, getYouTubeOAuthClient } from './oauthConfig.js';
-import { sendDingTalkText } from '../integrations/dingtalk.js';
-import { sendFeishuText } from '../integrations/feishu.js';
+import { sendDingTalkMarkdown, sendDingTalkText } from '../integrations/dingtalk.js';
+import { sendFeishuCard, sendFeishuText } from '../integrations/feishu.js';
 
 export type TenantPlatform = 'meta' | 'google' | 'tiktok' | 'wecom';
 export type TenantTokenType = 'user_60d' | 'system_user_permanent';
@@ -352,9 +352,23 @@ export function verifyMetaSignature(appSecret: string, rawBody: Buffer, signatur
   return crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected));
 }
 
-export async function notifyDeliveryTeam(message: string, options: { immediate?: boolean } = {}): Promise<void> {
-  const enterpriseNotifications = readEnterpriseNotificationSettings();
-  if (!options.immediate && enterpriseNotifications?.quietOutsideHours && !isWithinWorkHours(enterpriseNotifications.workHours)) {
+export type DeliveryNotificationSeverity = 'urgent' | 'important' | 'normal';
+
+export interface DeliveryNotificationOptions {
+  immediate?: boolean;
+  tenantId?: string;
+  severity?: DeliveryNotificationSeverity;
+  title?: string;
+  actions?: Array<{ text: string; url: string }>;
+}
+
+export async function notifyDeliveryTeam(message: string, options: DeliveryNotificationOptions = {}): Promise<void> {
+  const enterpriseNotifications = options.tenantId
+    ? await readTenantNotificationSettings(options.tenantId)
+    : readEnterpriseNotificationSettings();
+  const severity = options.severity ?? (options.immediate ? 'important' : 'normal');
+  const immediate = options.immediate || severity === 'urgent' || severity === 'important';
+  if (!immediate && enterpriseNotifications?.quietOutsideHours && !isWithinWorkHours(enterpriseNotifications.workHours)) {
     enqueueDailyBriefing(message);
     console.warn('[delivery-alert:queued-for-briefing]', message);
     return;
@@ -363,9 +377,21 @@ export async function notifyDeliveryTeam(message: string, options: { immediate?:
   if (enterpriseNotifications?.receivers.length) {
     for (const receiver of enterpriseNotifications.receivers) {
       if (receiver.channel === 'dingtalk') {
-        tasks.push(sendDingTalkText({ webhookUrl: receiver.target, secret: '' }, message));
+        const actionLinks = (options.actions ?? []).map(action => `[${action.text}](${action.url})`).join('　');
+        tasks.push(sendDingTalkMarkdown(
+          { webhookUrl: receiver.target, secret: '' },
+          options.title || '灵小枢客户提醒',
+          `${message.replace(/\n/g, '\n\n')}${actionLinks ? `\n\n${actionLinks}` : ''}`,
+        ));
       } else if (receiver.channel === 'feishu') {
-        tasks.push(sendFeishuText({ webhookUrl: receiver.target, secret: '' }, message));
+        const color = severity === 'urgent' ? 'red' : severity === 'important' ? 'yellow' : 'blue';
+        tasks.push(sendFeishuCard(
+          { webhookUrl: receiver.target, secret: '' },
+          options.title || '灵小枢客户提醒',
+          message,
+          color,
+          options.actions,
+        ));
       } else {
         console.warn(`[delivery-alert:${receiver.channel}] ${receiver.name || receiver.target}: ${message}`);
       }
@@ -394,6 +420,37 @@ export async function notifyDeliveryTeam(message: string, options: { immediate?:
     return;
   }
   await Promise.allSettled(tasks);
+}
+
+async function readTenantNotificationSettings(tenantId: string): Promise<ReturnType<typeof readEnterpriseNotificationSettings>> {
+  try {
+    const result = await store.list<Record<string, unknown>>('tenant_profiles', {
+      where: { tenant_id: tenantId }, page: 1, perPage: 1,
+    });
+    const rawProfile = result.items[0]?.profile;
+    const profile = typeof rawProfile === 'string' ? JSON.parse(rawProfile) : rawProfile;
+    const notifications = profile && typeof profile === 'object'
+      ? (profile as Record<string, any>).notifications
+      : undefined;
+    const receivers = Array.isArray(notifications?.receivers)
+      ? notifications.receivers.map((receiver: any) => ({
+          name: text(receiver?.name),
+          channel: ['wecom', 'dingtalk', 'feishu', 'sms'].includes(receiver?.channel) ? receiver.channel : 'wecom',
+          target: text(receiver?.target),
+        })).filter((receiver: any) => receiver.target)
+      : [];
+    if (!receivers.length) return readEnterpriseNotificationSettings();
+    return {
+      receivers,
+      workHours: {
+        start: /^\d{2}:\d{2}$/.test(text(notifications?.workHours?.start)) ? text(notifications.workHours.start) : '09:00',
+        end: /^\d{2}:\d{2}$/.test(text(notifications?.workHours?.end)) ? text(notifications.workHours.end) : '22:00',
+      },
+      quietOutsideHours: notifications?.quietOutsideHours !== false,
+    };
+  } catch {
+    return readEnterpriseNotificationSettings();
+  }
 }
 
 function readEnterpriseNotificationSettings(): null | {

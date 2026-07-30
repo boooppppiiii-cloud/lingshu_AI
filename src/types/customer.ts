@@ -14,6 +14,32 @@ export type HandlingMode = 'ai_auto' | 'ai_draft' | 'human_needed';
 export type TimelineType = 'whatsapp' | 'call' | 'note' | 'quote' | 'task' | 'system';
 export type AutonomyLevel = 'remind' | 'draft' | 'auto';
 
+export interface BantDimension {
+  score: number;
+  status: 'unknown' | 'partial' | 'confirmed';
+  evidence: string[];
+}
+
+export interface BantAssessment {
+  budget: BantDimension;
+  authority: BantDimension;
+  need: BantDimension;
+  timing: BantDimension;
+  total: number;
+  completeness: number;
+  level: 'early' | 'qualified' | 'hot';
+  updatedAt: string;
+}
+
+export interface ProgressionGoal {
+  dimension: 'budget' | 'authority' | 'need' | 'timing';
+  label: string;
+  reason: string;
+  question: string;
+  questionStyle: 'spin_indirect';
+  updatedAt: string;
+}
+
 export interface TimelineEvent {
   id: string;
   type: TimelineType;
@@ -68,6 +94,8 @@ export interface CustomerProfile {
   stage: CustomerStage;
   intentScore: number;
   intentSignals: string[];
+  bant?: BantAssessment;
+  progressionGoal?: ProgressionGoal;
   handlingMode: HandlingMode;
   handlingReason: string;
   aiAutoCount?: number;
@@ -79,6 +107,9 @@ export interface CustomerProfile {
   newProductMatch?: boolean;
   blockedAutoReplyReason?: string;
   pendingDraft?: string;
+  knowledgeMissStreak?: number;
+  fallbackCount?: number;
+  handoffDueAt?: string;
   todoCompletedAt?: string;
   priority: number;
   inboxReason?: 'call' | 'large' | 'draft' | 'overdue' | 'reply';

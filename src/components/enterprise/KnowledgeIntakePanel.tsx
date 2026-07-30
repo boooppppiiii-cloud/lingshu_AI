@@ -64,6 +64,9 @@ interface KnowledgePreview {
   faqs: PreviewFaq[];
   evidence: string[];
   missing: string[];
+  styleSamplesImported?: number;
+  winningStyleSamplesFound?: number;
+  styleFactsExcluded?: boolean;
 }
 
 interface CapabilityState {
@@ -354,6 +357,11 @@ export default function KnowledgeIntakePanel({ mode = 'center', compact = false,
                   ? `依据 ${preview.conversationCount} 段会话、${preview.historyMessageCount} 条历史消息整理`
                   : '依据已录入的企业和产品资料起草'}
               </p>
+              {preview.source === 'history' && (
+                <p className="mt-1 text-[11px] leading-5 text-emerald-700">
+                  已找到 {preview.winningStyleSamplesFound || 0} 条成交对话表达样本，本次新增学习 {preview.styleSamplesImported || 0} 条；历史价格、MOQ、交期、证书等事实已剥离，不会复用。
+                </p>
+              )}
             </div>
           </div>
           <span className="rounded-full bg-amber-50 px-2.5 py-1 text-[11px] font-bold text-amber-700">待你确认</span>

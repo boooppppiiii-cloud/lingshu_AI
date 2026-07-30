@@ -78,6 +78,8 @@ const loadConvs = (): Conversation[] => {
 const loadPage = (): Page => {
   try {
     if (window.location.pathname === '/admin/delivery') return 'adminDelivery';
+    const queryPage = new URLSearchParams(window.location.search).get('page') as Page | null;
+    if (queryPage && ALL_PAGES.includes(queryPage)) return queryPage;
     const saved = localStorage.getItem('ow_page') as Page | null;
     if (saved && ALL_PAGES.includes(saved)) return saved;
     if (saved) localStorage.removeItem('ow_page');

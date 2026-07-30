@@ -16,6 +16,8 @@ export interface StyleMemoryRecord {
   category: string;
   outcome?: string;
   strategy_ids?: string[] | string;
+  source?: string;
+  source_fingerprint?: string;
   created?: string;
 }
 
@@ -44,6 +46,58 @@ export function sanitizeStyleText(value: unknown): string {
     .replace(PHONE_RE, '[电话]')
     .replace(ADDRESS_RE, '[地址]')
     .slice(0, 3000);
+}
+
+export function sanitizeImportedWinningStyleText(value: unknown): string {
+  return sanitizeStyleText(value)
+    .replace(/https?:\/\/\S+/gi, '[链接]')
+    .replace(/(?:[$€£¥]\s*)?\d[\d,.:/%-]*(?:\s*(?:usd|eur|gbp|rmb|cny|pcs?|pieces?|units?|sets?|days?|weeks?|个月|天|件|套|箱|%))?/gi, '[业务数值]')
+    .replace(/\b(?:gmp|iso(?:\s*\d+)?|coa|ce|fda|msds|rohs)\b/gi, '[资质信息]')
+    .replace(/\b(?:we|i)\s+(?:can|provide|offer|support|have|guarantee|ensure)\b[^.!?\n]{0,120}/gi, '[历史业务事实已移除]')
+    .replace(/(?:我们|我司|工厂).{0,10}(?:可以|支持|提供|具备|有|保证).{0,80}(?=[。！？\n]|$)/g, '[历史业务事实已移除]')
+    .replace(/\[业务数值](?:\s*\[业务数值])+/g, '[业务数值]')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+}
+
+export async function importWinningStyleMemories(
+  tenantId: string,
+  samples: Array<{ customerId: string; buyer: string; seller: string }>,
+): Promise<number> {
+  const existing = await store.list<StyleMemoryRecord>(COLLECTION, {
+    where: { tenant_id: tenantId },
+    sort: '-created',
+    perPage: 1000,
+  });
+  const fingerprints = new Set(existing.items.map(item => text(item.source_fingerprint)).filter(Boolean));
+  let imported = 0;
+  for (const sample of samples.slice(0, 200)) {
+    const trigger = sanitizeImportedWinningStyleText(sample.buyer);
+    const finalSent = sanitizeImportedWinningStyleText(sample.seller);
+    if (!trigger || !finalSent || finalSent === '[历史业务事实已移除]') continue;
+    const fingerprint = createHash('sha256')
+      .update(`${tenantId}\n${sample.customerId}\n${trigger}\n${finalSent}`)
+      .digest('hex');
+    if (fingerprints.has(fingerprint)) continue;
+    const created = await store.create(COLLECTION, {
+      tenant_id: tenantId,
+      customer_id: text(sample.customerId),
+      trigger_message: trigger,
+      draft_original: '[历史成交对话：仅学习表达方式，业务事实已剥离]',
+      final_sent: finalSent,
+      edited: true,
+      category: 'reply',
+      outcome: 'won',
+      strategy_ids: [],
+      source: 'winning_history_style_only',
+      source_fingerprint: fingerprint,
+    });
+    if (created) {
+      fingerprints.add(fingerprint);
+      imported += 1;
+    }
+  }
+  return imported;
 }
 
 function tokenize(value: string): string[] {
@@ -138,8 +192,9 @@ export function buildStyleMemoryPromptBlock(items: StyleMemoryRecord[]): string 
   return [
     'Style memory few-shot:',
     '以下是该商家过往对类似问题的实际回复风格，请学习其措辞、称呼与口径；但价格、MOQ、交期、库存、证书等事实性数字必须以当前知识库检索结果为准，历史样本中的数字一律不得复用。',
+    'source=winning_history_style_only 的记录已经剥离历史业务事实，只能学习句式、语气和推进节奏，方括号占位符绝不能出现在客户回复中。',
     ...items.map((item, index) => [
-      `Example ${index + 1}${item.outcome === 'won' ? ' outcome=won' : ''}${item.edited ? ' edited=true' : ' edited=false'}:`,
+      `Example ${index + 1}${item.outcome === 'won' ? ' outcome=won' : ''}${item.edited ? ' edited=true' : ' edited=false'}${item.source ? ` source=${item.source}` : ''}:`,
       `Buyer trigger: ${item.trigger_message}`,
       `AI draft zh: ${item.draft_original}`,
       `Seller final zh: ${item.final_sent}`,

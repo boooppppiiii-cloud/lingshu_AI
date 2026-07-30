@@ -8,6 +8,7 @@ const INTERACTIONS_FILE = path.join(__dirname, '../../data/whatsapp-interactions
 
 interface MissInteraction {
   id: string;
+  tenantId?: string;
   body?: string;
   timestamp?: number;
   audit?: {
@@ -76,10 +77,10 @@ function parseClusters(raw: string): KnowledgeMissCluster[] {
   }
 }
 
-export async function aggregateKnowledgeMisses(days = 7): Promise<KnowledgeMissCluster[]> {
+export async function aggregateKnowledgeMisses(tenantId: string, days = 7): Promise<KnowledgeMissCluster[]> {
   const since = Date.now() - days * 86_400_000;
   const examples = readMisses()
-    .filter(item => (item.meta?.knowledgeMiss || item.audit?.knowledgeMiss) && Number(item.timestamp || 0) >= since)
+    .filter(item => item.tenantId === tenantId && (item.meta?.knowledgeMiss || item.audit?.knowledgeMiss) && Number(item.timestamp || 0) >= since)
     .map(normalizeExample)
     .filter(Boolean);
   if (!examples.length) return [];

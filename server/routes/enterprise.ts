@@ -1297,14 +1297,22 @@ enterpriseRouter.get('/knowledge-completion', async (_req, res) => {
 enterpriseRouter.post('/knowledge-intake/extract', async (_req, res) => {
   const { tenantId } = res.locals as AuthLocals;
   try {
-    const [{ getWhatsAppKnowledgeSamples }, { extractKnowledgeFromHistory }] = await Promise.all([
+    const [{ getWhatsAppKnowledgeSamples, getWhatsAppWinningStyleSamples }, { extractKnowledgeFromHistory }, { importWinningStyleMemories }] = await Promise.all([
       import('../whatsapp/historyImport.js'),
       import('../knowledge/intake.js'),
+      import('../knowledge/styleMemory.js'),
     ]);
     const profile = await readTenantProfile(tenantId);
     const samples = getWhatsAppKnowledgeSamples(tenantId, { maxConversations: 60, maxMessages: 500, sinceDays: 180 });
     const preview = await extractKnowledgeFromHistory(profile, samples);
-    res.json(preview);
+    const winningStyleSamples = getWhatsAppWinningStyleSamples(tenantId, 200);
+    const styleSamplesImported = await importWinningStyleMemories(tenantId, winningStyleSamples);
+    res.json({
+      ...preview,
+      styleSamplesImported,
+      winningStyleSamplesFound: winningStyleSamples.length,
+      styleFactsExcluded: true,
+    });
   } catch (error) {
     console.error('[knowledge-intake] extract failed:', error);
     res.status(500).json({

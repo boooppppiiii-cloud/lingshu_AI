@@ -25,13 +25,30 @@ export async function sendFeishuText(config: FeishuConfig, content: string): Pro
   await axios.post(config.webhookUrl, body);
 }
 
-export async function sendFeishuCard(config: FeishuConfig, title: string, content: string, color: 'blue' | 'green' | 'red' | 'yellow' = 'blue'): Promise<void> {
+export async function sendFeishuCard(
+  config: FeishuConfig,
+  title: string,
+  content: string,
+  color: 'blue' | 'green' | 'red' | 'yellow' = 'blue',
+  actions: Array<{ text: string; url: string }> = [],
+): Promise<void> {
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const body: Record<string, unknown> = {
     msg_type: 'interactive',
     card: {
       header: { title: { tag: 'plain_text', content: title }, template: color },
-      elements: [{ tag: 'div', text: { tag: 'lark_md', content } }],
+      elements: [
+        { tag: 'div', text: { tag: 'lark_md', content } },
+        ...(actions.length ? [{
+          tag: 'action',
+          actions: actions.slice(0, 3).map(action => ({
+            tag: 'button',
+            text: { tag: 'plain_text', content: action.text },
+            type: 'primary',
+            url: action.url,
+          })),
+        }] : []),
+      ],
     },
   };
   if (config.secret) {

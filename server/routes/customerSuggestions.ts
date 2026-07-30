@@ -79,7 +79,8 @@ customerSuggestionsRouter.get('/templates', (_req, res) => {
 });
 
 customerSuggestionsRouter.get('/knowledge-misses/briefing', async (_req, res) => {
-  const items = await aggregateKnowledgeMisses(7);
+  const { tenantId } = res.locals as AuthLocals;
+  const items = await aggregateKnowledgeMisses(tenantId, 7);
   res.json({ items });
 });
 
@@ -89,7 +90,8 @@ customerSuggestionsRouter.get('/night-mode/briefing', requireAuth, (req, res) =>
 });
 
 customerSuggestionsRouter.post('/knowledge-misses/recompute', async (_req, res) => {
-  const items = await aggregateKnowledgeMisses(7);
+  const { tenantId } = res.locals as AuthLocals;
+  const items = await aggregateKnowledgeMisses(tenantId, 7);
   res.json({ ok: true, items });
 });
 
@@ -205,8 +207,9 @@ customerSuggestionsRouter.post('/:id/outbox', requireAuth, async (req, res) => {
     res.status(409).json({ error: 'manual_active', message: '人工正在回复，AI 自动发送已挂起，只生成草稿。' });
     return;
   }
+  let sentMessages: string[] = [];
   try {
-    await sendTenantWhatsAppText(tenantId, to, body);
+    sentMessages = await sendTenantWhatsAppText(tenantId, to, body);
   } catch (error) {
     res.status(502).json({
       error: 'whatsapp_send_failed',
@@ -214,13 +217,14 @@ customerSuggestionsRouter.post('/:id/outbox', requireAuth, async (req, res) => {
     });
     return;
   }
-  markWhatsAppHumanReply({ tenantId, customerId, body, waNumber: to });
+  markWhatsAppHumanReply({ tenantId, customerId, body, messages: sentMessages, waNumber: to });
   await maybeRecordStyleMemory(req, tenantId, customerId, body);
   res.json({
     ok: true,
     outboxId: `out_${Date.now()}`,
     status: 'sent',
     sentAt: new Date().toISOString(),
+    messages: sentMessages,
   });
 });
 

@@ -403,6 +403,8 @@ async function requestDraft(customer: CustomerProfile, instruction?: string, mod
         internalProduct: customer.product,
         language: customer.language,
         stage: STAGE_LABEL[customer.stage],
+        bant: customer.bant,
+        progressionGoal: customer.progressionGoal,
         instruction,
         mode,
         intent,
@@ -715,7 +717,7 @@ function CompactCustomerList({
 function DraftSuggestionBar({
   customer,
   draft,
-  translatedDraft,
+  translatedDraft: _translatedDraft,
   isTemplate,
   templatePlan,
   priceRulesReady,
@@ -724,6 +726,7 @@ function DraftSuggestionBar({
   knownChineseDraft,
   onSend,
   onEdit,
+  onChangeDraft,
   onDismiss,
   onRegenerate,
 }: {
@@ -738,10 +741,20 @@ function DraftSuggestionBar({
   knownChineseDraft?: string;
   onSend: () => void;
   onEdit: () => void;
+  onChangeDraft: (value: string) => void;
   onDismiss: () => void;
   onRegenerate: () => void;
 }) {
   const templateApproved = !isTemplate || templatePlan?.template.status === 'approved';
+  const draftMessages = draft.split(/\n\s*\n/).map(item => item.trim()).filter(Boolean).slice(0, 3);
+  const updateMessage = (index: number, value: string) => {
+    const next = [...draftMessages];
+    next[index] = value;
+    onChangeDraft(next.filter(Boolean).join('\n\n'));
+  };
+  const deleteMessage = (index: number) => {
+    onChangeDraft(draftMessages.filter((_, itemIndex) => itemIndex !== index).join('\n\n'));
+  };
   const fallbackChinese = () => chineseMessageTranslation(draft, customer) || fallbackCustomerReplyZh(customer);
   const [chineseDraft, setChineseDraft] = useState(knownChineseDraft || (containsChinese(draft) ? draft : fallbackChinese()));
 
@@ -782,7 +795,23 @@ function DraftSuggestionBar({
             <RefreshCw size={12} />
           </button>
         </div>
-        <p className="mt-2 whitespace-pre-line text-sm leading-relaxed text-text-primary">{translatedDraft}</p>
+        <div className="mt-2 space-y-2">
+          {draftMessages.map((message, index) => (
+            <div key={`${index}-${message.slice(0, 12)}`} className="group relative rounded-2xl rounded-tr-sm border border-[#0891b2]/20 bg-white px-3 py-2 pr-8">
+              <textarea
+                value={message}
+                rows={Math.min(4, Math.max(1, message.split(/\n/).length))}
+                onChange={event => updateMessage(index, event.target.value)}
+                aria-label={`编辑第 ${index + 1} 条短消息`}
+                className="w-full resize-none bg-transparent text-sm leading-relaxed text-text-primary outline-none"
+              />
+              <button type="button" onClick={() => deleteMessage(index)} aria-label={`删除第 ${index + 1} 条短消息`} className="absolute right-2 top-2 rounded-full p-1 text-text-muted opacity-70 hover:bg-red-50 hover:text-red-600 group-hover:opacity-100">
+                <X size={11} />
+              </button>
+            </div>
+          ))}
+          <p className="text-[10px] font-semibold text-text-muted">将按顺序发送，共 {draftMessages.length}/3 条；每条都可直接修改或删除。</p>
+        </div>
         {isTemplate && templatePlan && (
           <div className="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-900">
             <p className="font-black">{'AI \u5df2\u9009\u62e9\u6a21\u677f\uff1a'}{templatePlan.template.label}</p>
@@ -875,6 +904,7 @@ function ChatThread({
   input,
   translatedInput,
   onInputChange,
+  onDraftChange,
   onTranslatedInputChange: _onTranslatedInputChange,
   onSend,
   onEditDraft,
@@ -898,6 +928,7 @@ function ChatThread({
   input: string;
   translatedInput: string;
   onInputChange: (value: string) => void;
+  onDraftChange: (value: string) => void;
   onTranslatedInputChange: (value: string) => void;
   onSend: () => void;
   onEditDraft: () => void;
@@ -1018,7 +1049,7 @@ function ChatThread({
             );
           })}
           {draftSuggestion && (
-            <DraftSuggestionBar customer={customer} draft={draftSuggestion} translatedDraft={isOutsideWindow && templatePlan ? templatePlan.rendered : translateChineseReplyForCustomer(customer, draftSuggestion)} isTemplate={isOutsideWindow} templatePlan={templatePlan} priceRulesReady={priceRulesReady} knowledgeMiss={knowledgeMiss} bridgeOnly={bridgeOnly} knownChineseDraft={bridgeTranslation} onSend={onSendDraft} onEdit={onEditDraft} onDismiss={onDismissDraft} onRegenerate={onRegenerateDraft} />
+            <DraftSuggestionBar customer={customer} draft={draftSuggestion} translatedDraft={isOutsideWindow && templatePlan ? templatePlan.rendered : translateChineseReplyForCustomer(customer, draftSuggestion)} isTemplate={isOutsideWindow} templatePlan={templatePlan} priceRulesReady={priceRulesReady} knowledgeMiss={knowledgeMiss} bridgeOnly={bridgeOnly} knownChineseDraft={bridgeTranslation} onSend={onSendDraft} onEdit={onEditDraft} onChangeDraft={onDraftChange} onDismiss={onDismissDraft} onRegenerate={onRegenerateDraft} />
           )}
         </div>
       </div>
@@ -1580,6 +1611,7 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
   const [priceRulesReady, setPriceRulesReady] = useState(true);
   const [notificationReady, setNotificationReady] = useState(true);
   const [lastDraftKey, setLastDraftKey] = useState('');
+  const deepLinkConsumedRef = useRef(false);
   const selected = useMemo(() => (
     selectedId ? customers.find(customer => customer.id === selectedId) ?? null : null
   ), [customers, selectedId]);
@@ -1601,6 +1633,20 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
       };
     })
   ), [customers]);
+
+  useEffect(() => {
+    if (deepLinkConsumedRef.current || !customers.length) return;
+    const customerId = new URLSearchParams(window.location.search).get('customer');
+    if (!customerId) {
+      deepLinkConsumedRef.current = true;
+      return;
+    }
+    if (customers.some(customer => customer.id === customerId)) {
+      setSelectedId(customerId);
+      setView('leads');
+      deepLinkConsumedRef.current = true;
+    }
+  }, [customers]);
 
   useEffect(() => {
     customers.forEach(customer => {
@@ -2098,6 +2144,7 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
           input={input}
           translatedInput={translatedInput}
           onInputChange={(value) => { setInput(value); setTranslatedInput(''); }}
+          onDraftChange={value => { setDraftSuggestion(value || null); if (!value) setDraftMeta(null); }}
           onTranslatedInputChange={setTranslatedInput}
           onSend={sendReply}
           onEditDraft={editDraft}

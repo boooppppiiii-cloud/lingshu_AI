@@ -4,11 +4,12 @@ import { fileURLToPath } from 'url';
 import { decideAction, type AutonomyLevel } from '../autonomy/actionRules.js';
 import { guardOutbound } from '../autonomy/outboundGuard.js';
 import { prioritizeCustomer } from '../autonomy/prioritize.js';
-import { resolveKnowledgeGapPlan, scenarioHasGroundedEvidence } from '../agents/knowledgeGapPlaybook.js';
+import { ambiguousFaqClarification, resolveKnowledgeGapPlan, scenarioHasGroundedEvidence } from '../agents/knowledgeGapPlaybook.js';
 import { retrieveContext, type RetrievedContext } from '../knowledge/retrieve.js';
-import { notifyDeliveryTeam } from '../lib/tenantPlatformApps.js';
 import { distillSalesStyleProfile, markStyleMemoryWonForCustomer } from '../knowledge/styleMemory.js';
 import { readTenantEnterpriseProfile, type EnterpriseProfile } from '../routes/enterprise.js';
+import { assessBant, selectProgressionGoal, type BantAssessment, type ProgressionGoal } from '../sales/qualification.js';
+import { automationFailureHandoff, evaluateHandoff, notifyCustomerHandoff } from '../sales/handoff.js';
 import { r2Upload } from '../storage/r2.js';
 import { store } from '../storage/index.js';
 import { sendTenantWhatsAppText } from './send.js';
@@ -79,6 +80,10 @@ interface StoredCustomer {
   pendingDraft?: string;
   needCall?: boolean;
   knowledgeMissStreak?: number;
+  fallbackCount?: number;
+  handoffDueAt?: string;
+  bant?: BantAssessment;
+  progressionGoal?: ProgressionGoal;
   source?: string;
   sourcePostId?: string;
   sourceTrackCode?: string;
@@ -761,7 +766,7 @@ function recentConversationForCustomer(tenantId: string, customerIdValue: string
     }));
 }
 
-function draftForMessage(message: IncomingMessage, context?: RetrievedContext): string {
+function draftForMessage(message: IncomingMessage, context?: RetrievedContext, progressionGoal?: ProgressionGoal): string {
   const product = context?.products?.[0];
   if (product) {
     const details = [
@@ -769,15 +774,53 @@ function draftForMessage(message: IncomingMessage, context?: RetrievedContext): 
       product.moq ? `MOQ ${product.moq}` : '',
       product.material ? `material ${product.material}` : '',
     ].filter(Boolean).join(', ');
-    return `Thanks for your message. I found ${details}. Please confirm your target quantity and packaging requirements, then I can prepare the next quote details.`;
+    return `I found ${details}. ${progressionGoal?.question || 'What target quantity are you planning?'}`;
   }
   if (/\b(catalog|catalogue|brochure|collections?)\b|目录|产品册/i.test(message.body)) {
-    return 'Thanks for your message. I can send our approved catalog for your review. Which product line and quantity are you interested in?';
+    return 'Which product line and target quantity are you interested in? I will use that to find the right approved information.';
   }
   if (/\b(track|tracking|ship|shipping|logistics)\b|物流|运单|发货/i.test(message.body)) {
-    return 'Thanks for checking in. I will update the tracking status and share the latest logistics information with you.';
+    return 'Please send the order number and ordering account. I will pass those details to the person who can verify the real record.';
   }
-  return 'Thanks for your message. I have received your request and will confirm the details with our team.';
+  return progressionGoal?.question || 'Which product or model do you mean, and what detail matters most to you?';
+}
+
+export interface WinningStyleSample {
+  customerId: string;
+  buyer: string;
+  seller: string;
+}
+
+function handoffCustomerContext(customer: StoredCustomer) {
+  const region = inferPhoneRegion(customer.waNumber);
+  const timeZone = customer.timeZone || region.timeZone;
+  const orderValue = (customer.orders ?? []).reduce((sum, order) => {
+    const amount = Number(String(order.total || '').replace(/[^\d.]/g, ''));
+    return sum + (Number.isFinite(amount) ? amount : 0);
+  }, 0);
+  return {
+    id: customer.id,
+    name: customer.name,
+    waNumber: customer.waNumber,
+    countryName: customer.countryName || region.countryName || '未知',
+    localTime: currentLocalTime(timeZone),
+    stage: customer.stage,
+    estimatedValue: orderValue > 0 ? `$${Math.round(orderValue).toLocaleString('en-US')}` : '$0',
+    intentScore: customer.intentScore,
+    bant: customer.bant,
+  };
+}
+
+function evaluateCustomerHandoff(customer: StoredCustomer, input: Parameters<typeof evaluateHandoff>[0]) {
+  const historicalOrderValue = (customer.orders ?? []).reduce((sum, order) => {
+    const amount = Number(String(order.total || '').replace(/[^\d.]/g, ''));
+    return sum + (Number.isFinite(amount) ? amount : 0);
+  }, 0);
+  return evaluateHandoff({
+    ...input,
+    historicalOrderValue,
+    repeatCustomer: (customer.orders ?? []).some(order => order.status === 'paid'),
+  });
 }
 
 async function handleInboundMessage(tenantId: string, message: IncomingMessage, options: { skipAutonomy?: boolean } = {}): Promise<void> {
@@ -810,7 +853,7 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
       }
     }
   }
-  const customer = upsertCustomer({
+  let customer = upsertCustomer({
     tenantId,
     waNumber: message.waNumber,
     name: message.name,
@@ -832,6 +875,20 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
     timestamp: message.timestamp,
     audit: {},
   });
+  const qualification = assessBant({
+    turns: recentConversationForCustomer(tenantId, customer.id),
+    previous: customer.bant,
+  });
+  const progressionGoal = selectProgressionGoal(qualification, customer.language);
+  customer = upsertCustomer({
+    tenantId,
+    waNumber: message.waNumber,
+    patch: {
+      bant: qualification,
+      progressionGoal,
+      intentScore: qualification.total,
+    },
+  });
   if (attributedPost) {
     await incrementPostMetric(attributedPost.id, 'inquiries');
     addInteraction({
@@ -847,7 +904,11 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
     });
   }
   if (message.fromBusiness) {
-    upsertCustomer({ tenantId, waNumber: message.waNumber, patch: { knowledgeMissStreak: 0, blockedAutoReplyReason: undefined } });
+    upsertCustomer({
+      tenantId,
+      waNumber: message.waNumber,
+      patch: { knowledgeMissStreak: 0, fallbackCount: 0, blockedAutoReplyReason: undefined, handoffDueAt: undefined },
+    });
     return;
   }
   if (options.skipAutonomy) return;
@@ -858,6 +919,7 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
   const handoffKeyword = matchedHandoffKeyword(message.body, rules.keywords);
   if (handoffKeyword) {
     const reason = `客户主动要求人工/触发关键词【${handoffKeyword}】`;
+    const handoffDecision = evaluateCustomerHandoff(customer, { message: message.body, requestedHuman: true });
     addInteraction({
       id: `${customer.id}-handoff-keyword-${Date.now()}`,
       tenantId,
@@ -879,6 +941,12 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
         blockedAutoReplyReason: reason,
       },
     });
+    await notifyCustomerHandoff({
+      tenantId,
+      customer: handoffCustomerContext(customer),
+      message: message.body,
+      decision: handoffDecision,
+    }).catch(() => undefined);
     return;
   }
 
@@ -891,6 +959,7 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
     stage: customer.stage,
   }, message.body, { conversation: recentConversation });
   const nextMissStreak = context.knowledgeMiss ? (customer.knowledgeMissStreak ?? 0) + 1 : 0;
+  const nextFallbackCount = (customer.fallbackCount ?? 0) + 1;
   const gapPlan = resolveKnowledgeGapPlan({
     message: message.body,
     language: customer.language,
@@ -904,33 +973,46 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
   });
   const predictableGapWithoutEvidence = gapPlan.scenario !== 'general_unknown'
     && !scenarioHasGroundedEvidence(gapPlan.scenario, enterpriseEvidenceSource);
-  if (context.knowledgeMiss || predictableGapWithoutEvidence) {
+  const needsFaqClarification = Boolean(context.faqMatch && (context.faqMatch.ambiguous || context.faqMatch.confidence < 0.75));
+  if (!needsFaqClarification && (context.knowledgeMiss || predictableGapWithoutEvidence)) {
+    const handoffDecision = evaluateCustomerHandoff(customer, {
+      message: message.body,
+      sentiment: context.sentiment,
+      knowledgeMissStreak: nextMissStreak,
+      fallbackCount: nextFallbackCount,
+      knowledgeGap: true,
+    });
     const guard = await guardOutbound(gapPlan.draft, { tenantId, customerId: customer.id, action: 'knowledge_gap_bridge' });
     const shouldAutoBridge = autonomy === 'auto' && gapPlan.safeToSendBeforeHandoff && guard.allowed;
     let bridgeSent = false;
+    let bridgeMessages: string[] = [];
     if (shouldAutoBridge) {
       try {
-        await sendTenantWhatsAppText(tenantId, message.waNumber, gapPlan.draft);
+        bridgeMessages = await sendTenantWhatsAppText(tenantId, message.waNumber, gapPlan.draft);
         bridgeSent = true;
-        addInteraction({
-          id: `${customer.id}-knowledge-gap-bridge-${Date.now()}`,
+        const sentAt = Date.now();
+        bridgeMessages.forEach((body, index) => addInteraction({
+          id: `${customer.id}-knowledge-gap-bridge-${sentAt}-${index}`,
           tenantId,
           customerId: customer.id,
           waNumber: message.waNumber,
           type: 'msg_out_ai',
-          body: gapPlan.draft,
-          timestamp: Date.now(),
+          body,
+          timestamp: sentAt + index,
           autoSent: true,
           audit: {
             knowledgeMiss: context.knowledgeMiss,
+            buyerMessage: message.body,
             scenario: gapPlan.scenario,
             bridgeOnly: true,
             handoff: true,
             translatedDraft: gapPlan.draftZh,
             replyConfidence: gapPlan.replyConfidence,
             evidence: context.evidence,
+            messageIndex: index,
+            messageCount: bridgeMessages.length,
           },
-        });
+        }));
       } catch {
         bridgeSent = false;
       }
@@ -947,24 +1029,26 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
       timestamp: Date.now(),
       audit: {
         knowledgeMiss: context.knowledgeMiss,
+        buyerMessage: message.body,
         scenario: gapPlan.scenario,
         bridgeSent,
         handoff: true,
         guardRule: guard.allowed ? undefined : guard.matchedRule,
         replyConfidence: gapPlan.replyConfidence,
+        fallbackCount: nextFallbackCount,
+        handoffDueAt: gapPlan.followUpDueAt,
         translatedDraft: gapPlan.draftZh,
       },
-      meta: { handoff: true, scenario: gapPlan.scenario, bridgeSent },
+      meta: { handoff: true, scenario: gapPlan.scenario, bridgeSent, knowledgeMiss: true, buyerMessage: message.body },
     });
     if (nightModeState(profile).active) recordNightModeEvent({ tenantId, customerId: customer.id, kind: bridgeSent ? 'auto' : 'draft' });
-    await notifyDeliveryTeam([
-      '【灵枢人工接管提醒】AI 已完成安全承接',
-      `客户：${customer.name}`,
-      `WhatsApp：${message.waNumber}`,
-      `原因：${gapPlan.handlingReason}`,
-      `客户消息：${message.body}`,
-      bridgeSent ? 'AI 已发送承接话术，请继续处理真实业务信息。' : '承接话术未自动发送，请尽快确认后回复。',
-    ].join('\n'), { immediate: !bridgeSent }).catch(() => undefined);
+    await notifyCustomerHandoff({
+      tenantId,
+      customer: handoffCustomerContext(customer),
+      message: message.body,
+      decision: handoffDecision,
+      bridgeSent,
+    }).catch(() => undefined);
     upsertCustomer({
       tenantId,
       waNumber: message.waNumber,
@@ -974,6 +1058,8 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
         pendingDraft: bridgeSent ? undefined : gapPlan.draft,
         blockedAutoReplyReason: guard.allowed ? 'knowledge_gap_handoff' : guard.matchedRule || 'knowledge_gap_guard',
         knowledgeMissStreak: nextMissStreak,
+        fallbackCount: nextFallbackCount,
+        handoffDueAt: gapPlan.followUpDueAt,
       },
     });
     return;
@@ -983,6 +1069,7 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
   }
   if (rules.negativeSentiment && context.sentiment === 'negative') {
     const reason = '客户情绪负面，建议亲自处理';
+    const handoffDecision = evaluateCustomerHandoff(customer, { message: message.body, sentiment: context.sentiment });
     addInteraction({
       id: `${customer.id}-handoff-sentiment-${Date.now()}`,
       tenantId,
@@ -1005,18 +1092,64 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
         knowledgeMissStreak: nextMissStreak,
       },
     });
+    await notifyCustomerHandoff({
+      tenantId,
+      customer: handoffCustomerContext(customer),
+      message: message.body,
+      decision: handoffDecision,
+    }).catch(() => undefined);
     return;
+  }
+  const salesHandoff = evaluateCustomerHandoff(customer, { message: message.body, sentiment: context.sentiment });
+  if (salesHandoff.lines.includes('business_value')) {
+    const reason = salesHandoff.reasons.join('；');
+    addInteraction({
+      id: `${customer.id}-business-value-handoff-${Date.now()}`,
+      tenantId,
+      customerId: customer.id,
+      waNumber: message.waNumber,
+      type: 'system',
+      body: `高价值商机已立即转人工：${reason}`,
+      timestamp: Date.now(),
+      audit: { handoff: true, line: 'business_value', severity: 'urgent', bant: customer.bant },
+      meta: { handoff: true, line: 'business_value', severity: 'urgent' },
+    });
+    upsertCustomer({
+      tenantId,
+      waNumber: message.waNumber,
+      patch: { handlingMode: 'human_needed', handlingReason: reason, pendingDraft: undefined, blockedAutoReplyReason: 'business_value_handoff' },
+    });
+    await notifyCustomerHandoff({
+      tenantId,
+      customer: handoffCustomerContext(customer),
+      message: message.body,
+      decision: salesHandoff,
+    }).catch(() => undefined);
+    return;
+  }
+  if (salesHandoff.lines.includes('risk')) {
+    await notifyCustomerHandoff({
+      tenantId,
+      customer: handoffCustomerContext(customer),
+      message: message.body,
+      decision: salesHandoff,
+    }).catch(() => undefined);
   }
   let action = inferredAction;
   if (context.faqMatch?.autoSafe && action !== 'formal_quote' && action !== 'call_request') {
     action = 'auto_faq_reply';
   }
   const night = nightModeState(profile);
-  let draft = draftForMessage(message, context);
+  let draft = draftForMessage(message, context, customer.progressionGoal);
   let blockedAutoReplyReason = '';
   let approvedFaqHit = false;
+  if (needsFaqClarification && action !== 'formal_quote' && action !== 'call_request') {
+    action = 'draft_greeting';
+    draft = ambiguousFaqClarification(customer.language).draft;
+    blockedAutoReplyReason = 'FAQ 匹配置信度低于 0.75，先向客户澄清具体产品和问题';
+  }
   if (action === 'call_request') {
-    const callDraft = 'Our manager will contact you shortly. What time works best for you?';
+    const callDraft = 'I have flagged your call request. What time window works best for you?';
     addInteraction({
       id: `${customer.id}-call-request-${Date.now()}`,
       tenantId,
@@ -1028,13 +1161,12 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
       audit: { action, risk: 'L4', nightMode: night.active },
     });
     if (night.active) recordNightModeEvent({ tenantId, customerId: customer.id, kind: 'call' });
-    await notifyDeliveryTeam([
-      '【灵枢通话提醒】客户想通电话',
-      `客户：${customer.name}`,
-      `WhatsApp：${message.waNumber}`,
-      `消息：${message.body}`,
-      '请尽快查看客户详情并安排通话。',
-    ].join('\n'), { immediate: true });
+    await notifyCustomerHandoff({
+      tenantId,
+      customer: handoffCustomerContext(customer),
+      message: message.body,
+      decision: evaluateCustomerHandoff(customer, { message: message.body, requestedHuman: true }),
+    }).catch(() => undefined);
     upsertCustomer({
       tenantId,
       waNumber: message.waNumber,
@@ -1061,20 +1193,23 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
   }
   const faqLibraryReady = autoFaqLibraryReady(profile);
   const configuredAutonomy: AutonomyLevel = autonomy === 'auto' && !faqLibraryReady ? 'draft' : autonomy;
-  const nightAllowsAuto = night.active && action === 'auto_faq_reply' && approvedFaqHit;
-  const effectiveAutonomy: AutonomyLevel = night.active && !nightAllowsAuto
-    ? (configuredAutonomy === 'remind' ? 'remind' : 'draft')
+  const approvedSafeIntent = action === 'auto_faq_reply' && approvedFaqHit;
+  const effectiveAutonomy: AutonomyLevel = configuredAutonomy === 'auto' && !approvedSafeIntent
+    ? 'draft'
     : configuredAutonomy;
   const decision = decideAction(action, effectiveAutonomy);
   if (night.active && decision.decision !== 'auto') {
     blockedAutoReplyReason = blockedAutoReplyReason || '夜班模式：非工作时间仅自动回复已审批常见问题和低风险动作';
+  } else if (!night.active && configuredAutonomy === 'auto' && !approvedSafeIntent) {
+    blockedAutoReplyReason = blockedAutoReplyReason || '负责人工作时间：除高置信已审批 FAQ 外，AI 只生成草稿';
   }
 
   if (decision.decision === 'auto') {
     const guard = await guardOutbound(draft, { tenantId, customerId: customer.id, action });
     if (guard.allowed) {
+      let sentMessages: string[] = [];
       try {
-        await sendTenantWhatsAppText(tenantId, message.waNumber, draft);
+        sentMessages = await sendTenantWhatsAppText(tenantId, message.waNumber, draft);
       } catch (error) {
         addInteraction({
           id: `${customer.id}-send-failed-${Date.now()}`,
@@ -1092,24 +1227,31 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
           patch: {
             handlingMode: 'ai_draft',
             handlingReason: 'AI 自动回复未真正发出，需要你确认后重发',
-          pendingDraft: draft,
-          blockedAutoReplyReason: error instanceof Error ? error.message : 'WhatsApp send failed',
-          knowledgeMissStreak: nextMissStreak,
-        },
-      });
+            pendingDraft: draft,
+            blockedAutoReplyReason: error instanceof Error ? error.message : 'WhatsApp send failed',
+            knowledgeMissStreak: nextMissStreak,
+          },
+        });
+        await notifyCustomerHandoff({
+          tenantId,
+          customer: handoffCustomerContext(customer),
+          message: message.body,
+          decision: automationFailureHandoff(error instanceof Error ? error.message : 'WhatsApp send failed'),
+        }).catch(() => undefined);
         return;
       }
-      addInteraction({
-        id: `${customer.id}-ai-${Date.now()}`,
+      const sentAt = Date.now();
+      sentMessages.forEach((body, index) => addInteraction({
+        id: `${customer.id}-ai-${sentAt}-${index}`,
         tenantId,
         customerId: customer.id,
         waNumber: message.waNumber,
         type: 'msg_out_ai',
-        body: draft,
-        timestamp: Date.now(),
+        body,
+        timestamp: sentAt + index,
         autoSent: true,
-        audit: { action, risk: decision.rule.risk, autonomy, evidence: context.evidence },
-      });
+        audit: { action, risk: decision.rule.risk, autonomy, evidence: context.evidence, messageIndex: index, messageCount: sentMessages.length },
+      }));
       if (night.active) recordNightModeEvent({ tenantId, customerId: customer.id, kind: 'auto' });
       upsertCustomer({
         tenantId,
@@ -1197,20 +1339,22 @@ export function getWhatsAppImportStatus(): ImportStatus {
   return importStatus();
 }
 
-export function markWhatsAppHumanReply(input: { tenantId: string; customerId: string; body: string; waNumber?: string }): void {
+export function markWhatsAppHumanReply(input: { tenantId: string; customerId: string; body: string; messages?: string[]; waNumber?: string }): void {
   const customer = customers().find(item => item.tenantId === input.tenantId && item.id === input.customerId);
   const waNumber = input.waNumber || customer?.waNumber;
   if (!customer || !waNumber) return;
-  addInteraction({
-    id: `${customer.id}-human-${Date.now()}`,
-    tenantId: input.tenantId,
-    customerId: customer.id,
-    waNumber,
-    type: 'msg_out_human',
-    body: input.body,
-    timestamp: Date.now(),
-    audit: { clearsKnowledgeMissStreak: true },
-  });
+  const sentMessages = input.messages?.length ? input.messages : [input.body];
+  const baseTimestamp = Date.now();
+  sentMessages.forEach((body, index) => addInteraction({
+      id: `${customer.id}-human-${baseTimestamp}-${index}`,
+      tenantId: input.tenantId,
+      customerId: customer.id,
+      waNumber,
+      type: 'msg_out_human',
+      body,
+      timestamp: baseTimestamp + index,
+      audit: { clearsKnowledgeMissStreak: true, messageIndex: index, messageCount: sentMessages.length },
+    }));
   upsertCustomer({
     tenantId: input.tenantId,
     waNumber,
@@ -1218,6 +1362,8 @@ export function markWhatsAppHumanReply(input: { tenantId: string; customerId: st
       handlingMode: 'ai_draft',
       handlingReason: '人工已回复，AI 继续辅助跟进',
       knowledgeMissStreak: 0,
+      fallbackCount: 0,
+      handoffDueAt: undefined,
       blockedAutoReplyReason: undefined,
       pendingDraft: undefined,
       hasUnread: false,
@@ -1319,7 +1465,13 @@ export function getWhatsAppCustomers(tenantId?: string): any[] {
       estimatedValue: '$0',
       stage: customer.stage,
       intentScore: customer.intentScore,
-      intentSignals: ['真实 WhatsApp 消息', customer.blockedAutoReplyReason ? '自动回复已拦截' : '待持续评分'],
+      intentSignals: [
+        '真实 WhatsApp 消息',
+        customer.bant ? `BANT ${customer.bant.total}/100` : 'BANT 待评分',
+        customer.blockedAutoReplyReason ? '自动回复已拦截' : `推进：${customer.progressionGoal?.label || '待识别'}`,
+      ],
+      bant: customer.bant,
+      progressionGoal: customer.progressionGoal,
       handlingMode: customer.handlingMode,
       handlingReason: customer.handlingReason,
       aiAutoCount: customer.aiAutoCount,
@@ -1329,6 +1481,9 @@ export function getWhatsAppCustomers(tenantId?: string): any[] {
       waNumber: customer.waNumber,
       blockedAutoReplyReason: customer.blockedAutoReplyReason,
       pendingDraft: customer.pendingDraft,
+      knowledgeMissStreak: customer.knowledgeMissStreak,
+      fallbackCount: customer.fallbackCount,
+      handoffDueAt: customer.handoffDueAt,
       priority,
       inboxReason: customer.handlingMode === 'human_needed' ? 'reply' : customer.handlingMode === 'ai_draft' ? 'draft' : 'reply',
       lastActive: '刚刚',
@@ -1379,4 +1534,34 @@ export function getWhatsAppKnowledgeSamples(
       messages: messages.sort((a, b) => a.timestamp - b.timestamp).slice(-30),
     }))
     .filter(sample => sample.messages.some(message => message.actor === 'buyer'));
+}
+
+export function getWhatsAppWinningStyleSamples(tenantId: string, maxSamples = 200): WinningStyleSample[] {
+  const wonCustomerIds = new Set(customers()
+    .filter(customer => customer.tenantId === tenantId && (
+      customer.stage === 'won' || (customer.orders ?? []).some(order => order.status === 'paid')
+    ))
+    .map(customer => customer.id));
+  if (!wonCustomerIds.size) return [];
+  const grouped = new Map<string, StoredInteraction[]>();
+  interactions()
+    .filter(item => item.tenantId === tenantId && wonCustomerIds.has(item.customerId) && item.type !== 'system')
+    .sort((left, right) => left.timestamp - right.timestamp)
+    .forEach(item => {
+      const list = grouped.get(item.customerId) ?? [];
+      list.push(item);
+      grouped.set(item.customerId, list);
+    });
+
+  const samples: WinningStyleSample[] = [];
+  for (const [customerId, items] of grouped) {
+    let latestBuyer = '';
+    for (const item of items) {
+      if (item.type === 'msg_in') latestBuyer = item.body;
+      if (item.type === 'msg_out_human' && latestBuyer && item.body.trim()) {
+        samples.push({ customerId, buyer: latestBuyer, seller: item.body });
+      }
+    }
+  }
+  return samples.slice(-Math.max(1, Math.min(500, maxSamples)));
 }

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { callLLM } from '../agents/llm.js';
 import { store } from '../storage/index.js';
 import type { ConversationTurn } from './retrieve.js';
+import { progressionForStrategy } from '../sales/salesSkill.js';
 
 export interface ResponseStrategy {
   id: string;
@@ -244,7 +245,9 @@ export function buildStrategyPromptBlock(matches: RetrievedStrategy[]): string {
     'Mandatory precedence: current redline rules and enterprise knowledge > response strategy > seller style memory.',
     'Use strategies to decide how to ask, explain, negotiate, follow up, or hand off. Never treat a strategy or its examples as evidence for price, discount, MOQ, inventory, certification, payment, shipping, lead time, capability, or any other company fact.',
     'Never copy numbers or company claims from strategy examples. If a strategy conflicts with current enterprise facts or redline rules, ignore the conflicting strategy instruction.',
-    ...matches.map((match, index) => [
+    ...matches.map((match, index) => {
+      const progression = progressionForStrategy(match.strategy.id);
+      return [
       `Matched strategy ${index + 1}: ${match.strategy.id} ${match.strategy.scenario} (confidence=${match.confidence.toFixed(2)})`,
       `Why matched: ${match.reason}`,
       `Buyer intent: ${match.strategy.intent}`,
@@ -252,10 +255,13 @@ export function buildStrategyPromptBlock(matches: RetrievedStrategy[]): string {
       `Risk link: ${match.strategy.risk_link}`,
       match.strategy.escalate ? `Handoff condition: ${match.strategy.escalate}` : '',
       match.strategy.examples.length ? `Wording references only: ${match.strategy.examples.join(' | ')}` : '',
+      progression ? `Progression goal for this strategy: ${progression.goal}` : '',
+      progression ? `Optional indirect question (ask only one if it fits the current turn): ${progression.indirectQuestion}` : '',
       match.learnedAdjustment
         ? `Tenant preference learned from ${match.learnedEvidenceCount} real edited replies: ${match.learnedAdjustment}`
         : '',
-    ].filter(Boolean).join('\n')),
+      ].filter(Boolean).join('\n');
+    }),
   ].join('\n');
 }
 

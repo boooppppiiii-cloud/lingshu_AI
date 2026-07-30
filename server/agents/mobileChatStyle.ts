@@ -1,5 +1,9 @@
 const MARKDOWN_OR_LIST_PATTERN = /(^|\n)\s*(?:#{1,6}\s+|>\s+|[-*+•◦▪▫◆◇]\s+|\d+[.)]\s+|[-*+]\s*\[[ xX]\]\s+)|\*\*[^*]+\*\*|__[^_]+__|```|`[^`]+`/m;
 const FORMAL_TRANSLATION_PATTERN = /\b(?:thank you for your inquiry|we would be delighted|please be advised|we are pleased to|kindly (?:provide|note|confirm)|happy to assist|feel free to contact us|at your earliest convenience)\b/i;
+const CJK_PATTERN = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/u;
+const MAX_MESSAGES = 3;
+const MAX_CJK_CHARS = 30;
+const MAX_LATIN_WORDS = 25;
 
 export function normalizeMobileChatFormatting(value: unknown): string {
   const raw = String(value || '')
@@ -33,7 +37,7 @@ export function normalizeMobileChatFormatting(value: unknown): string {
   let keptEmoji = false;
   return naturalized
     .replace(/\p{Extended_Pictographic}/gu, emoji => {
-      if (!keptEmoji && /^(?:👍|😊|👌)$/.test(emoji)) {
+      if (!keptEmoji && /^(?:👍|😊|👌|🙌|✨|📦)$/.test(emoji)) {
         keptEmoji = true;
         return emoji;
       }
@@ -42,6 +46,78 @@ export function normalizeMobileChatFormatting(value: unknown): string {
     .replace(/\uFE0F/g, '')
     .replace(/\s{2,}/g, ' ')
     .trim();
+}
+
+function messageUnits(value: string): number {
+  if (CJK_PATTERN.test(value)) {
+    return Array.from(value.replace(/\s/g, '')).length;
+  }
+  return value.split(/\s+/).filter(Boolean).length;
+}
+
+function messageLimit(value: string): number {
+  return CJK_PATTERN.test(value) ? MAX_CJK_CHARS : MAX_LATIN_WORDS;
+}
+
+function hardSplit(value: string): string[] {
+  const limit = messageLimit(value);
+  if (messageUnits(value) <= limit) return [value.trim()];
+  if (!CJK_PATTERN.test(value)) {
+    const words = value.split(/\s+/).filter(Boolean);
+    const chunks: string[] = [];
+    for (let index = 0; index < words.length; index += limit) {
+      chunks.push(words.slice(index, index + limit).join(' '));
+    }
+    return chunks;
+  }
+
+  const chunks: string[] = [];
+  let current = '';
+  for (const char of Array.from(value.trim())) {
+    const candidate = `${current}${char}`;
+    if (messageUnits(candidate) > limit && current.trim()) {
+      chunks.push(current.trim());
+      current = char;
+    } else {
+      current = candidate;
+    }
+  }
+  if (current.trim()) chunks.push(current.trim());
+  return chunks;
+}
+
+/**
+ * Turns a model draft into WhatsApp-sized bubbles. This is the final, deterministic
+ * guard: at most three bubbles, at most two sentences per bubble, and a compact
+ * per-bubble word/character budget. Any overflow is dropped instead of silently
+ * sending a wall of text after the third bubble.
+ */
+export function planMobileChatMessages(value: unknown): { messages: string[]; truncated: boolean } {
+  const normalized = normalizeMobileChatFormatting(value);
+  if (!normalized) return { messages: [], truncated: false };
+  const sentences = normalized.match(/[^.!?。！？]+[.!?。！？]?/gu)?.map(item => item.trim()).filter(Boolean) ?? [normalized];
+  const pieces = sentences.flatMap(hardSplit);
+  const messages: string[] = [];
+  let current = '';
+  let sentenceCount = 0;
+
+  for (const piece of pieces) {
+    const candidate = current ? `${current} ${piece}` : piece;
+    if (current && (sentenceCount >= 2 || messageUnits(candidate) > messageLimit(candidate))) {
+      messages.push(current.trim());
+      current = piece;
+      sentenceCount = 1;
+    } else {
+      current = candidate;
+      sentenceCount += 1;
+    }
+  }
+  if (current.trim()) messages.push(current.trim());
+  return { messages: messages.slice(0, MAX_MESSAGES), truncated: messages.length > MAX_MESSAGES };
+}
+
+export function splitMobileChatMessages(value: unknown): string[] {
+  return planMobileChatMessages(value).messages;
 }
 
 function isDetailedBuyerMessage(message: string): boolean {
@@ -56,6 +132,7 @@ export function shouldReshapeMobileChatDraft(draft: string, latestBuyerMessage: 
   const value = String(draft || '').trim();
   if (!value) return false;
   if (MARKDOWN_OR_LIST_PATTERN.test(value) || FORMAL_TRANSLATION_PATTERN.test(value)) return true;
+  if (planMobileChatMessages(value).truncated) return true;
   const detailed = isDetailedBuyerMessage(latestBuyerMessage);
   if (value.length > 720) return true;
   if (!detailed && value.length > Math.max(280, latestBuyerMessage.trim().length * 5)) return true;
@@ -65,7 +142,8 @@ export function shouldReshapeMobileChatDraft(draft: string, latestBuyerMessage: 
 export function mobileChatRewritePrompt(draft: string, latestBuyerMessage: string, language: string): string {
   return [
     'Rewrite one seller reply so it sounds typed by a real, experienced Yiwu trader on a phone.',
-    `Use ${language} throughout. Return one plain-text WhatsApp message only.`,
+    `Use ${language} throughout. Return one to three plain-text WhatsApp messages separated by a blank line.`,
+    'Each message must contain at most two sentences and about 30 Chinese characters or 25 English words.',
     'Keep every supported business fact and the original intent. Do not add product facts, prices, promises, or capabilities.',
     'Match the length to the buyer: keep a casual message brief; give a serious detail question only the extra explanation it genuinely needs.',
     'Use natural spoken trade language, not an essay, brochure, customer-service template, or polished marketing copy.',
