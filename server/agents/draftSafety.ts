@@ -12,6 +12,14 @@ const FACTUAL_RISK_PATTERNS: Array<{ label: string; pattern: RegExp }> = [
     pattern: /\bwe\s+can\s+(?:supply|produce|manufacture|customi[sz]e|deliver|ship|offer|provide|support|meet|accept|certify|guarantee)\b/i,
   },
   {
+    label: 'product attribute claim',
+    pattern: /\b(?:made (?:of|from|with)|material\s*(?:is|:)|comes? in|available in|dimensions?\s*(?:are|is|:)|sizes?\s*(?:are|is|:)|colou?rs?\s*(?:are|is|:)|weights?\s*(?:are|is|:)|capacity\s*(?:is|:)|voltage\s*(?:is|:)|ingredients?\s*(?:are|is|:)|certified|waterproof|food[- ]grade)\b/i,
+  },
+  {
+    label: 'order or logistics status claim',
+    pattern: /\b(?:has shipped|have shipped|was shipped|dispatched|in transit|on the way|tracking number|order status|invoice (?:is|has|was)|payment (?:is|has|was))\b/i,
+  },
+  {
     label: 'claimed conversation memory',
     pattern: /\b(?:you|your (?:team|company))\s+(?:said|mentioned|asked|needed|wanted|preferred|confirmed|were looking|had chosen|agreed)\b/i,
   },
@@ -37,4 +45,8 @@ export function draftFactualRiskSignals(draft: string, factualSource: string): s
     .map(item => item.label);
   if (unsupportedDraftNumbers(draft, factualSource).length) signals.push('number absent from supplied evidence');
   return Array.from(new Set(signals));
+}
+
+export function requiresFactualVerification(signals: string[], knowledgeMiss: boolean): boolean {
+  return knowledgeMiss || signals.length > 0;
 }

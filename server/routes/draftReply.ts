@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { callLLM } from '../agents/llm.js';
-import { conciseGreetingReply, conversationToneGuidance, hasPreviousConversation, isSimpleGreetingMessage } from '../agents/conversationTone.js';
-import { draftFactualRiskSignals, unsupportedDraftNumbers } from '../agents/draftSafety.js';
+import { conciseGreetingReply, conversationPhase, conversationToneGuidance, isSimpleGreetingMessage, timelineTimestampMs } from '../agents/conversationTone.js';
+import { draftFactualRiskSignals, requiresFactualVerification, unsupportedDraftNumbers } from '../agents/draftSafety.js';
+import { mobileChatRewritePrompt, normalizeMobileChatFormatting, shouldReshapeMobileChatDraft } from '../agents/mobileChatStyle.js';
 import { isGreetingOrProcessIntent, retrieveContext, type RetrievedContext } from '../knowledge/retrieve.js';
 import { buildKnowledgePromptBlock } from '../knowledge/promptBlocks.js';
 import { buildStyleMemoryPromptBlock, retrieveStyleMemories } from '../knowledge/styleMemory.js';
@@ -23,16 +24,19 @@ const SYSTEM_PROMPT = `你是一位在义乌做了多年外贸的资深业务员
 
 你的工作方式：
 - 像一个记得客户的人。先读最近的对话，顺着之前聊过的需求、看过的产品和已经确认的信息继续，不重新开场，也不让客户重复自己。
+- 先看 Conversation phase。只有 first_contact 或客户间隔超过 30 分钟重新回来（resumed）时才问候；ongoing 表示正在连续聊天，直接接他刚才的话，绝不每条都说 hi、hello、hi again，也不重新欢迎客户。
 - 长度跟着语境走。客户随口问一句，就轻松地短回一句；客户认真问产品细节，可以多说几句解释清楚。保留该有的热情，但不堆无助于成交的废话。
+- 写得像真人拿手机打字：只用纯文本，不用标题、Markdown、加粗、勾选框、项目符号、编号或装饰符号。真有两三点要说，就用“一个是……另外……”这类自然口语串起来。
+- 英语要像真实外贸业务员随口聊生意，直接、好懂、有温度，不写成作文、营销文案或翻译腔。可以说 “You want to add skincare to your shop?”、“Tell me the quantity you need and I’ll check the best option for you.”，不需要故意使用复杂完整的书面句式。
 - 当前企业知识与业务规则是事实底稿；匹配到的回复策略只决定怎么推进对话；商家真实回复中学到的风格只决定怎么说。三者发生冲突时，事实与红线优先。
 - Product 是可以告诉客户的产品名；Internal product name 和 Specific instruction 是商家内部信息，只用来帮助理解，不直接透露。
-- 问候或含糊开场时，从轻松自然的交流开始；有明确问题时，就直接回应问题并给出顺手的下一步。
+- 第一次问候或跨会话回来时，从轻松自然的交流开始；连续对话或有明确问题时，直接回应并给出顺手的下一步。
 - 客户要通话时，像真实业务员一样承接，并询问方便的时间。
 - 始终使用 Language 指定的语言，保持当地买家日常聊天的自然表达。
 
 你守住两条做生意的底线：
 1. 公司、产品、价格、库存、MOQ、认证、物流、付款、交期和能力承诺都必须有当前企业资料或对话证据，拿不准就自然说明需要确认，不猜、不编。
-2. 最终只给出一条可直接发给客户的回复，不附解释、标签、多个版本或内部说明。`;
+2. 最终只给出一条可直接发给客户的纯文本回复，不附解释、标签、多个版本或内部说明。`;
 
 const HANDOFF_SYSTEM_PROMPT = `You are Lingshu AI's handoff summarizer.
 Return exactly three short Chinese lines for the seller, not for the buyer:
@@ -46,6 +50,24 @@ function cleanDraft(raw: string): string {
     .replace(/```[\s\S]*?```/g, block => block.replace(/```[a-z]*|```/gi, '').trim())
     .replace(/^["'`]+|["'`]+$/g, '')
     .trim();
+}
+
+const MOBILE_CHAT_REWRITE_SYSTEM_PROMPT = `You reshape one customer-facing reply for a real WhatsApp conversation.
+Keep the business meaning and supported facts unchanged. Add no facts or promises.
+Write one natural plain-text mobile message in the requested language. No Markdown, headings, lists, checkboxes, bullets, or decorative symbols.
+Use direct everyday trade language, not formal customer-service or marketing copy.`;
+
+async function shapeMobileChatDraft(draft: string, latestMessage: string, language: string): Promise<string> {
+  const normalized = normalizeMobileChatFormatting(draft);
+  if (!shouldReshapeMobileChatDraft(draft, latestMessage)) return normalized;
+  try {
+    const rewritten = cleanDraft(await callLLM(mobileChatRewritePrompt(draft, latestMessage, language), {
+      systemPrompt: MOBILE_CHAT_REWRITE_SYSTEM_PROMPT,
+    }));
+    return normalizeMobileChatFormatting(rewritten) || normalized;
+  } catch {
+    return normalized;
+  }
 }
 
 function rememberedProductForGreeting(timeline: any[], productValue: unknown): string {
@@ -62,8 +84,10 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
   const intent = normalizeIntent(body.intent || body.mode);
   const language = String(body.language ?? '').trim() || 'English';
   const latestMessage = latestBuyerMessage(timeline) || String(body.message || body.instruction || body.product || '');
+  const phase = conversationPhase(timeline);
   const processIntent = isGreetingOrProcessIntent(latestMessage);
   body.__latestMessage = latestMessage;
+  body.__conversationPhase = phase;
   const quoteRequest = intent !== 'polish'
     && intent !== 'handoff_summary'
     && /\b(price|quote|quotation|discount|unit cost|how much)\b|报价|价格|单价|多少钱|折扣|优惠/i.test(latestMessage);
@@ -123,8 +147,8 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
       const actor = String(event?.actor ?? 'unknown');
       const type = String(event?.type ?? 'message');
       const text = String(event?.body ?? '');
-      const rawTimestamp = Number(event?.timestamp);
-      const time = Number.isFinite(rawTimestamp) ? new Date(rawTimestamp).toISOString() : String(event?.time || '');
+      const timestampMs = timelineTimestampMs(event);
+      const time = timestampMs !== null ? new Date(timestampMs).toISOString() : String(event?.time || '');
       return `- ${time ? `[${time}] ` : ''}${actor}/${type}: ${text}`;
     }).join('\n'),
     '',
@@ -139,9 +163,11 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
     const raw = await callLLM(prompt, { systemPrompt: intent === 'handoff_summary' ? HANDOFF_SYSTEM_PROMPT : SYSTEM_PROMPT });
     const draft = cleanDraft(raw);
     const generationFallback = intent === 'reply' && isSimpleGreetingMessage(latestMessage)
-      ? conciseGreetingReply(language, hasPreviousConversation(timeline), rememberedGreetingProduct)
+      ? conciseGreetingReply(language, phase, rememberedGreetingProduct)
       : fallbackDraft(body, intent, suppressPrice);
-    const candidateDraft = draft || generationFallback;
+    const candidateDraft = intent === 'handoff_summary'
+      ? draft || generationFallback
+      : await shapeMobileChatDraft(draft || generationFallback, latestMessage, language);
     const verification = await verifyGeneratedDraft({
       draft: candidateDraft,
       latestMessage,
@@ -153,18 +179,27 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
       sellerInstruction: String(body.instruction || ''),
       fallback: () => factualSafetyFallback(body, intent),
     });
-    const finalDraft = sanitizeDraft(verification.draft, body, intent, suppressPrice, hardNoPriceDigits);
+    const chatReadyDraft = intent === 'handoff_summary'
+      ? verification.draft
+      : normalizeMobileChatFormatting(verification.draft);
+    const finalDraft = sanitizeDraft(chatReadyDraft, body, intent, suppressPrice, hardNoPriceDigits);
     const finalVerification: DraftVerification = finalDraft === verification.draft
       ? verification
       : {
           draft: finalDraft,
-          status: 'revised',
-          issues: [...verification.issues, '已移除需要人工确认的商业事实或承诺'],
+          status: verification.status === 'safe_fallback' ? 'safe_fallback' : 'revised',
+          issues: [
+            ...verification.issues,
+            ...(chatReadyDraft !== verification.draft ? ['已整理为 WhatsApp 纯文本格式'] : []),
+            ...(finalDraft !== chatReadyDraft ? ['已移除需要人工确认的商业事实或承诺'] : []),
+          ],
         };
     res.json({
       draft: finalVerification.draft,
       evidence: [...context.evidence, ...strategyEvidence(strategies), verificationEvidence(finalVerification)],
       products: context.products,
+      knowledgeReady: context.knowledgeReady,
+      knowledgeSafetyMode: !context.knowledgeReady ? 'setup_required' : context.knowledgeMiss ? 'missing_knowledge' : 'grounded',
       knowledgeMiss: context.knowledgeMiss,
       missReason: context.missReason,
       sentiment: context.sentiment,
@@ -180,12 +215,14 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
     });
   } catch (error) {
     const safeDraft = intent === 'reply' && isSimpleGreetingMessage(latestMessage)
-      ? conciseGreetingReply(language, hasPreviousConversation(timeline), rememberedGreetingProduct)
+      ? conciseGreetingReply(language, phase, rememberedGreetingProduct)
       : fallbackDraft(body, intent, suppressPrice);
     res.json({
       draft: sanitizeDraft(safeDraft, body, intent, suppressPrice, hardNoPriceDigits),
       evidence: [...context.evidence, ...strategyEvidence(strategies)],
       products: context.products,
+      knowledgeReady: context.knowledgeReady,
+      knowledgeSafetyMode: !context.knowledgeReady ? 'setup_required' : context.knowledgeMiss ? 'missing_knowledge' : 'grounded',
       knowledgeMiss: context.knowledgeMiss,
       missReason: context.missReason,
       sentiment: context.sentiment,
@@ -255,6 +292,7 @@ async function verifyGeneratedDraft(input: {
   const factualSource = JSON.stringify({
     buyerMessage: input.latestMessage,
     sellerInstruction: input.sellerInstruction,
+    knowledgeReady: input.context.knowledgeReady,
     company: input.context.companyIntro,
     businessRules: input.context.bizRules,
     matchedFaq: input.context.faqMatch,
@@ -269,7 +307,7 @@ async function verifyGeneratedDraft(input: {
   }));
   const newNumbers = unsupportedDraftNumbers(input.draft, factualSource);
   const factualRiskSignals = draftFactualRiskSignals(input.draft, factualSource);
-  if (!factualRiskSignals.length) {
+  if (!requiresFactualVerification(factualRiskSignals, input.context.knowledgeMiss)) {
     return { draft: input.draft, status: 'verified', issues: [] };
   }
   const prompt = [
@@ -282,7 +320,8 @@ async function verifyGeneratedDraft(input: {
     'Allowed riskTypes are only unsupported_fact, unsupported_commercial_commitment, and prohibited_price_or_term. Style, tone, wording, length, punctuation, completeness, ambiguity, and question count are never risk types.',
     'Never allow an invented price, stock status, MOQ, certification, order or logistics status, discount, payment term, lead time, delivery promise, or company capability.',
     'Dialogue strategies may guide wording and next-step tactics, but they are never evidence for a factual claim.',
-    input.context.knowledgeMiss ? 'Knowledge miss is true. This alone is not a failure; fail only if the proposed reply presents the missing business fact as true.' : '',
+    !input.context.knowledgeReady ? 'Enterprise knowledge is not configured. Pass only acknowledgements, clarification questions, or statements that the seller will check; remove every enterprise, product, capability, or commercial fact not stated by the buyer.' : '',
+    input.context.knowledgeMiss ? 'Knowledge miss is true. This alone is not a failure; a natural acknowledgement or clarification question may pass. Revise or hand off if the reply presents the missing business fact as true.' : '',
     newNumbers.length ? `Deterministic check found numbers absent from evidence: ${newNumbers.join(', ')}. They must be removed unless they are only formatting.` : '',
     `Detected factual-risk signals: ${factualRiskSignals.join(', ')}`,
     `Customer reply language context: ${input.language}. Preserve it if you revise.`,
@@ -419,11 +458,8 @@ function noPriceFallback(body: any, intent: ReturnType<typeof normalizeIntent>):
 }
 
 function fallbackDraft(body: any, intent: ReturnType<typeof normalizeIntent>, suppressPrice = false): string {
-  if (intent === 'reply' && isGreetingOrProcessIntent(String(body.__latestMessage || ''))) {
-    const language = normalizeLanguage(body.language);
-    if (language === 'arabic') return 'أهلًا! قل لي، كيف أقدر أساعدك اليوم؟';
-    if (language === 'spanish') return '¡Hola! Cuéntame, ¿qué estás buscando?';
-    return 'Hey! What are you looking for today?';
+  if (intent === 'reply' && isSimpleGreetingMessage(String(body.__latestMessage || ''))) {
+    return conciseGreetingReply(body.language, body.__conversationPhase || 'first_contact');
   }
   if (suppressPrice && intent !== 'handoff_summary') return noPriceFallback(body, intent);
   const product = String(body.product ?? 'the product');

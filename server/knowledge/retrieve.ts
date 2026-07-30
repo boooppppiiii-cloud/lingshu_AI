@@ -58,6 +58,7 @@ export interface RetrievedContext {
   faqMatch: FaqMatch | null;
   products: Array<ProductLite>;
   evidence: string[];
+  knowledgeReady: boolean;
   knowledgeMiss: boolean;
   missReason?: string;
   sentiment?: 'negative' | 'neutral' | 'positive';
@@ -116,6 +117,20 @@ function companyIntro(profile: EnterpriseProfile): string {
     profile.products?.categories ? `主营产品：${profile.products.categories}` : '',
     profile.brand?.usp ? `核心卖点：${profile.brand.usp}` : '',
   ].filter(Boolean).join('\n');
+}
+
+export function enterpriseKnowledgeReady(profile: EnterpriseProfile): boolean {
+  const hasCompanyGrounding = Boolean(text(profile.company?.description) || text(profile.company?.industry) || text(profile.company?.mainMarkets));
+  const hasProductGrounding = (profile.products?.items ?? []).some(item => Boolean(text(item.name) || text(item.sku)));
+  const hasApprovedFaq = (profile.faq ?? []).some(item => item.approvedForAuto && text(item.question) && text(item.answer));
+  const rules = profile.bizRules;
+  const hasBusinessRuleGrounding = Boolean(
+    text(rules?.moq)
+    || text(rules?.samplePolicy)
+    || text(rules?.paymentTerms)
+    || text(rules?.leadTime),
+  );
+  return hasCompanyGrounding || hasProductGrounding || hasApprovedFaq || hasBusinessRuleGrounding;
 }
 
 function faqSource(item: FaqItem): 'manual'|'pack'|'learned' {
@@ -309,6 +324,12 @@ export function isGreetingOrProcessIntent(message: string): boolean {
     || /目录|产品册|物流|运单|发货|发票|形式发票/.test(raw);
 }
 
+export function isSafeWithoutEnterpriseKnowledge(message: string): boolean {
+  const raw = text(message);
+  if (!raw) return true;
+  return /^(hi|hello|hey|hola|buenas|thanks|thank you|ok|okay|are you there|est[aá]n ah[ií]|在吗|你好|您好)[\s?？!.！。]*$/i.test(raw);
+}
+
 function toProductLite(item: NonNullable<EnterpriseProfile['products']['items']>[number]): ProductLite {
   return {
     sku: text(item.sku),
@@ -456,9 +477,10 @@ export async function retrieveContext(
   const faqMatches = faqMatch
     ? [faqMatch.faq, ...lexicalMatches.filter(item => item.q !== faqMatch.faq.q)].slice(0, 5)
     : lexicalMatches;
-  const processIntent = isGreetingOrProcessIntent(message);
   const faqCovered = Boolean(faqMatch && !faqMatch.ambiguous && faqMatch.confidence >= 0.75);
-  const knowledgeMiss = !faqCovered && products.length === 0 && !processIntent;
+  const knowledgeReady = enterpriseKnowledgeReady(profile);
+  const knowledgeMiss = !faqCovered && products.length === 0 && !isSafeWithoutEnterpriseKnowledge(message);
+  if (!knowledgeReady) evidence.push('企业知识尚未配置：AI 只能承接需求、追问必要信息或转人工，不能回答企业与产品事实');
   if (knowledgeMiss) evidence.push('知识库未覆盖：FAQ 与产品均无有效命中，且不是寒暄/流程类意图');
   return {
     companyIntro: companyIntro(profile),
@@ -468,6 +490,7 @@ export async function retrieveContext(
     faqMatch,
     products,
     evidence,
+    knowledgeReady,
     knowledgeMiss,
     missReason: knowledgeMiss ? '客户在问知识库没有的问题' : '',
     sentiment: query?.sentiment ?? heuristicSentiment(message),
