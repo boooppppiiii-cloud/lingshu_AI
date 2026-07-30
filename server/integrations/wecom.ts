@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import axios from 'axios';
 
 function text(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
@@ -54,4 +55,13 @@ export function decryptWeComEcho(input: {
     throw new Error('wecom_corp_id_mismatch');
   }
   return message;
+}
+
+export async function sendWeComMarkdown(webhookUrl: string, content: string): Promise<void> {
+  const target = text(webhookUrl);
+  if (!/^https:\/\//i.test(target)) throw new Error('wecom_robot_webhook_required');
+  await axios.post(target, {
+    msgtype: 'markdown',
+    markdown: { content },
+  });
 }

@@ -7,6 +7,7 @@ import { store } from '../storage/index.js';
 import { getPublicOrigin, getMetaOAuthClient, getTikTokOAuthClient, getYouTubeOAuthClient } from './oauthConfig.js';
 import { sendDingTalkMarkdown, sendDingTalkText } from '../integrations/dingtalk.js';
 import { sendFeishuCard, sendFeishuText } from '../integrations/feishu.js';
+import { sendWeComMarkdown } from '../integrations/wecom.js';
 
 export type TenantPlatform = 'meta' | 'google' | 'tiktok' | 'wecom';
 export type TenantTokenType = 'user_60d' | 'system_user_permanent';
@@ -360,6 +361,7 @@ export interface DeliveryNotificationOptions {
   severity?: DeliveryNotificationSeverity;
   title?: string;
   actions?: Array<{ text: string; url: string }>;
+  receivers?: Array<{ name: string; channel: 'wecom' | 'dingtalk' | 'feishu' | 'sms'; target: string }>;
 }
 
 export async function notifyDeliveryTeam(message: string, options: DeliveryNotificationOptions = {}): Promise<void> {
@@ -374,8 +376,9 @@ export async function notifyDeliveryTeam(message: string, options: DeliveryNotif
     return;
   }
   const tasks: Promise<unknown>[] = [];
-  if (enterpriseNotifications?.receivers.length) {
-    for (const receiver of enterpriseNotifications.receivers) {
+  const selectedReceivers = options.receivers ?? enterpriseNotifications?.receivers ?? [];
+  if (selectedReceivers.length) {
+    for (const receiver of selectedReceivers) {
       if (receiver.channel === 'dingtalk') {
         const actionLinks = (options.actions ?? []).map(action => `[${action.text}](${action.url})`).join('　');
         tasks.push(sendDingTalkMarkdown(
@@ -392,14 +395,24 @@ export async function notifyDeliveryTeam(message: string, options: DeliveryNotif
           color,
           options.actions,
         ));
+      } else if (receiver.channel === 'wecom' && /^https:\/\//i.test(receiver.target)) {
+        const actionLinks = (options.actions ?? []).map(action => `[${action.text}](${action.url})`).join('　');
+        tasks.push(sendWeComMarkdown(
+          receiver.target,
+          `${message}${actionLinks ? `\n${actionLinks}` : ''}`,
+        ));
       } else {
         console.warn(`[delivery-alert:${receiver.channel}] ${receiver.name || receiver.target}: ${message}`);
       }
     }
     if (tasks.length) {
-      await Promise.allSettled(tasks);
+      const results = await Promise.allSettled(tasks);
+      if (results.every(result => result.status === 'rejected')) {
+        throw new Error('notification_delivery_failed');
+      }
+      return;
     }
-    return;
+    throw new Error('notification_receiver_not_deliverable');
   }
   const dingTalkWebhook = text(process.env.DELIVERY_ALERT_DINGTALK_WEBHOOK);
   if (dingTalkWebhook) {
@@ -419,7 +432,8 @@ export async function notifyDeliveryTeam(message: string, options: DeliveryNotif
     console.warn('[delivery-alert]', message);
     return;
   }
-  await Promise.allSettled(tasks);
+  const results = await Promise.allSettled(tasks);
+  if (results.every(result => result.status === 'rejected')) throw new Error('notification_delivery_failed');
 }
 
 async function readTenantNotificationSettings(tenantId: string): Promise<ReturnType<typeof readEnterpriseNotificationSettings>> {

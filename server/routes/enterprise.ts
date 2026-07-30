@@ -1562,10 +1562,23 @@ enterpriseRouter.post('/notifications/test', async (req, res) => {
     res.status(400).json({ error: 'receiver target is required' });
     return;
   }
-  await notifyDeliveryTeam(`[灵枢测试提醒] ${name} (${channel}/${target}) 已接入重要客户提醒。`);
+  const normalizedReceiver: NotificationReceiver = { name, channel, target };
+  try {
+    await notifyDeliveryTeam(`[灵枢测试提醒] ${name} (${channel}/${target}) 已接入重要客户提醒。`, {
+      immediate: true,
+      receivers: [normalizedReceiver],
+    });
+  } catch (error) {
+    res.status(502).json({
+      error: 'notification_test_failed',
+      message: channel === 'sms'
+        ? '短信通道尚未接入供应商，请先改用钉钉、飞书或企业微信群机器人 Webhook。'
+        : `测试消息没有真正送达：${error instanceof Error ? error.message : 'unknown_error'}`,
+    });
+    return;
+  }
   const receivers = [...(profile.notifications?.receivers ?? [])];
   const receiverIndex = receivers.findIndex(item => item.channel === channel && text(item.target) === target);
-  const normalizedReceiver: NotificationReceiver = { name, channel, target };
   if (receiverIndex >= 0) receivers[receiverIndex] = normalizedReceiver;
   else receivers.push(normalizedReceiver);
   const notifications = normalizeNotifications({
