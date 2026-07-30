@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { buildMarketingEvents } from '../../src/components/publishing/marketingCalendar.js';
 
 const root = process.cwd();
 const read = (file: string) => fs.readFileSync(path.join(root, file), 'utf8');
@@ -46,7 +47,19 @@ assert.match(assistantUi, /要补资料？点我/, 'enterprise center must leave
 const publishingUi = read('src/components/TrafficPage.tsx');
 assert.doesNotMatch(publishingUi, /平台发布推荐|publish-recommendations/, 'one-click publishing must not render the removed platform recommendation panel');
 assert.match(publishingUi, /applyContentToAll[\s\S]*?title: activeItem\.title[\s\S]*?description: activeItem\.description[\s\S]*?platformCopy:[\s\S]*?firstComment: activeItem\.firstComment/, 'applying content to all videos must copy the current publishing content');
-assert.match(publishingUi, /当前发布内容应用到全部[\s\S]*?平台账号选择[\s\S]*?内容编辑/, 'publishing queue, account selection, and content editing must remain separate sections');
+assert.match(publishingUi, /发布队列[\s\S]*?平台账号选择[\s\S]*?内容编辑/, 'publishing queue, account selection, and content editing must remain separate sections');
+const calendarPlannerUi = read('src/components/publishing/CalendarPlanner.tsx');
+assert.match(calendarPlannerUi, /tideMonthDays/, 'publishing tide must cover a complete month');
+assert.match(calendarPlannerUi, /onPointerDown=\{startTideDrag\}/, 'publishing tide must support horizontal pointer dragging');
+assert.match(calendarPlannerUi, /全球电商节庆点/, 'publishing tide must label global ecommerce festivals');
+assert.doesNotMatch(calendarPlannerUi, /festivalNoticesByDay|dayFestivalNotices/, 'festival markers must not be rendered inside calendar day cells');
+const events2026 = buildMarketingEvents(new Date(2026, 0, 1));
+const eventDates2026 = Object.fromEntries(events2026.filter(event => event.date.startsWith('2026-')).map(event => [event.id, event.date]));
+assert.equal(eventDates2026['2026-lunar-new-year'], '2026-02-17', '2026 Lunar New Year must use its real calendar date');
+assert.equal(eventDates2026['2026-eid-al-fitr'], '2026-03-20', '2026 Eid al-Fitr must use its real calendar date');
+assert.equal(eventDates2026['2026-diwali'], '2026-11-08', '2026 Diwali must use its real calendar date');
+assert.equal(eventDates2026['2026-black-friday'], '2026-11-27', 'Black Friday must be derived from Thanksgiving');
+assert.equal(eventDates2026['2026-cyber-monday'], '2026-11-30', 'Cyber Monday must be derived from Thanksgiving');
 const studioUi = read('src/components/AiCreateStudio.tsx');
 assert.match(studioUi, /goPublishCurrentWork[\s\S]*?sourceProjectId: projectId \|\| undefined[\s\S]*?platform: platform as/, 'AI materials must carry their project and platform format into one-click publishing');
 const socialSetupGuide = read('docs/客户社媒账号配置与授权操作指南.md');
@@ -75,6 +88,9 @@ assert.match(socialRoutes, /getTikTokClient\(tenantId\)/, 'customer TikTok OAuth
 const platformIntegrationRoutes = read('server/routes/platformIntegrations.ts');
 assert.match(platformIntegrationRoutes, /put\('\/oauth-config', requireAuth[\s\S]*?tenantId[\s\S]*?upsertTenantPlatformApp/, 'customer OAuth credentials must be authenticated and tenant scoped');
 assert.match(platformIntegrationRoutes, /publicTenantPlatformApp/, 'customer OAuth config responses must use the secret-safe public serializer');
+assert.match(platformIntegrationRoutes, /waConfigId:\s*text\(req\.body\?\.metaWhatsAppConfigId\)/, 'customer OAuth config must save the tenant-owned WhatsApp Embedded Signup configuration');
+const socialCredentialsUi = read('src/components/UserSocialAppCredentials.tsx');
+assert.match(socialCredentialsUi, /WhatsAppConnectionPanel[\s\S]*?startWhatsAppEmbeddedSignup/, 'customer integrations must expose WhatsApp Embedded Signup');
 const assistLinks = read('server/routes/assistLinks.ts');
 assert.match(assistLinks, /platform === 'meta' \|\| platform === 'google' \|\| platform === 'tiktok'/, 'assist links must accept TikTok');
 assert.match(assistLinks, /getTenantAwareTikTokOAuthClient\(tenantId\)/, 'TikTok assist links must use the tenant application');

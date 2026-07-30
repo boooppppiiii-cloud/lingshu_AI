@@ -109,7 +109,7 @@ export async function getWhatsAppEmbeddedSignupConfig(tenantId?: string): Promis
       missing.appSecret ? 'App Secret' : '',
       missing.configId ? 'Embedded Signup Config ID' : '',
     ].filter(Boolean).join(' / ');
-    throw new Error(`请先在交付工作台配置 ${fields || 'Meta 应用信息'}`);
+    throw new Error(`请先在集成中心配置 ${fields || 'Meta 应用信息'}`);
   }
   return { appId: String(data.appId), configId: String(data.configId), tenantId: String(data.tenantId || tenantId || '') };
 }

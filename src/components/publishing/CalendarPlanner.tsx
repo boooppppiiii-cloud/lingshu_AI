@@ -16,10 +16,6 @@ import {
 import { authHeader } from '../../lib/auth';
 import {
   buildMarketingEvents,
-  campaignPhase,
-  dateFromKey,
-  daysBetween,
-  eventsForMarket,
   MARKET_OPTIONS,
   timeZoneOffsetHours,
   type MarketId,
@@ -70,13 +66,6 @@ type ViewMode = 'week' | 'month';
 type HoverContentData = { kind: 'post'; post: CalendarPost };
 
 type HoveredContent = HoverContentData & { x: number; y: number };
-
-type CalendarFestivalNotice = {
-  event: MarketingEvent;
-  days: number;
-  phaseLabel: string;
-  isReminder: boolean;
-};
 
 type BestTimeResponse = {
   weekday: number;
@@ -204,6 +193,10 @@ function eventTone(event: MarketingEvent): string {
   if (event.market === 'southeast-asia') return 'border-rose-200 bg-rose-50 text-rose-700';
   if (event.market === 'europe') return 'border-indigo-200 bg-indigo-50 text-indigo-700';
   if (event.market === 'north-america') return 'border-amber-200 bg-amber-50 text-amber-700';
+  if (event.market === 'south-asia') return 'border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700';
+  if (event.market === 'east-asia') return 'border-red-200 bg-red-50 text-red-700';
+  if (event.market === 'latin-america') return 'border-cyan-200 bg-cyan-50 text-cyan-700';
+  if (event.market === 'oceania') return 'border-blue-200 bg-blue-50 text-blue-700';
   return 'border-orange-200 bg-orange-50 text-orange-700';
 }
 
@@ -240,7 +233,7 @@ export function CalendarPlanner({
   const [scores, setScores] = useState<Record<number, number[]>>({});
   const [dragId, setDragId] = useState('');
   const [dragOverDate, setDragOverDate] = useState('');
-  const [hoveredEventDate, setHoveredEventDate] = useState('');
+  const [isTideDragging, setIsTideDragging] = useState(false);
   const [hoveredContent, setHoveredContent] = useState<HoveredContent | null>(null);
   const [interactionMessage, setInteractionMessage] = useState('');
   const [loading, setLoading] = useState(false);
@@ -248,6 +241,8 @@ export function CalendarPlanner({
   const [scoreSource, setScoreSource] = useState('平台参考');
   const calendarTopRef = useRef<HTMLDivElement>(null);
   const calendarScrollRef = useRef<HTMLDivElement>(null);
+  const tideScrollRef = useRef<HTMLDivElement>(null);
+  const tideDragRef = useRef({ pointerId: -1, startX: 0, scrollLeft: 0, moved: false });
 
   const market = MARKET_OPTIONS.find(option => option.id === selectedMarket) ?? MARKET_OPTIONS[0];
   const utcOffset = useMemo(
@@ -291,37 +286,17 @@ export function CalendarPlanner({
     return { from, to };
   }, [days]);
 
-  const marketingEvents = useMemo(
-    () => eventsForMarket(buildMarketingEvents(anchor), selectedMarket),
-    [anchor, selectedMarket],
-  );
+  const tideMonthDays = useMemo(() => {
+    const first = new Date(anchor.getFullYear(), anchor.getMonth(), 1);
+    const dayCount = new Date(anchor.getFullYear(), anchor.getMonth() + 1, 0).getDate();
+    return Array.from({ length: dayCount }, (_, index) => addDays(first, index));
+  }, [anchor]);
 
-  const festivalNoticesByDay = useMemo(() => {
-    const groups: Record<string, CalendarFestivalNotice[]> = {};
-    for (const event of marketingEvents) {
-      groups[event.date] = [
-        ...(groups[event.date] || []),
-        { event, days: 0, phaseLabel: '爆发日', isReminder: false },
-      ];
-    }
-    const todayKey = dateKey(today);
-    const reminders = marketingEvents
-      .map(event => {
-        const eventDate = dateFromKey(event.date);
-        const days = daysBetween(today, eventDate);
-        const phase = campaignPhase(event, today);
-        return {
-          event,
-          days,
-          phaseLabel: phase?.label || '待准备',
-          isReminder: true,
-        };
-      })
-      .filter(notice => notice.days > 0 && notice.days <= 120)
-      .slice(0, 3);
-    if (reminders.length) groups[todayKey] = [...(groups[todayKey] || []), ...reminders];
-    return groups;
-  }, [marketingEvents, dateKey(today)]);
+  const tideEvents = useMemo(() => {
+    const firstKey = dateKey(tideMonthDays[0]);
+    const lastKey = dateKey(tideMonthDays[tideMonthDays.length - 1]);
+    return buildMarketingEvents(anchor).filter(event => event.date >= firstKey && event.date <= lastKey);
+  }, [anchor, tideMonthDays]);
 
   const load = async (silent = false) => {
     if (!silent) {
@@ -329,7 +304,7 @@ export function CalendarPlanner({
       setError('');
     }
     try {
-      const weekdays = Array.from(new Set(days.slice(0, 7).map(day => day.getDay())));
+      const weekdays = [0, 1, 2, 3, 4, 5, 6];
       const [calendar, scoreRows] = await Promise.all([
         api<{ items: CalendarPost[] }>(`/api/overseas/publishing/calendar?from=${encodeURIComponent(iso(range.from))}&to=${encodeURIComponent(iso(range.to))}`),
         Promise.all(weekdays.map(weekday =>
@@ -363,15 +338,28 @@ export function CalendarPlanner({
     return groups;
   }, [items]);
 
-  const selectedScores = scores[selectedDate.getDay()] || [];
-  const tideHours = [0, 4, 8, 12, 16, 20, 23];
-  const tideChartWidth = 1100;
-  const tidePoints = tideHours.map((hour, index) => ({
-    x: (index + 0.5) * (tideChartWidth / 7),
-    y: 82 - (selectedScores[hour] || 0) * 62,
-  }));
+  const tideDayWidth = 106;
+  const tideChartWidth = tideMonthDays.length * tideDayWidth;
+  const tidePoints = tideMonthDays.map((day, index) => {
+    const dayScores = scores[day.getDay()] || [];
+    const peakScore = dayScores.length ? Math.max(...dayScores) : 0.46;
+    return {
+      x: index * tideDayWidth + tideDayWidth / 2,
+      y: 126 - peakScore * 56,
+    };
+  });
   const tideLinePath = smoothChartPath(tidePoints);
-  const tideAreaPath = `${tideLinePath} L ${tidePoints[tidePoints.length - 1].x} 88 L ${tidePoints[0].x} 88 Z`;
+  const tideAreaPath = `${tideLinePath} L ${tidePoints[tidePoints.length - 1].x} 132 L ${tidePoints[0].x} 132 Z`;
+  const selectedScores = scores[selectedDate.getDay()] || [];
+  const selectedBestHour = selectedScores.length
+    ? selectedScores.reduce((bestHour, score, hour, all) => score > all[bestHour] ? hour : bestHour, 0)
+    : 20;
+
+  const eventsByDay = useMemo(() => {
+    const grouped: Record<string, MarketingEvent[]> = {};
+    for (const event of tideEvents) grouped[event.date] = [...(grouped[event.date] || []), event];
+    return grouped;
+  }, [tideEvents]);
 
   const placePendingContent = async (id: string, scheduledAt: Date) => {
     if (!onSchedulePending) throw new Error('排期功能暂不可用');
@@ -446,6 +434,54 @@ export function CalendarPlanner({
     setSelectedDate(startOfDay(next));
   };
 
+  useEffect(() => {
+    const scroller = tideScrollRef.current;
+    if (!scroller) return;
+    const isSelectedInMonth = selectedDate.getFullYear() === anchor.getFullYear()
+      && selectedDate.getMonth() === anchor.getMonth();
+    const targetIndex = isSelectedInMonth ? selectedDate.getDate() - 1 : 0;
+    const targetLeft = Math.max(0, targetIndex * tideDayWidth - scroller.clientWidth / 2 + tideDayWidth / 2);
+    scroller.scrollTo({ left: targetLeft, behavior: 'smooth' });
+  }, [anchor.getFullYear(), anchor.getMonth(), dateKey(selectedDate)]);
+
+  const startTideDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    tideDragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      scrollLeft: event.currentTarget.scrollLeft,
+      moved: false,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setIsTideDragging(true);
+  };
+
+  const moveTideDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (tideDragRef.current.pointerId !== event.pointerId) return;
+    const distance = event.clientX - tideDragRef.current.startX;
+    if (Math.abs(distance) > 5) tideDragRef.current.moved = true;
+    if (!tideDragRef.current.moved) return;
+    event.preventDefault();
+    event.currentTarget.scrollLeft = tideDragRef.current.scrollLeft - distance;
+  };
+
+  const endTideDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (tideDragRef.current.pointerId !== event.pointerId) return;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+      event.currentTarget.releasePointerCapture(event.pointerId);
+    }
+    tideDragRef.current.pointerId = -1;
+    setIsTideDragging(false);
+  };
+
+  const selectTideDate = (day: Date) => {
+    if (tideDragRef.current.moved) {
+      tideDragRef.current.moved = false;
+      return;
+    }
+    setSelectedDate(startOfDay(day));
+  };
+
   return (
     <div className="space-y-3" data-lingshu-guide="content-planner">
       <div className="space-y-3">
@@ -498,59 +534,114 @@ export function CalendarPlanner({
         </div>
 
         <div data-lingshu-guide="publishing-tide" className="mt-3 overflow-hidden rounded-xl border border-emerald-100 bg-emerald-50/30 pb-2 pt-3">
-          <div className="flex flex-wrap items-center justify-between gap-2 px-3">
-            <div className="flex items-center gap-2">
-              <Waves size={14} className="text-emerald-600" />
-              <span className="text-xs font-black text-text-primary">
-                {selectedDate.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' })}发布潮汐
-              </span>
-              {isSameDay(selectedDate, today) && <span className="rounded-full bg-emerald-600 px-2 py-0.5 text-[9px] font-black text-white">今天</span>}
+          <div className="flex flex-wrap items-start justify-between gap-2 px-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <Waves size={14} className="text-emerald-600" />
+                <span className="text-xs font-black text-text-primary">
+                  {anchor.getFullYear()} 年 {anchor.getMonth() + 1} 月发布潮汐
+                </span>
+                <span className="rounded-full bg-white px-2 py-0.5 text-[9px] font-black text-emerald-700 shadow-sm">
+                  本月 {tideMonthDays.length} 天
+                </span>
+              </div>
+              <p className="mt-1 text-[9px] font-bold text-text-muted">按住潮汐左右拖动，可查看整月发布节奏与全球重点电商节庆</p>
             </div>
-            <span className="text-[9px] font-bold text-text-muted">
-              目标市场：{enterpriseMarketLabel} · {scoreSource === '账号真实数据' ? scoreSource : `${scoreSource} · 非账号实测`} · 北京时间
-            </span>
+            <div className="text-right">
+              <p className="text-[9px] font-bold text-text-muted">
+                目标市场：{enterpriseMarketLabel} · {scoreSource === '账号真实数据' ? scoreSource : `${scoreSource} · 非账号实测`}
+              </p>
+              <p className="mt-1 text-[9px] font-black text-emerald-700">
+                {selectedDate.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'short' })} · 建议北京时间 {hourLabel(selectedBestHour)}
+                {market.id !== 'global' && `（${market.timeZoneLabel} ${hourLabel(targetHourFromBeijing(selectedBestHour, utcOffset))}）`}
+              </p>
+            </div>
           </div>
-          <svg viewBox={`0 0 ${tideChartWidth} 104`} preserveAspectRatio="none" className="mt-2 h-[104px] w-full overflow-visible" role="img" aria-label="24 小时发布潮汐平滑曲线图">
-            <defs>
-              <linearGradient id="publishing-tide-fill" x1="0" x2="0" y1="0" y2="1">
-                <stop offset="0%" stopColor="#10b981" stopOpacity="0.28" />
-                <stop offset="100%" stopColor="#10b981" stopOpacity="0.02" />
-              </linearGradient>
-              <filter id="publishing-tide-glow" x="-10%" y="-35%" width="120%" height="170%">
-                <feGaussianBlur stdDeviation="2.2" result="blur" />
-                <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
-              </filter>
-            </defs>
-            {[20, 50, 80].map(y => <line key={y} x1="0" x2={tideChartWidth} y1={y} y2={y} stroke="#d1fae5" strokeDasharray="4 5" />)}
-            {Array.from({ length: 8 }, (_, index) => (
-              <line key={index} x1={index * (tideChartWidth / 7)} x2={index * (tideChartWidth / 7)} y1="10" y2="88" stroke="#ecfdf5" />
-            ))}
-            <path
-              d={tideAreaPath}
-              fill="url(#publishing-tide-fill)"
-            />
-            <path
-              d={tideLinePath}
-              fill="none"
-              stroke="#10b981"
-              strokeWidth="3"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              filter="url(#publishing-tide-glow)"
-            />
-            {tideHours.map((hour, index) => {
-              const score = selectedScores[hour] || 0;
-              const point = tidePoints[index];
-              return (
-                <g key={hour}>
-                  <circle cx={point.x} cy={point.y} r="3.5" fill="#fff" stroke="#059669" strokeWidth="2">
-                    <title>{`北京 ${hour}:00 · ${market.timeZoneLabel} ${hourLabel(targetHourFromBeijing(hour, utcOffset))} · 推荐分 ${Math.round(score * 100)}`}</title>
-                  </circle>
-                  <text x={point.x} y="101" textAnchor="middle" fontSize="8" fill="#64748b">{String(hour).padStart(2, '0')}</text>
-                </g>
-              );
-            })}
-          </svg>
+          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 border-y border-emerald-100/80 bg-white/70 px-3 py-1.5 text-[8px] font-bold text-text-muted">
+            <span className="inline-flex items-center gap-1"><span className="h-2 w-2 rounded-full bg-emerald-500" />发布热度</span>
+            <span className="inline-flex items-center gap-1"><Flag size={9} className="text-orange-500" />全球电商节庆点（标注真实日期）</span>
+            <span className="ml-auto">节庆点仅显示在潮汐中</span>
+          </div>
+          <div
+            ref={tideScrollRef}
+            onPointerDown={startTideDrag}
+            onPointerMove={moveTideDrag}
+            onPointerUp={endTideDrag}
+            onPointerCancel={endTideDrag}
+            className={`overflow-x-auto overflow-y-hidden select-none ${isTideDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+            style={{ touchAction: 'pan-y' }}
+            aria-label={`${anchor.getFullYear()} 年 ${anchor.getMonth() + 1} 月可拖动发布潮汐`}
+          >
+            <div className="relative h-[188px]" style={{ width: tideChartWidth }}>
+              <svg viewBox={`0 0 ${tideChartWidth} 170`} className="absolute inset-x-0 bottom-0 h-[170px]" role="img" aria-label="一个月发布潮汐与全球重点电商节庆图">
+                <defs>
+                  <linearGradient id="publishing-tide-fill" x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0%" stopColor="#10b981" stopOpacity="0.28" />
+                    <stop offset="100%" stopColor="#10b981" stopOpacity="0.02" />
+                  </linearGradient>
+                  <filter id="publishing-tide-glow" x="-10%" y="-35%" width="120%" height="170%">
+                    <feGaussianBlur stdDeviation="2.2" result="blur" />
+                    <feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge>
+                  </filter>
+                </defs>
+                {[76, 104, 132].map(y => <line key={y} x1="0" x2={tideChartWidth} y1={y} y2={y} stroke="#d1fae5" strokeDasharray="4 5" />)}
+                {tideMonthDays.map((day, index) => {
+                  const x = index * tideDayWidth;
+                  const isSelected = isSameDay(day, selectedDate);
+                  return (
+                    <g key={dateKey(day)}>
+                      {isSelected && <rect x={x + 4} y="66" width={tideDayWidth - 8} height="96" rx="12" fill="#dbeafe" opacity="0.72" />}
+                      <line x1={x} x2={x} y1="68" y2="146" stroke="#ecfdf5" />
+                    </g>
+                  );
+                })}
+                {tideEvents.map(event => {
+                  const dayIndex = Number(event.date.slice(-2)) - 1;
+                  const point = tidePoints[dayIndex];
+                  return <line key={`${event.id}-guide`} x1={point.x} x2={point.x} y1="54" y2={point.y - 5} stroke="#f59e0b" strokeWidth="1.5" strokeDasharray="3 4" opacity="0.65" />;
+                })}
+                <path d={tideAreaPath} fill="url(#publishing-tide-fill)" />
+                <path d={tideLinePath} fill="none" stroke="#10b981" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" filter="url(#publishing-tide-glow)" />
+                {tideMonthDays.map((day, index) => {
+                  const dayScores = scores[day.getDay()] || [];
+                  const bestHour = dayScores.length
+                    ? dayScores.reduce((best, score, hour, all) => score > all[best] ? hour : best, 0)
+                    : 20;
+                  const peakScore = dayScores[bestHour] || 0;
+                  const point = tidePoints[index];
+                  const isSelected = isSameDay(day, selectedDate);
+                  return (
+                    <g key={`${dateKey(day)}-point`} onClick={() => selectTideDate(day)} className="cursor-pointer">
+                      <circle cx={point.x} cy={point.y} r={isSelected ? 5 : 3.5} fill="#fff" stroke={isSelected ? '#0284c7' : '#059669'} strokeWidth={isSelected ? 3 : 2}>
+                        <title>{`${day.toLocaleDateString('zh-CN')} · 北京 ${hourLabel(bestHour)} · ${market.timeZoneLabel} ${hourLabel(targetHourFromBeijing(bestHour, utcOffset))} · 推荐分 ${Math.round(peakScore * 100)}`}</title>
+                      </circle>
+                      <text x={point.x} y="157" textAnchor="middle" fontSize="8" fontWeight={isSelected ? 800 : 600} fill={isSelected ? '#0369a1' : '#64748b'}>
+                        {`${day.getMonth() + 1}/${day.getDate()} ${day.toLocaleDateString('zh-CN', { weekday: 'short' })}`}
+                      </text>
+                    </g>
+                  );
+                })}
+              </svg>
+              {tideEvents.map(event => {
+                const dayIndex = Number(event.date.slice(-2)) - 1;
+                const sameDayIndex = (eventsByDay[event.date] || []).findIndex(item => item.id === event.id);
+                const marketLabel = MARKET_OPTIONS.find(option => option.id === event.market)?.label || '全球';
+                return (
+                  <button
+                    key={event.id}
+                    type="button"
+                    onClick={() => selectTideDate(tideMonthDays[dayIndex])}
+                    className={`absolute z-10 w-[96px] rounded-lg border px-1.5 py-1 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${eventTone(event)}`}
+                    style={{ left: dayIndex * tideDayWidth + 5, top: 4 + sameDayIndex * 38 }}
+                    title={`${event.name} · ${event.date} · ${event.note}（${event.source}）`}
+                  >
+                    <span className="flex items-center gap-1 text-[8px] font-black"><Flag size={8} /><span className="truncate">{event.shortName}</span></span>
+                    <span className="mt-0.5 block truncate text-[7px] font-bold opacity-80">{event.date.slice(5).replace('-', '/')} · {marketLabel}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </div>
 
         {interactionMessage && (
@@ -563,10 +654,8 @@ export function CalendarPlanner({
             {days.map(day => {
               const key = dateKey(day);
               const dayItems = itemsByDay[key] || [];
-              const dayFestivalNotices = festivalNoticesByDay[key] || [];
               const isToday = isSameDay(day, today);
               const isSelected = isSameDay(day, selectedDate);
-              const isFestivalHovered = hoveredEventDate === key;
               const isDragTarget = dragOverDate === key;
               const isOutsideMonth = mode === 'month' && day.getMonth() !== anchor.getMonth();
               return (
@@ -599,13 +688,11 @@ export function CalendarPlanner({
                   } ${
                     isDragTarget
                       ? 'scale-[1.015] border-violet-400 bg-violet-50 ring-4 ring-violet-100 shadow-lg'
-                      : isFestivalHovered
-                        ? 'scale-[1.02] border-orange-400 bg-orange-50 ring-4 ring-orange-100 shadow-lg'
-                        : isToday
-                            ? 'border-emerald-400 bg-emerald-50/40 shadow-[0_8px_24px_rgba(16,185,129,0.12)]'
-                            : isSelected
-                              ? 'border-sky-300 bg-sky-50/30 ring-2 ring-sky-100'
-                              : 'border-border bg-white'
+                      : isToday
+                          ? 'border-emerald-400 bg-emerald-50/40 shadow-[0_8px_24px_rgba(16,185,129,0.12)]'
+                          : isSelected
+                            ? 'border-sky-300 bg-sky-50/30 ring-2 ring-sky-100'
+                            : 'border-border bg-white'
                   } ${isOutsideMonth ? 'opacity-45' : ''}`}
                 >
                   <button
@@ -625,40 +712,6 @@ export function CalendarPlanner({
                       {day.getDate()}
                     </span>
                   </button>
-
-                  {dayFestivalNotices.length > 0 && (
-                    <div className="mb-2 space-y-1">
-                      {dayFestivalNotices.slice(0, mode === 'month' ? 1 : 3).map(notice => (
-                        <button
-                          key={`${notice.event.id}-${notice.isReminder ? 'reminder' : 'event'}`}
-                          type="button"
-                          onMouseEnter={() => setHoveredEventDate(key)}
-                          onMouseLeave={() => setHoveredEventDate('')}
-                          onFocus={() => setHoveredEventDate(key)}
-                          onBlur={() => setHoveredEventDate('')}
-                          onClick={() => setSelectedDate(startOfDay(day))}
-                          className={`flex w-full items-start gap-1 rounded-lg border px-1.5 py-1 text-left ${eventTone(notice.event)}`}
-                          title={notice.event.name}
-                        >
-                          <Flag size={9} className="mt-0.5 shrink-0" />
-                          <span className="min-w-0 flex-1">
-                            <span className="flex items-center justify-between gap-1 text-[9px] font-black">
-                              <span className="truncate">{notice.event.shortName}</span>
-                              <span className="shrink-0">{notice.isReminder ? `D-${notice.days}` : '当天'}</span>
-                            </span>
-                            <span className="block truncate text-[8px] font-bold opacity-75">
-                              {dateFromKey(notice.event.date).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })} · {notice.phaseLabel}
-                            </span>
-                          </span>
-                        </button>
-                      ))}
-                      {dayFestivalNotices.length > (mode === 'month' ? 1 : 3) && (
-                        <p className="text-center text-[8px] font-bold text-orange-600">
-                          另有 {dayFestivalNotices.length - (mode === 'month' ? 1 : 3)} 个节庆提醒
-                        </p>
-                      )}
-                    </div>
-                  )}
 
                   {mode === 'week' ? (
                     <div className="mt-auto overflow-hidden rounded-xl border border-slate-100 bg-slate-50/40">

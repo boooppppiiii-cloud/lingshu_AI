@@ -19,6 +19,7 @@ platformIntegrationsRouter.get('/oauth-config', requireAuth, async (req, res) =>
     getTenantPlatformApp(tenantId, 'tiktok'),
   ]);
   const origin = getPublicOrigin(req);
+  const publicMeta = meta ? publicTenantPlatformApp(req, meta) : null;
   res.setHeader('Cache-Control', 'no-store');
   res.json({
     callbacks: {
@@ -27,9 +28,10 @@ platformIntegrationsRouter.get('/oauth-config', requireAuth, async (req, res) =>
       facebook: `${origin}/api/overseas/social/oauth/facebook/callback`,
       tiktok: `${origin}/api/overseas/social/oauth/tiktok/callback`,
     },
+    metaWebhookUrl: publicMeta?.webhookUrl || '',
     apps: {
       google: google ? publicTenantPlatformApp(req, google) : null,
-      meta: meta ? publicTenantPlatformApp(req, meta) : null,
+      meta: publicMeta,
       tiktok: tiktok ? publicTenantPlatformApp(req, tiktok) : null,
     },
   });
@@ -45,10 +47,15 @@ platformIntegrationsRouter.put('/oauth-config', requireAuth, async (req, res) =>
   ]);
   const entries = [
     { platform: 'google' as const, appId: text(req.body?.youtubeOAuthClientId), appSecret: text(req.body?.youtubeOAuthClientSecret) },
-    { platform: 'meta' as const, appId: text(req.body?.metaSocialAppId), appSecret: text(req.body?.metaSocialAppSecret) },
+    {
+      platform: 'meta' as const,
+      appId: text(req.body?.metaSocialAppId),
+      appSecret: text(req.body?.metaSocialAppSecret),
+      waConfigId: text(req.body?.metaWhatsAppConfigId),
+    },
     { platform: 'tiktok' as const, appId: text(req.body?.tiktokClientKey), appSecret: text(req.body?.tiktokClientSecret) },
   ];
-  await Promise.all(entries.filter((entry, index) => existing[index] || entry.appId || entry.appSecret).map(entry => upsertTenantPlatformApp({
+  await Promise.all(entries.filter((entry, index) => existing[index] || entry.appId || entry.appSecret || ('waConfigId' in entry && entry.waConfigId)).map(entry => upsertTenantPlatformApp({
     tenantId,
     ...entry,
   })));
