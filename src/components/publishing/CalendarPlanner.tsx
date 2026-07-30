@@ -340,12 +340,21 @@ export function CalendarPlanner({
 
   const tideDayWidth = 106;
   const tideChartWidth = tideMonthDays.length * tideDayWidth;
-  const tidePoints = tideMonthDays.map((day, index) => {
+  const tidePeakScores = tideMonthDays.map(day => {
     const dayScores = scores[day.getDay()] || [];
-    const peakScore = dayScores.length ? Math.max(...dayScores) : 0.46;
+    return dayScores.length ? Math.max(...dayScores) : 0.46;
+  });
+  const tideMinScore = Math.min(...tidePeakScores);
+  const tideMaxScore = Math.max(...tidePeakScores);
+  const tideScoreSpread = tideMaxScore - tideMinScore;
+  const tidePoints = tideMonthDays.map((day, index) => {
+    const peakScore = tidePeakScores[index];
+    const relativeScore = tideScoreSpread >= 0.02
+      ? (peakScore - tideMinScore) / tideScoreSpread
+      : 0.5;
     return {
       x: index * tideDayWidth + tideDayWidth / 2,
-      y: 126 - peakScore * 56,
+      y: 122 - relativeScore * 48,
     };
   });
   const tideLinePath = smoothChartPath(tidePoints);
