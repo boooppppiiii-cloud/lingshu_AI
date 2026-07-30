@@ -20,7 +20,7 @@ export function normalizeMobileChatFormatting(value: unknown): string {
     .trim())
     .filter(Boolean)
     .join(' ');
-  return plain
+  const naturalized = plain
     .replace(/\bthank you for your inquiry\b/gi, 'Thanks for your message')
     .replace(/\bwe would be delighted to\b/gi, "We'd be glad to")
     .replace(/\bplease be advised(?: that)?\b/gi, 'Just so you know,')
@@ -28,6 +28,18 @@ export function normalizeMobileChatFormatting(value: unknown): string {
     .replace(/\bhappy to assist\b/gi, 'glad to help')
     .replace(/\bfeel free to contact us\b/gi, 'Just message me')
     .replace(/\bat your earliest convenience\b/gi, 'when you can')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
+  let keptEmoji = false;
+  return naturalized
+    .replace(/\p{Extended_Pictographic}/gu, emoji => {
+      if (!keptEmoji && /^(?:👍|😊|👌)$/.test(emoji)) {
+        keptEmoji = true;
+        return emoji;
+      }
+      return '';
+    })
+    .replace(/\uFE0F/g, '')
     .replace(/\s{2,}/g, ' ')
     .trim();
 }

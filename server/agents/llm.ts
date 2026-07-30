@@ -25,11 +25,13 @@ async function callGemini(prompt: string, opts: LLMCallOptions): Promise<string>
   const ai = new GoogleGenAI({ apiKey });
   const model = opts.model ?? process.env.GEMINI_MODEL ?? 'gemini-2.5-flash';
 
-  const contents = opts.systemPrompt
-    ? `${opts.systemPrompt}\n\n${prompt}`
-    : prompt;
-
-  const response = await ai.models.generateContent({ model, contents });
+  const response = await ai.models.generateContent({
+    model,
+    contents: prompt,
+    ...(opts.systemPrompt ? {
+      config: { systemInstruction: { parts: [{ text: opts.systemPrompt }] } },
+    } : {}),
+  });
   return response.text ?? '';
 }
 

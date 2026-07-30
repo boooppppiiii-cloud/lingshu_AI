@@ -17,6 +17,7 @@ assert.equal(
   'Thanks for your message. Just so you know, we are checking it.',
 );
 assert.equal(shouldReshapeMobileChatDraft('The material is ABS, and the size is 20 cm. Tell me if you need the packing details too.', 'Can you explain the material, dimensions, packaging and certification details?'), false);
+assert.equal(normalizeMobileChatFormatting('Got it 👍 😊 🔥'), 'Got it 👍');
 assert.match(mobileChatRewritePrompt(structured, 'hi', 'English'), /plain-text WhatsApp message/);
 assert.match(mobileChatRewritePrompt(structured, 'hi', 'English'), /Do not add product facts/);
 

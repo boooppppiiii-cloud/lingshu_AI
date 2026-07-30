@@ -4,6 +4,7 @@ import { fileURLToPath } from 'url';
 import { decideAction, type AutonomyLevel } from '../autonomy/actionRules.js';
 import { guardOutbound } from '../autonomy/outboundGuard.js';
 import { prioritizeCustomer } from '../autonomy/prioritize.js';
+import { resolveKnowledgeGapPlan, scenarioHasGroundedEvidence } from '../agents/knowledgeGapPlaybook.js';
 import { retrieveContext, type RetrievedContext } from '../knowledge/retrieve.js';
 import { notifyDeliveryTeam } from '../lib/tenantPlatformApps.js';
 import { distillSalesStyleProfile, markStyleMemoryWonForCustomer } from '../knowledge/styleMemory.js';
@@ -882,74 +883,96 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
   }
 
   const inferredAction = inferActionFromText(message.body);
-  if (inferredAction === 'formal_quote') {
-    const reason = '客户正在询价，已标记为等待人工报价';
-    addInteraction({
-      id: `${customer.id}-waiting-human-quote-${Date.now()}`,
-      tenantId,
-      customerId: customer.id,
-      waNumber: message.waNumber,
-      type: 'system',
-      body: `${reason}。AI 不会直接回复价格，请销售确认数量、规格和包装后亲自报价。`,
-      timestamp: Date.now(),
-      audit: { action: 'formal_quote', risk: 'L4', handoff: true, reason },
-      meta: { action: 'formal_quote', waitingForQuote: true, handoff: true, reason },
-    });
-    upsertCustomer({
-      tenantId,
-      waNumber: message.waNumber,
-      patch: {
-        handlingMode: 'human_needed',
-        handlingReason: reason,
-        pendingDraft: undefined,
-        blockedAutoReplyReason: 'waiting_for_human_quote',
-      },
-    });
-    return;
-  }
-
+  const recentConversation = recentConversationForCustomer(tenantId, customer.id);
   const context = await retrieveContext(tenantId, {
     id: customer.id,
     name: customer.name,
     language: customer.language,
     stage: customer.stage,
-  }, message.body, { conversation: recentConversationForCustomer(tenantId, customer.id) });
-  if (context.knowledgeMiss) {
-    addInteraction({
-      id: `${customer.id}-knowledge-miss-${Date.now()}`,
-      tenantId,
-      customerId: customer.id,
-      waNumber: message.waNumber,
-      type: 'system',
-      body: '知识库未覆盖：客户在问资料中没有的问题，已停止自动处理并等待人工确认。',
-      timestamp: Date.now(),
-      audit: { knowledgeMiss: true, buyerMessage: message.body, evidence: context.evidence },
-      meta: { knowledgeMiss: true, buyerMessage: message.body, evidence: context.evidence },
-    });
-  }
+  }, message.body, { conversation: recentConversation });
   const nextMissStreak = context.knowledgeMiss ? (customer.knowledgeMissStreak ?? 0) + 1 : 0;
-  if (context.knowledgeMiss && nextMissStreak >= rules.missStreakToDraft) {
-    const reason = `连续 ${nextMissStreak} 条超出知识库范围`;
-    const draft = draftForMessage(message, context);
+  const gapPlan = resolveKnowledgeGapPlan({
+    message: message.body,
+    language: customer.language,
+    timeline: recentConversation.map(turn => ({ actor: turn.role, body: turn.text })),
+  });
+  const enterpriseEvidenceSource = JSON.stringify({
+    company: context.companyIntro,
+    businessRules: context.bizRules,
+    matchedFaq: context.faqMatch,
+    products: context.products,
+  });
+  const predictableGapWithoutEvidence = gapPlan.scenario !== 'general_unknown'
+    && !scenarioHasGroundedEvidence(gapPlan.scenario, enterpriseEvidenceSource);
+  if (context.knowledgeMiss || predictableGapWithoutEvidence) {
+    const guard = await guardOutbound(gapPlan.draft, { tenantId, customerId: customer.id, action: 'knowledge_gap_bridge' });
+    const shouldAutoBridge = autonomy === 'auto' && gapPlan.safeToSendBeforeHandoff && guard.allowed;
+    let bridgeSent = false;
+    if (shouldAutoBridge) {
+      try {
+        await sendTenantWhatsAppText(tenantId, message.waNumber, gapPlan.draft);
+        bridgeSent = true;
+        addInteraction({
+          id: `${customer.id}-knowledge-gap-bridge-${Date.now()}`,
+          tenantId,
+          customerId: customer.id,
+          waNumber: message.waNumber,
+          type: 'msg_out_ai',
+          body: gapPlan.draft,
+          timestamp: Date.now(),
+          autoSent: true,
+          audit: {
+            knowledgeMiss: context.knowledgeMiss,
+            scenario: gapPlan.scenario,
+            bridgeOnly: true,
+            handoff: true,
+            translatedDraft: gapPlan.draftZh,
+            replyConfidence: gapPlan.replyConfidence,
+            evidence: context.evidence,
+          },
+        });
+      } catch {
+        bridgeSent = false;
+      }
+    }
     addInteraction({
-      id: `${customer.id}-handoff-miss-streak-${Date.now()}`,
+      id: `${customer.id}-knowledge-gap-handoff-${Date.now()}`,
       tenantId,
       customerId: customer.id,
       waNumber: message.waNumber,
       type: 'system',
-      body: reason,
+      body: bridgeSent
+        ? `AI 已先承接客户并转人工：${gapPlan.handlingReason}`
+        : `已生成安全承接草稿并转人工：${gapPlan.handlingReason}`,
       timestamp: Date.now(),
-      audit: { knowledgeMiss: true, handoff: true, reason, missStreak: nextMissStreak, evidence: context.evidence },
-      meta: { knowledgeMiss: true, handoff: true, reason, missStreak: nextMissStreak, evidence: context.evidence },
+      audit: {
+        knowledgeMiss: context.knowledgeMiss,
+        scenario: gapPlan.scenario,
+        bridgeSent,
+        handoff: true,
+        guardRule: guard.allowed ? undefined : guard.matchedRule,
+        replyConfidence: gapPlan.replyConfidence,
+        translatedDraft: gapPlan.draftZh,
+      },
+      meta: { handoff: true, scenario: gapPlan.scenario, bridgeSent },
     });
+    if (nightModeState(profile).active) recordNightModeEvent({ tenantId, customerId: customer.id, kind: bridgeSent ? 'auto' : 'draft' });
+    await notifyDeliveryTeam([
+      '【灵枢人工接管提醒】AI 已完成安全承接',
+      `客户：${customer.name}`,
+      `WhatsApp：${message.waNumber}`,
+      `原因：${gapPlan.handlingReason}`,
+      `客户消息：${message.body}`,
+      bridgeSent ? 'AI 已发送承接话术，请继续处理真实业务信息。' : '承接话术未自动发送，请尽快确认后回复。',
+    ].join('\n'), { immediate: !bridgeSent }).catch(() => undefined);
     upsertCustomer({
       tenantId,
       waNumber: message.waNumber,
       patch: {
-        handlingMode: autonomy === 'remind' ? 'human_needed' : 'ai_draft',
-        handlingReason: reason,
-        pendingDraft: autonomy === 'remind' ? undefined : draft,
-        blockedAutoReplyReason: 'knowledge_miss_streak',
+        handlingMode: 'human_needed',
+        handlingReason: gapPlan.handlingReason,
+        pendingDraft: bridgeSent ? undefined : gapPlan.draft,
+        blockedAutoReplyReason: guard.allowed ? 'knowledge_gap_handoff' : guard.matchedRule || 'knowledge_gap_guard',
         knowledgeMissStreak: nextMissStreak,
       },
     });
@@ -1045,22 +1068,6 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
   const decision = decideAction(action, effectiveAutonomy);
   if (night.active && decision.decision !== 'auto') {
     blockedAutoReplyReason = blockedAutoReplyReason || '夜班模式：非工作时间仅自动回复已审批常见问题和低风险动作';
-  }
-
-  if (context.knowledgeMiss && decision.decision === 'auto') {
-    if (night.active) recordNightModeEvent({ tenantId, customerId: customer.id, kind: 'draft' });
-    upsertCustomer({
-      tenantId,
-      waNumber: message.waNumber,
-      patch: {
-        handlingMode: 'ai_draft',
-        handlingReason: '客户在问知识库没有的问题',
-        pendingDraft: draft,
-        blockedAutoReplyReason: 'knowledge_miss',
-        knowledgeMissStreak: nextMissStreak,
-      },
-    });
-    return;
   }
 
   if (decision.decision === 'auto') {
@@ -1282,6 +1289,7 @@ export function getWhatsAppCustomers(tenantId?: string): any[] {
         time: new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         timestamp: item.timestamp,
         autoSent: item.autoSent,
+        translatedBody: typeof item.audit?.translatedDraft === 'string' ? item.audit.translatedDraft : undefined,
         audit: item.audit,
       }));
     const priority = prioritizeCustomer({

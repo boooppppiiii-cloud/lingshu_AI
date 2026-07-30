@@ -28,6 +28,7 @@
     "test:conversation-tone": "tsx server/agents/conversationTone.test.ts",
     "test:draft-safety": "tsx server/agents/draftSafety.test.ts",
     "test:mobile-chat-style": "tsx server/agents/mobileChatStyle.test.ts",
+    "test:knowledge-gap-playbook": "tsx server/agents/knowledgeGapPlaybook.test.ts",
     "test:customer-visibility": "tsx server/whatsapp/customerVisibility.test.ts",
     "test:customer-profile": "tsx server/whatsapp/customerProfilePersistence.test.ts",
     "test:best-time": "tsx server/publishing/bestTime.test.ts",

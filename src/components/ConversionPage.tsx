@@ -52,8 +52,11 @@ type CustomerFilterKey = 'source' | 'country' | 'language' | 'stage' | 'handling
 
 interface DraftResult {
   draft: string;
+  translatedDraft?: string;
   handoffRequired?: boolean;
+  safeToSendBeforeHandoff?: boolean;
   handlingReason?: string;
+  replyConfidence?: { level: string; score: number; reason: string };
   knowledgeMiss?: boolean;
   missReason?: string;
   evidence?: string[];
@@ -268,18 +271,27 @@ function isSimpleGreeting(text: string): boolean {
   return /^(hi|hello|hey|hola|buenas|thanks|thank you|ok|okay|are you there|你好|您好)[\s?!,.。？！]*$/i.test(text.trim());
 }
 
-function hasPreviousSellerReply(customer: CustomerProfile): boolean {
+function fallbackConversationPhase(customer: CustomerProfile): 'first_contact' | 'ongoing' | 'resumed' {
   const latestBuyerIndex = customer.timeline.map(event => event.actor === 'buyer').lastIndexOf(true);
-  const beforeLatest = latestBuyerIndex >= 0 ? customer.timeline.slice(0, latestBuyerIndex) : customer.timeline;
-  return beforeLatest.some(event => event.type === 'whatsapp' && (event.actor === 'seller' || event.actor === 'ai'));
+  if (latestBuyerIndex < 0) return 'first_contact';
+  const previousSeller = [...customer.timeline.slice(0, latestBuyerIndex)]
+    .reverse()
+    .find(event => event.type === 'whatsapp' && (event.actor === 'seller' || event.actor === 'ai'));
+  if (!previousSeller) return 'first_contact';
+  const latestBuyerAt = Number(customer.timeline[latestBuyerIndex]?.timestamp);
+  const previousSellerAt = Number(previousSeller.timestamp);
+  if (Number.isFinite(latestBuyerAt) && Number.isFinite(previousSellerAt) && latestBuyerAt - previousSellerAt > 30 * 60_000) {
+    return 'resumed';
+  }
+  return 'ongoing';
 }
 
 function fallbackCustomerReply(customer: CustomerProfile): string {
   if (isSimpleGreeting(latestBuyerMessage(customer))) {
-    const returningCustomer = hasPreviousSellerReply(customer);
-    if (replyLanguage(customer) === 'Arabic') return returningCustomer ? 'مرحبًا مجددًا! كيف يمكنني مساعدتك اليوم؟' : 'مرحبًا! كيف يمكنني مساعدتك؟';
-    if (replyLanguage(customer) === 'Spanish') return returningCustomer ? '¡Hola de nuevo! ¿En qué puedo ayudarte hoy?' : '¡Hola! ¿En qué puedo ayudarte?';
-    return returningCustomer ? 'Hi again! How can I help today?' : 'Hi! How can I help?';
+    const phase = fallbackConversationPhase(customer);
+    if (replyLanguage(customer) === 'Arabic') return phase === 'resumed' ? 'مرحبًا مجددًا! أين نكمل؟' : phase === 'ongoing' ? 'أكيد، أنا معك. ماذا تريد أن نراجع؟' : 'مرحبًا! ماذا تبحث عنه؟';
+    if (replyLanguage(customer) === 'Spanish') return phase === 'resumed' ? '¡Hola de nuevo! ¿Por dónde seguimos?' : phase === 'ongoing' ? 'Claro, sigo aquí. ¿Qué quieres revisar?' : '¡Hola! ¿Qué estás buscando?';
+    return phase === 'resumed' ? 'Hi again! Where shall we pick up?' : phase === 'ongoing' ? "Sure, I'm with you. What do you want to check?" : 'Hey! What are you looking for?';
   }
   if (replyLanguage(customer) === 'Arabic') {
     return `شكرًا لرسالتك. هل يمكنك مشاركة الكمية المستهدفة والمواصفات ومتطلبات التغليف الخاصة بـ ${customer.outboundProduct}؟`;
@@ -399,12 +411,26 @@ async function requestDraft(customer: CustomerProfile, instruction?: string, mod
     if (resp.ok) {
       const data = await resp.json();
       if (data?.handoffRequired) {
+        const bridgeDraft = typeof data?.draft === 'string' ? data.draft.trim() : '';
         return {
-          draft: '',
+          draft: bridgeDraft ? normalizeDraftForChineseEditing(bridgeDraft, customer) : '',
+          originalDraft: bridgeDraft,
+          translatedDraft: typeof data.translatedDraft === 'string' ? data.translatedDraft.trim() : undefined,
           handoffRequired: true,
+          safeToSendBeforeHandoff: Boolean(data.safeToSendBeforeHandoff),
           handlingReason: typeof data.handlingReason === 'string' ? data.handlingReason : '客户正在询价，需要人工报价',
+          replyConfidence: data.replyConfidence && typeof data.replyConfidence === 'object'
+            ? {
+                level: String(data.replyConfidence.level || 'human_required'),
+                score: Number(data.replyConfidence.score || 0),
+                reason: String(data.replyConfidence.reason || ''),
+              }
+            : undefined,
+          knowledgeMiss: Boolean(data.knowledgeMiss),
+          missReason: typeof data.missReason === 'string' ? data.missReason : '',
           evidence: Array.isArray(data.evidence) ? data.evidence.map(String) : [],
           category: typeof data.category === 'string' ? data.category : '报价',
+          buyerMessage: latestBuyerText(customer),
         };
       }
       if (typeof data?.draft === 'string' && data.draft.trim()) {
@@ -694,6 +720,8 @@ function DraftSuggestionBar({
   templatePlan,
   priceRulesReady,
   knowledgeMiss,
+  bridgeOnly,
+  knownChineseDraft,
   onSend,
   onEdit,
   onDismiss,
@@ -706,6 +734,8 @@ function DraftSuggestionBar({
   templatePlan: TemplatePlan | null;
   priceRulesReady: boolean;
   knowledgeMiss?: boolean;
+  bridgeOnly?: boolean;
+  knownChineseDraft?: string;
   onSend: () => void;
   onEdit: () => void;
   onDismiss: () => void;
@@ -713,9 +743,10 @@ function DraftSuggestionBar({
 }) {
   const templateApproved = !isTemplate || templatePlan?.template.status === 'approved';
   const fallbackChinese = () => chineseMessageTranslation(draft, customer) || fallbackCustomerReplyZh(customer);
-  const [chineseDraft, setChineseDraft] = useState(containsChinese(draft) ? draft : fallbackChinese());
+  const [chineseDraft, setChineseDraft] = useState(knownChineseDraft || (containsChinese(draft) ? draft : fallbackChinese()));
 
   useEffect(() => {
+    if (knownChineseDraft) { setChineseDraft(knownChineseDraft); return; }
     if (containsChinese(draft)) { setChineseDraft(draft); return; }
     let cancelled = false;
     setChineseDraft('翻译中…');
@@ -728,7 +759,7 @@ function DraftSuggestionBar({
       if (!cancelled) setChineseDraft(response.ok && data.translatedText ? String(data.translatedText).trim() : fallbackChinese());
     }).catch(() => { if (!cancelled) setChineseDraft(fallbackChinese()); });
     return () => { cancelled = true; };
-  }, [draft, customer.id, customer.product]);
+  }, [draft, customer.id, customer.product, knownChineseDraft]);
 
   return (
     <div data-draft-suggestion className="relative ml-auto max-w-[74%] rounded-2xl rounded-tr-sm border border-dashed border-[#0891b2]/35 bg-[#0891b2]/[0.08] px-4 py-3 shadow-sm">
@@ -738,14 +769,14 @@ function DraftSuggestionBar({
       <div className="pr-6">
         <div className="flex shrink-0 items-center gap-1.5 text-xs font-black text-[#0891b2]">
           <Bot size={14} />
-          {'AI \u5efa\u8bae\u56de\u590d'}
+          {bridgeOnly ? 'AI 承接回复' : 'AI 建议回复'}
           {isTemplate && (
             <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-black ${templateApproved ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>
               {templateApproved ? '\u6a21\u677f\u53ef\u53d1' : '\u6a21\u677f\u5ba1\u6838\u4e2d'}
             </span>
           )}
           {knowledgeMiss && (
-            <span className="rounded-full bg-slate-200 px-1.5 py-0.5 text-[10px] font-black text-slate-600">知识库未覆盖</span>
+            <span className="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-black text-amber-700">{bridgeOnly ? '已转人工确认' : '知识库未覆盖'}</span>
           )}
           <button type="button" onClick={onRegenerate} className="ml-1 rounded-full p-1 text-[#0891b2] hover:bg-white" title="换一版">
             <RefreshCw size={12} />
@@ -858,6 +889,8 @@ function ChatThread({
   onManualActive,
   priceRulesReady,
   knowledgeMiss,
+  bridgeOnly,
+  bridgeTranslation,
   onMockBuyerMessage,
 }: {
   customer: CustomerProfile | null;
@@ -879,6 +912,8 @@ function ChatThread({
   onManualActive: () => void;
   priceRulesReady: boolean;
   knowledgeMiss?: boolean;
+  bridgeOnly?: boolean;
+  bridgeTranslation?: string;
   onMockBuyerMessage: (text: string) => void;
 }) {
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -983,7 +1018,7 @@ function ChatThread({
             );
           })}
           {draftSuggestion && (
-            <DraftSuggestionBar customer={customer} draft={draftSuggestion} translatedDraft={isOutsideWindow && templatePlan ? templatePlan.rendered : translateChineseReplyForCustomer(customer, draftSuggestion)} isTemplate={isOutsideWindow} templatePlan={templatePlan} priceRulesReady={priceRulesReady} knowledgeMiss={knowledgeMiss} onSend={onSendDraft} onEdit={onEditDraft} onDismiss={onDismissDraft} onRegenerate={onRegenerateDraft} />
+            <DraftSuggestionBar customer={customer} draft={draftSuggestion} translatedDraft={isOutsideWindow && templatePlan ? templatePlan.rendered : translateChineseReplyForCustomer(customer, draftSuggestion)} isTemplate={isOutsideWindow} templatePlan={templatePlan} priceRulesReady={priceRulesReady} knowledgeMiss={knowledgeMiss} bridgeOnly={bridgeOnly} knownChineseDraft={bridgeTranslation} onSend={onSendDraft} onEdit={onEditDraft} onDismiss={onDismissDraft} onRegenerate={onRegenerateDraft} />
           )}
         </div>
       </div>
@@ -1818,9 +1853,15 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
     setDraftMeta(null);
     const result = await requestDraft(customerWithMessage);
     if (result.handoffRequired || !result.draft.trim()) {
+      if (result.safeToSendBeforeHandoff && result.draft.trim()) {
+        const bridgeReply = translateChineseReplyForCustomer(customerWithMessage, result.draft);
+        appendTimelineEvent(selected.id, createMessageEvent(selected.id, bridgeReply, 'ai', { autoSent: true, sendStatus: 'delivered', translatedBody: result.translatedDraft }));
+      }
       updateCustomer(selected.id, { handlingMode: 'human_needed', handlingReason: result.handlingReason || '该消息需要人工接待' });
       setDraftMeta(result);
-      showToast(result.handlingReason || '该消息已转人工处理');
+      showToast(result.safeToSendBeforeHandoff && result.draft.trim()
+        ? 'AI 已先承接客户，并把完整上下文转给人工'
+        : result.handlingReason || '该消息已转人工处理');
       return;
     }
     const reply = translateChineseReplyForCustomer(customerWithMessage, result.draft);
@@ -1925,7 +1966,14 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
     setDraftMeta(null);
     const result = await requestDraft(selected, instruction, undefined, intent);
     if (result.handoffRequired) {
-      showToast(result.handlingReason || '该消息需要人工接手。');
+      updateCustomer(selected.id, { handlingMode: 'human_needed', handlingReason: result.handlingReason || '该消息需要人工接手' });
+      if (result.safeToSendBeforeHandoff && result.draft.trim()) {
+        setDraftSuggestion(result.draft);
+        setDraftMeta(result);
+      }
+      showToast(result.safeToSendBeforeHandoff && result.draft.trim()
+        ? '已生成安全承接话术，并标记人工接管'
+        : result.handlingReason || '该消息需要人工接手。');
       return;
     }
     setDraftSuggestion(result.draft);
@@ -1940,7 +1988,14 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
     }
     const result = await requestDraft(selected, undefined, undefined, 'reply');
     if (result.handoffRequired) {
-      showToast(result.handlingReason || '该消息需要人工接手。');
+      updateCustomer(selected.id, { handlingMode: 'human_needed', handlingReason: result.handlingReason || '该消息需要人工接手' });
+      if (result.safeToSendBeforeHandoff && result.draft.trim()) {
+        setDraftSuggestion(result.draft);
+        setDraftMeta(result);
+      }
+      showToast(result.safeToSendBeforeHandoff && result.draft.trim()
+        ? '已换一条安全承接话术，并标记人工接管'
+        : result.handlingReason || '该消息需要人工接手。');
       return;
     }
     setDraftSuggestion(result.draft);
@@ -2050,6 +2105,8 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
           onManualActive={reportManualActive}
           priceRulesReady={priceRulesReady}
           knowledgeMiss={Boolean(draftMeta?.knowledgeMiss)}
+          bridgeOnly={draftMeta?.replyConfidence?.level === 'bridge_only'}
+          bridgeTranslation={draftMeta?.translatedDraft}
           onMockBuyerMessage={pushMockBuyerMessage}
         />
         <CustomerInfoRail
