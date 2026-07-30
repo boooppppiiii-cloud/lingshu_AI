@@ -221,6 +221,57 @@ function compactText(text: string, maxLength = 900) {
   return normalized.length > maxLength ? `${normalized.slice(0, maxLength)}...` : normalized;
 }
 
+async function loadLiveIntegrationFacts(): Promise<string> {
+  const readItems = async (path: string): Promise<Record<string, unknown>[]> => {
+    try {
+      const response = await fetch(path, { headers: authHeader() });
+      if (!response.ok) return [];
+      const data = await response.json() as { items?: Record<string, unknown>[] };
+      return Array.isArray(data.items) ? data.items : [];
+    } catch {
+      return [];
+    }
+  };
+
+  const readVideoInventory = async (): Promise<number> => {
+    try {
+      const response = await fetch('/api/overseas/videos?page=1&perPage=1&contentFormat=video', { headers: authHeader() });
+      if (!response.ok) return 0;
+      const data = await response.json() as { inventoryTotalItems?: number; totalItems?: number };
+      return Math.max(0, Number(data.inventoryTotalItems ?? data.totalItems ?? 0));
+    } catch {
+      return 0;
+    }
+  };
+
+  const [socialAccounts, youtubeAccounts, customers, collectedVideos] = await Promise.all([
+    readItems('/api/overseas/social/accounts'),
+    readItems('/api/overseas/youtube/accounts'),
+    readItems('/api/overseas/customers'),
+    readVideoInventory(),
+  ]);
+  const socialPlatforms = Array.from(new Set(socialAccounts
+    .map(item => String(item.platform || item.provider || '').trim())
+    .filter(Boolean)));
+  const whatsappInquiries = customers.filter(item => String(item.source || '').toLowerCase() === 'whatsapp');
+  const accountViews = [...socialAccounts, ...youtubeAccounts].reduce(
+    (sum, item) => sum + Math.max(0, Number(item.viewCount ?? item.views ?? 0)),
+    0,
+  );
+  const confirmed: string[] = [];
+  if (socialAccounts.length) confirmed.push(`社媒账号 ${socialAccounts.length} 个${socialPlatforms.length ? `（${socialPlatforms.join('、')}）` : ''}`);
+  if (youtubeAccounts.length) confirmed.push(`YouTube 账号 ${youtubeAccounts.length} 个`);
+  if (collectedVideos > 0) confirmed.push(`已采集视频 ${collectedVideos} 条`);
+  if (accountViews > 0) confirmed.push(`账号内容曝光 ${accountViews.toLocaleString('zh-CN')}`);
+  if (whatsappInquiries.length) confirmed.push(`WhatsApp 询盘 ${whatsappInquiries.length} 条`);
+  return [
+    `核验时间：${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}`,
+    `已确认接入/真实数据：${confirmed.length ? confirmed.join('；') : '本次实时接口未返回可确认项目'}`,
+    `客户总记录：${customers.length} 条；WhatsApp 询盘：${whatsappInquiries.length} 条。`,
+    '判定规则：以上来自当前租户授权接口，优先级高于企业摘要；接口未返回某项只能说“本次未核验到”，不得说“未接入”。',
+  ].join('\n');
+}
+
 function mergeConsecutiveAssistant(list: Message[]): Message[] {
   const merged: Message[] = [];
   for (const msg of list) {
@@ -496,6 +547,7 @@ export default function GlobalAssistant({
     const enterpriseBrief = compactText(enterpriseContext);
     const historyForApi = apiHistory(thread.messages);
     const nextVisible = [...mergeConsecutiveAssistant(thread.messages), { role: 'user' as const, content: visibleText }];
+    const liveIntegrationFacts = await loadLiveIntegrationFacts();
     const apiMessages: Message[] = [
       ...historyForApi,
       {
@@ -505,6 +557,7 @@ export default function GlobalAssistant({
           `【当前模块】${context.label}`,
           `【当前时间】${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}（北京时间）。未注明年份时，“当前/最新/近期/今年”均指当前年份；不得把 2024 年或更早的公开数据表述为当前数据。`,
           enterpriseBrief ? `【企业中心摘要】${enterpriseBrief}` : '【企业中心摘要】当前未读取到企业中心资料。',
+          `【实时接入事实】\n${liveIntegrationFacts}`,
           '【经营事实要求】描述、脚本、卖点、市场、客户、MOQ、价格、交期、认证、联系方式和语种，只能使用企业中心摘要、用户明确输入或当前页面真实素材证据。语种必须沿用企业中心主要业务语言/首选输出语言，禁止根据地区自行推断。没有来源的经营细节直接省略，不要用示例补齐。',
           '【联网要求】涉及外贸行业趋势、目标市场、平台规则、竞品或品类机会时，请联网检索公开来源，并在回答中保留可核验来源；不要把假设当成事实。',
           '【连续对话要求】请承接本窗口已有上下文回答，直接基于页面现有数据给出可执行结果；不要用“当前缺少数据”“无法判断”“无法筛选”开头。必要的数据范围说明放在结尾并保持中性简短。',

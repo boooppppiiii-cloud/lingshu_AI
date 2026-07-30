@@ -1555,7 +1555,14 @@ async function sendCustomerOutbox(customer: CustomerProfile, body: string, outsi
 }
 
 export default function ConversionPage({ onLeaveConversation: _onLeaveConversation, isDemo = false, includeMockCustomers = false, mockCustomerScope = 'admin' }: Props) {
-  const [view, setView] = useState<CustomerView>('inbox');
+  const [view, setView] = useState<CustomerView>(() => {
+    try {
+      const initialView = localStorage.getItem('lingshu:conversion:initial-view') as CustomerView | null;
+      localStorage.removeItem('lingshu:conversion:initial-view');
+      if (initialView && ['inbox', 'leads', 'won', 'silent'].includes(initialView)) return initialView;
+    } catch { /* ignore */ }
+    return 'inbox';
+  });
   const { customers, updateCustomer, appendTimelineEvent, updateTimelineEvent, removeTimelineEvent } = useCustomers(0, includeMockCustomers, mockCustomerScope);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [autonomyLevel, setAutonomyLevel] = useState<AutonomyLevel>('draft');

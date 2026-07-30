@@ -4,6 +4,7 @@ import { buildStrategyPrompt, type StrategyParams } from '../prompts/strategyPro
 import { enterpriseRouter as _er, buildEnterpriseContext, readTenantEnterpriseProfile } from './enterprise.js';
 import { consumeDemoQuota } from '../lib/demo.js';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
+import { getWhatsAppCustomers } from '../whatsapp/historyImport.js';
 
 async function getEnterpriseContext(tenantId: string): Promise<string> {
   try { return buildEnterpriseContext(await readTenantEnterpriseProfile(tenantId)); }
@@ -89,6 +90,204 @@ const ADVISOR_SYSTEM_PROMPT = `你是灵枢AI的顾问Agent（策略编排层）
 export const strategyRouter = Router();
 strategyRouter.use(requireAuth);
 
+type AdvisorSnapshot = {
+  exposureReady: boolean;
+  exposure: number;
+  inquiries: number;
+  quoted: number;
+  orders: number;
+  followup: number;
+  accountCount: number;
+};
+
+type AdvisorTarget = {
+  page: 'traffic' | 'conversion' | 'enterprise' | 'orders' | 'channels';
+  view?: string;
+};
+
+type AdvisorRecommendation = {
+  id: string;
+  title: string;
+  desc: string;
+  basis: string;
+  target: string;
+  confidence: '高' | '中' | '低';
+  limitation: string;
+  priorityScore: number;
+  action: AdvisorTarget;
+};
+
+type MarketContext = {
+  summary: string;
+  sources: Array<{ title: string; uri: string }>;
+  generatedAt: string;
+};
+
+const marketContextCache = new Map<string, { expiresAt: number; value: MarketContext }>();
+
+function finiteCount(value: unknown): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, Math.round(parsed)) : 0;
+}
+
+function normalizeAdvisorSnapshot(value: unknown): AdvisorSnapshot {
+  const raw = value && typeof value === 'object' ? value as Record<string, unknown> : {};
+  return {
+    exposureReady: Boolean(raw.exposureReady),
+    exposure: finiteCount(raw.exposure),
+    inquiries: finiteCount(raw.inquiries),
+    quoted: finiteCount(raw.quoted),
+    orders: finiteCount(raw.orders),
+    followup: finiteCount(raw.followup),
+    accountCount: finiteCount(raw.accountCount),
+  };
+}
+
+function textReady(value: unknown): boolean {
+  return typeof value === 'string' && value.trim().length > 0;
+}
+
+function profileCoverage(profile: any): { score: number; missing: string[] } {
+  const checks = [
+    ['企业名称', profile?.company?.name],
+    ['主营产品', profile?.products?.categories || profile?.products?.items?.[0]?.name],
+    ['目标市场', profile?.strategy?.focusMarkets || profile?.company?.mainMarkets],
+    ['目标客户', profile?.customers?.targetProfiles],
+    ['MOQ', profile?.bizRules?.moq || profile?.products?.moq],
+    ['付款与交期', profile?.bizRules?.paymentTerms && (profile?.bizRules?.leadTime || profile?.operations?.leadTime)],
+  ] as const;
+  const missing = checks.filter(([, value]) => !textReady(value)).map(([label]) => label);
+  return { score: Math.round((checks.length - missing.length) / checks.length * 100), missing };
+}
+
+function confidenceFor(snapshot: AdvisorSnapshot, profileScore: number): '高' | '中' | '低' {
+  const coverage = [snapshot.exposureReady, snapshot.inquiries > 0, snapshot.orders > 0, profileScore >= 70].filter(Boolean).length;
+  return coverage >= 3 ? '高' : coverage >= 1 ? '中' : '低';
+}
+
+function buildAdvisorRecommendations(snapshot: AdvisorSnapshot, profile: any): AdvisorRecommendation[] {
+  const profileState = profileCoverage(profile);
+  const confidence = confidenceFor(snapshot, profileState.score);
+  const items: AdvisorRecommendation[] = [];
+  const add = (item: AdvisorRecommendation) => items.push(item);
+
+  if (!snapshot.exposureReady || snapshot.accountCount === 0) {
+    add({
+      id: 'connect-social-data', title: '接入社媒账号并建立真实基线',
+      desc: '先完成 YouTube、TikTok、Instagram、Facebook 的授权，再按账号表现决定内容优先级。',
+      basis: '依据：当前没有读取到可用的社媒账号曝光数据。', target: '目标：本周完成至少 1 个社媒账号授权并成功同步视频数据。',
+      confidence: '高', limitation: '未接入账号前，无法判断平台和内容优先级。', priorityScore: 96,
+      action: { page: 'traffic', view: 'accounts' },
+    });
+  }
+
+  if (snapshot.exposureReady && snapshot.exposure > 0 && snapshot.inquiries === 0) {
+    add({
+      id: 'exposure-to-inquiry', title: '优先修复“有播放、无询盘”的转化断点',
+      desc: '检查 WhatsApp 承接链接与归因码，复盘播放最高内容，并生成强化采购 CTA 的多语言版本。',
+      basis: `依据：当前已读取 ${snapshot.exposure.toLocaleString('zh-CN')} 次累计播放，但有效询盘为 0。`,
+      target: '目标：7 天内获得首批可归因询盘。', confidence,
+      limitation: '当前平台接口缺少完播率、链接点击和按日播放时序，暂不能定位到具体流失秒点。', priorityScore: 100,
+      action: { page: 'traffic', view: 'create' },
+    });
+  }
+
+  if (snapshot.inquiries > 0 && snapshot.quoted === 0) {
+    add({
+      id: 'inquiry-to-quote', title: '把高意向询盘推进到报价',
+      desc: '优先处理意向分最高且仍未报价的客户，补齐数量、规格、认证和交期后形成可报价条件。',
+      basis: `依据：已有 ${snapshot.inquiries} 个有效询盘，但进入报价的客户为 0。`,
+      target: '目标：3 天内完成首批高意向询盘资格确认并进入报价。', confidence,
+      limitation: '未读取客户预算与采购时间时，优先级主要依据现有意向分和对话状态。', priorityScore: 98,
+      action: { page: 'conversion', view: 'leads' },
+    });
+  }
+
+  if (snapshot.quoted > 0 && snapshot.orders === 0) {
+    add({
+      id: 'quote-to-order', title: '诊断报价到订单的成交阻力',
+      desc: '逐条核对价格、MOQ、样品、付款和交期异议，并为已报价客户安排下一次跟进。',
+      basis: `依据：已有 ${snapshot.quoted} 个客户进入报价，但有效订单为 0。`,
+      target: '目标：7 天内明确每个报价客户的阻力与下一步承诺。', confidence,
+      limitation: '若未记录丢单原因和报价版本，系统只能依据客户阶段做初步判断。', priorityScore: 94,
+      action: { page: 'conversion', view: 'leads' },
+    });
+  }
+
+  if (snapshot.followup > 0) {
+    add({
+      id: 'clear-followup', title: '先清理需要人工处理的客户待办',
+      desc: '按意向分、最近消息和响应时限排序，先处理高价值且即将超时的对话。',
+      basis: `依据：当前有 ${snapshot.followup} 个 WhatsApp 客户需要人工处理或存在待办原因。`,
+      target: '目标：今日清零高优先级待办，并为每个客户记录下一步。', confidence,
+      limitation: '未配置销售负责人时，任务暂按客户优先级而非人员负载排序。', priorityScore: 92,
+      action: { page: 'conversion', view: 'inbox' },
+    });
+  }
+
+  if (profileState.score < 70) {
+    add({
+      id: 'complete-enterprise-profile', title: '补齐会影响内容和报价的企业资料',
+      desc: `优先补充：${profileState.missing.slice(0, 4).join('、')}。这些字段会直接影响脚本、CTA 和询盘回复。`,
+      basis: `依据：当前企业经营资料完整度约 ${profileState.score}%。`,
+      target: '目标：本周将核心经营资料完整度提升到 70% 以上。', confidence: '高',
+      limitation: '完整度仅检查关键字段是否存在，不评价资料内容是否准确。', priorityScore: snapshot.exposureReady ? 82 : 90,
+      action: { page: 'enterprise', view: profileState.missing.includes('主营产品') ? 'products' : 'company' },
+    });
+  }
+
+  if (!items.length || items.length < 3) {
+    add({
+      id: 'market-content-test', title: '用市场趋势启动一轮可归因内容测试',
+      desc: '从当前目标市场的公开趋势中选 1 个可验证主题，生成多语言版本并使用统一 CTA 与归因码。',
+      basis: '依据：当前经营漏斗没有出现更高优先级的明显断点，可进入增长验证。',
+      target: '目标：7 天内完成 3 个内容版本的小样本测试。', confidence,
+      limitation: '趋势只能作为选题信号，最终仍需以账号真实播放、点击和询盘结果验证。', priorityScore: 70,
+      action: { page: 'traffic', view: 'create' },
+    });
+  }
+
+  return items.sort((a, b) => b.priorityScore - a.priorityScore).slice(0, 3);
+}
+
+function extractLinks(text: string): Array<{ title: string; uri: string }> {
+  const result: Array<{ title: string; uri: string }> = [];
+  const seen = new Set<string>();
+  for (const match of text.matchAll(/\[([^\]]+)]\((https?:\/\/[^\s)]+)\)/g)) {
+    if (!seen.has(match[2])) { seen.add(match[2]); result.push({ title: match[1], uri: match[2] }); }
+  }
+  return result.slice(0, 5);
+}
+
+async function loadMarketContext(tenantId: string, profile: any, force: boolean): Promise<MarketContext> {
+  const cached = marketContextCache.get(tenantId);
+  if (!force && cached && cached.expiresAt > Date.now()) return cached.value;
+  const market = profile?.strategy?.focusMarkets || profile?.company?.mainMarkets || '企业当前目标市场';
+  const category = profile?.products?.categories || profile?.products?.items?.[0]?.category || '企业主营品类';
+  const prompt = `联网核验 ${market} 的 ${category} 在最近 90 天内与跨境获客相关的市场变化。只写 2 条对经营动作有直接帮助的信号，每条包含：变化、对内容或询盘承接的影响、可点击公开来源。不要预测销量，不要编造数字。总字数不超过 220 字。`;
+  let text = '';
+  const sources: Array<{ title: string; uri: string }> = [];
+  try {
+    for await (const event of callLLMChatStream([{ role: 'user', content: prompt }], {
+      systemPrompt: `${currentTimeRule()}${BUSINESS_FACT_RULE}`,
+      requireSources: true,
+    })) {
+      if ('text' in event) text += event.text;
+      else sources.push(...event.sources.map(item => ({ title: item.title, uri: item.uri })));
+    }
+  } catch (error) {
+    console.warn('[strategy-advisor:market-context]', error);
+  }
+  const uniqueSources = [...sources, ...extractLinks(text)].filter((item, index, all) => all.findIndex(candidate => candidate.uri === item.uri) === index).slice(0, 5);
+  const value: MarketContext = {
+    summary: text.trim().slice(0, 900),
+    sources: uniqueSources,
+    generatedAt: new Date().toISOString(),
+  };
+  marketContextCache.set(tenantId, { expiresAt: Date.now() + 6 * 60 * 60 * 1000, value });
+  return value;
+}
+
 function formatStreamError(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
   if (/RESOURCE_EXHAUSTED|Too Many Requests|code['"]?:429|quota|rate limit/i.test(raw)) {
@@ -114,6 +313,37 @@ function shouldRequireSources(messages: ChatMessage[]): boolean {
   if (/不需要联网|无需联网|不用联网|不要联网|不必联网|无需搜索|不用搜索|不要搜索/i.test(question)) return false;
   return /联网|搜索|检索|查一下|查询|查找|核验|公开来源|来源|链接|趋势|平台规则|规则变化|政策|算法|竞品|品类机会|行业|目标市场|市场机会|最新|近期|报告|数据/i.test(question);
 }
+
+strategyRouter.post('/advisor', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const snapshot = normalizeAdvisorSnapshot(req.body?.snapshot);
+  const customers = getWhatsAppCustomers(tenantId);
+  if (customers.length) {
+    const effective = customers.filter((customer: any) => Number(customer.intentScore || 0) >= 70);
+    snapshot.inquiries = effective.length;
+    snapshot.quoted = customers.filter((customer: any) => customer.stage === 'quoted' || customer.stage === 'won' || (Array.isArray(customer.orders) && customer.orders.length > 0)).length;
+    snapshot.followup = customers.filter((customer: any) => customer.handlingMode !== 'ai_auto' || customer.inboxReason).length;
+  }
+  const profile = await readTenantEnterpriseProfile(tenantId);
+  const recommendations = buildAdvisorRecommendations(snapshot, profile);
+  const refreshExternal = req.body?.refreshExternal === true;
+  const marketContext = await loadMarketContext(tenantId, profile, refreshExternal);
+  const coverage = profileCoverage(profile);
+  res.json({
+    generatedAt: new Date().toISOString(),
+    periodLabel: '当前累计经营快照',
+    snapshot,
+    dataQuality: {
+      profileCoverage: coverage.score,
+      hasSocialData: snapshot.exposureReady,
+      hasInquiryData: customers.length > 0,
+      hasOrderData: snapshot.orders > 0,
+      note: '播放量为当前可读取累计值；接入平台 insights 时序后可升级为严格近 30 天增量。',
+    },
+    recommendations,
+    marketContext,
+  });
+});
 
 strategyRouter.post('/chat', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;

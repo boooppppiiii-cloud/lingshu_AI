@@ -10,7 +10,7 @@ import { gzipSync, gunzipSync } from 'node:zlib';
 import ffmpegStatic from 'ffmpeg-static';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 import { store } from '../storage/index.js';
-import { fetchFile } from '../storage/files.js';
+import { attachFile, fetchFile } from '../storage/files.js';
 import { objectStorageEnabled, r2Download, r2GetObject, r2Head, r2Upload } from '../storage/r2.js';
 import { analyzeImagePostEvidenceWithGemini, analyzeVideo, analyzeYouTubeUrl } from '../agents/gemini.js';
 import { analyzeImagePostEvidenceWithQwen, analyzeVideoFramesWithQwen, analyzeVideoTimelineDetailsWithQwen, transcribeAudioWithQwen, type ImagePostEvidenceAnalysis, type QwenTimelinePlan } from '../agents/qwen.js';
@@ -1790,10 +1790,10 @@ videosRouter.get('/', async (req, res) => {
     // A second full collection scan here doubled list latency as the inspiration
     // library grew. The first page contains the latest 20 records, which is also the
     // product definition of the public recent-account baseline.
-    res.json({ ...result, inventoryTotalItems, items: withImagePublicBaselines(result.items).map(item => withSignedThumbnail(item, tenantId)) });
+    res.json({ ...result, inventoryTotalItems, items: withImagePublicBaselines(result.items).map(item => withSignedThumbnail({ ...item, canManage: String(item.tenantId || '') === tenantId }, tenantId)) });
     return;
   }
-  res.json({ ...result, inventoryTotalItems, items: result.items.map(item => withSignedThumbnail(item, tenantId)) });
+  res.json({ ...result, inventoryTotalItems, items: result.items.map(item => withSignedThumbnail({ ...item, canManage: String(item.tenantId || '') === tenantId }, tenantId)) });
 });
 
 videosRouter.post('/:id/reanalyze-image', async (req, res) => {
@@ -1830,6 +1830,41 @@ videosRouter.post('/:id/reanalyze-image', async (req, res) => {
 });
 
 // ─── GET /videos/:id ──────────────────────────────────────────────────────────
+
+// PATCH /videos/:id - tenant-owned crawl metadata only
+videosRouter.patch('/:id', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const record = await store.getById<Record<string, unknown>>(COL, req.params.id);
+  if (!record || String(record.tenantId || '') !== tenantId) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
+  const title = String(req.body?.title ?? '').trim().slice(0, 160);
+  if (!title) { res.status(400).json({ error: 'Title is required' }); return; }
+  const tags = Array.isArray(req.body?.tags)
+    ? req.body.tags.map((tag: unknown) => String(tag).trim()).filter(Boolean).slice(0, 20)
+    : [];
+  await store.update(COL, req.params.id, {
+    title,
+    tags: JSON.stringify(tags.map((tag: string) => tag.slice(0, 40))),
+    updatedAt: new Date().toISOString(),
+  });
+  const updated = await store.getById<Record<string, unknown>>(COL, req.params.id);
+  res.json({ ...publicVideoRecord(updated || record), canManage: true });
+});
+
+// DELETE /videos/:id - tenant-owned crawl records only
+videosRouter.delete('/:id', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const record = await store.getById<Record<string, unknown>>(COL, req.params.id);
+  if (!record || String(record.tenantId || '') !== tenantId) {
+    res.status(404).json({ error: 'Not found' });
+    return;
+  }
+  await store.delete(COL, req.params.id);
+  res.json({ ok: true });
+});
+
 videosRouter.get('/:id', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
   const record = await store.getById(COL, req.params.id);
@@ -1898,6 +1933,60 @@ async function isAdminForAssetRequest(req: Request): Promise<boolean> {
   return Boolean(await requireAdminUser(proxied));
 }
 
+async function generateThumbnailFromStoredVideo(record: Record<string, unknown>): Promise<{ buf: Buffer; contentType: string } | null> {
+  const recordId = String(record.id || '');
+  if (!recordId) return null;
+  const analysis = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
+  const videoKey = String(analysis.videoObjectKey || '');
+  const filename = String(record.videoFileId || '');
+  const video = videoKey ? await r2Download(videoKey) : (filename ? await fetchFile(COL, recordId, filename) : null);
+  if (!video?.buf.length) return null;
+
+  if (!fs.existsSync(ANALYSIS_DIR)) fs.mkdirSync(ANALYSIS_DIR, { recursive: true });
+  const sourceName = videoKey || filename || 'video.mp4';
+  const ext = path.extname(sourceName).replace(/^\./, '').toLowerCase()
+    || (video.contentType.includes('webm') ? 'webm' : video.contentType.includes('quicktime') ? 'mov' : 'mp4');
+  const base = `thumb-${recordId}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const videoPath = path.join(ANALYSIS_DIR, `${base}.${ext}`);
+  const posterPath = path.join(ANALYSIS_DIR, `${base}.jpg`);
+  try {
+    fs.writeFileSync(videoPath, video.buf);
+    const ok = await extractPoster(videoPath, posterPath, Number(record.duration || 0) > 1 ? 1 : 0);
+    if (!ok || !fs.existsSync(posterPath)) return null;
+    const posterBuf = fs.readFileSync(posterPath);
+    const thumbnailUrl = `/api/overseas/videos/${encodeURIComponent(recordId)}/thumbnail`;
+    if (objectStorageEnabled()) {
+      const thumbnailObjectKey = await uploadCrawlerCosObject(recordId, 'thumbnail', posterBuf, 'image/jpeg');
+      await store.update(COL, recordId, {
+        thumbnailUrl,
+        aiAnalysis: JSON.stringify({
+          ...analysis,
+          thumbnailStorage: 'cos',
+          thumbnailObjectKey,
+        }),
+      });
+    } else {
+      const thumbnailFile = await attachFile(COL, recordId, 'thumbnailFile', {
+        name: `${recordId}-thumbnail.jpg`,
+        buf: posterBuf,
+        contentType: 'image/jpeg',
+      });
+      await store.update(COL, recordId, {
+        thumbnailUrl,
+        ...(thumbnailFile ? { thumbnailFile } : {}),
+      });
+    }
+    return { buf: posterBuf, contentType: 'image/jpeg' };
+  } catch (error) {
+    console.warn('[videos] thumbnail generation failed:', error instanceof Error ? error.message : error);
+    return null;
+  } finally {
+    for (const filePath of [videoPath, posterPath]) {
+      try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch {}
+    }
+  }
+}
+
 // 封面：直接从记录自己的 PocketBase 文件字段读。
 // <img> 带不了 Authorization 头，但 requireAuth 会回落到 asset session cookie。
 videosRouter.get('/:id/thumbnail', async (req, res) => {
@@ -1913,8 +2002,8 @@ videosRouter.get('/:id/thumbnail', async (req, res) => {
     return;
   }
   const filename = String(record.thumbnailFile || '');
-  if (!filename) { res.status(404).end(); return; }
-  const file = await fetchFile(COL, req.params.id, filename);
+  let file = filename ? await fetchFile(COL, req.params.id, filename) : null;
+  if (!file) file = await generateThumbnailFromStoredVideo(record as Record<string, unknown>);
   if (!file) { res.status(404).end(); return; }
 
   res.setHeader('Content-Type', file.contentType.startsWith('image/') ? file.contentType : 'image/jpeg');

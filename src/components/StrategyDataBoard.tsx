@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowRight, ListChecks, Target, TrendingUp, Users, Zap, MessageSquare, ArrowUpRight, CircleDollarSign } from 'lucide-react';
+import { ArrowRight, ListChecks, Target, TrendingUp, Users, Zap, MessageSquare, ArrowUpRight, CircleDollarSign, ExternalLink, Loader2, RefreshCw } from 'lucide-react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import TrafficDataBoard from './TrafficDataBoard';
 import InquiryDataBoard from './InquiryDataBoard';
@@ -37,6 +37,29 @@ interface YouTubeAccount {
   id: string;
   channelTitle?: string;
   viewCount?: number;
+}
+
+interface AdvisorRecommendation {
+  id: string;
+  title: string;
+  desc: string;
+  basis: string;
+  target: string;
+  confidence: '高' | '中' | '低';
+  limitation: string;
+  action: { page: Page; view?: string };
+}
+
+interface AdvisorResult {
+  generatedAt: string;
+  periodLabel: string;
+  recommendations: AdvisorRecommendation[];
+  dataQuality: { note: string };
+  marketContext: {
+    summary: string;
+    sources: Array<{ title: string; uri: string }>;
+    generatedAt: string;
+  };
 }
 
 async function readJson<T>(url: string, fallback: T): Promise<T> {
@@ -109,9 +132,12 @@ export default function StrategyDataBoard({
   onNavigate?: (page: Page) => void;
 }) {
   const [tab, setTab] = useState<TabId>('traffic');
-  const [exposure, setExposure] = useState<{ ready: boolean; value: number }>({ ready: false, value: 0 });
+  const [exposure, setExposure] = useState<{ loaded: boolean; ready: boolean; value: number; accountCount: number }>({ loaded: false, ready: false, value: 0, accountCount: 0 });
   const [orders, setOrders] = useState<OrderRecord[]>([]);
-  const { customers } = useCustomers();
+  const [advisor, setAdvisor] = useState<AdvisorResult | null>(null);
+  const [advisorLoading, setAdvisorLoading] = useState(false);
+  const [advisorError, setAdvisorError] = useState('');
+  const { customers, loading: customersLoading } = useCustomers();
   const windowDays = 30;
 
   const Active = (TABS.find(t => t.id === tab) ?? TABS[0]).Comp;
@@ -145,11 +171,45 @@ export default function StrategyDataBoard({
       const videoViews = videoResults.reduce((sum, result) => sum + (result.status === 'fulfilled' ? result.value : 0), 0);
       const accountViews = [...socialItems, ...youtubeItems].reduce((sum, account) => sum + num(account.viewCount), 0);
       if (!alive) return;
-      setExposure({ ready: socialItems.length + youtubeItems.length > 0, value: videoViews || accountViews });
+      setExposure({ loaded: true, ready: socialItems.length + youtubeItems.length > 0, value: videoViews || accountViews, accountCount: socialItems.length + youtubeItems.length });
       setOrders(Array.isArray(orderData.items) ? orderData.items : []);
     })();
     return () => { alive = false; };
   }, []);
+
+  const loadAdvisor = async (refreshExternal = false) => {
+    setAdvisorLoading(true);
+    setAdvisorError('');
+    try {
+      const response = await fetch('/api/overseas/strategy/advisor', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...authHeader() },
+        body: JSON.stringify({
+          refreshExternal,
+          snapshot: {
+            exposureReady: exposure.ready,
+            exposure: exposure.value,
+            inquiries: effectiveInquiries.length,
+            quoted: convertedInquiries.length,
+            orders: validOrders.length,
+            followup: needsFollowup.length,
+            accountCount: exposure.accountCount,
+          },
+        }),
+      });
+      if (!response.ok) throw new Error(`advisor_${response.status}`);
+      setAdvisor(await response.json() as AdvisorResult);
+    } catch {
+      setAdvisorError('经营建议暂时无法刷新，请稍后重试。');
+    } finally {
+      setAdvisorLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!exposure.loaded || customersLoading) return;
+    void loadAdvisor(false);
+  }, [exposure.loaded, exposure.ready, exposure.value, exposure.accountCount, customersLoading, effectiveInquiries.length, convertedInquiries.length, validOrders.length, needsFollowup.length]);
 
   const chainMetrics = useMemo(() => {
     const inquiryCount = effectiveInquiries.length;
@@ -215,7 +275,18 @@ export default function StrategyDataBoard({
     ['有效订单', String(validOrders.length), '真实订单'],
   ];
 
-  const actionItems = defaultActionItems;
+  const actionItems = advisor?.recommendations ?? [];
+
+  const executeAdvisorAction = (item: AdvisorRecommendation) => {
+    const { page, view } = item.action;
+    try {
+      if (page === 'traffic' && view) localStorage.setItem('lingshu:traffic:initial-view', view);
+      if (page === 'conversion' && view) localStorage.setItem('lingshu:conversion:initial-view', view);
+      if (page === 'enterprise' && view) localStorage.setItem('lingshu:enterprise:initial-view', view);
+      localStorage.setItem('lingshu:advisor:last-action', JSON.stringify({ id: item.id, title: item.title, at: Date.now() }));
+    } catch { /* ignore unavailable storage */ }
+    onNavigate?.(page);
+  };
 
   return (
     <div className="h-full flex flex-col" data-lingshu-guide="strategy-dashboard">
@@ -239,7 +310,7 @@ export default function StrategyDataBoard({
           <section className="rounded-2xl border border-border bg-white p-4 shadow-sm">
             <div className="mb-3 flex items-center justify-between gap-3">
               <div>
-                <h2 className="text-base font-black text-text-primary">近 30 天获客经营总览</h2>
+                <h2 className="text-base font-black text-text-primary">当前获客经营总览</h2>
                 <p className="mt-1 text-[11px] text-text-muted">从内容曝光到成交推进，先看趋势，再看渠道和待办。</p>
               </div>
               <span className="rounded-full border border-green-200 bg-green-50 px-2.5 py-1 text-[10px] font-bold text-green-700">真实数据</span>
@@ -297,7 +368,7 @@ export default function StrategyDataBoard({
             </div>
 
             <section className="mt-3 rounded-2xl border border-border bg-surface-2 p-4">
-              <div className="flex items-center gap-2"><span className={sectionIcon}><CircleDollarSign size={14}/></span><p className={bodyTitle}>获客转化漏斗</p><span className="ml-auto text-[10px] text-text-muted">近30天</span></div>
+              <div className="flex items-center gap-2"><span className={sectionIcon}><CircleDollarSign size={14}/></span><p className={bodyTitle}>获客转化漏斗</p><span className="ml-auto text-[10px] text-text-muted">当前累计快照</span></div>
               <div className="mt-3 grid grid-cols-4 gap-2">
                 {funnelData.map(([label,value,rate],index)=><div key={label} className="relative rounded-xl border border-border bg-white p-3"><p className="text-[10px] font-semibold text-text-muted">{label}</p><p className="mt-1 text-xl font-black text-text-primary">{value}</p><p className="mt-1 text-[9px] font-bold text-green-700">{rate}</p>{index<3&&<ArrowRight size={13} className="absolute -right-2.5 top-1/2 z-10 -translate-y-1/2 rounded-full bg-white text-text-muted"/>}</div>)}
               </div>
@@ -305,27 +376,65 @@ export default function StrategyDataBoard({
 
             <div className="mt-3 grid gap-3">
               <section className="rounded-2xl border border-border bg-white p-4">
-                <div className={sectionTitle}>
-                  <span className={sectionIcon}><ListChecks size={14} /></span>
-                  <h2>本周优先动作</h2>
+                <div className="flex items-center justify-between gap-3">
+                  <div className={sectionTitle}>
+                    <span className={sectionIcon}><ListChecks size={14} /></span>
+                    <h2>本周优先动作</h2>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void loadAdvisor(true)}
+                    disabled={advisorLoading}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-white px-2.5 text-[11px] font-bold text-text-secondary hover:bg-surface-2 disabled:opacity-60"
+                  >
+                    {advisorLoading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                    {advisorLoading ? '分析中' : '刷新分析'}
+                  </button>
                 </div>
                 <div className="mt-3 space-y-2.5">
+                  {advisorLoading && !actionItems.length && (
+                    <div className="flex h-24 items-center justify-center rounded-xl border border-dashed border-border bg-surface text-xs text-text-muted">
+                      <Loader2 size={14} className="mr-2 animate-spin" />正在结合经营数据与外部趋势生成建议
+                    </div>
+                  )}
+                  {advisorError && <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-700">{advisorError}</p>}
                   {actionItems.map(item => (
                     <button
-                      key={item.title}
+                      key={item.id}
                       type="button"
-                      onClick={() => onAction?.(item.agent, item.task)}
+                      onClick={() => executeAdvisorAction(item)}
                       className="flex w-full items-start gap-3 rounded-xl border border-border bg-surface px-3.5 py-2.5 text-left transition-colors hover:border-green-200 hover:bg-green-50/60"
                     >
                       <span className="min-w-0 flex-1">
-                        <span className={`block ${actionTitleText}`}>{item.title}</span>
+                        <span className="flex flex-wrap items-center gap-2">
+                          <span className={actionTitleText}>{item.title}</span>
+                          <span className="rounded-md border border-green-200 bg-green-50 px-1.5 py-0.5 text-[9px] font-bold text-green-700">置信度 {item.confidence}</span>
+                        </span>
                         <span className={`mt-1 block ${bodyText}`}>{item.desc}</span>
                         <span className={`mt-1.5 block ${supplementText}`}>{item.basis}</span>
+                        <span className="mt-1 block text-[11px] font-semibold text-text-secondary">{item.target}</span>
+                        <span className="mt-1 block text-[10px] text-text-muted">限制：{item.limitation}</span>
                       </span>
                       <ArrowRight size={14} className="mt-1 text-text-muted" />
                     </button>
                   ))}
                 </div>
+                {advisor?.marketContext.summary && (
+                  <div className="mt-3 rounded-xl border border-sky-100 bg-sky-50/60 px-3.5 py-3">
+                    <p className="text-[11px] font-black text-sky-900">外部市场信号</p>
+                    <p className="mt-1 whitespace-pre-line text-[11px] leading-5 text-sky-900/80">{advisor.marketContext.summary}</p>
+                    {!!advisor.marketContext.sources.length && (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {advisor.marketContext.sources.map(source => (
+                          <a key={source.uri} href={source.uri} target="_blank" rel="noreferrer" className="inline-flex max-w-full items-center gap-1 rounded-md bg-white px-2 py-1 text-[10px] font-bold text-sky-700 hover:underline">
+                            <ExternalLink size={10} /><span className="truncate">{source.title}</span>
+                          </a>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+                {advisor?.dataQuality.note && <p className="mt-2 text-[10px] text-text-muted">数据口径：{advisor.dataQuality.note}</p>}
               </section>
             </div>
           </section>

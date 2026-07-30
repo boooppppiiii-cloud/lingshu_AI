@@ -21,10 +21,21 @@ const TRAFFIC_GREEN = '#16a34a';
 const CANVA_VIDEO_COVER_URL = 'https://www.canva.cn/create/video-covers/';
 const CANVA_COVER_RETURN_KEY = 'ow_canva_cover_return';
 const CANVA_COVER_RETURN_TTL = 6 * 60 * 60 * 1000;
+const PUBLISH_RETURN_PREVIEW_KEY = 'ow_publish_return_to_preview';
+const PUBLISH_RETURN_PREVIEW_TTL = 2 * 60 * 60 * 1000;
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
 const PLAYABLE_AUDIO_BLOB_CACHE = new Map<string, string>();
+const PLAYABLE_VIDEO_BLOB_CACHE = new Map<string, string>();
+
+function isSameOriginUrl(sourceUrl: string): boolean {
+  try {
+    return new URL(sourceUrl, window.location.href).origin === window.location.origin;
+  } catch {
+    return false;
+  }
+}
 
 async function authenticatedAudioBlobUrl(sourceUrl: string): Promise<string> {
   if (/^(?:blob:|data:)/i.test(sourceUrl)) return sourceUrl;
@@ -41,6 +52,27 @@ async function authenticatedAudioBlobUrl(sourceUrl: string): Promise<string> {
   const playableBlob = blob.type.startsWith('audio/') ? blob : new Blob([blob], { type: 'audio/wav' });
   const blobUrl = URL.createObjectURL(playableBlob);
   PLAYABLE_AUDIO_BLOB_CACHE.set(sourceUrl, blobUrl);
+  return blobUrl;
+}
+
+async function authenticatedVideoBlobUrl(sourceUrl: string): Promise<string> {
+  if (/^(?:blob:|data:)/i.test(sourceUrl)) return sourceUrl;
+  const cached = PLAYABLE_VIDEO_BLOB_CACHE.get(sourceUrl);
+  if (cached) return cached;
+  const sameOrigin = isSameOriginUrl(sourceUrl);
+  const response = await fetch(sourceUrl, sameOrigin
+    ? { headers: authHeader(), credentials: 'same-origin' }
+    : { credentials: 'omit' });
+  if (!response.ok) throw new Error(`视频请求失败（HTTP ${response.status}）`);
+  const blob = await response.blob();
+  if (!blob.size) throw new Error('服务器返回了空视频');
+  const contentType = String(response.headers.get('content-type') || blob.type || '').toLowerCase();
+  if (contentType && !contentType.startsWith('video/') && contentType !== 'application/octet-stream') {
+    throw new Error(`服务器返回的不是视频（${contentType}）`);
+  }
+  const playableBlob = blob.type.startsWith('video/') ? blob : new Blob([blob], { type: 'video/mp4' });
+  const blobUrl = URL.createObjectURL(playableBlob);
+  PLAYABLE_VIDEO_BLOB_CACHE.set(sourceUrl, blobUrl);
   return blobUrl;
 }
 
@@ -67,6 +99,29 @@ async function playAudioWithAuthenticatedFallback(
     element.load();
     element.currentTime = 0;
     await element.play();
+  }
+}
+
+async function playVideoWithAuthenticatedFallback(
+  element: HTMLVideoElement,
+  sourceUrl: string,
+): Promise<string> {
+  const absoluteSource = new URL(sourceUrl, window.location.href).href;
+  if (element.src !== absoluteSource && element.dataset.sourceUrl !== sourceUrl) {
+    element.src = sourceUrl;
+    element.dataset.sourceUrl = sourceUrl;
+    element.load();
+  }
+  try {
+    await element.play();
+    return sourceUrl;
+  } catch {
+    const blobUrl = await authenticatedVideoBlobUrl(sourceUrl);
+    element.src = blobUrl;
+    element.dataset.sourceUrl = sourceUrl;
+    element.load();
+    await element.play();
+    return blobUrl;
   }
 }
 
@@ -276,6 +331,25 @@ interface ClipEdit {
   transition: string;
   note: string;
 }
+
+function mergeClipLists(primary: Clip[], fallback: Clip[]): Clip[] {
+  const byId = new Map<string, Clip>();
+  for (const item of fallback) byId.set(item.id, item);
+  for (const item of primary) {
+    const existing = byId.get(item.id);
+    byId.set(item.id, existing
+      ? {
+          ...existing,
+          ...item,
+          url: item.url || existing.url,
+          poster: item.poster || existing.poster,
+          segments: item.segments?.length ? item.segments : existing.segments,
+        }
+      : item);
+  }
+  return Array.from(byId.values());
+}
+
 interface StoryboardSlot {
   id: string;
   time: string;
@@ -316,6 +390,23 @@ type StudioPublishItem = {
   platform?: StudioPublishPlatform;
 };
 type StudioPublishPayload = StudioPublishItem & { items?: StudioPublishItem[] };
+
+type LanguageRenderOutput = {
+  status: 'pending' | 'rendering' | 'done' | 'failed';
+  path?: string;
+  previewUrl?: string;
+  error?: string;
+};
+
+type LanguageRenderGeneration = {
+  id: string;
+  versionNumber: number;
+  status: 'done' | 'failed';
+  path?: string;
+  previewUrl?: string;
+  error?: string;
+  createdAt: string;
+};
 
 const renderCombinationKey = (planId: string, language: string, bgmId: string) =>
   `${encodeURIComponent(planId)}::${encodeURIComponent(language)}::${encodeURIComponent(bgmId || 'none')}`;
@@ -613,6 +704,7 @@ function buildCues(script: string, totalDur: number): SubCue[] {
   }
 
   const lines = script.split('\n');
+  if (hasStoryboardFieldLabels(lines)) return [];
   // 形如 [Hook · 0-3s] / [Body · 3-15s] 的时间段标记
   const headerRe = /\[([^\]]*?\d+(?:\.\d+)?\s*(?:s|秒)?\s*[-–]\s*\d+(?:\.\d+)?\s*(?:s|秒)?[^\]]*)\]/i;
   const sections: { start: number; end: number; text: string }[] = [];
@@ -1002,6 +1094,60 @@ interface VideoKickoff {
   };
 }
 
+function normalizeClipSnapshot(value: unknown): Clip | null {
+  if (!value || typeof value !== 'object') return null;
+  const item = value as Partial<Clip>;
+  if (!item.id || typeof item.id !== 'string') return null;
+  const type = item.type === 'image' || item.type === 'audio' || item.type === 'video' ? item.type : 'video';
+  const url = typeof item.url === 'string' ? item.url : '';
+  const poster = typeof item.poster === 'string' ? item.poster : '';
+  if (!url && !poster) return null;
+  return {
+    id: item.id,
+    name: typeof item.name === 'string' && item.name.trim() ? item.name : '历史作品集素材',
+    folder: typeof item.folder === 'string' && item.folder.trim() ? item.folder : 'upload',
+    type,
+    duration: Number(item.duration) || 0,
+    width: Number(item.width) || undefined,
+    height: Number(item.height) || undefined,
+    aspectRatio: Number(item.aspectRatio) || undefined,
+    size: typeof item.size === 'string' && item.size.trim() ? item.size : '作品集快照',
+    url,
+    poster,
+    scope: item.scope === 'shared' ? 'shared' : 'own',
+    usage: item.usage,
+    sourceType: typeof item.sourceType === 'string' && item.sourceType.trim() ? item.sourceType : 'project-snapshot',
+    industry: item.industry,
+    shotFunction: item.shotFunction,
+    applicability: item.applicability,
+    tags: item.tags,
+    segmentAnalysisStatus: item.segmentAnalysisStatus,
+    segments: item.segments,
+  };
+}
+
+function kickoffClipSnapshot(kickoff: VideoKickoff | null): Clip | null {
+  if (!kickoff) return null;
+  if (kickoff.generatedVideo?.material) {
+    return normalizeClipSnapshot({ ...materialToClip(kickoff.generatedVideo.material), sourceType: 'historical-kickoff' });
+  }
+  const url = kickoff.generatedVideo?.url || kickoff.video?.aiAnalysis?.materialUrl || kickoff.video?.videoUrl || '';
+  const poster = kickoff.generatedVideo?.poster || kickoff.video?.aiAnalysis?.materialPoster || kickoff.video?.thumbnail || '';
+  if (!url && !poster) return null;
+  return normalizeClipSnapshot({
+    id: kickoff.generatedVideo?.id || `historical-kickoff-${url || poster || kickoff.video?.title || 'video'}`,
+    name: kickoff.generatedVideo?.title || kickoff.video?.title || '历史对标视频',
+    folder: kickoff.source === 'material_library' ? 'hot' : 'upload',
+    type: kickoff.video?.contentFormat === 'image' ? 'image' : 'video',
+    duration: kickoff.generatedVideo?.duration || kickoff.video?.duration || 0,
+    size: '历史作品集',
+    url,
+    poster,
+    scope: 'own',
+    sourceType: 'historical-kickoff',
+  });
+}
+
 const LEAD_PACKAGE_ROLE_LABELS: Record<string, string> = {
   buyer_attention: '第 1 组 · 吸引目标买家',
   capability_explanation: '第 2 组 · 解释合作能力',
@@ -1082,7 +1228,7 @@ function BenchmarkVideoPreview({ kickoff }: { kickoff: VideoKickoff | null }) {
   const isImageReference = video?.contentFormat === 'image';
   const poster = video?.thumbnail || video?.aiAnalysis?.materialPoster || kickoff?.generatedVideo?.poster || '';
   const rawUrl = video?.videoUrl || video?.aiAnalysis?.materialUrl || kickoff?.generatedVideo?.url || '';
-  const apiUrl = rawUrl.endsWith('/media') ? `${rawUrl}-url` : rawUrl;
+  const apiUrl = rawUrl.replace(/\/media(?=\?|$)/, '/media-url');
 
   useEffect(() => {
     setPlaybackUrl('');
@@ -1099,7 +1245,7 @@ function BenchmarkVideoPreview({ kickoff }: { kickoff: VideoKickoff | null }) {
     if (loading) return '';
     setLoading(true);
     try {
-      const response = await fetch(apiUrl, { headers: authHeader() });
+      const response = await fetch(apiUrl, { headers: authHeader(), credentials: 'same-origin' });
       if (!response.ok) return '';
       const next = String(((await response.json()) as { url?: string }).url || '');
       setPlaybackUrl(next);
@@ -1117,18 +1263,14 @@ function BenchmarkVideoPreview({ kickoff }: { kickoff: VideoKickoff | null }) {
     }
     const element = videoRef.current;
     if (!element) return;
-    // 首次点击时 React 可能尚未把新解析出的地址提交到 DOM，直接赋值
-    // 可避免有封面、有 URL，但第一次点击始终无法播放。
-    if (element.getAttribute('src') !== url) {
-      element.src = url;
-      element.load();
-    }
     try {
-      await element.play();
+      const usedUrl = await playVideoWithAuthenticatedFallback(element, url);
+      if (usedUrl !== playbackUrl) setPlaybackUrl(usedUrl);
       setPlaying(true);
-    } catch {
+    } catch (error: unknown) {
       setPlaying(false);
-      setPlaybackError('视频加载或解码失败，可点击右上角“原站”查看');
+      const message = error instanceof Error ? error.message : String(error || '');
+      setPlaybackError(message ? `视频加载失败：${message}` : '视频加载或解码失败，可点击右上角“原站”查看');
     }
   };
   const pause = () => {
@@ -1960,6 +2102,41 @@ function looksLikeProductionInstruction(value: string): boolean {
     || /(?:画面|我方画面|参考节奏|字幕|Shot|Camera|Visual|Subtitle)\s*[：:]/i.test(value);
 }
 
+
+const VOICEOVER_FIELD_RE = /(?:人物说|台词|Voiceover|VO|口播)\s*[：:]\s*(.+)$/i;
+const NON_VOICE_FIELD_RE = /^(?:环境|景别|运镜|构图|镜头功能|画面|Visual|字幕|Caption|屏幕文字|OnScreenText|配乐|音乐|音效|Sound|SFX|BGM|真实性要求|可见事实|表达意图|未展示因果|Omni提示词|Omni禁止项)\s*[：:]/i;
+
+function hasStoryboardFieldLabels(lines: string[]): boolean {
+  return lines.some(raw => {
+    const line = raw.trim();
+    return VOICEOVER_FIELD_RE.test(line) || NON_VOICE_FIELD_RE.test(line);
+  });
+}
+
+function looksLikeOnScreenOnlyText(value: string): boolean {
+  const text = String(value || '').replace(/\s+/g, '').trim();
+  if (!text) return true;
+  if (isNonSpeechSfx(text)) return true;
+  if (/[｜|]/.test(text)) return true;
+  if (/[¥￥$€£]\s*\d/.test(text)) return true;
+  if (/^[A-Z][A-Z0-9_-]{2,}(?:-\d+)?$/i.test(text)) return true;
+  if (/^[A-Z][A-Z0-9_-]{2,}(?:-\d+)?(?:资料|认证|报价|PDF)$/i.test(text)) return true;
+  if (/^[A-Z0-9_-]{2,}[\u4e00-\u9fff]{1,10}(?:\d+款?)?$/i.test(text)) return true;
+  if (/^\d+(?:\.\d+)?\s*(?:资料|认证|报价|PDF)$/i.test(text)) return true;
+  if (/^(?:[\d.]+|[A-Z0-9_-]+|PDF|CPNP|MOQ|OEM|ODM)+$/i.test(text)) return true;
+  if (/^(?:按压即发|绵密不塌|现货|秒回PDF|含报价|含认证|非打样|即订即发)$/i.test(text)) return true;
+  return false;
+}
+
+function looksLikeStandaloneSpeech(value: string): boolean {
+  const text = cleanVoiceoverLine(value);
+  if (!text || looksLikeOnScreenOnlyText(text) || looksLikeProductionInstruction(text)) return false;
+  if (/[，。！？!?、]/.test(text)) return true;
+  if (/(吗|呢|吧|了|我|你|咱|这|那|真能|不是|马上|直接|发我|留言|私信)/.test(text) && text.length >= 6) return true;
+  if (/\s/.test(text) && /^(check|send|watch|see|message|comment|dm|ask|get|try)\b/i.test(text)) return true;
+  return text.length >= 10 && /[\u4e00-\u9fff]/.test(text);
+}
+
 function cleanVoiceoverLine(value: string): string {
   let text = String(value || '')
     .replace(/^\s*\[[^\]]+\]\s*/g, '')
@@ -2017,9 +2194,35 @@ function hasUnnaturalVoiceover(value: string): boolean {
     });
 }
 
+function mergeTimestampedVoiceoverSegments(
+  segments: Array<{ time: string; text: string }>,
+): Array<{ time: string; text: string }> {
+  const merged: Array<{ time: string; text: string }> = [];
+  for (const segment of segments) {
+    const previous = merged[merged.length - 1];
+    if (!previous || previous.time !== segment.time) {
+      merged.push({ ...segment });
+      continue;
+    }
+
+    const previousKey = compactComparable(previous.text);
+    const currentKey = compactComparable(segment.text);
+    if (!currentKey || previousKey === currentKey || previousKey.includes(currentKey)) continue;
+    if (currentKey.includes(previousKey)) {
+      previous.text = segment.text;
+      continue;
+    }
+
+    const separator = /[。！？!?]$/.test(previous.text) ? '' : '。';
+    previous.text = `${previous.text}${separator}${segment.text}`;
+  }
+  return merged;
+}
+
 function parseTimestampedVoiceover(value: string): Array<{ time: string; text: string }> {
   const lines = String(value || '').split(/\n+/);
   const segments: Array<{ time: string; text: string }> = [];
+  const structuredStoryboard = hasStoryboardFieldLabels(lines);
   let currentTime = '';
   let fallbackIndex = 0;
   for (const raw of lines) {
@@ -2031,21 +2234,25 @@ function parseTimestampedVoiceover(value: string): Array<{ time: string; text: s
     if (timeMatch) currentTime = normalizeTimeLabel(timeMatch[1], fallbackIndex);
     else if (sceneTimeMatch) currentTime = normalizeTimeLabel(sceneTimeMatch[1], fallbackIndex);
 
-    const quoted = line.match(/[“"]([^”"]{2,})[”"]/);
-    const prefixed = line.match(/(?:人物说|台词|Voiceover|VO|口播)\s*[：:]\s*(.+)$/i);
+    const prefixed = line.match(VOICEOVER_FIELD_RE);
+    if (!prefixed && NON_VOICE_FIELD_RE.test(line)) continue;
+    const quoted = !prefixed && !structuredStoryboard ? line.match(/[“"]([^”"]{2,})[”"]/) : null;
     const sameLine = timeMatch ? line.replace(timeMatch[0], '').trim() : '';
     let text = quoted?.[1] || prefixed?.[1] || '';
-    if (!text && sameLine && !looksLikeProductionInstruction(sameLine)) text = sameLine;
+    if (!text && sameLine && !structuredStoryboard && looksLikeStandaloneSpeech(sameLine)) text = sameLine;
     text = cleanVoiceoverLine(text);
-    if (!text || looksLikeProductionInstruction(text)) continue;
+    if (!text || looksLikeProductionInstruction(text) || isNonSpeechSfx(text)) continue;
+    if (!prefixed && looksLikeOnScreenOnlyText(text)) continue;
     segments.push({ time: currentTime || normalizeTimeLabel('', fallbackIndex), text });
     fallbackIndex += 1;
   }
-  if (segments.length) return segments;
+  if (segments.length) return mergeTimestampedVoiceoverSegments(segments);
+  if (structuredStoryboard) return [];
   return Array.from(String(value || '').matchAll(/[“"]([^”"]{2,})[”"]/g))
     .map((match, index) => ({ time: normalizeTimeLabel('', index), text: cleanVoiceoverLine(match[1] || '') }))
-    .filter(item => item.text);
+    .filter(item => item.text && !isNonSpeechSfx(item.text) && !looksLikeOnScreenOnlyText(item.text));
 }
+
 
 function formatVoiceoverWithTimestamps(value: string): string {
   const parsed = parseTimestampedVoiceover(value).filter(item => !isNonSpeechSfx(item.text));
@@ -2160,7 +2367,7 @@ function isNonSpeechSfx(text: string): boolean {
     .toLowerCase();
   if (!normalized) return true;
   if (/^(无|暂无|无口播|无台词|无对白|没有口播|没有台词|none|n\/a|no voiceover|no dialogue)$/i.test(normalized)) return true;
-  if (/^(噗|噗噗|砰|砰砰|咚|咚咚|哒|哒哒|啪|啪啪|嗒|嗒嗒|咔|咔哒|咔嚓|咯吱|嘎吱|吱呀|叮|叮咚|嘀|滴滴|唰|嗖|嗡|嗡嗡|轰|轰隆|沙沙|刷刷)$/i.test(normalized)) return true;
+  if (/^(噗|噗噗|砰|砰砰|咚|咚咚|哒|哒哒|啪|啪啪|嗒|嗒嗒|咔|咔哒|咔嗒|咔嚓|咯吱|嘎吱|吱呀|叮|叮咚|嘀|滴滴|唰|嗖|嗡|嗡嗡|轰|轰隆|沙沙|刷刷)$/i.test(normalized)) return true;
   if (/^(whoosh|swoosh|pop|popop|bang|boom|ding|beep|click|clack|creak|crack|snap|buzz|whirr|rustle)$/i.test(normalized)) return true;
   if (normalized.length <= 4 && /^([\u54c8\u563f\u5566\u5662\u7830\u549a\u53ee\u6ef4\u54d2\u55d2\u556a\u54d7\u55d2\u5530\u55e1\u5431\u5494\u55d2])\1+$/.test(normalized)) return true;
   return false;
@@ -2648,6 +2855,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   const [productSearch, setProductSearch] = useState('');
   const [productCategoryFilter, setProductCategoryFilter] = useState('');
   const [showSelectedProductsOnly, setShowSelectedProductsOnly] = useState(false);
+  const [productSelectorOpen, setProductSelectorOpen] = useState(false);
   const [cloneCount] = useState(1);
   const [cloneOutputMode, setCloneOutputMode] = useState<'ideas' | 'languages'>('ideas');
   const [audience, setAudience] = useState('');
@@ -2884,12 +3092,14 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   const [rendered, setRendered] = useState(false);
   const [renderPct, setRenderPct] = useState(0);
   const [renderOutputPath, setRenderOutputPath] = useState<string | null>(null); // 桌面端合成产物路径
+  const [renderOutputPreviewUrl, setRenderOutputPreviewUrl] = useState<string | null>(null);
   const [renderDownloadMessage, setRenderDownloadMessage] = useState('');
-  const [languageRenderOutputs, setLanguageRenderOutputs] = useState<Record<string, { status: 'pending' | 'rendering' | 'done' | 'failed'; path?: string; error?: string }>>({});
-  const [languageRenderVersions, setLanguageRenderVersions] = useState<Record<string, Array<{ id: string; versionNumber: number; status: 'done' | 'failed'; path?: string; error?: string; createdAt: string }>>>({});
+  const [languageRenderOutputs, setLanguageRenderOutputs] = useState<Record<string, LanguageRenderOutput>>({});
+  const [languageRenderVersions, setLanguageRenderVersions] = useState<Record<string, LanguageRenderGeneration[]>>({});
   const [activeRenderCombinationKey, setActiveRenderCombinationKey] = useState('');
   const [batchRenderingLangs, setBatchRenderingLangs] = useState(false);
   const renderToken = useRef(0); // 取消过期的渲染循环（重复点「重新合成」时）
+  const renderPreviewUrlsRef = useRef<Record<string, string>>({});
 
   const [account, setAccount] = useState<string | null>('a1');
   const [caption, setCaption] = useState('Factory-direct home essentials 🏠✨ #tiktokmademebuyit #homefinds');
@@ -3730,7 +3940,10 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     setRendered(false);
     setRendering(true);
     setRenderPct(0);
-    if (!renderOverride?.outputOnly) setRenderOutputPath(null);
+    if (!renderOverride?.outputOnly) {
+      setRenderOutputPath(null);
+      setRenderOutputPreviewUrl(null);
+    }
     const token = ++renderToken.current;
     try {
 
@@ -3822,7 +4035,11 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     const localOut = await studioApi.renderLocal(auth.manifest).finally(() => window.clearInterval(progressTimer));
     if (renderToken.current !== token) return;
     if (!localOut.ok) throw new Error(localOut.error || '本地 MP4 导出失败');
-    if (!renderOverride?.outputOnly) setRenderOutputPath(localOut.outputPath ?? null);
+    if (localOut.outputPath && localOut.previewUrl) renderPreviewUrlsRef.current[localOut.outputPath] = localOut.previewUrl;
+    if (!renderOverride?.outputOnly) {
+      setRenderOutputPath(localOut.outputPath ?? null);
+      setRenderOutputPreviewUrl(localOut.previewUrl ?? null);
+    }
     setRendering(false);
     setRendered(true);
     setRenderPct(100);
@@ -3876,8 +4093,9 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
             timeline: timelineForAssembly(plan),
             bgmId,
           });
-          setLanguageRenderOutputs(prev => ({ ...prev, [key]: { status: 'done', path: outputPath || undefined } }));
-          setLanguageRenderVersions(prev => ({ ...prev, [key]: [{ id: `${key}-${Date.now()}`, versionNumber: (prev[key]?.[0]?.versionNumber || 0) + 1, status: 'done', path: outputPath || undefined, createdAt: new Date().toISOString() }, ...(prev[key] || [])] }));
+          const previewUrl = outputPath ? renderPreviewUrlsRef.current[outputPath] : undefined;
+          setLanguageRenderOutputs(prev => ({ ...prev, [key]: { status: 'done', path: outputPath || undefined, previewUrl } }));
+          setLanguageRenderVersions(prev => ({ ...prev, [key]: [{ id: `${key}-${Date.now()}`, versionNumber: (prev[key]?.[0]?.versionNumber || 0) + 1, status: 'done', path: outputPath || undefined, previewUrl, createdAt: new Date().toISOString() }, ...(prev[key] || [])] }));
         } catch (err: any) {
           setLanguageRenderOutputs(prev => ({ ...prev, [key]: { status: 'failed', error: err?.message || '生成失败' } }));
           setLanguageRenderVersions(prev => ({ ...prev, [key]: [{ id: `${key}-${Date.now()}`, versionNumber: (prev[key]?.[0]?.versionNumber || 0) + 1, status: 'failed', error: err?.message || '生成失败', createdAt: new Date().toISOString() }, ...(prev[key] || [])] }));
@@ -3905,8 +4123,9 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         timeline: timelineForAssembly(plan),
         bgmId,
       });
-      setLanguageRenderOutputs(prev => ({ ...prev, [key]: { status: 'done', path: outputPath || undefined } }));
-      setLanguageRenderVersions(prev => ({ ...prev, [key]: [{ id: `${key}-${Date.now()}`, versionNumber: (prev[key]?.[0]?.versionNumber || 0) + 1, status: 'done', path: outputPath || undefined, createdAt: new Date().toISOString() }, ...(prev[key] || [])] }));
+      const previewUrl = outputPath ? renderPreviewUrlsRef.current[outputPath] : undefined;
+      setLanguageRenderOutputs(prev => ({ ...prev, [key]: { status: 'done', path: outputPath || undefined, previewUrl } }));
+      setLanguageRenderVersions(prev => ({ ...prev, [key]: [{ id: `${key}-${Date.now()}`, versionNumber: (prev[key]?.[0]?.versionNumber || 0) + 1, status: 'done', path: outputPath || undefined, previewUrl, createdAt: new Date().toISOString() }, ...(prev[key] || [])] }));
     } catch (err: any) {
       setLanguageRenderOutputs(prev => ({ ...prev, [key]: { status: 'failed', error: err?.message || '生成失败' } }));
       setLanguageRenderVersions(prev => ({ ...prev, [key]: [{ id: `${key}-${Date.now()}`, versionNumber: (prev[key]?.[0]?.versionNumber || 0) + 1, status: 'failed', error: err?.message || '生成失败', createdAt: new Date().toISOString() }, ...(prev[key] || [])] }));
@@ -4240,7 +4459,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       setModeScripts(outputs);
       setProjectTitle(projectTitle === '未命名草稿' ? '产品生成 · AI智能素材' : projectTitle);
       setModeNotice(usedLocalFallback
-        ? `已生成可用脚本。系统自动校正了初稿中的格式或事实表达：${Array.from(new Set(fallbackDetails)).slice(0, 3).join('；') || '已按产品资料完成安全校正'}。`
+        ? '已生成可用脚本。'
         : '产品脚本已生成。确认脚本后，可继续选择配音和素材；不会自动生成视频。');
       autoGen.current = true;
     } catch (err: any) {
@@ -4916,13 +5135,15 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       const bgmId = materialVersionBgms[materialVersionKey(plan.id, code)] ?? assemblyBgms[plan.id] ?? bgm;
       const key = renderCombinationKey(plan.id, code, bgmId);
       const latestDone = (languageRenderVersions[key] || []).find(item => item.status === 'done' && item.path);
-      const path = languageRenderOutputs[key]?.path || latestDone?.path || (key === activeRenderCombinationKey ? renderOutputPath : '');
+      const output = languageRenderOutputs[key];
+      const path = output?.path || latestDone?.path || (key === activeRenderCombinationKey ? renderOutputPath : '');
       const videoPath = String(path || '').trim();
-      if (!videoPath || seenPaths.has(videoPath)) return null;
-      seenPaths.add(videoPath);
+      if (videoPath && seenPaths.has(videoPath)) return null;
+      if (videoPath) seenPaths.add(videoPath);
       const versionName = `${plan.name || `视频${planIndex + 1}`} * ${langZh(code) || `语种${languageIndex + 1}`}`;
       return {
-        videoPath,
+        videoPath: videoPath || undefined,
+        previewUrl: output?.previewUrl || latestDone?.previewUrl || (key === activeRenderCombinationKey ? renderOutputPreviewUrl || undefined : undefined),
         title: `${baseTitle} - ${versionName}`,
         description: caption.trim() || voiceDrafts[code] || activeSpokenScript,
         ratio,
@@ -4932,17 +5153,28 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     })).filter(Boolean) as StudioPublishItem[];
   };
 
-  const goPublishCurrentWork = () => {
+  const buildPublishPayload = (): StudioPublishPayload => {
     const items = buildPublishVersions();
     const fallback: StudioPublishItem = {
       videoPath: renderOutputPath || '',
+      previewUrl: renderOutputPreviewUrl || undefined,
       title: projectTitle.trim() || coverTitle || 'AI 快剪成片',
       description: caption.trim() || activeSpokenScript,
       ratio,
       sourceProjectId: projectId || undefined,
       platform: platform as StudioPublishPlatform,
     };
-    onGoPublish?.(items.length ? { ...fallback, items } : fallback);
+    return items.length ? { ...fallback, items } : fallback;
+  };
+
+  useEffect(() => {
+    try { localStorage.setItem('ow_publish_draft', JSON.stringify(buildPublishPayload())); } catch { /* ignore */ }
+    // Keep the top-level publish tab in sync with the latest generated combinations.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeRenderCombinationKey, activeVoiceLang, assemblyBgms, bgm, caption, contentPlanVersions, languageRenderOutputs, languageRenderVersions, materialVersionBgms, platform, projectId, projectTitle, ratio, renderOutputPath, renderOutputPreviewUrl, voiceDrafts, voiceLangs, voiceoverAudios, voiceoverMode, voiceoverUrl]);
+
+  const goPublishCurrentWork = () => {
+    onGoPublish?.(buildPublishPayload());
   };
 
   const aiCaption = async () => {
@@ -5164,7 +5396,8 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   /* ── 素材库：只拉取真实素材 ──────────────────────── */
   const refreshMaterials = async () => {
     const real = await studioApi.listMaterials();
-    setMaterials(real.map(materialToClip));
+    const realClips = real.map(materialToClip);
+    setMaterials(current => mergeClipLists(realClips, current.filter(item => item.sourceType === 'project-snapshot' || item.sourceType === 'historical-kickoff')));
   };
   const materialSourceRefreshesRef = useRef(new Set<string>());
   const refreshMaterialSource = async (materialId: string): Promise<Clip | undefined> => {
@@ -5694,13 +5927,52 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   const assembliesForSave = storyboardAssemblies.map(item => item.id === activeAssemblyId
     ? { ...item, name: assemblyName, assignments: storyboardAssignments, sourcePlans: storyboardSourcePlans, selected }
     : item);
+  const materialSnapshotIds = new Set<string>([
+    hookMaterialId,
+    cover,
+    ...selected,
+    ...scriptRecommendedMaterialIds,
+    ...Object.values(storyboardAssignments),
+    ...assembliesForSave.flatMap(item => [
+      ...(item.selected || []),
+      ...Object.values(item.assignments || {}),
+      ...Object.values(item.sourcePlans || {}).flatMap(plan => [plan.referenceClipId, plan.generatedClipId]),
+    ]),
+  ].filter((id): id is string => Boolean(id)));
+  const kickoffSnapshot = kickoffClipSnapshot(videoKickoff);
+  if (kickoffSnapshot) materialSnapshotIds.add(kickoffSnapshot.id);
+  const materialSnapshots = [
+    ...materials.filter(item => materialSnapshotIds.has(item.id)),
+    ...(kickoffSnapshot && !materials.some(item => item.id === kickoffSnapshot.id) ? [kickoffSnapshot] : []),
+  ].map(item => ({
+    id: item.id,
+    name: item.name,
+    folder: item.folder,
+    type: item.type,
+    duration: item.duration,
+    width: item.width,
+    height: item.height,
+    aspectRatio: item.aspectRatio,
+    size: item.size,
+    url: item.url,
+    poster: item.poster,
+    scope: item.scope,
+    usage: item.usage,
+    sourceType: 'project-snapshot',
+    industry: item.industry,
+    shotFunction: item.shotFunction,
+    applicability: item.applicability,
+    tags: item.tags,
+    segmentAnalysisStatus: item.segmentAnalysisStatus,
+    segments: item.segments,
+  }));
   const collectSpec = () => ({
     mode, contentMode, posterStyle, platform, ratio, duration, lang, provider,
     videoKickoff,
     productInfo, productSelectMode, selectedProductIds, audience, sellingPoints, tone,
     videoThemeId, themePainPoint, themeConversionGoal,
-    selected, scriptRecommendedMaterialIds, storyboardAssignments, storyboardSourcePlans, assemblyName,
-    storyboardAssemblies: assembliesForSave, activeAssemblyId, script, scriptType, voice, voiceCandidates,
+    selected, scriptRecommendedMaterialIds, storyboardAssignments, storyboardSourcePlans, assemblyName, hookMaterialId, materialSnapshots,
+    storyboardAssemblies: assembliesForSave, activeAssemblyId, script, scriptType, modeScripts, activeModeScriptId, voice, voiceCandidates,
     bgm, bgmCandidates, platformBgms, assemblyBgms, materialVersionBgms, soundCandidatesPerContent, bgmVol, voiceVol, cover, coverTitle, coverStyle, materialVersionCovers, account, caption,
     subtitlesOn, subMode, clipEdits, voiceoverMode, uploadedVoiceName, customVoiceId, customVoiceName, customVoiceUrl,
     ttsPreset, ttsEmotion, ttsEmotionIntensity, ttsSpeed, ttsPauseStyle, ttsPronunciationText, ttsLanguageSettings, voiceLangs, activeVoiceLang, voiceDrafts, voiceDraftStaleLangs,
@@ -5769,8 +6041,18 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     setVoiceDraftLoading(false);
     setTtsLoading(false);
     setTtsLoadingScope(null);
+    const restoredVideoKickoff = s.videoKickoff && typeof s.videoKickoff === 'object'
+      ? s.videoKickoff as VideoKickoff
+      : null;
+    const restoredMaterialSnapshots = [
+      ...(Array.isArray(s.materialSnapshots) ? s.materialSnapshots.map(normalizeClipSnapshot).filter((item): item is Clip => Boolean(item)).map(item => ({ ...item, sourceType: 'project-snapshot' })) : []),
+      kickoffClipSnapshot(restoredVideoKickoff),
+    ].filter((item): item is Clip => Boolean(item));
+    if (restoredMaterialSnapshots.length) {
+      setMaterials(current => mergeClipLists(current, restoredMaterialSnapshots));
+    }
     if (s.mode) setMode(s.mode as typeof mode);
-    if (s.videoKickoff && typeof s.videoKickoff === 'object') setVideoKickoff(s.videoKickoff as VideoKickoff);
+    if (restoredVideoKickoff) setVideoKickoff(restoredVideoKickoff);
     if (s.contentMode === 'video' || s.contentMode === 'poster') setContentMode(s.contentMode);
     if (typeof s.posterStyle === 'string' && POSTER_STYLES.some(item => item.id === s.posterStyle)) {
       setPosterStyle(s.posterStyle as typeof posterStyle);
@@ -5790,6 +6072,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     if (typeof s.themePainPoint === 'string') setThemePainPoint(s.themePainPoint);
     if (typeof s.themeConversionGoal === 'string') setThemeConversionGoal(s.themeConversionGoal);
     if (s.variationStrategy === 'remix' || s.variationStrategy === 'recreate' || s.variationStrategy === 'hybrid') setVariationStrategy(s.variationStrategy);
+    if (typeof s.hookMaterialId === 'string') setHookMaterialId(s.hookMaterialId);
     if (Array.isArray(s.selected)) setSelected(s.selected as string[]);
     if (Array.isArray(s.scriptRecommendedMaterialIds)) setScriptRecommendedMaterialIds(s.scriptRecommendedMaterialIds as string[]);
     if (s.storyboardAssignments && typeof s.storyboardAssignments === 'object') setStoryboardAssignments(s.storyboardAssignments as Record<string, string>);
@@ -5819,6 +6102,8 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     }
     if (typeof s.script === 'string') setScript(s.script);
     if (s.scriptType) setScriptType(s.scriptType as typeof scriptType);
+    if (Array.isArray(s.modeScripts)) setModeScripts(s.modeScripts as ModeScriptOutput[]);
+    if (typeof s.activeModeScriptId === 'string') setActiveModeScriptId(s.activeModeScriptId);
     if (s.voice) setVoice(s.voice as string);
     if (Array.isArray(s.voiceCandidates)) setVoiceCandidates(s.voiceCandidates as string[]);
     if (s.voiceoverMode === 'none' || s.voiceoverMode === 'ai' || s.voiceoverMode === 'upload') setVoiceoverMode(s.voiceoverMode);
@@ -5988,6 +6273,81 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     setPublished(false);
   };
 
+  const reuseProject = async (p: StudioProject) => {
+    if (voiceDraftLoading || ttsLoading || savingProj) return;
+    setSavingProj(true);
+    try {
+      const baseTitle = p.title.replace(/\s*·\s*复用\s*\d*$/, '').trim() || '历史作品集';
+      const nextTitle = `${baseTitle} · 复用`;
+      const clonedSpec = JSON.parse(JSON.stringify(p.spec || {})) as Record<string, unknown>;
+      const saved = await studioApi.saveProject({
+        title: nextTitle,
+        status: 'draft',
+        spec: clonedSpec,
+        thumbSeed: p.thumbSeed,
+      });
+      if (!saved.ok || !saved.project) throw new Error('复用失败，请稍后重试。');
+      applySpec(saved.project.spec);
+      setProjectId(saved.project.id);
+      setProjectTitle(saved.project.title);
+      setProjects(current => [saved.project, ...current.filter(item => item.id !== saved.project.id)]);
+      autoGen.current = true;
+      setStepIdx(0);
+      setShowProjects(false);
+      setPublished(false);
+      setSavedTick(true);
+      window.setTimeout(() => setSavedTick(false), 1800);
+    } catch (err: any) {
+      alert(err?.message || '复用失败，请稍后重试。');
+    } finally {
+      setSavingProj(false);
+    }
+  };
+
+  useEffect(() => {
+    let raw = '';
+    try {
+      raw = localStorage.getItem(PUBLISH_RETURN_PREVIEW_KEY) || '';
+      if (raw) localStorage.removeItem(PUBLISH_RETURN_PREVIEW_KEY);
+    } catch {
+      return;
+    }
+    if (!raw) return;
+    const goPreviewStep = () => {
+      const previewIndex = STEPS.findIndex(item => item.id === 'preview');
+      setContentMode('video');
+      setShowProjects(false);
+      setPublished(false);
+      setPreviewIdx(null);
+      window.setTimeout(() => setStepIdx(previewIndex >= 0 ? previewIndex : Math.max(0, STEPS.length - 1)), 0);
+    };
+    try {
+      const state = JSON.parse(raw) as { at?: number; projectId?: string };
+      if (!state?.at || Date.now() - state.at > PUBLISH_RETURN_PREVIEW_TTL) return;
+      const targetProjectId = String(state.projectId || '').trim();
+      if (!targetProjectId) {
+        goPreviewStep();
+        return;
+      }
+      void studioApi.listProjects().then(list => {
+        setProjects(list);
+        const project = list.find(item => item.id === targetProjectId);
+        if (project) {
+          applySpec(project.spec);
+          setProjectId(project.status === 'template' ? null : project.id);
+          setProjectTitle(project.status === 'template' ? `${project.title} · 副本` : project.title);
+        }
+        goPreviewStep();
+        setModeNotice(project ? '已从一键发布返回素材成片预览。' : '未找到来源项目，已返回当前素材成片预览。');
+      }).catch(() => {
+        goPreviewStep();
+        setModeNotice('项目列表读取失败，已返回当前素材成片预览。');
+      });
+    } catch {
+      goPreviewStep();
+    }
+  }, []);
+
   const removeProject = async (id: string) => {
     await studioApi.deleteProject(id);
     setProjects(await studioApi.listProjects());
@@ -6067,8 +6427,12 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                 </label>
                 <div className="min-w-[260px] max-w-[420px] flex-1">
                   <span className="mb-1.5 block text-xs font-semibold text-text-secondary">产品信息（多选）</span>
-                  <details className="group relative">
-                    <summary className="flex h-10 cursor-pointer list-none items-center justify-between gap-3 rounded-xl border border-border bg-surface px-3 text-sm font-semibold text-text-primary transition hover:border-accent/50 [&::-webkit-details-marker]:hidden">
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setProductSelectorOpen(value => !value)}
+                      className="flex h-10 w-full items-center justify-between gap-3 rounded-xl border border-border bg-surface px-3 text-left text-sm font-semibold text-text-primary transition hover:border-accent/50"
+                    >
                       <span className="truncate">
                         {productOptions.length === 0
                           ? '暂无可选产品'
@@ -6076,9 +6440,10 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                             ? '请选择产品'
                             : `已选 ${selectedProductIds.length} 个产品`}
                       </span>
-                      <ChevronDown size={15} className="shrink-0 text-text-muted transition group-open:rotate-180" />
-                    </summary>
-                    <div className="absolute left-0 top-[calc(100%+6px)] z-30 w-full min-w-[420px] overflow-hidden rounded-xl border border-border bg-surface shadow-xl">
+                      <ChevronDown size={15} className={`shrink-0 text-text-muted transition ${productSelectorOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    {productSelectorOpen && (
+                    <div className="mt-2 w-full overflow-hidden rounded-xl border border-border bg-surface shadow-sm">
                       <div className="space-y-2 border-b border-border bg-surface p-2.5">
                         <div className="relative">
                           <Search size={14} className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
@@ -6162,7 +6527,8 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                       )}
                       </div>
                     </div>
-                  </details>
+                    )}
+                  </div>
                 </div>
               </div>
               {contentMode === 'video' && mode === 'clone' && (
@@ -6176,7 +6542,6 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                       </div>
                       <p className="mt-1 text-xs leading-relaxed text-text-secondary">{migrationRecommendation.reason}</p>
                     </div>
-                    <span className="shrink-0 text-[10px] font-semibold text-text-muted">诊断在后台完成，不增加操作步骤</span>
                   </div>
                   <div className="mt-3 grid gap-2 md:grid-cols-2">
                     <div className="rounded-xl border border-emerald-100 bg-white/80 p-3">
@@ -7231,13 +7596,63 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
           });
         const referenceAnalysisIncomplete = mode === 'clone' && hasIncompleteReferenceAnalysis(videoKickoff);
         const detectedVoiceLang = detectScriptLanguageCode(voiceoverLines || extractVoiceoverText(script));
+        const updatePrimaryScriptContent = (value: string) => {
+          const spoken = extractVoiceoverText(value);
+          const sourceLanguage = detectScriptLanguageCode(spoken || value);
+          setScript(value);
+          setVoiceoverLines(spoken);
+          setScriptView('timestamp');
+          setModeScripts(current => current.map(item => item.id === activeModeScriptId ? { ...item, script: value } : item));
+          if (spoken.trim()) {
+            setVoiceDrafts(current => ({ ...current, [sourceLanguage]: spoken }));
+            setVoiceDraftStaleLangs(current => [...new Set([
+              ...current,
+              ...voiceLangs.filter(code => code !== sourceLanguage),
+            ])]);
+          }
+          setVoiceoverAudios({});
+          setAlignedCuesByLang({});
+          setLanguageRenderOutputs({});
+          setRenderOutputPath('');
+          setModeNotice('脚本已手动修改，请保存草稿；如需配音或成片，请重新生成对应语种配音。');
+        };
+        const updateVoiceScriptContent = (code: string, value: string) => {
+          setVoiceDrafts(current => ({ ...current, [code]: value }));
+          if (code === detectedVoiceLang) setVoiceoverLines(value);
+          setActiveVoiceLang(code);
+          setLang(code);
+          setScriptView('voiceover');
+          setVoiceDraftStaleLangs(current => current.filter(item => item !== code));
+          setVoiceoverAudios(current => { const next = { ...current }; delete next[code]; return next; });
+          setAlignedCuesByLang(current => { const next = { ...current }; delete next[code]; return next; });
+          setLanguageRenderOutputs({});
+          setRenderOutputPath('');
+          setVoiceDraftNotice(`${langZh(code) || code}脚本已手动修改，请保存草稿并重新生成该语种配音。`);
+        };
         const scriptPreviewTabs = [
-          { id: 'script', label: '脚本', content: script },
-          { id: 'voiceover', label: `${langZh(detectedVoiceLang) || detectedVoiceLang}口播`, content: voiceDrafts[detectedVoiceLang] || voiceoverLines || extractVoiceoverText(script) },
+          {
+            id: 'script',
+            label: '脚本',
+            content: script,
+            placeholder: '可直接输入或粘贴完整时间戳脚本。保存后会写入当前草稿。',
+            dir: detectScriptLanguageCode(script) === 'ar' ? 'rtl' : 'ltr',
+            onChange: updatePrimaryScriptContent,
+          },
+          {
+            id: 'voiceover',
+            label: `${langZh(detectedVoiceLang) || detectedVoiceLang}口播`,
+            content: voiceDrafts[detectedVoiceLang] || voiceoverLines || extractVoiceoverText(script),
+            placeholder: '可直接编辑当前口播台词；修改后需重新生成配音。',
+            dir: detectedVoiceLang === 'ar' ? 'rtl' : 'ltr',
+            onChange: (value: string) => updateVoiceScriptContent(detectedVoiceLang, value),
+          },
           ...voiceLangs.filter(code => code !== detectedVoiceLang).map(code => ({
             id: `lang:${code}`,
             label: LANGS.find(item => item.code === code)?.label.split(' - ')[1] || code.toUpperCase(),
             content: voiceDrafts[code] || '',
+            placeholder: `可直接编辑${langZh(code) || code}版本脚本；修改后需重新生成该语种配音。`,
+            dir: code === 'ar' ? 'rtl' : 'ltr',
+            onChange: (value: string) => updateVoiceScriptContent(code, value),
           })),
         ];
         const activeScriptPreview = scriptPreviewTabs.find(tab => tab.id === scriptPreviewTab) || scriptPreviewTabs[0];
@@ -7854,19 +8269,36 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
             <div className="min-h-[520px] p-4">
               <div className="mb-3 flex items-center justify-between gap-2">
                 <span className="rounded-md bg-accent-glow px-2 py-1 text-[10px] font-black text-accent">{activeScriptPreview.label}</span>
-                {activeScriptPreview.content && (
-                  <button type="button" onClick={() => void navigator.clipboard?.writeText(activeScriptPreview.content)} className="inline-flex items-center gap-1 text-[10px] font-bold text-text-muted hover:text-accent">
-                    <Copy size={11} /> 复制
+                <div className="flex items-center gap-2">
+                  {activeScriptPreview.content && (
+                    <button type="button" onClick={() => void navigator.clipboard?.writeText(activeScriptPreview.content)} className="inline-flex items-center gap-1 text-[10px] font-bold text-text-muted hover:text-accent">
+                      <Copy size={11} /> 复制
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void saveProject('draft')}
+                    disabled={savingProj || voiceDraftLoading || ttsLoading}
+                    className="inline-flex items-center gap-1 rounded-lg bg-accent px-2.5 py-1.5 text-[10px] font-black text-white disabled:opacity-50"
+                  >
+                    {savingProj ? <Loader2 size={11} className="animate-spin" /> : <Save size={11} />}
+                    保存
                   </button>
-                )}
+                </div>
               </div>
-              {activeScriptPreview.content ? (
-                <pre dir={activeScriptPreview.id === 'lang:ar' ? 'rtl' : 'ltr'} className="max-h-[620px] overflow-y-auto whitespace-pre-wrap break-words rounded-xl bg-surface-2 p-4 font-sans text-xs leading-6 text-text-secondary">{activeScriptPreview.content}</pre>
-              ) : (
-                <div className="flex min-h-[430px] flex-col items-center justify-center rounded-xl border border-dashed border-border bg-surface-2 px-8 text-center">
+              <textarea
+                value={activeScriptPreview.content}
+                onChange={event => activeScriptPreview.onChange(event.target.value)}
+                placeholder={activeScriptPreview.placeholder}
+                dir={activeScriptPreview.dir}
+                spellCheck={false}
+                className="min-h-[430px] max-h-[620px] w-full resize-y overflow-y-auto rounded-xl border border-border bg-white p-4 font-sans text-xs leading-6 text-text-secondary outline-none focus:border-accent focus:bg-white"
+              />
+              {!activeScriptPreview.content && (
+                <div className="mt-3 flex min-h-[120px] flex-col items-center justify-center rounded-xl border border-dashed border-border bg-surface-2 px-8 text-center">
                   <FileText size={28} className="text-text-muted opacity-35" />
-                  <p className="mt-3 text-xs font-bold text-text-secondary">{activeScriptPreview.id === 'script' ? '尚未生成脚本' : '尚未生成此版本'}</p>
-                  <p className="mt-1 text-[10px] leading-relaxed text-text-muted">{activeScriptPreview.id === 'script' ? '点击左侧“生成时间戳脚本”后将在这里显示。' : '点击左侧“提取口播并翻译”后将在这里显示。'}</p>
+                  <p className="mt-3 text-xs font-bold text-text-secondary">{activeScriptPreview.id === 'script' ? '尚未生成脚本，也可以直接手动填写' : '尚未生成此版本，也可以直接手动填写'}</p>
+                  <p className="mt-1 text-[10px] leading-relaxed text-text-muted">输入后点击“保存”，后续配音、素材匹配和成片会使用这里的最新内容。</p>
                 </div>
               )}
             </div>
@@ -8653,7 +9085,10 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
           activateContentPlan(version.plan.id);
           setBgm(version.bgmId);
           previewLanguageVersion(version.code, false);
-          if (version.output?.path) setRenderOutputPath(version.output.path);
+          if (version.output?.path) {
+            setRenderOutputPath(version.output.path);
+            setRenderOutputPreviewUrl(version.output.previewUrl || null);
+          }
         };
         return (
           <div className="flex items-start gap-8">
@@ -8792,8 +9227,11 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                           </button>
                           {version.generations.length > 0 && <div className="mt-2 flex flex-wrap gap-1 border-t border-border pt-2">
                             {version.generations.map(generation => <button key={generation.id} type="button" onClick={() => {
-                              setLanguageRenderOutputs(prev => ({ ...prev, [version.key]: { status: generation.status, path: generation.path, error: generation.error } }));
-                              if (generation.path) setRenderOutputPath(generation.path);
+                              setLanguageRenderOutputs(prev => ({ ...prev, [version.key]: { status: generation.status, path: generation.path, previewUrl: generation.previewUrl, error: generation.error } }));
+                              if (generation.path) {
+                                setRenderOutputPath(generation.path);
+                                setRenderOutputPreviewUrl(generation.previewUrl || null);
+                              }
                             }} className="rounded-md border border-border bg-surface-2 px-1.5 py-0.5 text-[9px] font-bold text-text-secondary">
                               V{generation.versionNumber}{generation.status === 'failed' ? ' 失败' : ''}
                             </button>)}
@@ -8905,7 +9343,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
           <button onClick={() => void openProjects()}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white transition-all active:scale-95"
             style={{ background: TRAFFIC_GREEN }}>
-            <FolderOpen size={13} /> 我的作品
+            <FolderOpen size={13} /> 我的创作
           </button>
         </div>
       </div>
@@ -9008,6 +9446,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
             onLoad={loadProject}
             onDelete={removeProject}
             onReview={reviewVariationItem}
+            onReuseProject={reuseProject}
             onReuse={reuseVariationBatch}
           />
         )}
@@ -9017,7 +9456,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
 }
 
 /* ── 我的作品 / 草稿 浮层 ─────────────────────────────────────────────── */
-function ProjectsOverlay({ projects, batches, materials, currentId, onClose, onLoad, onDelete, onReview, onReuse }: {
+function ProjectsOverlay({ projects, batches, materials, currentId, onClose, onLoad, onDelete, onReview, onReuseProject, onReuse }: {
   projects: StudioProject[];
   batches: VariationBatch[];
   materials: Clip[];
@@ -9026,11 +9465,11 @@ function ProjectsOverlay({ projects, batches, materials, currentId, onClose, onL
   onLoad: (p: StudioProject) => void;
   onDelete: (id: string) => void;
   onReview: (batchId: string, itemId: string, status: 'approved' | 'rejected') => void;
+  onReuseProject: (p: StudioProject) => void | Promise<void>;
   onReuse: (batch: VariationBatch) => void;
 }) {
   const drafts = projects.filter(p => p.status === 'draft');
   const works = projects.filter(p => p.status === 'published');
-  const templates = projects.filter(p => p.status === 'template');
 
   const Section = ({ title, items }: { title: string; items: StudioProject[] }) => (
     <div className="mb-5">
@@ -9044,7 +9483,20 @@ function ProjectsOverlay({ projects, batches, materials, currentId, onClose, onL
               className="card !rounded-xl overflow-hidden group cursor-pointer relative"
               style={p.id === currentId ? { borderColor: TRAFFIC_GREEN, boxShadow: `0 0 0 1px ${TRAFFIC_GREEN}` } : undefined}
               onClick={() => onLoad(p)}>
-              <ProjectFirstFrameThumb project={p} materials={materials} />
+              <div className="relative">
+                <ProjectFirstFrameThumb project={p} materials={materials} />
+                <button
+                  type="button"
+                  onClick={event => {
+                    event.stopPropagation();
+                    void onReuseProject(p);
+                  }}
+                  className="absolute bottom-1.5 right-1.5 inline-flex items-center gap-1 rounded-lg bg-accent px-2 py-1 text-[10px] font-black text-white shadow-sm hover:brightness-95"
+                  title="复制为新草稿并进入编辑"
+                >
+                  <Copy size={10} /> 一键复用
+                </button>
+              </div>
               <div className="p-2.5">
                 <p className="text-xs font-semibold text-text-primary truncate">{p.title}</p>
                 <p className="text-[10px] text-text-muted mt-0.5">{new Date(p.updatedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })}</p>
@@ -9074,14 +9526,14 @@ function ProjectsOverlay({ projects, batches, materials, currentId, onClose, onL
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-border flex-shrink-0">
           <div className="flex items-center gap-2">
             <FolderOpen size={15} style={{ color: TRAFFIC_GREEN }} />
-            <span className="text-sm font-bold text-text-primary">我的作品</span>
+            <span className="text-sm font-bold text-text-primary">我的创作</span>
           </div>
           <button onClick={onClose} className="p-1.5 rounded-lg hover:bg-surface-2 text-text-muted hover:text-text-primary transition-colors">
             <X size={15} />
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-5">
-          {projects.length === 0 && batches.length === 0 ? (
+          {drafts.length === 0 && works.length === 0 && batches.length === 0 ? (
             <div className="text-center py-12">
               <FolderOpen size={28} className="mx-auto text-text-muted mb-3 opacity-30" />
               <p className="text-sm text-text-muted">还没有保存任何草稿或作品</p>
@@ -9089,9 +9541,8 @@ function ProjectsOverlay({ projects, batches, materials, currentId, onClose, onL
             </div>
           ) : (
             <>
-              <Section title="裂变母版（点击创建副本）" items={templates} />
-              <Section title="我的草稿" items={drafts} />
-              <Section title="已发布作品" items={works} />
+              <Section title="作品集草稿" items={drafts} />
+              <Section title="已发布作品集" items={works} />
               {batches.length > 0 && (
                 <div className="mb-5">
                   <p className="mb-2 text-xs font-semibold text-text-secondary">裂变批次 · {batches.length}</p>

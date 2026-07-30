@@ -5,7 +5,7 @@ import {
   TrendingUp, Clock, Globe, ChevronDown, X, Loader2,
   Check, Copy, ArrowRight, Zap, LayoutGrid, List,
   Lightbulb, Flame, BarChart2, ChevronRight, Film, Download, Plus,
-  Bookmark, Maximize2, Minimize2, Lock, Upload, Users, Images,
+  Bookmark, Maximize2, Minimize2, Lock, Upload, Users, Images, Pencil, Trash2,
 } from 'lucide-react';
 import { studioApi, type Material, type MaterialSegment, type VideoGenerationVersion } from '../lib/studioApi';
 import { authHeader } from '../lib/auth';
@@ -74,6 +74,7 @@ interface TrendVideo {
   aiAnalysis?: VideoAnalysisPayload;
   crawledAt?: string;
   contentFormat: ContentFormat;
+  canManage?: boolean;
 }
 
 interface GeminiVideoAnalysis {
@@ -1307,10 +1308,36 @@ function ThumbnailImage({
   title: string;
   className: string;
 }) {
+  const isDirectUrl = /^https?:\/\//i.test(src) || src.startsWith('/media/') || src.startsWith('blob:') || src.startsWith('data:');
+  const [blobUrl, setBlobUrl] = useState('');
   const [failed, setFailed] = useState(false);
-  useEffect(() => setFailed(false), [src]);
-  if (failed || !src) return <VideoThumbnail platform={platform} title={title} />;
-  return <img src={src} alt="" className={className} draggable={false} loading="lazy" decoding="async" onError={() => setFailed(true)} />;
+  useEffect(() => {
+    setFailed(false);
+    setBlobUrl('');
+    if (!src || isDirectUrl) return;
+    const controller = new AbortController();
+    let createdUrl = '';
+    void fetch(src, { headers: authHeader(), signal: controller.signal })
+      .then(response => {
+        if (!response.ok) throw new Error(String(response.status));
+        return response.blob();
+      })
+      .then(blob => {
+        if (controller.signal.aborted) return;
+        createdUrl = URL.createObjectURL(blob);
+        setBlobUrl(createdUrl);
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) setFailed(true);
+      });
+    return () => {
+      controller.abort();
+      if (createdUrl) URL.revokeObjectURL(createdUrl);
+    };
+  }, [src, isDirectUrl]);
+  if (failed || !src) return null;
+  if (isDirectUrl) return <img src={src} alt="" className={className} draggable={false} loading="lazy" decoding="async" onError={() => setFailed(true)} />;
+  return blobUrl ? <img src={blobUrl} alt="" className={className} draggable={false} /> : null;
 }
 
 function AuthenticatedImage({ src, alt, className }: { src: string; alt: string; className: string }) {
@@ -1345,7 +1372,7 @@ function AuthenticatedImage({ src, alt, className }: { src: string; alt: string;
     : <div className={`${className} animate-pulse bg-slate-200`} aria-label={alt} />;
 }
 
-function AuthenticatedVideo({ apiUrl, poster, className, controls = false, autoPlay = false, hoverPlay = false }: { apiUrl: string; poster?: string; className: string; controls?: boolean; autoPlay?: boolean; hoverPlay?: boolean }) {
+function AuthenticatedVideo({ apiUrl, poster, className, controls = false, autoPlay = false, hoverPlay = false, onReady, onError }: { apiUrl: string; poster?: string; className: string; controls?: boolean; autoPlay?: boolean; hoverPlay?: boolean; onReady?: () => void; onError?: () => void }) {
   const [playbackUrl, setPlaybackUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -1363,6 +1390,9 @@ function AuthenticatedVideo({ apiUrl, poster, className, controls = false, autoP
   useEffect(() => { setPlaybackUrl(''); if (autoPlay) void load(); }, [apiUrl, autoPlay]);
   useEffect(() => { if (autoPlay && playbackUrl) void videoRef.current?.play().catch(() => {}); }, [autoPlay, playbackUrl]);
   return <video ref={videoRef} src={playbackUrl || undefined} poster={poster} controls={controls} autoPlay={autoPlay} muted={!controls} playsInline loop={hoverPlay} preload="metadata" className={className}
+    onLoadedData={onReady}
+    onCanPlay={onReady}
+    onError={onError}
     onMouseEnter={async () => { if (!hoverPlay) return; await load(); setTimeout(() => void videoRef.current?.play().catch(() => {}), 0); }}
     onMouseLeave={() => { if (!hoverPlay || !videoRef.current) return; videoRef.current.pause(); videoRef.current.currentTime = 0; }} />;
 }
@@ -2381,6 +2411,8 @@ function VideoCard({ video, index, isSelected, onSelect, onWatch, onAnalyzeVideo
   const meta = getPlatformMeta(video.platform);
   const crawlRule = video.aiAnalysis?.crawlRule || '关键词检索';
   const isImagePost = video.contentFormat === 'image';
+  const [mediaReady, setMediaReady] = useState(false);
+  useEffect(() => setMediaReady(false), [video.id, video.thumbnail, video.videoUrl]);
   const imageAnalyzed = video.aiAnalysis?.imageEvidence?.status === 'analyzed' && Boolean(video.aiAnalysis.imageEvidence.observedFacts?.length);
   const imageFailed = video.aiAnalysis?.imageAnalysisStatus === 'failed' || video.status === 'failed';
   const trendLabel = isImagePost
@@ -2407,11 +2439,20 @@ function VideoCard({ video, index, isSelected, onSelect, onWatch, onAnalyzeVideo
         }}
         className="relative overflow-hidden w-full aspect-[9/16] text-left block"
         style={{ background: 'var(--color-surface-2)' }}>
-        {video.videoUrl
-          ? <AuthenticatedVideo apiUrl={video.videoUrl} poster={video.thumbnail} hoverPlay className="absolute inset-0 w-full h-full object-cover" />
-          : video.thumbnail
-          ? <ThumbnailImage src={video.thumbnail} platform={video.platform} title={video.title} className="absolute inset-0 w-full h-full object-cover" />
-          : <VideoThumbnail platform={video.platform} title={video.title} />}
+        <VideoThumbnail platform={video.platform} title={video.title} />
+        {video.thumbnail && (
+          <ThumbnailImage src={video.thumbnail} platform={video.platform} title={video.title} className="absolute inset-0 w-full h-full object-cover" />
+        )}
+        {video.videoUrl ? (
+          <AuthenticatedVideo
+            apiUrl={video.videoUrl}
+            poster={/^https?:\/\//i.test(video.thumbnail) ? video.thumbnail : undefined}
+            hoverPlay
+            className={`absolute inset-0 w-full h-full object-cover transition-opacity ${mediaReady ? 'opacity-100' : 'opacity-0'}`}
+            onReady={() => setMediaReady(true)}
+            onError={() => setMediaReady(false)}
+          />
+        ) : null}
         <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
           <span className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-white text-neutral-900">
             {isImagePost ? <Images size={11} /> : <Play size={11} fill="currentColor" />}{isImagePost ? '查看' : video.videoUrl || sourceEmbedUrl(video) ? '观看' : '原站'}
@@ -2488,9 +2529,8 @@ function VideoListItem({ video, isSelected, onSelect, onWatch, onAnalyzeVideo, o
     <div className={`flex items-center gap-4 px-4 py-3 cursor-pointer transition-all group ${isSelected ? 'bg-accent-glow' : 'hover:bg-surface-2'}`} onClick={onSelect}>
       <button type="button" onClick={e => { e.stopPropagation(); onWatch(); }}
         className="w-16 h-10 rounded-lg overflow-hidden flex-shrink-0 border border-border bg-surface-2 relative group/thumb">
-        {video.thumbnail
-          ? <ThumbnailImage src={video.thumbnail} platform={video.platform} title={video.title} className="w-full h-full object-cover" />
-          : <VideoThumbnail platform={video.platform} title={video.title} />}
+        <VideoThumbnail platform={video.platform} title={video.title} />
+        {video.thumbnail && <ThumbnailImage src={video.thumbnail} platform={video.platform} title={video.title} className="absolute inset-0 w-full h-full object-cover" />}
         <span className="absolute inset-0 bg-black/35 opacity-0 group-hover/thumb:opacity-100 transition-opacity flex items-center justify-center text-white">
           {isImagePost ? <Images size={13} /> : <Play size={13} fill="currentColor" />}
         </span>
@@ -2546,6 +2586,7 @@ interface CrawlerRecord {
   status?: 'pending' | 'analyzed' | 'failed';
   videoFileId?: string;
   crawledAt?: string;
+  canManage?: boolean;
 }
 
 function parseRecordTags(tags?: string): string[] {
@@ -2571,6 +2612,7 @@ function recordsToVideos(records: CrawlerRecord[]): TrendVideo[] {
       const trend: TrendVideo['trend'] = record.status === 'analyzed' ? 'hot' : record.status === 'failed' ? 'stable' : 'rising';
       const title = record.title || 'Untitled crawled video';
       const tags = parseRecordTags(record.tags);
+      const recordThumbnail = record.thumbnailUrl || (record.videoFileId ? `/api/overseas/videos/${record.id}/thumbnail` : '');
       if (!analysis.gemini && analysis.contentFormat !== 'image') {
         analysis = {
           ...analysis,
@@ -2584,7 +2626,7 @@ function recordsToVideos(records: CrawlerRecord[]): TrendVideo[] {
         recordId: record.id,
         platform: record.platform,
         title,
-        thumbnail: record.thumbnailUrl || '',
+        thumbnail: recordThumbnail,
         duration: Number(record.duration || 0),
         tags,
         views,
@@ -2596,6 +2638,7 @@ function recordsToVideos(records: CrawlerRecord[]): TrendVideo[] {
         aiAnalysis: analysis,
         crawledAt: record.crawledAt,
         contentFormat: contentFormatOfAnalysis(analysis),
+      canManage: Boolean(record.canManage),
       };
     })
     // 历史记录在后台回填 PocketBase 时仍展示封面，避免管理员视频池因存储迁移暂时变成空列表。
@@ -2815,6 +2858,10 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   const [favoritingMaterialIds, setFavoritingMaterialIds] = useState<string[]>([]);
   const [materialMessage, setMaterialMessage] = useState('');
   const [localMaterials, setLocalMaterials] = useState<Material[]>([]);
+  const [manageTarget, setManageTarget] = useState<{ kind: 'video'; item: TrendVideo } | { kind: 'material'; item: Material } | null>(null);
+  const [manageName, setManageName] = useState('');
+  const [manageTags, setManageTags] = useState('');
+  const [manageBusy, setManageBusy] = useState(false);
   const [previewMaterial, setPreviewMaterial] = useState<Material | null>(null);
   const [materialSearch, setMaterialSearch] = useState('');
   const [materialIndustry, setMaterialIndustry] = useState<MaterialIndustryFilter>('all');
@@ -3413,6 +3460,75 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
     }
   };
 
+
+  const openManageDialog = (target: { kind: 'video'; item: TrendVideo } | { kind: 'material'; item: Material }) => {
+    if (!target.item.canManage) return;
+    setManageTarget(target);
+    setManageName(target.kind === 'video' ? target.item.title : target.item.name);
+    setManageTags(target.kind === 'video' ? target.item.tags.join(', ') : String(target.item.tags || ''));
+  };
+
+  const saveManagedItem = async () => {
+    if (!manageTarget || !manageName.trim() || manageBusy) return;
+    setManageBusy(true);
+    try {
+      if (manageTarget.kind === 'video') {
+        const recordId = manageTarget.item.recordId;
+        if (!recordId) throw new Error('视频记录不存在');
+        const response = await fetch(`/api/overseas/videos/${encodeURIComponent(recordId)}`, {
+          method: 'PATCH',
+          headers: { ...authHeader(), 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: manageName.trim(), tags: manageTags.split(/[,，]/).map(tag => tag.trim()).filter(Boolean) }),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || '编辑失败');
+        setCrawledVideos(items => items.map(item => item.id === manageTarget.item.id
+          ? { ...item, title: manageName.trim(), tags: manageTags.split(/[,，]/).map(tag => tag.trim()).filter(Boolean) }
+          : item));
+      } else {
+        const result = await studioApi.updateMaterial(manageTarget.item.id, { name: manageName.trim(), tags: manageTags.trim() });
+        if (!result.ok) throw new Error(result.error || '编辑失败');
+        await refreshMaterials();
+      }
+      setMaterialMessage('已保存修改');
+      setManageTarget(null);
+    } catch (error) {
+      setMaterialMessage(error instanceof Error ? error.message : '编辑失败');
+    } finally {
+      setManageBusy(false);
+    }
+  };
+
+  const deleteManagedItem = async () => {
+    if (!manageTarget || manageBusy) return;
+    setManageBusy(true);
+    try {
+      if (manageTarget.kind === 'video') {
+        const recordId = manageTarget.item.recordId;
+        if (!recordId) throw new Error('视频记录不存在');
+        const response = await fetch(`/api/overseas/videos/${encodeURIComponent(recordId)}`, {
+          method: 'DELETE',
+          headers: authHeader(),
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) throw new Error(data.error || '删除失败');
+        setCrawledVideos(items => items.filter(item => item.id !== manageTarget.item.id));
+        setTenantVideoTotalItems(value => Math.max(0, value - 1));
+      } else {
+        const result = await studioApi.deleteMaterial(manageTarget.item.id);
+        if (!result.ok) throw new Error('删除失败');
+        setLocalMaterials(items => items.filter(item => item.id !== manageTarget.item.id));
+      }
+      setMaterialMessage('已删除');
+      setManageTarget(null);
+    } catch (error) {
+      setMaterialMessage(error instanceof Error ? error.message : '删除失败');
+    } finally {
+      setManageBusy(false);
+    }
+  };
+
+
   return (
     <div className="relative">
       <div className="transition-all duration-300">
@@ -3594,7 +3710,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
                 // grid 而非 columns 瀑布流：columns 是竖向灌列，横向阅读顺序会打乱排序
                 <div className="grid grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 items-start">
                   {filtered.map((video, i) => (
-                    <div key={video.id}>
+                    <div key={video.id} className="relative">
                       <VideoCard video={video} index={i} isSelected={selectedVideo?.id === video.id}
                         onSelect={() => toggleScriptPanel(video)}
                         onWatch={() => handleWatch(video)}
@@ -3602,6 +3718,13 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
                         onFavoriteMaterial={() => void favoriteMaterial(video)}
                         analyzingVideo={analyzingVideoIds.includes(video.id)}
                         favoritingMaterial={favoritingMaterialIds.includes(video.id)} />
+              {video.canManage && (
+                <div className="absolute right-2 top-2 z-20 flex gap-1">
+                  <button type="button" title="编辑素材" aria-label="编辑素材" onClick={() => openManageDialog({ kind: 'video', item: video })} className="rounded-md bg-white/95 p-1.5 text-text-secondary shadow hover:text-accent"><Pencil size={14} /></button>
+                  <button type="button" title="删除素材" aria-label="删除素材" onClick={() => openManageDialog({ kind: 'video', item: video })} className="rounded-md bg-white/95 p-1.5 text-text-secondary shadow hover:text-red-600"><Trash2 size={14} /></button>
+                </div>
+              )}
+
                     </div>
                   ))}
                 </div>
@@ -3781,6 +3904,13 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
                     </div>
                     <div className="p-3">
                       <p className="truncate text-sm font-bold text-text-primary">{material.name}</p>
+                  {material.canManage && (
+                    <div className="mt-2 flex gap-2 border-t border-border pt-2">
+                      <button type="button" onClick={() => openManageDialog({ kind: 'material', item: material })} className="inline-flex items-center gap-1 text-[11px] font-semibold text-text-muted hover:text-accent"><Pencil size={12} />编辑</button>
+                      <button type="button" onClick={() => openManageDialog({ kind: 'material', item: material })} className="inline-flex items-center gap-1 text-[11px] font-semibold text-text-muted hover:text-red-600"><Trash2 size={12} />删除</button>
+                    </div>
+                  )}
+
                       <p className="mt-1 text-xs text-text-muted">{MATERIAL_SOURCE_LABELS[materialSourceOf(material)]} · {material.size || `${material.duration}s`}</p>
                       <div className="mt-2 flex flex-wrap gap-1">
                         {[
@@ -3936,6 +4066,29 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
           void refreshVideos(1, false);
         }}
       />
+      {manageTarget && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/50 px-4" role="dialog" aria-modal="true" aria-label="编辑素材">
+          <div className="w-full max-w-md rounded-lg bg-white p-5 shadow-2xl">
+            <div className="flex items-center justify-between">
+              <h3 className="text-base font-black text-text-primary">编辑{manageTarget.kind === 'video' ? '爆款视频' : '素材'}</h3>
+              <button type="button" title="关闭" aria-label="关闭" onClick={() => setManageTarget(null)} disabled={manageBusy} className="rounded-md p-1.5 text-text-muted hover:bg-surface-2 hover:text-text-primary"><X size={18} /></button>
+            </div>
+            <label className="mt-4 block text-xs font-bold text-text-secondary">名称</label>
+            <input value={manageName} onChange={event => setManageName(event.target.value)} maxLength={160} className="mt-1 w-full rounded-md border border-border px-3 py-2 text-sm outline-none focus:border-accent" />
+            <label className="mt-3 block text-xs font-bold text-text-secondary">标签</label>
+            <input value={manageTags} onChange={event => setManageTags(event.target.value)} placeholder="用逗号分隔" className="mt-1 w-full rounded-md border border-border px-3 py-2 text-sm outline-none focus:border-accent" />
+            <p className="mt-3 text-xs text-text-muted">仅当前租户自己采集或本地上传的素材可修改；共享素材保持只读。</p>
+            <div className="mt-5 flex items-center justify-between gap-3">
+              <button type="button" onClick={() => void deleteManagedItem()} disabled={manageBusy} className="inline-flex items-center gap-1.5 rounded-md border border-red-200 px-3 py-2 text-sm font-bold text-red-600 hover:bg-red-50 disabled:opacity-50"><Trash2 size={15} />确认删除</button>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setManageTarget(null)} disabled={manageBusy} className="rounded-md border border-border px-3 py-2 text-sm font-bold text-text-secondary hover:bg-surface-2">取消</button>
+                <button type="button" onClick={() => void saveManagedItem()} disabled={manageBusy || !manageName.trim()} className="rounded-md bg-accent px-4 py-2 text-sm font-bold text-white hover:brightness-110 disabled:opacity-50">{manageBusy ? '处理中...' : '保存'}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
     </div>
   );
 }

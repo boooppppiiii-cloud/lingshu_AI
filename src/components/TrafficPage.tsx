@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   BarChart3,
+  ChevronLeft,
   CheckCircle2,
   Film,
   Loader2,
@@ -165,7 +166,7 @@ function createPublishItem(draft?: PublishDraftItem | null, targetAccountIds: st
     : {};
   return {
     id: publishItemId(),
-    selected: true,
+    selected: Boolean(draft?.videoPath?.trim()),
     videoPath: draft?.videoPath || '',
     previewUrl: draft?.previewUrl || browserVideoUrl(draft?.videoPath),
     title: draft?.title || '',
@@ -251,9 +252,9 @@ export default function TrafficPage({
 }: Props) {
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     try {
-      const initialView = localStorage.getItem('lingshu:traffic:initial-view');
+      const initialView = localStorage.getItem('lingshu:traffic:initial-view') as ViewMode | null;
       localStorage.removeItem('lingshu:traffic:initial-view');
-      if (initialView === 'publish') return 'publish';
+      if (initialView && ['materials', 'create', 'publish', 'accounts'].includes(initialView)) return initialView;
     } catch { /* ignore */ }
     return 'materials';
   });
@@ -311,6 +312,16 @@ export default function TrafficPage({
     setViewMode('publish');
   };
 
+  const handleReturnToPreview = (projectId?: string) => {
+    try {
+      localStorage.setItem('ow_publish_return_to_preview', JSON.stringify({
+        at: Date.now(),
+        projectId: projectId || publishDraft?.sourceProjectId || readStoredPublishDraft()?.sourceProjectId || '',
+      }));
+    } catch { /* ignore */ }
+    setViewMode('create');
+  };
+
   return (
     <div className="flex h-full flex-col">
       <header className="flex h-12 flex-shrink-0 items-center justify-between border-b border-border px-5">
@@ -366,7 +377,7 @@ export default function TrafficPage({
             </motion.div>
           ) : viewMode === 'publish' ? (
             <motion.div key="publish" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full overflow-y-auto">
-              <SocialPublishPanel onNavigate={onNavigate} draft={publishDraft} />
+              <SocialPublishPanel onNavigate={onNavigate} draft={publishDraft} onReturnToPreview={handleReturnToPreview} />
             </motion.div>
           ) : (
             <motion.div key="accounts" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} className="h-full overflow-y-auto">
@@ -379,7 +390,7 @@ export default function TrafficPage({
   );
 }
 
-function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => void; draft?: PublishDraft | null }) {
+function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNavigate?: (p: Page) => void; draft?: PublishDraft | null; onReturnToPreview?: (projectId?: string) => void }) {
   const [workspaceTab, setWorkspaceTab] = useState<'schedule' | 'publish'>(() => draft || readStoredPublishDraft() ? 'publish' : 'schedule');
   const [accounts, setAccounts] = useState<PublishAccount[]>([]);
   const [items, setItems] = useState<PublishQueueItem[]>(() => createPublishItems(draft || readStoredPublishDraft()));
@@ -398,6 +409,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
   const accountTargetsSeededRef = useRef(false);
   const appliedDraftRef = useRef(JSON.stringify(draft || readStoredPublishDraft() || {}));
   const loadedVersionProjectRef = useRef('');
+  const materializedVideoPathsRef = useRef(new Set<string>());
   const videoInputRef = useRef<HTMLInputElement | null>(null);
   const publishSettingsRef = useRef<HTMLElement | null>(null);
 
@@ -455,10 +467,11 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
   };
 
   const selectedQueueItems = items.filter(item => item.selected);
-  const allQueueItemsSelected = items.length > 0 && selectedQueueItems.length === items.length;
+  const selectableQueueItems = items.filter(item => item.videoPath.trim());
+  const allQueueItemsSelected = selectableQueueItems.length > 0 && selectableQueueItems.every(item => item.selected);
   const toggleAllQueueItems = () => {
     const selected = !allQueueItemsSelected;
-    setItems(previous => previous.map(item => ({ ...item, selected })));
+    setItems(previous => previous.map(item => ({ ...item, selected: Boolean(item.videoPath.trim()) && selected })));
   };
 
   const setDeliveryMode = (mode: DeliveryMode) => {
@@ -717,6 +730,31 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
     setWorkspaceTab('publish');
     appliedDraftRef.current = fingerprint;
   }, [draft]);
+
+  useEffect(() => {
+    const pendingPaths = items
+      .filter(item => item.videoPath.trim() && !item.previewUrl && !browserVideoUrl(item.videoPath))
+      .map(item => item.videoPath.trim())
+      .filter(videoPath => !materializedVideoPathsRef.current.has(videoPath));
+    if (!pendingPaths.length) return;
+    pendingPaths.forEach(videoPath => materializedVideoPathsRef.current.add(videoPath));
+    void fetchJson<{ videos?: Array<{ sourcePath: string; videoPath?: string; previewUrl?: string; error?: string }> }>('/api/overseas/publishing/local-videos/import-rendered', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ videoPaths: pendingPaths }),
+    }).then(result => {
+      const imported = new Map((result.videos || []).map(video => [video.sourcePath, video]));
+      setItems(previous => previous.map(item => {
+        const video = imported.get(item.videoPath.trim());
+        if (!video) return item;
+        if (video.videoPath) return { ...item, videoPath: video.videoPath, previewUrl: video.previewUrl, selected: true, error: undefined };
+        return { ...item, videoPath: '', previewUrl: undefined, selected: false, error: '原成片文件已失效，请返回 AI 智能素材重新生成此版本。' };
+      }));
+    }).catch(importError => {
+      pendingPaths.forEach(videoPath => materializedVideoPathsRef.current.delete(videoPath));
+      setError(importError instanceof Error ? importError.message : '无法读取已生成成片');
+    });
+  }, [items]);
 
   useEffect(() => {
     const projectId = String(draft?.sourceProjectId || readStoredPublishDraft()?.sourceProjectId || '').trim();
@@ -1208,6 +1246,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
               {items.map((item, index) => {
                 const active = item.id === activeItem?.id;
                 const status = PUBLISH_STATUS_META[item.status];
+                const hasVideo = Boolean(item.videoPath.trim());
                 const targetCount = item.targetAccountIds.filter(id => connectedAccountIds.has(id)).length;
                 return (
                   <div key={item.id} className={`flex min-w-0 items-center gap-2 rounded-xl border p-2 transition-colors ${active ? 'border-accent bg-accent-glow' : 'border-border bg-surface'}`}>
@@ -1215,6 +1254,7 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                       type="checkbox"
                       checked={item.selected}
                       onChange={event => updateItem(item.id, { selected: event.target.checked })}
+                      disabled={!hasVideo}
                       aria-label={`选择素材 ${item.title || index + 1}`}
                       className="h-4 w-4 flex-shrink-0 rounded border-border text-emerald-600"
                     />
@@ -1222,10 +1262,10 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
                       <div className="flex items-center gap-2">
                         <span className="text-xs font-black text-text-muted">{String(index + 1).padStart(2, '0')}</span>
                         <span className="min-w-0 flex-1 truncate text-sm font-bold text-text-primary">{item.title || titleFromVideoPath(item.videoPath) || '待填写视频'}</span>
-                        <span className={`flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${status.className}`}>{status.label}</span>
+                        <span className={`flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${hasVideo ? status.className : 'bg-amber-50 text-amber-700'}`}>{hasVideo ? status.label : '未生成成片'}</span>
                       </div>
                       <p className="mt-1 truncate text-[11px] text-text-muted">
-                        {item.videoPath || '尚未填写视频路径'} · {targetCount} 个账号 · {item.deliveryMode === 'now' ? '立即发布' : item.scheduledAt ? `排期 ${new Date(item.scheduledAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : '待选排期'}
+                        {item.videoPath || '请返回 AI 智能素材生成该版本成片'} · {targetCount} 个账号 · {item.deliveryMode === 'now' ? '立即发布' : item.scheduledAt ? `排期 ${new Date(item.scheduledAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : '待选排期'}
                       </p>
                       {item.error && <p className="mt-1 truncate text-[11px] font-semibold text-red-600" title={item.error}>{item.error}</p>}
                     </button>
@@ -1387,7 +1427,16 @@ function SocialPublishPanel({ onNavigate, draft }: { onNavigate?: (p: Page) => v
           </section>
 
           <aside ref={publishSettingsRef} className="scroll-mt-24 rounded-2xl border border-border bg-white p-4 shadow-sm xl:sticky xl:top-4 xl:max-h-[calc(100vh-7rem)] xl:overflow-y-auto">
-            <h3 className="text-sm font-bold text-text-primary">发布设置</h3>
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-sm font-bold text-text-primary">发布设置</h3>
+              <button
+                type="button"
+                onClick={() => onReturnToPreview?.(activeItem?.sourceProjectId || draft?.sourceProjectId || readStoredPublishDraft()?.sourceProjectId)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-[11px] font-bold text-text-secondary hover:border-accent hover:text-accent"
+              >
+                <ChevronLeft size={12} /> 返回成片预览
+              </button>
+            </div>
             <div data-lingshu-guide="publish-mode" className="mt-4 rounded-2xl border border-border bg-surface p-3">
               <p className="text-[11px] font-bold text-text-secondary">当前视频的发布方式</p>
               <div className="mt-2 grid grid-cols-2 gap-2">

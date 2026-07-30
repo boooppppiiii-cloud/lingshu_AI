@@ -58,6 +58,16 @@ const { composite } = require('../../desktop/render.cjs') as {
   composite: (manifest: unknown, onProgress?: (pct: number) => void, outDir?: string) => Promise<{ ok: boolean; outputPath?: string; error?: string }>;
 };
 
+function publishingRenderDir(tenantId: string): string {
+  const tenantFolder = String(tenantId || 'local').replace(/[^\w.-]+/g, '-');
+  return path.resolve(process.cwd(), 'data', 'publishing-uploads', tenantFolder);
+}
+
+function publishingRenderPreviewUrl(tenantId: string, outputPath: string): string {
+  const route = `/api/overseas/publishing/local-videos/${encodeURIComponent(path.basename(outputPath))}`;
+  return signAssetUrl(route, tenantId, 24 * 60 * 60 * 1000);
+}
+
 function execFileAsync(file: string, args: string[], timeout = 5000): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile(file, args, { timeout }, (err, stdout) => (err ? reject(err) : resolve(String(stdout || ''))));
@@ -1356,7 +1366,7 @@ ${productTimeline}
 画面：<主体+动作+可见结果，不能写抽象意图>
 配乐：<音乐或音效及其节奏>
 台词：<字数不超过本段上限；没有必要则写“无”>
-字幕：<短字幕；不能引入产品资料以外的新事实>
+字幕：<短字幕；不能引入产品资料以外的新事实>\n\n分轨硬规则：台词只写真人会说出口的完整自然句；品牌露出、货号、价格、认证短标签、PDF口令和“咔嗒/叮/噗噗”等音效只能写在字幕、画面或配乐字段，禁止写进台词。
 
 最终输出前在内部检查但不要输出检查过程：字段完整；时间连续；台词不超时；所有产品事实均可回指输入；没有编造效果与承诺。语言为${lang}。`;
 
@@ -2247,7 +2257,10 @@ studioRouter.post('/render', async (req, res) => {
 // 网页端兜底：没有 Electron 桥时，直接让本机后端调用同一套 ffmpeg 合成器导出 MP4。
 studioRouter.post('/render/local', async (req, res) => {
   try {
+    const { tenantId } = res.locals as AuthLocals;
     const origin = `${req.protocol}://${req.get('host')}`;
+    const outputDir = publishingRenderDir(tenantId);
+    fs.mkdirSync(outputDir, { recursive: true });
     const result = await composite({
       ...(req.body || {}),
       assetOrigin: origin,
@@ -2255,12 +2268,17 @@ studioRouter.post('/render/local', async (req, res) => {
         ...(req.get('authorization') ? { authorization: req.get('authorization') } : {}),
         ...(req.get('cookie') ? { cookie: req.get('cookie') } : {}),
       },
-    });
+    }, undefined, outputDir);
     if (!result.ok) {
       res.status(500).json({ ok: false, error: result.error || '本地 MP4 导出失败' });
       return;
     }
-    res.json({ ok: true, outputPath: result.outputPath });
+    const outputPath = String(result.outputPath || '');
+    res.json({
+      ok: true,
+      outputPath,
+      previewUrl: outputPath ? publishingRenderPreviewUrl(tenantId, outputPath) : '',
+    });
   } catch (err) {
     res.status(500).json({ ok: false, error: err instanceof Error ? err.message : '本地 MP4 导出失败' });
   }
@@ -2456,7 +2474,7 @@ async function signedMaterialObjectUrl(key?: string): Promise<string | undefined
   return key && objectStorageEnabled() ? r2SignedGetUrl(key, materialSignedUrlTtlSeconds()) : undefined;
 }
 
-async function materialResponse(material: Material, tenantId: string): Promise<Material> {
+async function materialResponse(material: Material, tenantId: string): Promise<Material & { canManage: boolean }> {
   const url = material.objectKey
     ? await signedMaterialObjectUrl(material.objectKey)
     : /^\/(?:cloud-files|studio-media)\//.test(material.url)
@@ -2476,7 +2494,7 @@ async function materialResponse(material: Material, tenantId: string): Promise<M
     poster: segment.posterObjectKey ? await signedMaterialObjectUrl(segment.posterObjectKey) : segment.poster,
     posterObjectKey: undefined,
   })));
-  return { ...material, url: url || material.url, poster, segments, objectKey: undefined, posterObjectKey: undefined };
+  return { ...material, url: url || material.url, poster, segments, canManage: material.scope !== 'shared' && material.tenantId === tenantId, objectKey: undefined, posterObjectKey: undefined };
 }
 
 // Video generation history. A groupKey identifies one logical output slot
@@ -2964,12 +2982,30 @@ studioRouter.patch('/materials/:id/pin', async (req, res) => {
   res.json({ ok: true, material });
 });
 
+
+// PATCH /studio/materials/:id - tenant-owned local material metadata only
+studioRouter.patch('/materials/:id', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const list = loadMaterials();
+  const material = list.find(item => item.id === req.params.id && item.tenantId === tenantId);
+  if (!material) { res.status(404).json({ ok: false, error: 'Material not found' }); return; }
+  if (material.scope === 'shared') { res.status(403).json({ ok: false, error: 'Shared materials are read-only' }); return; }
+
+  const name = String(req.body?.name ?? '').trim().slice(0, 120);
+  if (!name) { res.status(400).json({ ok: false, error: 'Material name is required' }); return; }
+  material.name = name;
+  if ('tags' in (req.body || {})) material.tags = String(req.body?.tags ?? '').trim().slice(0, 500);
+  persistMaterials(list);
+  res.json({ ok: true, material: await materialResponse(material, tenantId) });
+});
+
 // DELETE /studio/materials/:id
 studioRouter.delete('/materials/:id', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
   const list = loadMaterials();
   const m = list.find(x => x.id === req.params.id && x.tenantId === tenantId);
   if (!m) { res.status(404).json({ ok: false, error: 'Material not found' }); return; }
+  if (m.scope === 'shared') { res.status(403).json({ ok: false, error: 'Shared materials are read-only' }); return; }
   if (m.objectKey) await r2Delete(m.objectKey).catch(error => console.error('[materials] COS delete failed', error));
   else try { fs.unlinkSync(path.join(MEDIA_DIR, m.file)); } catch { /* file may be gone */ }
   if (m.posterObjectKey && m.posterObjectKey !== m.objectKey) await r2Delete(m.posterObjectKey).catch(error => console.error('[materials] COS poster delete failed', error));

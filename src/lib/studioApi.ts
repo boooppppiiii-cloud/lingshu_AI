@@ -585,7 +585,7 @@ export const studioApi = {
     }
   },
 
-  renderLocal: async (manifest: RenderManifest): Promise<{ ok: boolean; outputPath?: string; error?: string }> => {
+  renderLocal: async (manifest: RenderManifest): Promise<{ ok: boolean; outputPath?: string; previewUrl?: string; error?: string }> => {
     try {
       const r = await fetch('/api/overseas/studio/render/local', {
         method: 'POST',
@@ -594,7 +594,7 @@ export const studioApi = {
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(data?.error || String(r.status));
-      return data as { ok: boolean; outputPath?: string; error?: string };
+      return data as { ok: boolean; outputPath?: string; previewUrl?: string; error?: string };
     } catch (err: any) {
       return { ok: false, error: err?.message || '本地 MP4 导出失败' };
     }
@@ -666,6 +666,18 @@ export const studioApi = {
       return await response.json() as { ok: boolean; material?: Material; segment?: MaterialSegment; error?: string };
     } catch { return { ok: false, error: '片段更新失败' }; }
   },
+  updateMaterial: async (id: string, changes: { name: string; tags?: string }): Promise<{ ok: boolean; material?: Material; error?: string }> => {
+    try {
+      const response = await fetch(`/api/overseas/studio/materials/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', ...authHeader() },
+        body: JSON.stringify(changes),
+      });
+      return await response.json();
+    } catch {
+      return { ok: false, error: '素材编辑失败' };
+    }
+  },
   deleteMaterial: (id: string) => del(`materials/${id}`),
 
   // BGM 曲库
@@ -725,6 +737,7 @@ export interface Material {
   poster?: string;
   scope?: 'shared' | 'own';
   usage?: 'editable' | 'reference_only';
+  canManage?: boolean;
   sourceType?: string;
   sourceUrl?: string;
   pinned?: boolean;

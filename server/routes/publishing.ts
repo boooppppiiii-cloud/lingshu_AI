@@ -295,6 +295,33 @@ publishingRouter.post('/local-videos', async (req, res) => {
   }
 });
 
+publishingRouter.post('/local-videos/import-rendered', (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const sourceRoot = path.resolve('/root/Downloads/lingshu-ai-exports');
+  const outputDir = publishingUploadDir(tenantId);
+  fs.mkdirSync(outputDir, { recursive: true });
+  const requestedPaths: string[] = Array.isArray(req.body?.videoPaths) ? req.body.videoPaths.map(text).filter(Boolean).slice(0, 200) : [];
+  const videos = requestedPaths.map(sourcePath => {
+    const filename = path.basename(sourcePath);
+    const ext = path.extname(filename).toLowerCase();
+    if (!PUBLISH_VIDEO_EXTENSIONS.has(ext)) return { sourcePath, error: 'unsupported_video' };
+    const targetPath = path.join(outputDir, filename);
+    if (!fs.existsSync(targetPath)) {
+      const resolvedSource = path.resolve(sourcePath);
+      if (!resolvedSource.startsWith(`${sourceRoot}${path.sep}`) || !fs.existsSync(resolvedSource) || !fs.statSync(resolvedSource).isFile()) {
+        return { sourcePath, error: 'video_not_found' };
+      }
+      fs.copyFileSync(resolvedSource, targetPath);
+    }
+    return {
+      sourcePath,
+      videoPath: targetPath,
+      previewUrl: publishingPreviewUrl(tenantId, targetPath),
+    };
+  });
+  res.json({ ok: true, videos });
+});
+
 publishingRouter.get('/best-time', (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
   const platform = text(req.query.platform) || 'tiktok';

@@ -186,6 +186,14 @@ const SERVICE_INTAKE_AUTO_OPEN_KEY = 'lingshu:enterprise:service-intake-auto-ope
 type KnowledgeView = 'products' | 'bizRules' | 'faq' | 'company' | 'materials' | 'salesStyle' | 'advanced';
 type EnterpriseArea = 'facts' | 'service';
 
+function advisorInitialEnterpriseView(): KnowledgeView {
+  try {
+    const value = localStorage.getItem('lingshu:enterprise:initial-view') as KnowledgeView | null;
+    if (value && ['products', 'bizRules', 'faq', 'company', 'materials', 'salesStyle', 'advanced'].includes(value)) return value;
+  } catch { /* ignore */ }
+  return 'company';
+}
+
 const FACT_VIEWS: Array<{ id: KnowledgeView; label: string; hint: string }> = [
   { id: 'company', label: '公司与市场', hint: '你是谁' },
   { id: 'products', label: '产品资料', hint: '你卖什么' },
@@ -511,8 +519,8 @@ export default function EnterprisePage() {
   const [notificationTesting, setNotificationTesting] = useState('');
   const [notificationMessage, setNotificationMessage] = useState('');
   const [notificationMessageError, setNotificationMessageError] = useState(false);
-  const [enterpriseArea, setEnterpriseArea] = useState<EnterpriseArea>('facts');
-  const [knowledgeView, setKnowledgeView] = useState<KnowledgeView>('company');
+  const [knowledgeView, setKnowledgeView] = useState<KnowledgeView>(advisorInitialEnterpriseView);
+  const [enterpriseArea, setEnterpriseArea] = useState<EnterpriseArea>(() => ['bizRules', 'faq', 'salesStyle', 'advanced'].includes(advisorInitialEnterpriseView()) ? 'service' : 'facts');
   const [productPage, setProductPage] = useState(1);
   const [materialPage, setMaterialPage] = useState(1);
   const [faqPage, setFaqPage] = useState(1);
@@ -699,6 +707,10 @@ export default function EnterprisePage() {
     } catch { /* 浏览器禁用存储时，本次仍正常打开。 */ }
     openKnowledgeIntake();
   };
+
+  useEffect(() => {
+    try { localStorage.removeItem('lingshu:enterprise:initial-view'); } catch { /* ignore */ }
+  }, []);
 
   useEffect(() => {
     const handler = (event: Event) => {
