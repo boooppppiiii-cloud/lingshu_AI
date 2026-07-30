@@ -3,6 +3,7 @@ export type CustomerSource =
   | 'facebook'
   | 'instagram'
   | 'tiktok'
+  | 'youtube'
   | 'whatsapp_from_youtube'
   | 'whatsapp_from_tiktok'
   | 'whatsapp_from_instagram'
@@ -84,6 +85,7 @@ export interface CustomerProfile {
   lastActive: string;
   lastActiveAt?: number;
   localTime: string;
+  timeZone?: string;
   orders: OrderRecord[];
   tags: string[];
   summary: string;

@@ -4,6 +4,7 @@ import { Card, CardContent } from '../../ui/card';
 import { SourceIcon, sourceLabel } from '../SourceIcon';
 import type { CustomerProfile } from '../../../types/customer';
 import { authHeader } from '../../../lib/auth';
+import { LiveLocalTime } from '../LiveLocalTime';
 
 const LANGUAGE_OPTIONS = ['英语', '西语', '阿语', '葡语', '法语', '俄语', '印尼语', '越南语', '泰语', '其他'];
 
@@ -20,11 +21,7 @@ export function BasicInfoWidget({
     onCustomerPatch?.({ language, languageLocked: true });
     setLanguageOpen(false);
   };
-  const attributedPlatform = String(customer.sourcePostPlatform
-    || (String(customer.source).startsWith('whatsapp_from_') ? String(customer.source).replace('whatsapp_from_', '') : '')
-    || customer.softAttribution?.candidates?.[0]?.platform
-    || '').toLowerCase();
-  const displaySource = attributedPlatform || customer.source;
+  const displaySource = customer.source;
   const sourceText = sourceLabel(displaySource);
   const openSourcePost = async () => {
     if (!customer.sourcePostId && customer.softAttribution?.candidates?.[0]?.id) {
@@ -71,7 +68,7 @@ export function BasicInfoWidget({
         <div className="mt-4 grid grid-cols-2 gap-2 text-xs">
           <div className="rounded-xl bg-surface-2 p-3">
             <p className="text-text-muted">国家/地区</p>
-            <p className="mt-1 font-bold text-text-primary">{customer.countryName}</p>
+            <p className="mt-1 font-bold text-text-primary">{customer.countryName || '未知'}</p>
           </div>
           <div className="relative rounded-xl bg-surface-2 p-3">
             <div className="flex items-center justify-between gap-2">
@@ -110,7 +107,7 @@ export function BasicInfoWidget({
           </div>
           <div className="rounded-xl bg-surface-2 p-3">
             <p className="text-text-muted">当地时间</p>
-            <p className="mt-1 font-bold text-text-primary">{customer.localTime}</p>
+            <p className="mt-1 font-bold text-text-primary"><LiveLocalTime timeZone={customer.timeZone} /></p>
           </div>
           <div className="rounded-xl bg-surface-2 p-3">
             <p className="text-text-muted">来源渠道</p>

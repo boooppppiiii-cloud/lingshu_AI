@@ -181,6 +181,7 @@ const CERTIFICATION_OPTIONS = ['CE', 'FDA', 'SGS', 'RoHS', 'FCC', 'MSDS', 'ISO',
 const BRAND_TONE_OPTIONS = ['专业可靠', '亲切自然', '简洁直接', '高端克制', '热情主动', '务实高效'];
 const COMMUNICATION_STYLE_OPTIONS = ['专业', '轻松', '亲切', '正式'];
 const PAGE_SIZE = 5;
+const SERVICE_INTAKE_AUTO_OPEN_KEY = 'lingshu:enterprise:service-intake-auto-opened';
 
 type KnowledgeView = 'products' | 'bizRules' | 'faq' | 'company' | 'materials' | 'salesStyle' | 'advanced';
 type EnterpriseArea = 'facts' | 'service';
@@ -238,7 +239,7 @@ function sectionCompletion(profile: Profile): Record<SectionKey, boolean> {
   const items = normalizeProductItems(profile.products);
   const stats = productAssetStats(items);
   return {
-    products: items.length >= 1,
+    products: items.some((item, index) => Boolean(item.name.trim() && item.name.trim() !== `产品${index + 1}`)),
     materials: stats.videos >= 1 || stats.images + stats.videos + stats.documents >= 5,
     bizRules: Boolean(profile.bizRules?.quoteMode && profile.bizRules?.samplePolicy?.trim() && profile.bizRules?.paymentTerms?.trim()),
     faq: (profile.faq ?? []).length >= 5,
@@ -509,6 +510,7 @@ export default function EnterprisePage() {
   const [packImporting, setPackImporting] = useState('');
   const [notificationTesting, setNotificationTesting] = useState('');
   const [notificationMessage, setNotificationMessage] = useState('');
+  const [notificationMessageError, setNotificationMessageError] = useState(false);
   const [enterpriseArea, setEnterpriseArea] = useState<EnterpriseArea>('facts');
   const [knowledgeView, setKnowledgeView] = useState<KnowledgeView>('company');
   const [productPage, setProductPage] = useState(1);
@@ -690,6 +692,14 @@ export default function EnterprisePage() {
     }));
   };
 
+  const openKnowledgeIntakeOnce = () => {
+    try {
+      if (localStorage.getItem(SERVICE_INTAKE_AUTO_OPEN_KEY) === 'true') return;
+      localStorage.setItem(SERVICE_INTAKE_AUTO_OPEN_KEY, 'true');
+    } catch { /* 浏览器禁用存储时，本次仍正常打开。 */ }
+    openKnowledgeIntake();
+  };
+
   useEffect(() => {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<{ profile?: AppliedProfile }>).detail;
@@ -704,6 +714,7 @@ export default function EnterprisePage() {
   };
 
   const addFaq = () => {
+    setFaqPage(Math.max(1, Math.ceil((faqItems.length + 1) / PAGE_SIZE)));
     setProfile(prev => ({ ...prev, faq: [...(prev.faq ?? []), { id: crypto.randomUUID(), question: '', answer: '', approvedForAuto: false }] }));
   };
 
@@ -732,6 +743,7 @@ export default function EnterprisePage() {
   };
 
   const importFaqPreview = () => {
+    setFaqPage(Math.max(1, Math.ceil((faqItems.length + faqPreview.length) / PAGE_SIZE)));
     setProfile(prev => ({ ...prev, faq: [...(prev.faq ?? []), ...faqPreview] }));
     setFaqPreview([]);
   };
@@ -755,8 +767,9 @@ export default function EnterprisePage() {
 
   const importFaqPack = async (pack: FaqPack) => {
     setPackImporting(pack.id);
+    setSaveError('');
     try {
-      const result = await fetch('/api/overseas/enterprise/faq/packs/import', {
+      const response = await fetch('/api/overseas/enterprise/faq/packs/import', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeader() },
         body: JSON.stringify({
@@ -764,11 +777,16 @@ export default function EnterprisePage() {
           scenario: pack.scenario,
           questions: selectedQuestionsForPack(pack),
         }),
-      }).then(r => r.json());
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.message || result.error || '知识包导入失败');
       if (result.profile?.faq) {
+        setFaqPage(Math.max(1, Math.ceil(result.profile.faq.length / PAGE_SIZE)));
         setProfile(prev => ({ ...prev, faq: result.profile.faq }));
       }
       await reloadFaqPacks();
+    } catch (error) {
+      setSaveError(error instanceof Error ? error.message : '知识包导入失败');
     } finally {
       setPackImporting('');
     }
@@ -801,11 +819,13 @@ export default function EnterprisePage() {
 
   const testReceiver = async (receiver: NotificationReceiver, index: number) => {
     if (!receiver.target.trim()) {
+      setNotificationMessageError(true);
       setNotificationMessage('请先填写接收目标');
       return;
     }
     setNotificationTesting(String(index));
     setNotificationMessage('');
+    setNotificationMessageError(false);
     try {
       const result = await fetch('/api/overseas/enterprise/notifications/test', {
         method: 'POST',
@@ -815,13 +835,11 @@ export default function EnterprisePage() {
       if (result.error) throw new Error(result.error);
       setProfile(prev => ({
         ...prev,
-        notifications: {
-          ...(prev.notifications ?? DEFAULT.notifications!),
-          lastTestAt: result.lastTestAt || new Date().toISOString(),
-        },
+        notifications: result.notifications ?? { ...(prev.notifications ?? DEFAULT.notifications!), lastTestAt: result.lastTestAt || new Date().toISOString() },
       }));
       setNotificationMessage('测试提醒已发送');
     } catch (error) {
+      setNotificationMessageError(true);
       setNotificationMessage(error instanceof Error ? error.message : '测试提醒发送失败');
     } finally {
       setNotificationTesting('');
@@ -1095,6 +1113,7 @@ export default function EnterprisePage() {
           if (index >= 0) next[index] = { ...next[index], ...item };
           else next.push(item);
         }
+        setProductPage(Math.max(1, Math.ceil(next.length / PAGE_SIZE)));
         return { ...prev, products: { ...prev.products, items: next } };
       });
       const skipped = prepared.dataRows.length - incoming.length;
@@ -1114,6 +1133,7 @@ export default function EnterprisePage() {
   };
 
   const addProduct = () => {
+    setProductPage(Math.max(1, Math.ceil((products.length + 1) / PAGE_SIZE)));
     setProfile(prev => {
       const items = normalizeProductItems(prev.products);
       return { ...prev, products: { ...prev.products, items: [...items, emptyProduct(items.length)] } };
@@ -1125,7 +1145,7 @@ export default function EnterprisePage() {
       const items = normalizeProductItems(prev.products)
         .filter((_, i) => i !== index)
         .map((item, i) => ({ ...item, name: item.name || `产品${i + 1}` }));
-      return { ...prev, products: { ...prev.products, items: items.length ? items : [emptyProduct(0)] } };
+      return { ...prev, products: { ...prev.products, items } };
     });
   };
 
@@ -1215,9 +1235,7 @@ export default function EnterprisePage() {
         <div className="flex items-start justify-between gap-4">
           <div>
             <p className="text-sm font-black text-amber-950">转人工规则</p>
-            <p className="mt-1 text-[11px] font-semibold leading-5 text-amber-800">
-              这些规则长在 L1-L4 放权体系上：触发后只改变接待方式，不扩大 AI 自动发送范围。
-            </p>
+            <p className="mt-1 text-[11px] font-semibold leading-5 text-amber-800">触发后，灵小枢会停下自动回复，交给你处理。</p>
           </div>
           <span className="rounded-full bg-white px-2.5 py-1 text-[11px] font-black text-red-700 shadow-sm">L4 永不自动</span>
         </div>
@@ -1352,13 +1370,13 @@ export default function EnterprisePage() {
             <button type="button" onClick={() => void testReceiver(receiver, index)} disabled={notificationTesting === String(index)} className="inline-flex items-center justify-center gap-1.5 rounded-lg bg-slate-950 px-3 py-2 text-xs font-bold text-white disabled:opacity-60">
               {notificationTesting === String(index) ? <Loader2 size={12} className="animate-spin" /> : <Bell size={12} />}测试
             </button>
-            <button type="button" onClick={() => removeReceiver(index)} className="rounded-lg border border-border bg-white px-2 text-text-muted hover:text-red"><X size={13} /></button>
+            <button type="button" onClick={() => removeReceiver(index)} aria-label={`删除接收人 ${receiver.name || index + 1}`} title="删除接收人" className="rounded-lg border border-border bg-white px-2 text-text-muted hover:text-red"><X size={13} /></button>
           </div>
         ))}
         <button type="button" onClick={addReceiver} className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-white px-3 py-2 text-xs font-bold text-text-secondary hover:bg-surface-2">
           <Plus size={12} />添加接收人
         </button>
-        {notificationMessage && <p className="text-xs font-bold text-emerald-700">{notificationMessage}</p>}
+        {notificationMessage && <p className={`text-xs font-bold ${notificationMessageError ? 'text-red-600' : 'text-emerald-700'}`}>{notificationMessage}</p>}
       </div>
       <div className="mt-4 grid grid-cols-3 gap-4">
         <Field label="工作开始时间">
@@ -1432,7 +1450,7 @@ export default function EnterprisePage() {
                 onClick={() => {
                   setEnterpriseArea(item.id);
                   setKnowledgeView(item.initialView);
-                  if (item.id === 'service') openKnowledgeIntake();
+                  if (item.id === 'service') openKnowledgeIntakeOnce();
                 }}
                 className={`flex h-10 items-center justify-center gap-2 rounded-xl px-3 text-sm font-black transition-all ${active ? 'bg-white text-text-primary shadow-sm ring-1 ring-border' : 'text-text-muted hover:bg-white/60 hover:text-text-secondary'}`}
               >
@@ -1586,7 +1604,7 @@ export default function EnterprisePage() {
                               <div key={`${asset.name}-${assetIndex}`} className="flex min-w-0 items-center gap-1.5 text-[10px] text-text-secondary">
                                 {asset.url ? <a href={asset.url} target="_blank" rel="noreferrer" className="flex-1 truncate hover:text-text-primary">{asset.name}</a> : <span className="flex-1 truncate">{asset.name}</span>}
                                 <span className="shrink-0 text-text-muted">{formatSize(asset.size)}</span>
-                                <button type="button" onClick={() => removeProductAsset(index, key, assetIndex)} className="shrink-0 rounded p-0.5 text-text-muted hover:text-red"><X size={10} /></button>
+                                <button type="button" onClick={() => removeProductAsset(index, key, assetIndex)} aria-label={`删除素材 ${asset.name}`} title="删除素材" className="shrink-0 rounded p-0.5 text-text-muted hover:text-red"><X size={10} /></button>
                               </div>
                             ))}
                           </div>
@@ -1749,7 +1767,7 @@ export default function EnterprisePage() {
                       </span>
                       <span className="text-[11px] text-text-muted">允许 AI 自动回复</span>
                       <Toggle checked={item.approvedForAuto} onChange={checked => updateFaq(item.id, { approvedForAuto: checked })} />
-                      <button type="button" onClick={(event) => { event.preventDefault(); removeFaq(item.id); }} className="rounded-md p-1 text-text-muted hover:text-red"><X size={13} /></button>
+                      <button type="button" onClick={(event) => { event.preventDefault(); removeFaq(item.id); }} aria-label={`删除问答 ${item.question || index + 1}`} title="删除问答" className="rounded-md p-1 text-text-muted hover:text-red"><X size={13} /></button>
                     </div>
                   </summary>
                   <textarea className={`${textareaCls} mt-3`} rows={3} value={item.answer} onChange={e => updateFaq(item.id, { answer: e.target.value })} placeholder="标准答案" />
@@ -1843,7 +1861,7 @@ export default function EnterprisePage() {
             <div className="flex w-full items-center justify-between px-5 py-4 text-left">
               <span>
                 <span className="block text-sm font-black text-text-primary">接待规则与高级设置</span>
-                <span className="mt-1 block text-[11px] text-text-muted">不属于企业资料本身：AI 参与程度、转人工规则、通知与夜班、支持授权和经营偏好。</span>
+                <span className="mt-1 block text-[11px] text-text-muted">先选灵小枢参与到哪一步，再设置什么时候交给你。</span>
               </span>
             </div>
               <div className="space-y-5 border-t border-border p-5">

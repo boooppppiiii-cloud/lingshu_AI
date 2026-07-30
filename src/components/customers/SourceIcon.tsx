@@ -7,14 +7,14 @@ const SOURCE_LABEL: Record<string, string> = {
   facebook: 'Facebook',
   instagram: 'Instagram',
   tiktok: 'TikTok',
-  whatsapp_from_youtube: 'WhatsApp · YouTube',
-  whatsapp_from_tiktok: 'WhatsApp · TikTok',
-  whatsapp_from_instagram: 'WhatsApp · Instagram',
-  whatsapp_from_facebook: 'WhatsApp · Facebook',
+  whatsapp_from_youtube: 'WhatsApp · 来自 YouTube',
+  whatsapp_from_tiktok: 'WhatsApp · 来自 TikTok',
+  whatsapp_from_instagram: 'WhatsApp · 来自 Instagram',
+  whatsapp_from_facebook: 'WhatsApp · 来自 Facebook',
 };
 
 export function sourceLabel(source: CustomerSource) {
-  return SOURCE_LABEL[String(source || '').toLowerCase()] || 'WhatsApp';
+  return SOURCE_LABEL[String(source || '').toLowerCase()] || '未知渠道';
 }
 
 export function SourceIcon({ source, size = 16 }: { source: CustomerSource; size?: number }) {
@@ -57,7 +57,7 @@ export function SourceIcon({ source, size = 16 }: { source: CustomerSource; size
       className="inline-flex shrink-0 items-center justify-center"
       style={{ width: boxSize, height: boxSize }}
     >
-      <SocialPlatformIcon platform="whatsapp" size={size + 3} />
+      <span className="text-[10px] font-black text-text-muted">?</span>
     </span>
   );
 }

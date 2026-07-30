@@ -291,7 +291,7 @@ export default function TrafficPage({
       },
       accounts: {
         label: '账号动态',
-        summary: '当前在账号动态，适合查看账号表现、内容状态，以及识别评论中的高意向商机。',
+        summary: '当前在账号动态，适合查看账号表现，以及识别评论中的高意向商机。',
         suggestions: ['查看待回复高意向评论', '判断评论采购意图', '生成真人化回复', '复盘账号表现'],
       },
     };

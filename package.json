@@ -27,6 +27,7 @@
     "test:outbound-guard": "tsx server/autonomy/outboundGuard.test.ts",
     "test:conversation-tone": "tsx server/agents/conversationTone.test.ts",
     "test:customer-visibility": "tsx server/whatsapp/customerVisibility.test.ts",
+    "test:customer-profile": "tsx server/whatsapp/customerProfilePersistence.test.ts",
     "test:autonomy": "tsx server/autonomy/actionRules.test.ts",
     "test:knowledge-policy": "tsx server/knowledge/retrieve.test.ts",
     "test:strategy-policy": "tsx server/knowledge/strategyRetrieve.test.ts",

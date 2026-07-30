@@ -6,7 +6,7 @@ import { buildKnowledgePromptBlock } from '../knowledge/promptBlocks.js';
 import { buildStrategyPromptBlock, retrieveResponseStrategies, strategyEvidence } from '../knowledge/strategyRetrieve.js';
 import { aggregateKnowledgeMisses } from '../knowledge/misses.js';
 import { recordStyleMemory } from '../knowledge/styleMemory.js';
-import { confirmCustomerSourceAttribution, getNightModeMorningBriefing, getWhatsAppCustomers, getWhatsAppImportStatus, markWhatsAppHumanReply } from '../whatsapp/historyImport.js';
+import { confirmCustomerSourceAttribution, getNightModeMorningBriefing, getWhatsAppCustomers, getWhatsAppImportStatus, markWhatsAppHumanReply, patchWhatsAppCustomer } from '../whatsapp/historyImport.js';
 import { sendTenantWhatsAppTemplate, sendTenantWhatsAppText } from '../whatsapp/send.js';
 
 export const customerSuggestionsRouter = Router();
@@ -104,6 +104,25 @@ customerSuggestionsRouter.post('/:id/manual-active', (req, res) => {
   const until = Date.now() + minutes * 60_000;
   manualActiveUntil.set(`${tenantId}:${customerId}`, until);
   res.json({ ok: true, suspendedUntil: new Date(until).toISOString() });
+});
+
+customerSuggestionsRouter.patch('/:id', (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const customerId = String(req.params.id || '');
+  if (!customerId) {
+    res.status(400).json({ error: 'customer_id_required' });
+    return;
+  }
+  const customer = patchWhatsAppCustomer({
+    tenantId,
+    customerId,
+    patch: req.body && typeof req.body === 'object' ? req.body as Record<string, unknown> : {},
+  });
+  if (!customer) {
+    res.status(404).json({ error: 'customer_not_found' });
+    return;
+  }
+  res.json({ ok: true });
 });
 
 customerSuggestionsRouter.post('/:id/source-attribution', async (req, res) => {

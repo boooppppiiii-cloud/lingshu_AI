@@ -1555,12 +1555,18 @@ enterpriseRouter.post('/notifications/test', async (req, res) => {
     return;
   }
   await notifyDeliveryTeam(`[灵枢测试提醒] ${name} (${channel}/${target}) 已接入重要客户提醒。`);
+  const receivers = [...(profile.notifications?.receivers ?? [])];
+  const receiverIndex = receivers.findIndex(item => item.channel === channel && text(item.target) === target);
+  const normalizedReceiver: NotificationReceiver = { name, channel, target };
+  if (receiverIndex >= 0) receivers[receiverIndex] = normalizedReceiver;
+  else receivers.push(normalizedReceiver);
   const notifications = normalizeNotifications({
     ...(profile.notifications ?? DEFAULT_NOTIFICATIONS),
+    receivers,
     lastTestAt: new Date().toISOString(),
   });
   await writeTenantProfile(tenantId, { ...profile, notifications }, userId);
-  res.json({ ok: true, lastTestAt: notifications.lastTestAt });
+  res.json({ ok: true, lastTestAt: notifications.lastTestAt, notifications });
 });
 
 enterpriseRouter.get('/orders', async (req, res) => {

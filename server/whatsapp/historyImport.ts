@@ -35,6 +35,14 @@ const BACKUP_ROOT = path.join(DATA_DIR, 'backups');
 type HandlingMode = 'ai_auto' | 'ai_draft' | 'human_needed';
 type CustomerStage = 'lead' | 'inquiry' | 'quoted' | 'won' | 'silent30' | 'silent60';
 
+interface StoredCustomerOrder {
+  id: string;
+  status: 'paid' | 'refunded' | 'cancelled' | 'pending';
+  total: string;
+  createdAt: string;
+  items?: Array<{ name: string; qty: number }>;
+}
+
 interface StoredInteraction {
   id: string;
   tenantId: string;
@@ -55,6 +63,9 @@ interface StoredCustomer {
   waNumber: string;
   name: string;
   language: string;
+  languageLocked?: boolean;
+  countryName?: string;
+  timeZone?: string;
   stage: CustomerStage;
   handlingMode: HandlingMode;
   handlingReason: string;
@@ -73,6 +84,10 @@ interface StoredCustomer {
   sourcePostTitle?: string;
   sourcePostPlatform?: string;
   softAttribution?: { candidates: Array<{ id: string; title: string; platform: string; trackCode: string }> };
+  tags?: string[];
+  orders?: StoredCustomerOrder[];
+  todoCompletedAt?: string;
+  hasUnread?: boolean;
 }
 
 interface NightModeEvent {
@@ -394,6 +409,79 @@ function detectLanguage(body: string): string {
   return '\u82f1\u8bed';
 }
 
+const PHONE_REGION_PREFIXES: Array<{ prefix: string; countryName: string; timeZone: string }> = [
+  { prefix: '966', countryName: '沙特阿拉伯', timeZone: 'Asia/Riyadh' },
+  { prefix: '974', countryName: '卡塔尔', timeZone: 'Asia/Qatar' },
+  { prefix: '965', countryName: '科威特', timeZone: 'Asia/Kuwait' },
+  { prefix: '968', countryName: '阿曼', timeZone: 'Asia/Muscat' },
+  { prefix: '973', countryName: '巴林', timeZone: 'Asia/Bahrain' },
+  { prefix: '880', countryName: '孟加拉国', timeZone: 'Asia/Dhaka' },
+  { prefix: '855', countryName: '柬埔寨', timeZone: 'Asia/Phnom_Penh' },
+  { prefix: '852', countryName: '中国香港', timeZone: 'Asia/Hong_Kong' },
+  { prefix: '853', countryName: '中国澳门', timeZone: 'Asia/Macau' },
+  { prefix: '886', countryName: '中国台湾', timeZone: 'Asia/Taipei' },
+  { prefix: '351', countryName: '葡萄牙', timeZone: 'Europe/Lisbon' },
+  { prefix: '234', countryName: '尼日利亚', timeZone: 'Africa/Lagos' },
+  { prefix: '254', countryName: '肯尼亚', timeZone: 'Africa/Nairobi' },
+  { prefix: '212', countryName: '摩洛哥', timeZone: 'Africa/Casablanca' },
+  { prefix: '971', countryName: '阿联酋', timeZone: 'Asia/Dubai' },
+  { prefix: '62', countryName: '印度尼西亚', timeZone: 'Asia/Jakarta' },
+  { prefix: '84', countryName: '越南', timeZone: 'Asia/Ho_Chi_Minh' },
+  { prefix: '66', countryName: '泰国', timeZone: 'Asia/Bangkok' },
+  { prefix: '60', countryName: '马来西亚', timeZone: 'Asia/Kuala_Lumpur' },
+  { prefix: '65', countryName: '新加坡', timeZone: 'Asia/Singapore' },
+  { prefix: '63', countryName: '菲律宾', timeZone: 'Asia/Manila' },
+  { prefix: '91', countryName: '印度', timeZone: 'Asia/Kolkata' },
+  { prefix: '92', countryName: '巴基斯坦', timeZone: 'Asia/Karachi' },
+  { prefix: '81', countryName: '日本', timeZone: 'Asia/Tokyo' },
+  { prefix: '82', countryName: '韩国', timeZone: 'Asia/Seoul' },
+  { prefix: '86', countryName: '中国', timeZone: 'Asia/Shanghai' },
+  { prefix: '44', countryName: '英国', timeZone: 'Europe/London' },
+  { prefix: '49', countryName: '德国', timeZone: 'Europe/Berlin' },
+  { prefix: '33', countryName: '法国', timeZone: 'Europe/Paris' },
+  { prefix: '39', countryName: '意大利', timeZone: 'Europe/Rome' },
+  { prefix: '34', countryName: '西班牙', timeZone: 'Europe/Madrid' },
+  { prefix: '31', countryName: '荷兰', timeZone: 'Europe/Amsterdam' },
+  { prefix: '48', countryName: '波兰', timeZone: 'Europe/Warsaw' },
+  { prefix: '55', countryName: '巴西', timeZone: 'America/Sao_Paulo' },
+  { prefix: '52', countryName: '墨西哥', timeZone: 'America/Mexico_City' },
+  { prefix: '54', countryName: '阿根廷', timeZone: 'America/Argentina/Buenos_Aires' },
+  { prefix: '56', countryName: '智利', timeZone: 'America/Santiago' },
+  { prefix: '57', countryName: '哥伦比亚', timeZone: 'America/Bogota' },
+  { prefix: '51', countryName: '秘鲁', timeZone: 'America/Lima' },
+  { prefix: '20', countryName: '埃及', timeZone: 'Africa/Cairo' },
+  { prefix: '27', countryName: '南非', timeZone: 'Africa/Johannesburg' },
+  { prefix: '61', countryName: '澳大利亚', timeZone: 'Australia/Sydney' },
+  { prefix: '64', countryName: '新西兰', timeZone: 'Pacific/Auckland' },
+];
+
+function inferPhoneRegion(waNumber: string): { countryName: string; timeZone?: string } {
+  const digits = String(waNumber || '').replace(/\D/g, '');
+  const match = PHONE_REGION_PREFIXES.find(item => digits.startsWith(item.prefix));
+  return match ? { countryName: match.countryName, timeZone: match.timeZone } : { countryName: '未知' };
+}
+
+function currentLocalTime(timeZone?: string): string {
+  if (!timeZone) return '未知';
+  try {
+    return new Intl.DateTimeFormat('zh-CN', { timeZone, hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).format(new Date());
+  } catch {
+    return '未知';
+  }
+}
+
+function normalizedCustomerSource(source?: string): string {
+  const value = String(source || 'whatsapp').trim().toLowerCase();
+  const aliases: Record<string, string> = {
+    fb: 'facebook', ig: 'instagram', yt: 'youtube',
+    'tik tok': 'tiktok', whatsapp_business: 'whatsapp',
+  };
+  const normalized = aliases[value] || value;
+  return /^(whatsapp|facebook|instagram|tiktok|youtube|whatsapp_from_(facebook|instagram|tiktok|youtube))$/.test(normalized)
+    ? normalized
+    : 'whatsapp';
+}
+
 function stageByTimestamp(lastActiveAt: number): CustomerStage {
   const days = Math.floor((Date.now() - lastActiveAt) / 86_400_000);
   if (days <= 30) return 'inquiry';
@@ -516,7 +604,7 @@ function upsertCustomer(input: { tenantId: string; waNumber: string; name?: stri
     ...base,
     ...input.patch,
     name: input.name || base.name,
-    language: base.language || detectLanguage(input.body || ''),
+    language: base.languageLocked ? base.language : (input.body ? detectLanguage(input.body) : base.language || detectLanguage('')),
     stage: stageByTimestamp(lastActiveAt),
     lastActiveAt: Math.max(base.lastActiveAt, lastActiveAt),
     updatedAt: now,
@@ -727,7 +815,10 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
     name: message.name,
     body: message.body,
     lastActiveAt: message.timestamp,
-    patch: attributionPatch,
+    patch: {
+      ...attributionPatch,
+      ...(!message.fromBusiness ? { hasUnread: true, todoCompletedAt: undefined } : {}),
+    },
   });
   addInteraction({
     id: `${customer.id}-${message.id}`,
@@ -1122,8 +1213,56 @@ export function markWhatsAppHumanReply(input: { tenantId: string; customerId: st
       knowledgeMissStreak: 0,
       blockedAutoReplyReason: undefined,
       pendingDraft: undefined,
+      hasUnread: false,
+      todoCompletedAt: new Date().toISOString(),
     },
   });
+}
+
+export function patchWhatsAppCustomer(input: {
+  tenantId: string;
+  customerId: string;
+  patch: Record<string, unknown>;
+}): StoredCustomer | null {
+  const list = customers();
+  const index = list.findIndex(item => item.tenantId === input.tenantId && item.id === input.customerId && isRealWhatsAppNumber(item.waNumber));
+  if (index < 0) return null;
+  const current = list[index];
+  const patch = input.patch && typeof input.patch === 'object' ? input.patch : {};
+  const next: StoredCustomer = { ...current };
+
+  if (typeof patch.language === 'string' && patch.language.trim()) next.language = patch.language.trim().slice(0, 40);
+  if (typeof patch.languageLocked === 'boolean') next.languageLocked = patch.languageLocked;
+  if (patch.handlingMode === 'ai_auto' || patch.handlingMode === 'ai_draft' || patch.handlingMode === 'human_needed') next.handlingMode = patch.handlingMode;
+  if (typeof patch.needCall === 'boolean') next.needCall = patch.needCall;
+  if (typeof patch.aiAutoCount === 'number' && Number.isFinite(patch.aiAutoCount)) next.aiAutoCount = Math.max(0, Math.floor(patch.aiAutoCount));
+  if (typeof patch.hasUnread === 'boolean') next.hasUnread = patch.hasUnread;
+  if (patch.todoCompletedAt === null || patch.todoCompletedAt === '') delete next.todoCompletedAt;
+  else if (typeof patch.todoCompletedAt === 'string') next.todoCompletedAt = patch.todoCompletedAt.slice(0, 80);
+  if (Array.isArray(patch.tags)) next.tags = patch.tags.map(item => String(item || '').trim()).filter(Boolean).slice(0, 20);
+  if (Array.isArray(patch.orders)) {
+    next.orders = patch.orders.map(item => {
+      const raw = item && typeof item === 'object' ? item as Record<string, unknown> : {};
+      const status = raw.status === 'paid' || raw.status === 'refunded' || raw.status === 'cancelled' ? raw.status : 'pending';
+      const items = Array.isArray(raw.items) ? raw.items.map(entry => {
+        const detail = entry && typeof entry === 'object' ? entry as Record<string, unknown> : {};
+        return { name: String(detail.name || '').trim().slice(0, 120), qty: Math.max(1, Math.floor(Number(detail.qty) || 1)) };
+      }).filter(entry => entry.name).slice(0, 50) : undefined;
+      return {
+        id: String(raw.id || '').trim().slice(0, 80),
+        status,
+        total: String(raw.total || '').trim().slice(0, 80),
+        createdAt: String(raw.createdAt || '').trim().slice(0, 40),
+        ...(items?.length ? { items } : {}),
+      } as StoredCustomerOrder;
+    }).filter(order => order.id && order.total).slice(0, 200);
+  }
+
+  next.updatedAt = new Date().toISOString();
+  list[index] = next;
+  writeCustomers(list);
+  void mirrorCustomerToPocketBase(next).catch(error => console.error('[whatsapp-pb-customer]', error));
+  return next;
 }
 
 export function getWhatsAppCustomers(tenantId?: string): any[] {
@@ -1147,18 +1286,21 @@ export function getWhatsAppCustomers(tenantId?: string): any[] {
       }));
     const priority = prioritizeCustomer({
       ...customer,
-      orders: [],
+      orders: customer.orders ?? [],
       estimatedValue: '$0',
     }).priorityScore;
+    const inferredRegion = inferPhoneRegion(customer.waNumber);
+    const timeZone = customer.timeZone || inferredRegion.timeZone;
+    const lastTimelineEvent = timeline.at(-1);
     return {
       id: customer.id,
       name: customer.name,
       avatar: (customer.name[0] || 'W').toUpperCase(),
-      countryName: 'WhatsApp',
+      countryName: customer.countryName || inferredRegion.countryName || '未知',
       email: undefined,
       language: customer.language,
-      languageLocked: false,
-      source: customer.source || 'whatsapp',
+      languageLocked: Boolean(customer.languageLocked),
+      source: normalizedCustomerSource(customer.source),
       sourcePostId: customer.sourcePostId,
       sourceTrackCode: customer.sourceTrackCode,
       sourcePostTitle: customer.sourcePostTitle,
@@ -1174,7 +1316,7 @@ export function getWhatsAppCustomers(tenantId?: string): any[] {
       handlingReason: customer.handlingReason,
       aiAutoCount: customer.aiAutoCount,
       needCall: Boolean(customer.needCall),
-      hasUnread: true,
+      hasUnread: customer.hasUnread ?? lastTimelineEvent?.actor === 'buyer',
       isReal: true,
       waNumber: customer.waNumber,
       blockedAutoReplyReason: customer.blockedAutoReplyReason,
@@ -1183,9 +1325,11 @@ export function getWhatsAppCustomers(tenantId?: string): any[] {
       inboxReason: customer.handlingMode === 'human_needed' ? 'reply' : customer.handlingMode === 'ai_draft' ? 'draft' : 'reply',
       lastActive: '刚刚',
       lastActiveAt: customer.lastActiveAt,
-      localTime: new Date(customer.lastActiveAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      orders: [],
-      tags: ['真实WhatsApp', customer.handlingMode === 'ai_auto' ? 'AI接待' : '待处理'],
+      localTime: currentLocalTime(timeZone),
+      timeZone,
+      orders: customer.orders ?? [],
+      tags: customer.tags ?? ['真实WhatsApp', customer.handlingMode === 'ai_auto' ? 'AI接待' : '待处理'],
+      todoCompletedAt: customer.todoCompletedAt,
       summary: customer.handlingReason,
       nextStep: customer.pendingDraft || '继续跟进客户最新消息。',
       timeline,

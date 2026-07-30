@@ -4,9 +4,7 @@ import {
   CheckCircle2,
   CheckSquare2,
   ChevronDown,
-  ChevronRight,
   CircleUserRound,
-  Clock3,
   ExternalLink,
   Filter,
   Layers3,
@@ -23,7 +21,7 @@ import { ChannelOverview } from './YouTubeIntegration';
 import { authHeader } from '../lib/auth';
 import { SocialPlatformIcon } from './SocialPlatformIcon';
 
-type ActivityTab = 'overview' | 'content' | 'comments';
+type ActivityTab = 'overview' | 'comments';
 type CommentFilter = 'all' | 'high' | 'pending' | 'following' | 'converted' | 'ignored';
 type CommentStatus = 'pending' | 'following' | 'converted' | 'ignored' | 'replied';
 
@@ -63,7 +61,6 @@ const PLATFORM_OPTIONS: SocialComment['platform'][] = ['YouTube', 'TikTok', 'Ins
 
 const TAB_ITEMS: Array<{ id: ActivityTab; label: string }> = [
   { id: 'overview', label: '数据概览' },
-  { id: 'content', label: '内容动态' },
   { id: 'comments', label: '评论管理' },
 ];
 
@@ -279,17 +276,6 @@ export default function AccountActivity() {
       </div>
 
       {tab === 'overview' && <div className="px-6 py-5"><ChannelOverview /></div>}
-
-      {tab === 'content' && (
-        <div className="px-6 py-5">
-          <div className="rounded-2xl border border-dashed border-border bg-white px-6 py-16 text-center shadow-sm">
-            <span className="mx-auto flex h-12 w-12 items-center justify-center rounded-2xl bg-accent-glow text-accent"><Clock3 size={22} /></span>
-            <h3 className="mt-4 text-sm font-black text-text-primary">内容动态将在账号同步后展示</h3>
-            <p className="mx-auto mt-2 max-w-md text-xs leading-5 text-text-muted">这里会聚合已发布内容、平台状态和单条内容表现，不会把未同步的平台历史冒充为真实数据。</p>
-            <button type="button" className="mt-5 inline-flex items-center gap-2 rounded-xl bg-accent px-4 py-2.5 text-xs font-black text-white">前往集成中心 <ChevronRight size={14} /></button>
-          </div>
-        </div>
-      )}
 
       {tab === 'comments' && (
         <div className="min-h-[620px]">
