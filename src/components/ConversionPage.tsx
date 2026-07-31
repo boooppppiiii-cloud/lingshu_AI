@@ -42,6 +42,7 @@ import { SourceIcon, sourceLabel } from './customers/SourceIcon';
 import { LiveLocalTime } from './customers/LiveLocalTime';
 import { DailyBriefing } from './customers/DailyBriefing';
 import { useCustomers } from '../hooks/useCustomers';
+import { useDismissibleLayer } from '../hooks/useDismissibleLayer';
 import { buildPrioritySuggestion, dailyTodoCustomers, isTodoCompleted, pendingCount, sortCustomersByPriority, type PrioritySuggestion } from '../lib/customerPriority';
 import type { AutonomyLevel, CustomerProfile, CustomerStage, HandlingMode, TimelineEvent } from '../types/customer';
 
@@ -559,6 +560,8 @@ function CompactCustomerList({
   onViewChange: (view: CustomerView) => void;
 }) {
   const [filterOpen, setFilterOpen] = useState(false);
+  const filterMenuRef = useRef<HTMLDivElement>(null);
+  useDismissibleLayer(filterOpen, filterMenuRef, () => setFilterOpen(false));
   const [filters, setFilters] = useState<CustomerListFilters>(EMPTY_CUSTOMER_FILTERS);
   const baseList = filterCustomers(view, customers);
   const list = applyCustomerListFilters(baseList, filters);
@@ -631,7 +634,7 @@ function CompactCustomerList({
   return (
     <aside className="flex h-full w-80 shrink-0 flex-col overflow-hidden border-r border-border bg-white">
       <div className="border-b border-border px-4 py-3">
-        <div className="relative flex items-center justify-between gap-3">
+        <div ref={filterMenuRef} className="relative flex items-center justify-between gap-3">
           <p className="text-[11px] text-text-muted">{list.length} 个待处理 · 按最近动态排序</p>
           <button
             type="button"

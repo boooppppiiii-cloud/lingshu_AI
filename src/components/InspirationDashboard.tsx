@@ -13,6 +13,7 @@ import CompetitorAccountsModal from './CompetitorAccountsModal';
 import type { Page } from '../App';
 import { completeDemoStep, readDemoProgress } from '../lib/demoProgress';
 import { SocialPlatformIcon } from './SocialPlatformIcon';
+import { useDismissibleLayer } from '../hooks/useDismissibleLayer';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type Platform = 'all' | 'tiktok' | 'instagram' | 'youtube' | 'facebook';
@@ -1918,11 +1919,13 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onExactAnalysis,
   const [result, setResult] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [showLangDropdown, setShowLangDropdown] = useState(false);
+  const languageDropdownRef = useRef<HTMLDivElement>(null);
   const [voiceLanguageConfirmed, setVoiceLanguageConfirmed] = useState(false);
   const [videoGenerating, setVideoGenerating] = useState(false);
   const [videoResult, setVideoResult] = useState<GeneratedVideo | null>(null);
   const [videoVersions, setVideoVersions] = useState<VideoGenerationVersion[]>([]);
   const [videoError, setVideoError] = useState('');
+  useDismissibleLayer(showLangDropdown, languageDropdownRef, () => setShowLangDropdown(false));
   const [expanded, setExpanded] = useState(false);
   const [seedanceVideoLocked, setSeedanceVideoLocked] = useState(true);
   const [productInfoOpen, setProductInfoOpen] = useState(false);
@@ -2184,7 +2187,7 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onExactAnalysis,
                     </button>
                   ))}
                 </div>
-                <div className="relative flex-1">
+                <div ref={languageDropdownRef} className="relative flex-1">
                   <button onClick={() => setShowLangDropdown(v => !v)}
                     className="w-full flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border bg-surface text-xs text-text-secondary hover:border-border-bright transition-colors">
                     <Globe size={11} className="text-text-muted flex-shrink-0" />
@@ -2489,7 +2492,7 @@ function VideoCard({ video, index, isSelected, onSelect, onWatch, onAnalyzeVideo
           )}
         </div>
         {crawledLabel && (
-          <div className="absolute top-2 right-2 px-1.5 py-0.5 rounded-md text-[10px] font-mono font-bold text-white bg-black/50 backdrop-blur-sm"
+          <div className="absolute top-2 right-2 max-w-[48%] truncate px-1.5 py-0.5 rounded-md text-[10px] font-mono font-bold text-white bg-black/50 backdrop-blur-sm"
             title={`爬取入库时间：${crawledDate!.toLocaleString()}`}>
             {crawledLabel}
           </div>
@@ -3127,10 +3130,11 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   );
   const filtered = useMemo(() => {
     const lastCrawlIds = new Set(lastCrawlVideoIds);
+    const limitToLastCrawl = lastCrawlIds.size >= 10;
     const q = search.trim().toLowerCase();
     return visibleVideos
       .filter(v =>
-        (v.id.startsWith('material-') || lastCrawlIds.size === 0 || lastCrawlIds.has(v.id)) &&
+        (v.id.startsWith('material-') || !limitToLastCrawl || lastCrawlIds.has(v.id)) &&
         (platform === 'all' || v.platform === platform) &&
         (!q || v.title.toLowerCase().includes(q) || v.tags.some(t => t.toLowerCase().includes(q)))
       )
@@ -3150,6 +3154,12 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
         return heatValue(b.views) - heatValue(a.views) || timeValue(b.crawledAt) - timeValue(a.crawledAt);
       });
   }, [visibleVideos, lastCrawlVideoIds, platform, search, sortMode, pinnedMaterialVideos, contentFormat]);
+
+  useEffect(() => {
+    if (innerView !== 'inspiration' || viewMode !== 'grid') return;
+    if (videosLoading || filtered.length === 0 || filtered.length >= 10 || videoPage >= videoTotalPages) return;
+    void refreshVideos(videoPage + 1, true);
+  }, [filtered.length, innerView, videoPage, videoTotalPages, videosLoading, viewMode]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const recentThreeDayUploads = visibleVideos.filter(v => {
     const t = v.crawledAt ? new Date(v.crawledAt).getTime() : 0;
@@ -3707,7 +3717,6 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
                   )}
                 </div>
               ) : viewMode === 'grid' ? (
-                // grid 而非 columns 瀑布流：columns 是竖向灌列，横向阅读顺序会打乱排序
                 <div className="grid grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 items-start">
                   {filtered.map((video, i) => (
                     <div key={video.id} className="relative">
@@ -3719,9 +3728,9 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
                         analyzingVideo={analyzingVideoIds.includes(video.id)}
                         favoritingMaterial={favoritingMaterialIds.includes(video.id)} />
               {video.canManage && (
-                <div className="absolute right-2 top-2 z-20 flex gap-1">
-                  <button type="button" title="编辑素材" aria-label="编辑素材" onClick={() => openManageDialog({ kind: 'video', item: video })} className="rounded-md bg-white/95 p-1.5 text-text-secondary shadow hover:text-accent"><Pencil size={14} /></button>
-                  <button type="button" title="删除素材" aria-label="删除素材" onClick={() => openManageDialog({ kind: 'video', item: video })} className="rounded-md bg-white/95 p-1.5 text-text-secondary shadow hover:text-red-600"><Trash2 size={14} /></button>
+                <div className="absolute right-2 top-9 z-20 flex gap-1">
+                  <button type="button" title="编辑素材" aria-label="编辑素材" onClick={() => openManageDialog({ kind: 'video', item: video })} className="rounded-md bg-white/95 p-1.5 text-text-secondary shadow backdrop-blur-sm hover:text-accent"><Pencil size={14} /></button>
+                  <button type="button" title="删除素材" aria-label="删除素材" onClick={() => openManageDialog({ kind: 'video', item: video })} className="rounded-md bg-white/95 p-1.5 text-text-secondary shadow backdrop-blur-sm hover:text-red-600"><Trash2 size={14} /></button>
                 </div>
               )}
 

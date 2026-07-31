@@ -1,10 +1,11 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { Lock, Pencil } from 'lucide-react';
 import { Card, CardContent } from '../../ui/card';
 import { SourceIcon, sourceLabel } from '../SourceIcon';
 import type { CustomerProfile } from '../../../types/customer';
 import { authHeader } from '../../../lib/auth';
 import { LiveLocalTime } from '../LiveLocalTime';
+import { useDismissibleLayer } from '../../../hooks/useDismissibleLayer';
 
 const LANGUAGE_OPTIONS = ['英语', '西语', '阿语', '葡语', '法语', '俄语', '印尼语', '越南语', '泰语', '其他'];
 
@@ -16,6 +17,8 @@ export function BasicInfoWidget({
   onCustomerPatch?: (patch: Partial<CustomerProfile>) => void;
 }) {
   const [languageOpen, setLanguageOpen] = useState(false);
+  const languageMenuRef = useRef<HTMLDivElement>(null);
+  useDismissibleLayer(languageOpen, languageMenuRef, () => setLanguageOpen(false));
 
   const updateLanguage = (language: string) => {
     onCustomerPatch?.({ language, languageLocked: true });
@@ -70,7 +73,7 @@ export function BasicInfoWidget({
             <p className="text-text-muted">国家/地区</p>
             <p className="mt-1 font-bold text-text-primary">{customer.countryName || '未知'}</p>
           </div>
-          <div className="relative rounded-xl bg-surface-2 p-3">
+          <div ref={languageMenuRef} className="relative rounded-xl bg-surface-2 p-3">
             <div className="flex items-center justify-between gap-2">
               <p className="text-text-muted">语言</p>
               <div className="flex items-center gap-1">
