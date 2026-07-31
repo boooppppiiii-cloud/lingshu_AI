@@ -3,8 +3,8 @@
     "id": "S01",
     "scenario": "客户开口就压价或说太贵",
     "signals": ["too expensive", "price is too high", "best price", "cheaper", "太贵", "便宜点"],
-    "intent": "多数是在试探供应商底线，不等于客户没有购买能力。",
-    "strategy": ["不立即降价或带情绪回应", "先问比较对象和具体觉得贵的部分", "把讨论引向质量、售后、履约与总成本", "需要让步时只做条件置换或非价格价值交换", "议价不超过三轮"],
+    "intent": "多数是在试探供应商底线，不等于客户没有购买能力；持续只压价却拒绝说明数量时，真实性系数会自动降低。",
+    "strategy": ["不立即降价或带情绪回应", "先问比较对象和具体觉得贵的部分", "把讨论引向质量、售后、履约与总成本", "需要让步时只做条件置换或非价格价值交换", "议价不超过三轮", "若客户反复问价却始终不给数量，视为低真实性询价，只提供公开信息"],
     "examples": ["Could you share which specific part seems higher — is it compared to a certain supplier?", "Besides price, is there anything else holding back this order?"],
     "risk_link": "L4",
     "escalate": "客户要求确定折扣、降价数字或给出目标价要求答复时转人工"
@@ -33,9 +33,9 @@
     "id": "S04",
     "scenario": "首次询盘",
     "signals": ["interested in", "send catalog", "price list", "first inquiry", "首次询盘", "目录", "询价"],
-    "intent": "买家可能正在明确比价，也可能仍处于了解阶段，需要通过数量、市场和规格判断。",
-    "strategy": ["快速、专业地确认收到询盘", "补问数量、目标市场、用途和定制需求", "报价前先确认采购量", "基于知识库主动说明可确认的 MOQ、样品、认证等信息", "给出一个明确且低阻力的下一步"],
-    "examples": ["Thank you for your inquiry. To prepare an accurate offer, may I know your target quantity and destination market?"],
+    "intent": "买家可能正在明确比价，也可能仍处于了解阶段，需要通过数量、市场和规格判断；对话前几轮应先摸清品类和现有采购方式，不急于报价。",
+    "strategy": ["快速、专业地确认收到询盘", "先问品类、市场或现有采购方式（SPIN situation 阶段），再补问数量和定制需求", "报价前先确认采购量", "基于知识库主动说明可确认的 MOQ、样品、认证等信息", "给出一个明确且低阻力的下一步"],
+    "examples": ["Thank you for your inquiry. Which market are you selling to, and roughly what quantity are you thinking?"],
     "risk_link": "L2-L3",
     "escalate": "要求正式报价单或 PI 时生成草稿并转人工确认报价"
   },
@@ -43,8 +43,8 @@
     "id": "S05",
     "scenario": "客户只问价不回应细节",
     "signals": ["how much", "price only", "lowest price", "只问价", "反复问价格"],
-    "intent": "可能是试探或采集报价，合作诚意需要通过数量、市场和用途进一步验证。",
-    "strategy": ["不被带入一口价", "用数量、市场、用途问题筛选真实意向", "持续拒绝提供细节时降低跟进优先级"],
+    "intent": "可能是试探或采集报价，合作诚意需要通过数量、市场和用途进一步验证；反复问价且拒绝提供数量属于真实性红旗信号之一。",
+    "strategy": ["不被带入一口价", "用数量、市场、用途问题筛选真实意向", "持续拒绝提供细节时降低跟进优先级", "命中真实性红旗时只回答公开信息，不发详细资料"],
     "examples": ["Could you share the quantity and destination market? That lets us prepare an accurate offer instead of a rough range."],
     "risk_link": "L2",
     "escalate": ""
@@ -121,8 +121,8 @@
   },
   {
     "id": "S13",
-    "scenario": "客户要求定制、OEM 或独家",
-    "signals": ["OEM", "ODM", "customize", "private label", "exclusive", "定制", "贴牌", "独家"],
+    "scenario": "客户要求定制或 OEM",
+    "signals": ["OEM", "ODM", "customize", "private label", "custom packaging", "定制", "贴牌", "代工"],
     "intent": "通常是高意向信号，但涉及可行性、成本、周期和合同判断。",
     "strategy": ["积极确认需求", "只收集定制内容、预计量、目标市场和时间要求", "不承诺可行性、价格或周期", "明确由负责人继续评估"],
     "examples": ["To evaluate this properly, could you share the customization details, expected quantity, target market, and required timing? Our specialist will follow up."],
@@ -133,7 +133,7 @@
     "id": "S14",
     "scenario": "投诉、纠纷或质量问题",
     "signals": ["complaint", "quality issue", "damaged", "refund", "compensation", "投诉", "质量问题", "损坏", "退款", "赔偿"],
-    "intent": "客户需要被重视并尽快进入事实核查和责任处理流程。",
+    "intent": "客户需要被重视并尽快进入事实核查和责任处理流程；情绪本身不是判责依据，但必须优先安抚。",
     "strategy": ["先共情并确认重视", "收集订单号、问题描述和照片", "不认定责任、不承诺退款赔偿或免费补发", "通知负责人接管"],
     "examples": ["I'm sorry to hear this. Could you share the order number, a description of the issue, and photos? Our team will review it right away."],
     "risk_link": "L4",
@@ -148,5 +148,285 @@
     "examples": ["Our manager would be happy to speak with you. What time works best in your timezone?"],
     "risk_link": "L4",
     "escalate": "立即转人工并创建通话任务"
+  },
+  {
+    "id": "A02",
+    "scenario": "首次接触·带明确需求",
+    "signals": ["I need", "looking for", "500 pcs", "we want to order", "需要", "想采购", "我们要"],
+    "intent": "开口就带具体品类和数量，属于较高需求明确度信号。",
+    "strategy": ["先确认能满足的能力范围", "顺势追问目标市场或用途", "不在确认规格前跳步报价"],
+    "examples": ["Yes, we can help with that. Which market are these for, and what specification are you looking at?"],
+    "risk_link": "L3",
+    "escalate": "数量超出常规散单阈值时转人工"
+  },
+  {
+    "id": "A03",
+    "scenario": "只想索要目录或价格表",
+    "signals": ["send catalog", "price list please", "send me everything", "发目录", "全部价格"],
+    "intent": "可能只是初步了解，也可能是同行套价的常见开场；不能直接报出全价目录。",
+    "strategy": ["不直接发完整报价表", "先了解具体品类和大致用途", "按客户真实指向的品类发对应资料"],
+    "examples": ["Happy to help — which category are you interested in? I'll send the right information for that."],
+    "risk_link": "L2",
+    "escalate": "三轮后仍不说明具体品类或用途时，只发公开资料，不再追问"
+  },
+  {
+    "id": "A04",
+    "scenario": "客户主动自报家门",
+    "signals": ["we are a", "our shop", "our company", "我们是", "我们店", "我们公司"],
+    "intent": "主动介绍生意背景是较强的真实买家信号，是绿旗信号之一。",
+    "strategy": ["顺势建立关系而非重新自我介绍", "呼应客户提到的生意类型", "追问一个了解现状的问题（SPIN situation）"],
+    "examples": ["Sounds like a solid business. Which line sells best for you right now?"],
+    "risk_link": "L3",
+    "escalate": ""
+  },
+  {
+    "id": "B01",
+    "scenario": "询问具体产品或货号",
+    "signals": ["this product", "that SKU", "the one in your video", "这个产品", "这款", "这个型号"],
+    "intent": "已锁定具体产品，需要确认规格并引出数量。",
+    "strategy": ["只使用知识库中的真实规格回答", "确认后顺势问预计数量", "不臆测客户未提及的规格"],
+    "examples": ["Yes, that one is available. How many units are you thinking?"],
+    "risk_link": "L3",
+    "escalate": ""
+  },
+  {
+    "id": "B02",
+    "scenario": "询问是否有某产品但实际无货",
+    "signals": ["do you have", "do you sell", "is there a", "有没有", "你们有.*吗"],
+    "intent": "如果不在产品范围内，必须直接说明，不能为了留客而编造。",
+    "strategy": ["如实说明不在经营范围", "不失礼地转向可替代的现有产品", "绝不承诺自己不确定是否存在的货品"],
+    "examples": ["We don't carry that particular item, sorry. We do have a few similar options in skincare — want me to share those?"],
+    "risk_link": "L2",
+    "escalate": "客户坚持要求确认无货产品的具体细节时转人工核实"
+  },
+  {
+    "id": "B03",
+    "scenario": "询问产品成分、原理或功效",
+    "signals": ["ingredients", "how does it work", "what's in it", "成分", "原理", "有什么效果"],
+    "intent": "买家在做产品尽调，回答必须是事实而非功效承诺。",
+    "strategy": ["只陈述知识库中的成分或规格事实", "不做医疗、功效或治疗效果的宣称", "涉及功效证明或医学背书时转人工"],
+    "examples": ["It contains hyaluronic acid and niacinamide. I can send the full ingredient list if that helps."],
+    "risk_link": "L4",
+    "escalate": "要求功效证明、医学背书或认证文件核验时转人工"
+  },
+  {
+    "id": "B04",
+    "scenario": "要求发送照片、视频或详细资料",
+    "signals": ["send photos", "send video", "more details please", "发照片", "发视频", "详细资料"],
+    "intent": "希望获得更直观的信息，通常是积极信号。",
+    "strategy": ["发送已审批的真实素材", "附带一个推进对话的问题", "不额外承诺资料之外的信息"],
+    "examples": ["Sending now. Let me know which ones catch your eye and I'll check stock for you."],
+    "risk_link": "L3",
+    "escalate": ""
+  },
+  {
+    "id": "C05",
+    "scenario": "要求完整报价单或形式发票（PI）",
+    "signals": ["send quotation", "send PI", "proforma invoice", "formal quote", "正式报价单", "形式发票"],
+    "intent": "已进入交易推进阶段，需要尽快收齐信息交人工处理。",
+    "strategy": ["收集品类、数量、规格和收货地信息", "不自行生成或承诺正式报价单内容", "立即转交负责人处理"],
+    "examples": ["Sure — send me the items, quantities, and specs, and I'll get this ready for our team to confirm."],
+    "risk_link": "L4",
+    "escalate": "必须转人工出具正式报价单或 PI"
+  },
+  {
+    "id": "D01",
+    "scenario": "质疑质量或第一次从中国进货",
+    "signals": ["how do I know the quality", "first time buying from China", "is it safe to order", "第一次从中国进货", "怎么保证质量"],
+    "intent": "对跨境交易缺乏经验，担心风险，需要用可验证事实降低心理门槛。",
+    "strategy": ["共情这是合理顾虑", "只引用知识库中真实存在的认证或质检信息", "建议先小额试单降低风险"],
+    "examples": ["That's a fair question. We do have quality documentation available — want to start with a small trial order first?"],
+    "risk_link": "L2",
+    "escalate": "要求核验具体认证文件真伪时转人工"
+  },
+  {
+    "id": "D02",
+    "scenario": "索要认证文件但知识库未覆盖",
+    "signals": ["GMP", "ISO", "COA", "certificate please", "认证文件", "质检报告"],
+    "intent": "买家需要具体文件核实资质，绝不能凭空承诺知识库里没有的认证。",
+    "strategy": ["不承诺任何知识库未明确记录的认证", "说明会确认具体能提供的文件范围", "给出跟进时间预期并转人工"],
+    "examples": ["Let me confirm exactly which documents we can share for this product, and get back to you today."],
+    "risk_link": "L4",
+    "escalate": "必须转人工核实并补充知识库"
+  },
+  {
+    "id": "D03",
+    "scenario": "怀疑认证或资质造假",
+    "signals": ["fake certificate", "is this certificate real", "had a bad experience before", "证书是假的", "以前被骗过"],
+    "intent": "客户可能有过被骗经历，信任成本很高，需要立即由负责人正面回应。",
+    "strategy": ["不辩解、不反驳客户的顾虑", "不自行证明证书真伪", "立即转交负责人直接提供可验证材料"],
+    "examples": ["I understand that concern completely. Let me have our manager send you the verifiable documents directly."],
+    "risk_link": "L4",
+    "escalate": "立即转人工"
+  },
+  {
+    "id": "D04",
+    "scenario": "询问是工厂还是贸易公司",
+    "signals": ["are you a factory", "trading company or factory", "how big is your company", "你们是工厂还是贸易公司", "公司规模多大"],
+    "intent": "身份核实类问题，正常回答即可；但若伴随反复追问工厂地址、产线细节，应视为真实性红旗。",
+    "strategy": ["如实按知识库回答企业身份信息", "不额外透露工厂地址或产线细节等敏感信息", "追问工厂细节升级时只给公开信息"],
+    "examples": ["We work with certified partner factories on a trading model. Happy to share more about our quality process."],
+    "risk_link": "L2",
+    "escalate": "追问工厂地址或产线细节等敏感信息时，只提供公开信息并标记真实性待核实"
+  },
+  {
+    "id": "E02",
+    "scenario": "要求免费样品或包邮寄样",
+    "signals": ["free sample", "you pay shipping", "sample at no cost", "免费样品", "包邮寄样"],
+    "intent": "希望完全零成本试用，超出常规样品政策时不能自行答应。",
+    "strategy": ["不强硬拒绝，也不自行承诺", "说明常规政策后交由负责人判断", "记录客户诉求供负责人参考"],
+    "examples": ["Our usual policy is sample at cost, refundable on the bulk order. Let me check if we can do something for you here."],
+    "risk_link": "L4",
+    "escalate": "必须转人工确认是否可破例"
+  },
+  {
+    "id": "F02",
+    "scenario": "询问运费",
+    "signals": ["shipping cost", "how much is freight", "delivery fee", "运费多少", "快递费"],
+    "intent": "买家需要计算总成本，运费必须基于真实重量和目的地，不能凭空估算。",
+    "strategy": ["不估算或编造运费金额", "收集目的地、数量、包装信息交人工核算", "说明将尽快提供准确运费"],
+    "examples": ["Freight depends on weight and your delivery address. Send me your city and quantity, and I'll get you the exact cost."],
+    "risk_link": "L4",
+    "escalate": "必须转人工核算准确运费"
+  },
+  {
+    "id": "F03",
+    "scenario": "询问清关、税费或进口手续",
+    "signals": ["customs", "import duty", "clearance", "清关", "关税", "进口手续"],
+    "intent": "买家在评估落地成本和合规风险，不能就税务或法律问题做出承诺。",
+    "strategy": ["不承诺具体税费金额", "只说明可提供的单据（如发票、装箱单）", "税务、法律相关问题一律交由客户当地专业人士或转人工"],
+    "examples": ["We can provide the invoice and packing list needed for customs. Duty rates depend on your country's regulations."],
+    "risk_link": "L4",
+    "escalate": "客户要求承担或代办清关手续时转人工"
+  },
+  {
+    "id": "G02",
+    "scenario": "要求账期或收货后付款",
+    "signals": ["net 30", "pay after receiving", "credit terms", "账期", "收货后付款", "先发货后付款"],
+    "intent": "属于超出常规付款政策的条件，必须由负责人评估风险后决定。",
+    "strategy": ["不自行答应任何账期或延后付款方案", "说明会向负责人确认可行性", "给出跟进时间预期"],
+    "examples": ["Let me check with our manager on payment terms for this order and come back to you shortly."],
+    "risk_link": "L4",
+    "escalate": "必须转人工确认账期方案"
+  },
+  {
+    "id": "H02",
+    "scenario": "要求独家代理",
+    "signals": ["exclusive distributor", "sole agent", "exclusive rights", "独家代理", "总代理"],
+    "intent": "属于高价值信号，涉及长期合作条件，只能收集意向不能自行承诺。",
+    "strategy": ["表达认真对待的态度", "只收集市场覆盖范围、预计规模等信息", "不承诺任何独家条件或区域保护"],
+    "examples": ["That's worth a proper conversation. Could you tell me about your market coverage? I'll have our manager follow up directly."],
+    "risk_link": "L4",
+    "escalate": "立即转人工并即时通知负责人"
+  },
+  {
+    "id": "I01",
+    "scenario": "客户表达明确购买意向",
+    "signals": ["I want to order", "let's proceed", "we'll place the order", "我要下单", "我们决定采购"],
+    "intent": "已经进入成交阶段，核心是锁定细节并尽快交给负责人处理，不能拖延。",
+    "strategy": ["确认品类、数量、规格和收货信息", "不自行完成下单确认", "立即转交负责人对接"],
+    "examples": ["Great! Send me the items, quantities, and your delivery address, and I'll get this moving right away."],
+    "risk_link": "L4",
+    "escalate": "必须转人工完成下单确认"
+  },
+  {
+    "id": "I02",
+    "scenario": "客户犹豫不决",
+    "signals": ["let me think about it", "I'll consider", "not sure yet", "我再想想", "还不确定"],
+    "intent": "顾虑尚未化解，不应施压，应降低决策门槛。",
+    "strategy": ["不催促、不施压", "提供一个低门槛的下一步（如小批量试单或样品）", "保持轻松语气结束这一轮"],
+    "examples": ["No rush at all. If it helps, you could start with a small trial order first — much lower risk."],
+    "risk_link": "L2",
+    "escalate": ""
+  },
+  {
+    "id": "I03",
+    "scenario": "客户要求简化流程",
+    "signals": ["keep it simple", "don't want a long process", "just tell me what you need", "简单点", "别搞太复杂"],
+    "intent": "客户希望减少沟通负担，回复应该聚焦一件事，不要罗列多个要求。",
+    "strategy": ["一次只提一个明确诉求", "不使用列表或多点罗列", "把复杂流程留在后台处理，不转嫁给客户"],
+    "examples": ["Got it, let's keep it simple. Just send me the quantity and I'll handle the rest."],
+    "risk_link": "L2",
+    "escalate": ""
+  },
+  {
+    "id": "I04",
+    "scenario": "客户要求总结已确认的内容",
+    "signals": ["can you summarize", "confirm what we discussed", "recap please", "总结一下", "确认一下之前说的"],
+    "intent": "客户在核对信息是否被准确记录，复述必须精确，不能遗漏或添加。",
+    "strategy": ["严格从真实对话记录中提取已确认项", "逐条复述，不遗漏、不臆测、不添加未确认的内容", "复述后确认是否还有需要补充的"],
+    "examples": ["Sure — to confirm: 5 samples, 30ml frosted bottle, white pump. Anything to add or change?"],
+    "risk_link": "L2",
+    "escalate": ""
+  },
+  {
+    "id": "J03",
+    "scenario": "客户表示以后再联系",
+    "signals": ["maybe later", "I'll contact you next season", "not right now", "以后再说", "下次再联系"],
+    "intent": "客户暂时没有需求，但保留了关系，应记录时间点而不是消失。",
+    "strategy": ["接受客户的节奏，不追问原因", "记录客户提到的时间点，安排下一次合适的跟进", "结束时保持轻松、不施压的语气"],
+    "examples": ["No problem at all. Should I check back with you before your next season starts?"],
+    "risk_link": "L1",
+    "escalate": ""
+  },
+  {
+    "id": "K01",
+    "scenario": "老客户主动回来联系",
+    "signals": ["I ordered before", "we bought from you last time", "it's me again", "之前买过", "老客户回购"],
+    "intent": "客户是回头客，不应该重新自我介绍，要体现出记得对方。",
+    "strategy": ["呼应历史采购记录，不重新做基础介绍", "顺势询问是复购还是想看新品", "保持熟悉、轻松的语气"],
+    "examples": ["Welcome back! Would you like the same items as before, or want to see what's new?"],
+    "risk_link": "L2",
+    "escalate": ""
+  },
+  {
+    "id": "K02",
+    "scenario": "客户反馈之前销售情况良好",
+    "signals": ["sold well", "customers love it", "went well", "卖得不错", "客户反馈很好"],
+    "intent": "积极信号，适合顺势推进复购或关联品类扩展。",
+    "strategy": ["先肯定并感谢反馈", "顺势推荐关联品类或复购", "不夸大或编造额外卖点"],
+    "examples": ["That's great to hear! Would you like to add a related item to this round?"],
+    "risk_link": "L2",
+    "escalate": ""
+  },
+  {
+    "id": "L02",
+    "scenario": "疑似同行套价",
+    "signals": ["what's your cost price", "who else do you supply", "your production cost", "成本价多少", "供货给哪些客户"],
+    "intent": "反复追问敏感成本或客户信息，属于真实性红旗信号，应降低响应深度。",
+    "strategy": ["保持礼貌但只提供公开信息", "不主动深挖或多问细节", "不透露成本结构或其他客户信息"],
+    "examples": ["Happy to share our public pricing tiers. For anything more specific, I'd need your quantity and market first."],
+    "risk_link": "L2",
+    "escalate": "标记为疑似套价，不主动继续追问细节"
+  },
+  {
+    "id": "L03",
+    "scenario": "疑似试探或测试性提问",
+    "signals": ["just testing", "is this a bot", "checking your response", "随便问问", "测试一下"],
+    "intent": "可能是同行、审计或无采购意图的测试，不应投入过多推进动作。",
+    "strategy": ["正常礼貌回应，不过度解释", "不主动推进销售动作", "交由人工判断是否继续跟进"],
+    "examples": ["No problem, happy to help if you have any real questions about our products."],
+    "risk_link": "L4",
+    "escalate": "转人工并标记为疑似非真实采购意图"
+  },
+  {
+    "id": "L04",
+    "scenario": "客户情绪激动或言语不当",
+    "signals": ["this is ridiculous", "you are scamming me", "terrible service", "太离谱了", "你们在骗人"],
+    "intent": "无论对错，情绪需要先被安抚，绝不能火上浇油或与客户争辩。",
+    "strategy": ["先降温、不辩解、不反驳", "不承认或否认任何责任判断", "立即转交负责人处理"],
+    "examples": ["I'm really sorry you're feeling this way. Let me get our manager to help you right away."],
+    "risk_link": "L4",
+    "escalate": "立即转人工"
+  },
+  {
+    "id": "L05",
+    "scenario": "知识库完全未覆盖的问题",
+    "signals": [],
+    "intent": "AI 不能编造答案，也不能让客户消失在沉默里，需要用不重复的承接话术过渡到人工。",
+    "strategy": ["不编造任何知识库没有的事实", "使用非重复的承接话术并给出预期回复时间", "同一会话内知识缺口累计达到阈值时强制转人工"],
+    "examples": ["That's a fair question — I want to give you the exact answer. Let me confirm and get back to you today."],
+    "risk_link": "L2",
+    "escalate": "同一会话内知识缺口累计达到阈值时强制转人工（由 knowledgeGapPlaybook 承接与轮换话术）"
   }
 ]

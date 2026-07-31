@@ -405,6 +405,7 @@ async function requestDraft(customer: CustomerProfile, instruction?: string, mod
         stage: STAGE_LABEL[customer.stage],
         bant: customer.bant,
         progressionGoal: customer.progressionGoal,
+        spinGuidance: customer.spinGuidance,
         instruction,
         mode,
         intent,

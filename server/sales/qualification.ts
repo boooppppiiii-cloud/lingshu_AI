@@ -1,5 +1,7 @@
 export type BantKey = 'budget' | 'authority' | 'need' | 'timing';
 export type BantStatus = 'unknown' | 'partial' | 'confirmed';
+export type AuthenticityBand = 'verified' | 'reduced' | 'suspected_scraping';
+export type QualificationBand = 'white' | 'blue' | 'yellow' | 'red' | 'black';
 
 export interface BantDimension {
   score: number;
@@ -7,12 +9,22 @@ export interface BantDimension {
   evidence: string[];
 }
 
+export interface AuthenticityAssessment {
+  score: number;
+  band: AuthenticityBand;
+  redFlags: string[];
+  greenFlags: string[];
+}
+
 export interface BantAssessment {
   budget: BantDimension;
   authority: BantDimension;
   need: BantDimension;
   timing: BantDimension;
+  rawTotal: number;
+  authenticity: AuthenticityAssessment;
   total: number;
+  band: QualificationBand;
   completeness: number;
   level: 'early' | 'qualified' | 'hot';
   updatedAt: string;
@@ -73,6 +85,69 @@ function mergeDimension(current: BantDimension, previous?: BantDimension): BantD
   };
 }
 
+// 外贸场景专属的真实性信号：识别套价/踩点/欺诈试探，而不是评估采购意愿本身。
+const PRICE_PROBE_PATTERN = /\b(?:how much|best price|lowest price|cheapest|price)\b|多少钱|最低价|价格/i;
+const QUANTITY_MENTION_PATTERN = /\b\d[\d,]*\s*(?:pcs?|pieces?|units?|sets?|cartons?|containers?|bottles?|boxes?)\b|\d+\s*(?:件|个|套|箱)/i;
+const MARKET_MENTION_PATTERN = /\b(?:market|country|region)\b|selling (?:in|to)|for\s+(?:our|the)\s+\w+\s+market|市场|国家|地区/i;
+const REFUSAL_TO_DISCLOSE_PATTERN = /\bwhy (?:do you need|does it matter|ask)\b|just (?:send|give|tell) me (?:the )?price|no need to (?:know|tell)|不需要告诉你|不方便说|直接说价格|别问那么多/i;
+const FULL_PRICE_LIST_PATTERN = /\bfull price list\b|\ball (?:your )?products?.{0,10}price\b|complete price list|price list for everything|全部产品.{0,6}价格|完整价格表|所有产品报价/i;
+const FACTORY_PROBE_PATTERN = /\bfactory address\b|\bproduction line\b|\bwhich factory\b|\bwho (?:is your|manufactures)\b|工厂地址|生产线|哪个工厂|谁生产/i;
+const OTHER_CUSTOMERS_PATTERN = /\bwho else (?:do you supply|are your customers)\b|other (?:customers|clients|buyers)\b.{0,20}(?:you supply|you have)|还给谁供货|其他客户是谁|你的客户有哪些/i;
+const UNUSUAL_PAYMENT_PATTERN = /\bno deposit\b|\bzero deposit\b|\bpay (?:you )?extra\b|\boverpay\b|refund the difference|western union|money order|cashier'?s check|无需定金|多付.{0,6}退还|银行本票|电汇差额/i;
+const DESCRIBES_BUSINESS_PATTERN = /\bwe are\b|\bour (?:shop|store|company|business|clinic|chain|brand|salon|pharmacy)\b|\bi run\b|\bi own\b|我们是|我们店|我司|我们公司/i;
+const SHARES_COMPANY_INFO_PATTERN = /\bwebsite\b|\binstagram\b|\bfacebook\b|www\.|\.com\b|官网|社媒|https?:\/\//i;
+const EXECUTABLE_LOGISTICS_PATTERN = /\b(?:shipping|customs|duty|payment terms|deposit|T\/T|L\/C|incoterm|FOB|CIF)\b|物流|清关|关税|付款方式|定金/i;
+const CERTIFICATION_INTEREST_PATTERN = /\bcertificat\w*|\bwarranty\b|\bGMP\b|\bISO\b|\bCOA\b|认证|质保|保修/i;
+const CONTENT_SOURCE_PATTERN = /\bsaw your (?:video|post|ad)\b|\byour (?:tiktok|instagram|youtube)\b|看到你.{0,6}(?:视频|广告)|从.{0,10}(?:短视频|广告).{0,6}看到/i;
+
+const RED_FLAG_LABELS: Record<string, string> = {
+  price_only_no_quantity: '信息待核实：反复问价但未提供采购数量',
+  full_price_list: '信息待核实：要求提供全部产品完整报价',
+  refuses_market: '信息待核实：回避说明目标市场或国家',
+  factory_probe: '信息待核实：多次追问工厂地址或生产线细节',
+  other_customers: '信息待核实：询问其他客户或供货对象信息',
+  unusual_payment: '信息待核实：付款条件明显异常',
+};
+
+const GREEN_FLAG_LABELS: Record<string, string> = {
+  describes_business: '已主动介绍自身业务',
+  shares_company_info: '已提供公司/官网/社媒信息',
+  executable_logistics: '已询问物流、清关或付款等可执行问题',
+  certification_interest: '已询问认证或质保信息',
+  content_source: '来源于内容/视频观看后咨询',
+};
+
+function assessAuthenticity(buyerMessages: string[], previous?: AuthenticityAssessment): AuthenticityAssessment {
+  const redKeys: string[] = [];
+  if (buyerMessages.length >= 2 && buyerMessages.some(message => PRICE_PROBE_PATTERN.test(message)) && !buyerMessages.some(message => QUANTITY_MENTION_PATTERN.test(message))) {
+    redKeys.push('price_only_no_quantity');
+  }
+  if (buyerMessages.some(message => FULL_PRICE_LIST_PATTERN.test(message))) redKeys.push('full_price_list');
+  if (buyerMessages.some(message => REFUSAL_TO_DISCLOSE_PATTERN.test(message)) && !buyerMessages.some(message => MARKET_MENTION_PATTERN.test(message))) {
+    redKeys.push('refuses_market');
+  }
+  if (buyerMessages.some(message => FACTORY_PROBE_PATTERN.test(message))) redKeys.push('factory_probe');
+  if (buyerMessages.some(message => OTHER_CUSTOMERS_PATTERN.test(message))) redKeys.push('other_customers');
+  if (buyerMessages.some(message => UNUSUAL_PAYMENT_PATTERN.test(message))) redKeys.push('unusual_payment');
+
+  const greenKeys: string[] = [];
+  if (buyerMessages.some(message => DESCRIBES_BUSINESS_PATTERN.test(message))) greenKeys.push('describes_business');
+  if (buyerMessages.some(message => SHARES_COMPANY_INFO_PATTERN.test(message))) greenKeys.push('shares_company_info');
+  if (buyerMessages.some(message => EXECUTABLE_LOGISTICS_PATTERN.test(message))) greenKeys.push('executable_logistics');
+  if (buyerMessages.some(message => CERTIFICATION_INTEREST_PATTERN.test(message))) greenKeys.push('certification_interest');
+  if (buyerMessages.some(message => CONTENT_SOURCE_PATTERN.test(message))) greenKeys.push('content_source');
+
+  const redFlags = [...new Set([...(previous?.redFlags ?? []), ...redKeys.map(key => RED_FLAG_LABELS[key])])];
+  const greenFlags = [...new Set([...(previous?.greenFlags ?? []), ...greenKeys.map(key => GREEN_FLAG_LABELS[key])])];
+
+  const redCategoryCount = redFlags.length;
+  const greenCategoryCount = greenFlags.length;
+  const baseline = redCategoryCount >= 3 ? 0.2 : redCategoryCount >= 2 ? 0.5 : 1.0;
+  const score = Math.min(1, baseline + 0.1 * greenCategoryCount);
+  const band: AuthenticityBand = score <= 0.3 ? 'suspected_scraping' : score >= 1 ? 'verified' : 'reduced';
+  return { score, band, redFlags, greenFlags };
+}
+
 export function assessBant(input: { turns: QualificationTurn[]; previous?: BantAssessment }): BantAssessment {
   const buyerMessages = input.turns.filter(turn => turn.role === 'buyer').map(turn => String(turn.text || '').trim()).filter(Boolean);
   const budget = mergeDimension(
@@ -91,16 +166,24 @@ export function assessBant(input: { turns: QualificationTurn[]; previous?: BantA
     scoreDimension(buyerMessages, TIMING_CONFIRMED_PATTERN, TIMING_PARTIAL_PATTERN),
     input.previous?.timing,
   );
-  const total = budget.score + authority.score + need.score + timing.score;
+  const rawTotal = budget.score + authority.score + need.score + timing.score;
+  const authenticity = assessAuthenticity(buyerMessages, input.previous?.authenticity);
+  const total = Math.round(rawTotal * authenticity.score);
   const completeness = [budget, authority, need, timing].filter(item => item.status !== 'unknown').length;
+  const band: QualificationBand = authenticity.band === 'suspected_scraping'
+    ? 'black'
+    : total >= 75 ? 'red' : total >= 50 ? 'yellow' : total >= 25 ? 'blue' : 'white';
   return {
     budget,
     authority,
     need,
     timing,
+    rawTotal,
+    authenticity,
     total,
+    band,
     completeness,
-    level: total >= 75 ? 'hot' : total >= 45 ? 'qualified' : 'early',
+    level: total >= 75 ? 'hot' : total >= 50 ? 'qualified' : 'early',
     updatedAt: new Date().toISOString(),
   };
 }

@@ -39,10 +39,23 @@ export function IntentSignalsWidget({ customer }: { customer: CustomerProfile })
             </span>
           ))}
         </div>
-        {customer.progressionGoal && (
+        {customer.spinGuidance ? (
+          <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] text-amber-900">
+            <p className="font-bold">SPIN · {customer.spinGuidance.stage}</p>
+            <p className="mt-1 leading-5">{customer.spinGuidance.statement} {customer.spinGuidance.question}</p>
+          </div>
+        ) : customer.progressionGoal && (
           <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[11px] text-amber-900">
             <p className="font-bold">本轮推进：{customer.progressionGoal.label}</p>
             <p className="mt-1 leading-5">建议间接问：{customer.progressionGoal.question}</p>
+          </div>
+        )}
+        {customer.bant && customer.bant.authenticity.redFlags.length > 0 && (
+          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2 text-[11px] text-slate-600">
+            <p className="font-bold">信息待核实</p>
+            {customer.bant.authenticity.redFlags.map(flag => (
+              <p key={flag} className="mt-1 leading-5">{flag}</p>
+            ))}
           </div>
         )}
       </CardContent>

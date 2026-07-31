@@ -14,10 +14,20 @@ export type HandlingMode = 'ai_auto' | 'ai_draft' | 'human_needed';
 export type TimelineType = 'whatsapp' | 'call' | 'note' | 'quote' | 'task' | 'system';
 export type AutonomyLevel = 'remind' | 'draft' | 'auto';
 
+export type AuthenticityBand = 'verified' | 'reduced' | 'suspected_scraping';
+export type QualificationBand = 'white' | 'blue' | 'yellow' | 'red' | 'black';
+
 export interface BantDimension {
   score: number;
   status: 'unknown' | 'partial' | 'confirmed';
   evidence: string[];
+}
+
+export interface AuthenticityAssessment {
+  score: number;
+  band: AuthenticityBand;
+  redFlags: string[];
+  greenFlags: string[];
 }
 
 export interface BantAssessment {
@@ -25,7 +35,10 @@ export interface BantAssessment {
   authority: BantDimension;
   need: BantDimension;
   timing: BantDimension;
+  rawTotal: number;
+  authenticity: AuthenticityAssessment;
   total: number;
+  band: QualificationBand;
   completeness: number;
   level: 'early' | 'qualified' | 'hot';
   updatedAt: string;
@@ -37,6 +50,16 @@ export interface ProgressionGoal {
   reason: string;
   question: string;
   questionStyle: 'spin_indirect';
+  updatedAt: string;
+}
+
+export type SpinStage = 'situation' | 'problem' | 'implication' | 'need_payoff';
+
+export interface SpinGuidance {
+  stage: SpinStage;
+  statement: string;
+  question: string;
+  rationale: string;
   updatedAt: string;
 }
 
@@ -96,6 +119,7 @@ export interface CustomerProfile {
   intentSignals: string[];
   bant?: BantAssessment;
   progressionGoal?: ProgressionGoal;
+  spinGuidance?: SpinGuidance;
   handlingMode: HandlingMode;
   handlingReason: string;
   aiAutoCount?: number;

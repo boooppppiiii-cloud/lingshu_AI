@@ -1,28 +1,23 @@
 import { notifyDeliveryTeam, type DeliveryNotificationSeverity } from '../lib/tenantPlatformApps.js';
+import { hasLargeQuantity } from '../lib/dealSize.js';
 import type { BantAssessment } from './qualification.js';
 
 export type HandoffLine = 'business_value' | 'risk' | 'capability';
+export type RiskKind = 'price_or_terms' | 'dispute_or_quality';
 
 export interface HandoffDecision {
   required: boolean;
   primaryLine?: HandoffLine;
   lines: HandoffLine[];
+  riskKind?: RiskKind;
   severity: DeliveryNotificationSeverity;
   stopAuto: boolean;
   reasons: string[];
 }
 
-const LARGE_QUANTITY_PATTERN = /\b(\d[\d,]*(?:\.\d+)?)\s*(?:pcs?|pieces?|units?|sets?|bottles?|boxes?|cartons?)\b/gi;
 const VALUE_PATTERN = /\b(?:ready to order|place (?:the )?order|purchase now|send (?:the )?pi|proforma invoice|contract|repeat order|reorder|exclusive|distributor agreement|oem|odm|private label)\b|准备下单|马上下单|采购意向明确|形式发票|合同|复购|返单|独家|总代|贴牌|代工/i;
-const RISK_PATTERN = /\b(?:price|quote|quotation|discount|best price|payment|deposit|credit terms|lead time|delivery date|guarantee|complaint|refund|compensation|damaged|defect|bad quality|lawyer|other supplier|competitor price)\b|价格|报价|折扣|优惠|付款|定金|账期|交期|保证|投诉|退款|赔偿|破损|瑕疵|质量问题|律师|同行价|其他供应商/i;
-
-function hasLargeQuantity(message: string): boolean {
-  for (const match of String(message || '').matchAll(LARGE_QUANTITY_PATTERN)) {
-    const quantity = Number(String(match[1]).replace(/,/g, ''));
-    if (Number.isFinite(quantity) && quantity >= 1000) return true;
-  }
-  return false;
-}
+const PRICE_RISK_PATTERN = /\b(?:price|quote|quotation|discount|best price|payment|deposit|credit terms|lead time|delivery date|other supplier|competitor price)\b|价格|报价|折扣|优惠|付款|定金|账期|交期|同行价|其他供应商/i;
+const DISPUTE_RISK_PATTERN = /\b(?:guarantee|complaint|refund|compensation|damaged|defect|bad quality|lawyer)\b|保证|投诉|退款|赔偿|破损|瑕疵|质量问题|律师/i;
 
 export function evaluateHandoff(input: {
   message: string;
@@ -43,9 +38,13 @@ export function evaluateHandoff(input: {
       ? '历史已成交或累计采购价值高，属于优先人工维护客户'
       : '命中大单、明确采购、PI/合同、复购或 OEM/独家等商业价值信号');
   }
-  if (RISK_PATTERN.test(message) || input.sentiment === 'negative') {
+  const disputeRisk = DISPUTE_RISK_PATTERN.test(message) || input.sentiment === 'negative';
+  const priceRisk = PRICE_RISK_PATTERN.test(message);
+  let riskKind: RiskKind | undefined;
+  if (disputeRisk || priceRisk) {
     lines.push('risk');
-    reasons.push(input.sentiment === 'negative' ? '客户情绪负面或存在投诉风险' : '涉及价格、付款、交期、客诉或同行探价等 L4 事项');
+    riskKind = disputeRisk ? 'dispute_or_quality' : 'price_or_terms';
+    reasons.push(input.sentiment === 'negative' ? '客户情绪负面或存在投诉风险' : disputeRisk ? '涉及客诉、质量或纠纷类 L4 事项' : '涉及价格、付款、交期或同行探价等 L4 事项');
   }
   if (input.requestedHuman || input.knowledgeGap || (input.knowledgeMissStreak ?? 0) >= 2 || (input.fallbackCount ?? 0) > 2) {
     lines.push('capability');
@@ -65,10 +64,17 @@ export function evaluateHandoff(input: {
     required: uniqueLines.length > 0,
     primaryLine: uniqueLines[0],
     lines: uniqueLines,
+    riskKind: uniqueLines.includes('risk') ? riskKind : undefined,
     severity,
     stopAuto: uniqueLines.includes('business_value') || uniqueLines.includes('risk') || uniqueLines.includes('capability'),
     reasons,
   };
+}
+
+// 真实性系数≤0.3（疑似套价/踩点）时，仅抑制价格/条款类的转人工推送噪音；
+// 纠纷、投诉等 dispute_or_quality 永远不受此影响，必须正常转人工。
+export function shouldRestrictToPublicInfo(bant?: BantAssessment): boolean {
+  return (bant?.authenticity?.score ?? 1) <= 0.3;
 }
 
 export function automationFailureHandoff(detail: unknown): HandoffDecision {

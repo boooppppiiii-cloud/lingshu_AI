@@ -1,3 +1,5 @@
+import { chooseNonRepeatedIndex, type TimelineLike } from '../lib/nonRepeatingReply.js';
+
 export type KnowledgeGapScenario =
   | 'quality_or_certification'
   | 'competitor_comparison'
@@ -7,8 +9,6 @@ export type KnowledgeGapScenario =
   | 'price_or_quote'
   | 'high_value_or_peer'
   | 'general_unknown';
-
-type TimelineLike = { actor?: unknown; type?: unknown; body?: unknown };
 
 export interface KnowledgeGapPlan {
   scenario: KnowledgeGapScenario;
@@ -79,35 +79,6 @@ function normalizeLanguage(value: unknown): 'english' | 'spanish' | 'arabic' {
   if (language.includes('arabic') || language.includes('阿语') || language.includes('العربية')) return 'arabic';
   if (language.includes('spanish') || language.includes('西语') || language.includes('español')) return 'spanish';
   return 'english';
-}
-
-function canonicalReply(value: string): string {
-  return value
-    .normalize('NFKC')
-    .toLowerCase()
-    .replace(/[’‘]/g, "'")
-    .replace(/[^\p{L}\p{N}]+/gu, ' ')
-    .trim();
-}
-
-function recentSellerTexts(timeline: TimelineLike[]): string[] {
-  return timeline
-    .filter(item => {
-      const actor = String(item.actor || '').toLowerCase();
-      return actor === 'seller' || actor === 'ai' || String(item.type || '').includes('msg_out');
-    })
-    .slice(-6)
-    .map(item => canonicalReply(String(item.body || '')))
-    .filter(Boolean);
-}
-
-function chooseNonRepeatedIndex(options: string[], timeline: TimelineLike[]): number {
-  const recent = recentSellerTexts(timeline);
-  const index = options.findIndex(option => {
-    const candidate = canonicalReply(option);
-    return !recent.some(previous => previous === candidate || previous.startsWith(candidate.slice(0, 80)) || candidate.startsWith(previous.slice(0, 80)));
-  });
-  return index >= 0 ? index : options.length - 1;
 }
 
 const HANDLING_REASON: Record<KnowledgeGapScenario, string> = {

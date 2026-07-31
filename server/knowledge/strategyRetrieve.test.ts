@@ -7,8 +7,8 @@ import {
 } from './strategyRetrieve.js';
 
 const library = responseStrategyLibrary();
-assert.equal(library.length, 15, 'the built-in strategy library must contain all 15 reviewed scenarios');
-assert.equal(new Set(library.map(item => item.id)).size, 15, 'strategy IDs must be unique');
+assert.equal(library.length, 43, 'the built-in strategy library must contain all 43 reviewed scenarios');
+assert.equal(new Set(library.map(item => item.id)).size, 43, 'strategy IDs must be unique');
 
 const cases: Array<{ message: string; expected: string }> = [
   { message: 'Your price is too high. Can you make it cheaper?', expected: 'S01' },

@@ -9,7 +9,8 @@ import { retrieveContext, type RetrievedContext } from '../knowledge/retrieve.js
 import { distillSalesStyleProfile, markStyleMemoryWonForCustomer } from '../knowledge/styleMemory.js';
 import { readTenantEnterpriseProfile, type EnterpriseProfile } from '../routes/enterprise.js';
 import { assessBant, selectProgressionGoal, type BantAssessment, type ProgressionGoal } from '../sales/qualification.js';
-import { automationFailureHandoff, evaluateHandoff, notifyCustomerHandoff } from '../sales/handoff.js';
+import { automationFailureHandoff, evaluateHandoff, notifyCustomerHandoff, shouldRestrictToPublicInfo } from '../sales/handoff.js';
+import { advanceSpinStage, selectSpinGuidance, type SpinState, type SpinGuidance } from '../sales/spin.js';
 import { r2Upload } from '../storage/r2.js';
 import { store } from '../storage/index.js';
 import { sendTenantWhatsAppText } from './send.js';
@@ -84,6 +85,8 @@ interface StoredCustomer {
   handoffDueAt?: string;
   bant?: BantAssessment;
   progressionGoal?: ProgressionGoal;
+  spin?: SpinState;
+  spinGuidance?: SpinGuidance;
   source?: string;
   sourcePostId?: string;
   sourceTrackCode?: string;
@@ -766,7 +769,9 @@ function recentConversationForCustomer(tenantId: string, customerIdValue: string
     }));
 }
 
-function draftForMessage(message: IncomingMessage, context?: RetrievedContext, progressionGoal?: ProgressionGoal): string {
+function draftForMessage(message: IncomingMessage, context?: RetrievedContext, progressionGoal?: ProgressionGoal, spinGuidance?: SpinGuidance): string {
+  // SPIN 陈述+提问优先于单条 BANT 推进问题，避免同一条草稿里出现两个互相竞争的问题。
+  const followUpQuestion = spinGuidance ? `${spinGuidance.statement} ${spinGuidance.question}` : progressionGoal?.question;
   const product = context?.products?.[0];
   if (product) {
     const details = [
@@ -774,7 +779,7 @@ function draftForMessage(message: IncomingMessage, context?: RetrievedContext, p
       product.moq ? `MOQ ${product.moq}` : '',
       product.material ? `material ${product.material}` : '',
     ].filter(Boolean).join(', ');
-    return `I found ${details}. ${progressionGoal?.question || 'What target quantity are you planning?'}`;
+    return `I found ${details}. ${followUpQuestion || 'What target quantity are you planning?'}`;
   }
   if (/\b(catalog|catalogue|brochure|collections?)\b|目录|产品册/i.test(message.body)) {
     return 'Which product line and target quantity are you interested in? I will use that to find the right approved information.';
@@ -782,7 +787,7 @@ function draftForMessage(message: IncomingMessage, context?: RetrievedContext, p
   if (/\b(track|tracking|ship|shipping|logistics)\b|物流|运单|发货/i.test(message.body)) {
     return 'Please send the order number and ordering account. I will pass those details to the person who can verify the real record.';
   }
-  return progressionGoal?.question || 'Which product or model do you mean, and what detail matters most to you?';
+  return followUpQuestion || 'Which product or model do you mean, and what detail matters most to you?';
 }
 
 export interface WinningStyleSample {
@@ -875,17 +880,28 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
     timestamp: message.timestamp,
     audit: {},
   });
+  const conversationForQualification = recentConversationForCustomer(tenantId, customer.id);
   const qualification = assessBant({
-    turns: recentConversationForCustomer(tenantId, customer.id),
+    turns: conversationForQualification,
     previous: customer.bant,
   });
   const progressionGoal = selectProgressionGoal(qualification, customer.language);
+  const spinState = advanceSpinStage({
+    previous: customer.spin,
+    turns: conversationForQualification,
+    bant: qualification,
+    isNewBuyerTurn: !message.fromBusiness,
+  });
+  const spinTimeline = conversationForQualification.map(turn => ({ actor: turn.role === 'seller' ? 'seller' : 'buyer', body: turn.text }));
+  const spinGuidance = selectSpinGuidance(spinState, customer.language, spinTimeline);
   customer = upsertCustomer({
     tenantId,
     waNumber: message.waNumber,
     patch: {
       bant: qualification,
       progressionGoal,
+      spin: spinState,
+      spinGuidance,
       intentScore: qualification.total,
     },
   });
@@ -1128,19 +1144,34 @@ async function handleInboundMessage(tenantId: string, message: IncomingMessage, 
     return;
   }
   if (salesHandoff.lines.includes('risk')) {
-    await notifyCustomerHandoff({
-      tenantId,
-      customer: handoffCustomerContext(customer),
-      message: message.body,
-      decision: salesHandoff,
-    }).catch(() => undefined);
+    const restrictToPublicInfoOnly = salesHandoff.riskKind === 'price_or_terms' && shouldRestrictToPublicInfo(customer.bant);
+    if (restrictToPublicInfoOnly) {
+      // 真实性系数≤0.3（疑似套价/踩点）：不推送人工提醒噪音，只静默标记，继续仅回答公开信息。
+      addInteraction({
+        id: `${customer.id}-public-info-only-${Date.now()}`,
+        tenantId,
+        customerId: customer.id,
+        waNumber: message.waNumber,
+        type: 'system',
+        body: '客户信息待核实，AI 继续仅提供公开信息自动应答，不推送人工提醒。',
+        timestamp: Date.now(),
+        audit: { authenticity: customer.bant?.authenticity, riskKind: salesHandoff.riskKind },
+      });
+    } else {
+      await notifyCustomerHandoff({
+        tenantId,
+        customer: handoffCustomerContext(customer),
+        message: message.body,
+        decision: salesHandoff,
+      }).catch(() => undefined);
+    }
   }
   let action = inferredAction;
   if (context.faqMatch?.autoSafe && action !== 'formal_quote' && action !== 'call_request') {
     action = 'auto_faq_reply';
   }
   const night = nightModeState(profile);
-  let draft = draftForMessage(message, context, customer.progressionGoal);
+  let draft = draftForMessage(message, context, customer.progressionGoal, customer.spinGuidance);
   let blockedAutoReplyReason = '';
   let approvedFaqHit = false;
   if (needsFaqClarification && action !== 'formal_quote' && action !== 'call_request') {
@@ -1472,6 +1503,7 @@ export function getWhatsAppCustomers(tenantId?: string): any[] {
       ],
       bant: customer.bant,
       progressionGoal: customer.progressionGoal,
+      spinGuidance: customer.spinGuidance,
       handlingMode: customer.handlingMode,
       handlingReason: customer.handlingReason,
       aiAutoCount: customer.aiAutoCount,

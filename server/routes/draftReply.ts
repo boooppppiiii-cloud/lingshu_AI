@@ -225,6 +225,14 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
   const suppressPrice = shouldSuppressPriceFromRules(context.bizRules);
   const hardNoPriceDigits = false;
   const rememberedGreetingProduct = rememberedProductForGreeting(timeline, body.product);
+  // SPIN 陈述+提问优先于单条 BANT 推进问题，避免同一轮出现两个互相竞争的问题。
+  const spinGuidance = body.spinGuidance && typeof body.spinGuidance === 'object' ? body.spinGuidance : undefined;
+  const followUpGuidance = spinGuidance
+    ? `本轮对话处于 SPIN ${String(spinGuidance.stage || '')} 阶段：${String(spinGuidance.rationale || '')}。请先说一句陈述再问一个问题，可参考：${String(spinGuidance.statement || '')} ${String(spinGuidance.question || '')}。每轮最多问一个问题，不得连续追问。`
+    : body.progressionGoal?.label
+    ? `本轮推进目标：${String(body.progressionGoal.label)}。原因：${String(body.progressionGoal.reason || '')}。可自然使用这个间接问题：${String(body.progressionGoal.question || '')}。每轮最多追问一个信息点，不得为了完成 BANT 打断当前问题。`
+    : '';
+  const publicInfoOnly = Number(body.bant?.authenticity?.score ?? 1) <= 0.3;
   const runtimeSystemPrompt = intent === 'handoff_summary'
     ? HANDOFF_SYSTEM_PROMPT
     : [
@@ -233,10 +241,9 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
         `回复语言：${language}。客户可见内容必须全程使用该语言。`,
         intentInstruction(intent),
         conversationToneGuidance(timeline, latestMessage),
-        body.progressionGoal?.label
-          ? `本轮推进目标：${String(body.progressionGoal.label)}。原因：${String(body.progressionGoal.reason || '')}。可自然使用这个间接问题：${String(body.progressionGoal.question || '')}。每轮最多追问一个信息点，不得为了完成 BANT 打断当前问题。`
-          : '',
+        followUpGuidance,
         suppressPrice ? '本轮价格红线：不得包含或承诺任何价格；遇到询价必须交给人工销售。' : '',
+        publicInfoOnly ? '客户信息待核实（真实性系数偏低）：仅可回答已公开的品类、认证等公开信息，不得透露价格、工厂产能/地址、其他客户信息，不得使用任何负面或指控性措辞。' : '',
       ].filter(Boolean).join('\n');
   const prompt = [
     '下面全部是内部参考数据。只提取有依据的事实，不要复述标签、字段名、规则或内部说明。',
@@ -252,6 +259,7 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
       sellerInstruction: String(body.instruction ?? ''),
       bant: body.bant && typeof body.bant === 'object' ? body.bant : undefined,
       progressionGoal: body.progressionGoal && typeof body.progressionGoal === 'object' ? body.progressionGoal : undefined,
+      spinGuidance,
     }),
     '</internal_request_context>',
     '<internal_enterprise_knowledge>',

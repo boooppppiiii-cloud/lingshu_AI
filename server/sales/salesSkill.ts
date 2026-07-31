@@ -19,6 +19,17 @@ const PROGRESSION_BY_STRATEGY: Record<string, StrategyProgression> = {
   S13: { goal: '收齐 OEM/独家需求并立即交接', indirectQuestion: '先确认销售市场、预计量和上线时间，哪项最确定？' },
   S14: { goal: '控制风险并收集可核验事实', indirectQuestion: '这次问题对应哪个订单和批次，您看到的具体情况是什么？' },
   S15: { goal: '确定通话目的与可执行时间', indirectQuestion: '您希望通话重点确认什么，哪个时间段方便？' },
+  D01: { goal: '用可验证事实降低跨境采购的心理门槛', indirectQuestion: '您比较关心的是质检报告，还是想先小批量试单看看？' },
+  D02: { goal: '明确客户需要的具体认证类型，避免空口承诺', indirectQuestion: '您需要的是哪一类认证文件，方便我准确核实？' },
+  D03: { goal: '识别信任危机并第一时间交接负责人', indirectQuestion: '方便告诉我具体是哪份文件让您有顾虑吗？' },
+  D04: { goal: '在如实说明身份的同时守住敏感信息边界', indirectQuestion: '除了公司类型，您还想了解哪方面的资质信息？' },
+  H02: { goal: '收齐独家代理意向要素，交负责人评估', indirectQuestion: '您预计覆盖的市场范围和规模大概是怎样的？' },
+  I02: { goal: '找到犹豫背后的顾虑，提供低门槛下一步', indirectQuestion: '如果先从小批量试单开始，会不会更容易做决定？' },
+  I03: { goal: '把多头信息收敛成一个清晰指令', indirectQuestion: '现在最关键的一件事是什么，我先帮您落实？' },
+  I04: { goal: '精确复述已确认内容，避免遗漏或误加', indirectQuestion: '这样确认的内容准确吗，还有需要补充的吗？' },
+  L02: { goal: '识别疑似套价并控制信息披露深度', indirectQuestion: '方便说下大概的采购数量和用途吗？' },
+  L03: { goal: '判断是否为真实采购意图，避免过度投入', indirectQuestion: '您这边是有具体产品想了解，还是先随便看看？' },
+  L04: { goal: '先安抚情绪，收集事实后转交负责人', indirectQuestion: '方便告诉我订单号，让负责人尽快为您处理吗？' },
 };
 
 export function progressionForStrategy(strategyId: string): StrategyProgression | null {
