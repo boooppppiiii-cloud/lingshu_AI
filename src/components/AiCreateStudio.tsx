@@ -4405,7 +4405,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         ), 45_000, '后端模型生成超过 45 秒。');
         if (response.source && response.source !== 'ai') throw new Error(response.fallbackReason || 'AI脚本未通过检查，未生成兜底稿。');
         nextScript = sanitizeStoryboardScript(response.script || '', activeProductInfo, activeProductLabel).trim();
-        if (!nextScript || response.source === 'local') throw new Error(response.error
+        if (!nextScript) throw new Error(response.error
           ? `脚本服务连接失败：${response.error}`
           : '后端脚本生成接口未返回结果。');
         outputs.push({
@@ -4489,7 +4489,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         );
         if (response.source && response.source !== 'ai') throw new Error(response.fallbackReason || 'AI脚本未通过检查，未生成兜底稿。');
         nextScript = sanitizeStoryboardScript(response.script || '', product, activeProductLabel).trim();
-        if (!nextScript || response.source === 'local') throw new Error(response.error
+        if (!nextScript) throw new Error(response.error
           ? `脚本服务连接失败：${response.error}`
           : '后端脚本生成接口未返回结果。');
         outputs.push({
@@ -4636,10 +4636,8 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         });
         if (normalized.normalized) throw new Error('模型返回脚本未满足标准分镜字段或与已有脚本过于相似，未生成兜底稿。');
         generatedScript = normalized.script;
-        if (!generatedScript || response.source === 'local') {
-          throw new Error(response.source === 'local'
-            ? response.error ? `脚本服务连接失败：${response.error}` : '后端脚本生成接口未返回结果。'
-            : '模型没有返回可用脚本。');
+        if (!generatedScript) {
+          throw new Error('模型没有返回可用脚本。');
         }
         outputs.push({
           id: `clone-${Date.now()}-${index}`,
