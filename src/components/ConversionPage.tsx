@@ -489,6 +489,9 @@ async function requestHandoffSummary(customer: CustomerProfile): Promise<string>
         internalProduct: customer.product,
         language: customer.language,
         stage: STAGE_LABEL[customer.stage],
+        handlingReason: customer.handlingReason,
+        customerSummary: customer.summary,
+        nextStep: customer.nextStep,
         intent: 'handoff_summary',
       }),
     });

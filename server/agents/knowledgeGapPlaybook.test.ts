@@ -42,6 +42,26 @@ assert.equal(classifyKnowledgeGapScenario('What is the price for 300 pieces?'), 
 assert.equal(classifyKnowledgeGapScenario('Do you have size M for this one?'), 'product_availability');
 assert.equal(classifyKnowledgeGapScenario('What colors are available for this one?'), 'product_availability');
 assert.equal(classifyKnowledgeGapScenario('what do you have'), 'product_discovery');
+assert.equal(classifyKnowledgeGapScenario('¿Qué productos tienen?'), 'product_discovery');
+assert.equal(classifyKnowledgeGapScenario('¿Qué venden ustedes?'), 'product_discovery');
+assert.equal(classifyKnowledgeGapScenario('ما المنتجات المتوفرة لديكم؟'), 'product_discovery');
+assert.equal(classifyKnowledgeGapScenario('ماذا تبيعون؟'), 'product_discovery');
+
+const combinedAvailability = resolveKnowledgeGapPlan({
+  message: 'Black, size M. We still need 500 pcs.',
+  language: 'English',
+});
+assert.match(combinedAvailability.draft, /Black/);
+assert.match(combinedAvailability.draft, /size M/);
+assert.match(combinedAvailability.draft, /500 pcs/);
+
+const clarifiedUnknown = resolveKnowledgeGapPlan({
+  message: 'We need a three-level approval workflow connected through our own API.',
+  language: 'English',
+  timeline: [{ actor: 'seller', body: 'Which part do you want to pin down first?' }],
+});
+assert.match(clarifiedUnknown.draft, /clear now/i);
+assert.doesNotMatch(clarifiedUnknown.draft, /\?/);
 assert.equal(scenarioHasGroundedEvidence('quality_or_certification', 'Approved documents: GMP and ISO 22716'), false);
 assert.equal(scenarioHasGroundedEvidence('quality_or_certification', 'No documents configured'), false);
 assert.equal(scenarioHasGroundedEvidence('customization_or_packaging', 'OEM and bilingual packaging are approved'), true);
