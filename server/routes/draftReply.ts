@@ -46,6 +46,7 @@ const SYSTEM_PROMPT = `你是一位在义乌做了多年外贸的资深业务员
 - 先看 Conversation phase。只有 first_contact 或客户间隔超过 30 分钟重新回来（resumed）时才问候；ongoing 表示正在连续聊天，直接接他刚才的话，绝不每条都说 hi、hello、hi again，也不重新欢迎客户。
 - 长度跟着语境走。客户随口问一句，就轻松地短回一句；客户认真问产品细节，可以多说几句解释清楚。保留该有的热情，但不堆无助于成交的废话。
 - 跟着客户的情绪走：初次询盘热情一点，连续聊天爽快一点，客户犹豫时不施压，投诉或质疑时先接住情绪再处理。每轮只留下一个最自然的下一步，不讲“流程”“队列”“完整上下文”这类内部工作话。
+- 人工接管、创建任务和通知同事都只在系统内部完成。客户可见回复始终用第一人称自然承接，不说“转给团队”“请产品同事”“销售会联系你”“正在转人工”，也不解释系统为什么无法回答。
 - 写得像真人拿手机打字：只用纯文本，不用标题、Markdown、加粗、勾选框、项目符号、编号或装饰符号。真有两三点要说，就用“一个是……另外……”这类自然口语串起来。
 - 英语要像真实外贸业务员随口聊生意，直接、好懂、有温度，不写成作文、营销文案或翻译腔。可以说 “You want to add skincare to your shop?”、“Tell me the quantity you need and I’ll check the best option for you.”，不需要故意使用复杂完整的书面句式。
 - 你平时偶尔会用 👍、😊、👌 增加亲切感，但一条最多一个，而且不是每条都用。客户投诉、质疑证书、谈价格或有风险时不用表情。
@@ -156,21 +157,6 @@ async function translateDraftToChinese(draft: string, language: string): Promise
   } catch {
     return '';
   }
-}
-
-function appendHumanHandoff(plan: KnowledgeGapPlan, language: string): KnowledgeGapPlan {
-  if (plan.scenario !== 'general_unknown') return plan;
-  const normalized = String(language || '').toLowerCase();
-  const bridge = normalized.includes('arabic') || normalized.includes('阿语')
-    ? 'لا أريد أن أخمّن وأعطيك جوابًا خاطئًا. سأطلب من الشخص المناسب التحقق من هذه النقطة معك الآن.'
-    : normalized.includes('spanish') || normalized.includes('西语')
-    ? 'No quiero adivinar y darte una respuesta incorrecta. Voy a pedir a la persona adecuada que lo compruebe contigo ahora.'
-    : "I don't want to guess and give you a bad answer. I'm bringing in the right person to check it properly with you now.";
-  return {
-    ...plan,
-    draft: bridge,
-    draftZh: '我不想靠猜给您错误答案。现在请对应负责人和您一起核实清楚。',
-  };
 }
 
 function rememberedProductForGreeting(timeline: any[], productValue: unknown): string {
@@ -344,8 +330,11 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
   }
   if (intent === 'reply' && (forceHandoff || context.knowledgeMiss || predictableGapWithoutEvidence)) {
     const nextFallbackCount = Math.max(1, Number(body.fallbackCount ?? 0) + 1);
-    const handoffRequired = forceHandoff || gapPlan.scenario !== 'general_unknown' || nextFallbackCount >= 2;
-    const responsePlan = handoffRequired ? appendHumanHandoff(gapPlan, language) : gapPlan;
+    const clarifyBeforeHandoff = gapPlan.scenario === 'general_unknown' || gapPlan.scenario === 'product_discovery';
+    const handoffRequired = forceHandoff || !clarifyBeforeHandoff || nextFallbackCount >= 2;
+    // Human assignment is an internal action. Keep the buyer-facing reply focused
+    // on their question instead of announcing queues, teams or handoff mechanics.
+    const responsePlan = gapPlan;
     const actionIssues = forcedHandoffActions.map(action => `销售动作 ${action.id} 要求人工接管：${action.scenario}`);
     res.json(knowledgeGapPayload(responsePlan, context, [], 0, actionIssues, handoffRequired, nextFallbackCount));
     return;
@@ -483,7 +472,7 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
       return;
     }
     if (intent === 'reply' && (verification.status === 'revised' || verification.status === 'safe_fallback')) {
-      const responsePlan = appendHumanHandoff(gapPlan, language);
+      const responsePlan = gapPlan;
       res.json(knowledgeGapPayload(responsePlan, context, strategies, styleMemories.length, [
         ...verification.issues,
         verification.status === 'revised'

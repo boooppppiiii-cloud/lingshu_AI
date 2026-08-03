@@ -41,11 +41,14 @@ assert.equal(classifyKnowledgeGapScenario('We need 5,000 bottles with private-la
 assert.equal(classifyKnowledgeGapScenario('What is the price for 300 pieces?'), 'price_or_quote');
 assert.equal(classifyKnowledgeGapScenario('Do you have size M for this one?'), 'product_availability');
 assert.equal(classifyKnowledgeGapScenario('What colors are available for this one?'), 'product_availability');
+assert.equal(classifyKnowledgeGapScenario('what do you have'), 'product_discovery');
 assert.equal(scenarioHasGroundedEvidence('quality_or_certification', 'Approved documents: GMP and ISO 22716'), false);
 assert.equal(scenarioHasGroundedEvidence('quality_or_certification', 'No documents configured'), false);
 assert.equal(scenarioHasGroundedEvidence('customization_or_packaging', 'OEM and bilingual packaging are approved'), true);
 assert.equal(scenarioHasGroundedEvidence('product_availability', '{"color":"black, navy","size":""}'), true);
 assert.equal(scenarioHasGroundedEvidence('product_availability', '{"color":"","size":""}'), false);
+assert.equal(scenarioHasGroundedEvidence('product_discovery', '{"name":"Pleated skirt"}'), true);
+assert.equal(scenarioHasGroundedEvidence('product_discovery', '[]'), false);
 
 const repeated = resolveKnowledgeGapPlan({
   message: 'How can I know your quality is reliable?',
@@ -94,6 +97,11 @@ for (const language of ['English', 'Spanish', 'Arabic']) {
 const generalUnknown = resolveKnowledgeGapPlan({ message: 'Does this work with our internal ERP workflow?', language: 'English' });
 assert.doesNotMatch(generalUnknown.draft, /pass|hand(?:ing)? over|right person|team|human queue|four hours/i);
 
+const productDiscovery = resolveKnowledgeGapPlan({ message: 'what do you have', language: 'English' });
+assert.equal(productDiscovery.scenario, 'product_discovery');
+assert.match(productDiscovery.draft, /what kind of product|what are you buying for|tell me what you are looking for/i);
+assert.doesNotMatch(productDiscovery.draft, /guess|colleague|team|sales|manager|right person|hand(?:ing)? over/i);
+
 const knownQuantity = resolveKnowledgeGapPlan({
   message: 'We need 5,000 bottles for Dubai and want your exact price.',
   language: 'English',
@@ -113,5 +121,6 @@ const sizeCheck = resolveKnowledgeGapPlan({ message: 'Do you have size M for thi
 assert.equal(sizeCheck.scenario, 'product_availability');
 assert.match(sizeCheck.draft, /size M/i);
 assert.doesNotMatch(sizeCheck.draft, /which size|what size/i);
+assert.doesNotMatch(sizeCheck.draft, /guess|colleague|team|sales|manager|right person|hand(?:ing)? over/i);
 
 console.log('knowledge gap playbook passed');

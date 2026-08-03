@@ -317,6 +317,11 @@ function productIntentLikely(message: string): boolean {
     || /价格|报价|多少钱|货号|款号|产品|目录|起订|样品|面料|材质|颜色|尺码/.test(raw);
 }
 
+export function isProductDiscoveryIntent(message: string): boolean {
+  const raw = text(message);
+  return /\b(?:what (?:products? )?do you have|what do you sell|show me what you have|show me your products?|what can you offer|product range|send (?:me )?(?:your )?catalog(?:ue)?)\b|你们有什么|你卖什么|有什么产品|看看产品|发.{0,6}目录/i.test(raw);
+}
+
 function refersToCurrentProduct(message: string): boolean {
   const raw = normalize(message);
   if (!raw) return false;
@@ -461,12 +466,16 @@ function productHaystack(product: ProductLite): string {
   ].filter(Boolean).join(' '));
 }
 
-function retrieveProducts(profile: EnterpriseProfile, query: ProductQuery | null, evidence: string[]): ProductLite[] {
+function retrieveProducts(profile: EnterpriseProfile, query: ProductQuery | null, evidence: string[], includeCatalog = false): ProductLite[] {
   if (!query) return [];
   const all = (profile.products.items ?? []).map(toProductLite).filter(item => item.name || item.sku);
   if (!all.length) {
     evidence.push('产品表为空，未命中产品');
     return [];
+  }
+  if (includeCatalog) {
+    evidence.push(`客户正在浏览产品，返回已录入产品 ${Math.min(5, all.length)} 条`);
+    return all.slice(0, 5);
   }
   const sku = normalize(query.sku);
   if (sku) {
@@ -512,7 +521,7 @@ export async function retrieveContext(
   const conversationQuery = conversation.map(turn => turn.text).join(' ');
   const parsedQuery = await parseProductQuery(message, evidence);
   const query = seedCurrentProductQuery(parsedQuery, customer, message, conversation, evidence);
-  const products = retrieveProducts(profile, query, evidence);
+  const products = retrieveProducts(profile, query, evidence, isProductDiscoveryIntent(message));
   const faqs = retrieveFaqs(profile, conversationQuery || message, evidence);
   const faqMatch = await resolveFaqMatch(faqs, message, conversation, evidence);
   const lexicalMatches = matchedFaqs(faqs, conversationQuery || message);

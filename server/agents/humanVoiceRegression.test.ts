@@ -12,6 +12,7 @@ const conversations = [
   'Can you guarantee delivery within 10 days?',
   'Do you have size M for this one?',
   'What colors are available for this one?',
+  'what do you have',
   'The bottles arrived damaged. This is unacceptable and I want a refund.',
   'Can you call me today?',
   'Where is my order? It should have arrived already.',
@@ -28,6 +29,7 @@ for (const message of conversations) {
   assert.ok(plan.draftZh.trim().length > 0, 'every bridge needs a paired Chinese translation');
   assert.doesNotMatch(plan.draft, /(?:^|\n)\s*(?:[-*•◆◇☑✅]|\d+[.)])\s+/m);
   assert.doesNotMatch(plan.draft, /\*\*|__|#{1,6}\s|full context|human queue|four(?:-| )working(?:-| )hours?/i);
+  assert.doesNotMatch(plan.draft, /I don\'?t want to guess|product colleague|right person|hand(?:ing)? over|bringing in (?:our )?(?:team|sales|manager)/i);
   assert.ok((plan.draft.match(/\?/g) || []).length <= 1, `one natural next step only: ${plan.draft}`);
 }
 

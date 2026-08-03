@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import type { EnterpriseProfile } from '../routes/enterprise.js';
-import { enterpriseKnowledgeReady, isContextDependentFaqQuestion, isSafeWithoutEnterpriseKnowledge, seedCurrentProductQuery } from './retrieve.js';
+import { enterpriseKnowledgeReady, isContextDependentFaqQuestion, isProductDiscoveryIntent, isSafeWithoutEnterpriseKnowledge, seedCurrentProductQuery } from './retrieve.js';
 
 for (const question of ['How much?', 'What about this?', 'Is it available?', '这个呢？', '多少钱？']) {
   assert.equal(isContextDependentFaqQuestion(question), true, `${question} needs conversation context`);
@@ -49,6 +49,9 @@ assert.equal(isSafeWithoutEnterpriseKnowledge('hi'), true);
 assert.equal(isSafeWithoutEnterpriseKnowledge('thanks!'), true);
 assert.equal(isSafeWithoutEnterpriseKnowledge('Where is my tracking number?'), false);
 assert.equal(isSafeWithoutEnterpriseKnowledge('Please send the invoice.'), false);
+assert.equal(isProductDiscoveryIntent('what do you have'), true);
+assert.equal(isProductDiscoveryIntent('show me your products'), true);
+assert.equal(isProductDiscoveryIntent('Do you have size M?'), false);
 assert.equal(enterpriseKnowledgeReady({
   products: { items: [{ name: 'Travel organizer' }] },
 } as EnterpriseProfile), true);

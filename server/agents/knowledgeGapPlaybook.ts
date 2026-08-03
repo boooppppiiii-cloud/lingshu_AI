@@ -4,6 +4,7 @@ export type KnowledgeGapScenario =
   | 'after_sale_complaint'
   | 'call_request'
   | 'delivery_commitment'
+  | 'product_discovery'
   | 'product_availability'
   | 'quality_or_certification'
   | 'competitor_comparison'
@@ -59,6 +60,10 @@ const SCENARIO_PATTERNS: Array<{ scenario: KnowledgeGapScenario; pattern: RegExp
     pattern: /\b(?:quality|reliable|certificate|certification|gmp|iso|coa|lab report|test report|inspection|compliance|fake cert|standard)\b|质量|可靠|证书|认证|检测报告|验货|合规|假证/i,
   },
   {
+    scenario: 'product_discovery',
+    pattern: /\b(?:what (?:products? )?do you have|what do you sell|show me what you have|show me your products?|what can you offer|product range|send (?:me )?(?:your )?catalog(?:ue)?)\b|你们有什么|你卖什么|有什么产品|看看产品|发.{0,6}目录/i,
+  },
+  {
     scenario: 'product_availability',
     pattern: /\b(?:do you have|have you got|available|in stock|what colo(?:u)?rs|which colo(?:u)?rs|what sizes|which sizes|size\s+[a-z0-9-]+|black|white|navy|beige|red|blue|green)\b|有货吗|现货|有哪些颜色|什么颜色|有哪些尺码|什么尺码|黑色|白色|藏青|米色/i,
   },
@@ -111,6 +116,7 @@ const HANDLING_REASON: Record<KnowledgeGapScenario, string> = {
   after_sale_complaint: '客户正在投诉或要求退款，需要负责人立即接管并核对订单证据',
   call_request: '客户希望电话或视频沟通，需要人工确认可用时间并接管',
   delivery_commitment: '客户要求保证交付时间，需要人工核实生产与物流后确认',
+  product_discovery: '客户正在了解可选产品，需要结合已录入的产品资料推荐；资料不足时先了解采购方向',
   product_availability: '客户正在确认颜色、尺码或库存，需要核对当前产品资料与实时可用状态',
   quality_or_certification: '客户在确认质量或资质真实性，需要人工核验真实文件',
   competitor_comparison: '客户正在比较供应商条件，需要销售确认同口径方案',
@@ -124,64 +130,69 @@ const HANDLING_REASON: Record<KnowledgeGapScenario, string> = {
 
 const ENGLISH: Record<KnowledgeGapScenario, ReplyPair[]> = {
   after_sale_complaint: [
-    { draft: "I'm sorry this happened. Send me the order number and a couple of clear photos, and I'll get our manager on it now.", draftZh: '很抱歉出了这个问题。请把订单号和两张清楚的照片发给我，我现在就请负责人处理。' },
-    { draft: "I get why you're upset. Send the order number and photos of the issue here; I'm bringing in our manager now.", draftZh: '我理解您为什么生气。请把订单号和问题照片发在这里，我现在请负责人接手。' },
-    { draft: "That's not the experience you should have had. Share the order number and clear photos, and I'll have our manager take this over now.", draftZh: '这次体验确实不应该这样。请发来订单号和清楚的照片，我现在让负责人接手处理。' },
+    { draft: "I'm sorry this happened. Send me the order number and a couple of clear photos, and I'll look into it straight away.", draftZh: '很抱歉出了这个问题。把订单号和两张清楚的照片发给我，我马上核查。' },
+    { draft: "I can see why you're upset. Send me the order number and photos of the problem, and I'll take it from there.", draftZh: '我明白您为什么生气。把订单号和问题照片发给我，后面我来跟进。' },
+    { draft: "That's not how this should have arrived. Send me the order number and clear photos so I can look into it right away.", draftZh: '货物不该是这样到手的。把订单号和清楚的照片发给我，我马上核查。' },
   ],
   call_request: [
     { draft: "Sure, let's talk. What time works for you today?", draftZh: '可以，我们电话聊。您今天什么时间方便？' },
-    { draft: 'Yes, a call is easier. Send me a time that suits you and I’ll get the right person to join.', draftZh: '可以，电话沟通更方便。请发一个您合适的时间，我会请对应负责人参加。' },
+    { draft: 'Yes, a call is easier. What time works for you?', draftZh: '可以，电话聊更方便。您什么时间合适？' },
     { draft: 'No problem. Tell me your time zone and a good time to call.', draftZh: '没问题。请告诉我您的时区和方便通话的时间。' },
   ],
   delivery_commitment: [
-    { draft: "I don't want to promise a date before checking the real production and shipping time. I'm getting sales to confirm it for this order now.", draftZh: '我不想在核实真实生产和运输时间前随口承诺日期。我现在请销售按这笔订单确认。' },
-    { draft: "That date is important, so I won't guess. I'm bringing in sales to check the actual timeline and confirm it here.", draftZh: '这个日期很重要，所以我不会靠猜。我现在请销售核对真实时间并在这里确认。' },
-    { draft: "Let me get the real timeline checked first. Sales will confirm whether that delivery date is workable for this order.", draftZh: '我先请人核对真实时间。销售会确认这笔订单是否能做到这个交付日期。' },
+    { draft: 'Let me confirm the production and shipping time before I give you a date.', draftZh: '我先核对生产和运输时间，再给您确认日期。' },
+    { draft: 'That date matters. Let me check the actual timing and come back to you here.', draftZh: '这个日期很重要。我先核对实际时间，确认后就在这里回复您。' },
+    { draft: 'Let me check whether that date works for this order first.', draftZh: '我先核对一下这笔订单能不能按这个日期交付。' },
+  ],
+  product_discovery: [
+    { draft: "What kind of product are you looking for? Send me a photo or the product name and I'll show you the closest options.", draftZh: '您想找哪类产品？发一张图片或产品名称给我，我按这个方向给您找合适的。' },
+    { draft: "What are you buying for—your shop, online sales, or a specific order? That'll help me show you the right products.", draftZh: '您是给门店、线上销售，还是某个具体订单找产品？我好按用途给您推荐。' },
+    { draft: 'Tell me what you are looking for and roughly how many you need, and I can narrow it down for you.', draftZh: '告诉我您想找什么、大概需要多少，我就能帮您把范围缩小。' },
   ],
   product_availability: [
-    { draft: "I don't want to guess the current options. I'm asking our product colleague to check this item now.", draftZh: '我不想靠猜现在有哪些选项。我正在请产品同事核对这款产品。' },
-    { draft: "Let me check this exact option with our product colleague first, then we'll confirm it here.", draftZh: '我先请产品同事核对这个具体选项，然后在这里给您确认。' },
-    { draft: "I'll get the product colleague to check the current options for this one now.", draftZh: '我现在请产品同事核对这款产品当前可选的内容。' },
+    { draft: "Which item do you mean? Send me the photo or product name and I'll check the available options.", draftZh: '您指的是哪一款？把图片或产品名称发给我，我帮您看现有哪些选项。' },
+    { draft: "Send me the product photo or name and I'll check what's available.", draftZh: '把产品图片或名称发给我，我帮您看现有选项。' },
+    { draft: 'Got it. Let me check the current options for this one.', draftZh: '明白，我查一下这款现在有哪些选项。' },
   ],
   quality_or_certification: [
-    { draft: "You're right to check. I won't say a certificate is valid before it's matched to this product. I'm bringing in a colleague to verify the real file with you now.", draftZh: '您要核实是对的。在证书与这个产品核对一致前，我不会说它有效。我现在请同事一起核验真实文件。' },
-    { draft: "Fair question. Let's verify the actual document and certificate number for this product, not just take a supplier's word for it. I'm getting the right person on it now.", draftZh: '这个问题很合理。我们要核验这个产品对应的真实文件和证书编号，不能只听供应商口头说。我现在请对应负责人处理。' },
-    { draft: "I understand why you're careful. I'm asking our team to check the exact document against this product before we give you an answer.", draftZh: '我理解您为什么谨慎。我会请团队先核对这份文件是否与产品一致，再给您答复。' },
+    { draft: "You're right to check. Let me match the certificate to this product before I confirm anything.", draftZh: '您要核实是对的。我先确认这份证书和产品是否对应，再给您答复。' },
+    { draft: "Fair question. Let's check the actual document and certificate number for this product.", draftZh: '这个问题很合理。我们直接核对这款产品对应的文件和证书编号。' },
+    { draft: "I get why you're careful. Let me verify the actual document before I answer.", draftZh: '我明白您为什么谨慎。我先核实真实文件，再回复您。' },
   ],
   competitor_comparison: [
-    { draft: "That's worth comparing. The fair way is to check what's included, not only the headline number. I'm bringing sales in to compare the same scope with you.", draftZh: '这个报价值得比较。公平的方式是看清包含哪些内容，而不只看表面的数字。我现在请销售按同一范围与您比较。' },
-    { draft: "300 pcs and 10 days sounds attractive. Let's check whether the packaging, documents and delivery scope are really the same; sales can compare it properly with you.", draftZh: '300 件和 10 天确实有吸引力。我们先确认包装、文件和交付范围是否完全相同，销售会按同一口径与您比较。' },
-    { draft: "Good offer on the surface. I'll get sales to compare the full scope with you so you can see the real difference.", draftZh: '表面看是个不错的报价。我会请销售把完整范围放在一起比较，让您看清真实差异。' },
+    { draft: "That's worth comparing. Let's check what's actually included, not only the headline number.", draftZh: '这个报价值得比较。我们先看清实际包含哪些内容，不只看表面的数字。' },
+    { draft: "300 pcs and 10 days sounds attractive. Let's check whether the packaging, documents and delivery terms are really the same.", draftZh: '300 件和 10 天确实有吸引力。我们先确认包装、文件和交付条件是不是完全相同。' },
+    { draft: 'It looks good on the surface. Let me compare the full scope so you can see the real difference.', draftZh: '表面看确实不错。我把完整条件对一下，您就能看清真正的差别。' },
   ],
   customization_or_packaging: [
-    { draft: "Got it—your label, with both languages on the pack. Send me the logo or a pack you like and I'll ask our packaging colleague to check it 👍", draftZh: '明白，要用您的品牌，包装上放两种语言。把 Logo 或喜欢的包装参考发来，我会请包装同事核对。' },
-    { draft: "I see the look you're after. Drop the logo and a packaging reference here; I'll keep it together and ask our packaging colleague to check it 👍", draftZh: '我明白您想要的效果。把 Logo 和包装参考发在这里，我会整理好并请包装同事核对。' },
-    { draft: "Private label, got it. Send the logo or a pack you like and I'll ask our packaging colleague to look at it 👍", draftZh: '明白，您要做贴牌。把 Logo 或喜欢的包装参考发来，我会请包装同事看一下。' },
+    { draft: "Got it—your label, with both languages on the pack. Send me the logo or a pack you like and I'll check it 👍", draftZh: '明白，要用您的品牌，包装上放两种语言。把 Logo 或喜欢的包装参考发来，我帮您看。' },
+    { draft: "I see the look you're after. Drop the logo and a packaging reference here and I'll take it from there 👍", draftZh: '我明白您想要的效果。把 Logo 和包装参考发在这里，后面我来跟进。' },
+    { draft: "Private label, got it. Send the logo or a pack you like and I'll check what works 👍", draftZh: '明白，您要做贴牌。把 Logo 或喜欢的包装参考发来，我帮您确认怎么做合适。' },
   ],
   urgent_next_step: [
-    { draft: "Got it—you want this simple. I've kept everything you already sent, so just add anything that's still missing and I'll get someone to confirm the next step.", draftZh: '明白，您想简单推进。我已经记下您发过的信息，只需补充还缺的内容，我会请人确认下一步。' },
-    { draft: "Let's keep it simple. I have what you've already shared; just add any missing deadline or packaging reference and I'll get the next step confirmed.", draftZh: '我们简单推进。我已经记下您说过的信息，只需补充还没提到的截止时间或包装参考，我会请人确认下一步。' },
-    { draft: "Got it. I won't make you repeat anything—I'm asking the right colleague to pick it up from here.", draftZh: '明白，我不会让您重复说明。现在请对应同事直接从这里继续跟进。' },
+    { draft: "Got it—you want this simple. I've kept everything you already sent, so just add anything that's still missing and I'll sort out the next step.", draftZh: '明白，您想简单推进。我已经记下您发过的信息，只需补充还缺的内容，下一步我来处理。' },
+    { draft: "Let's keep it simple. I have what you've already shared; just add any missing deadline or packaging reference.", draftZh: '我们简单推进。我已经记下您说过的信息，只需补充还没提到的截止时间或包装参考。' },
+    { draft: "Got it. I have the details above, so you won't need to repeat anything.", draftZh: '明白，上面的信息我都记下了，您不用再重复。' },
   ],
   order_or_logistics: [
-    { draft: "Send me the order number and I'll ask the team to check what's happening.", draftZh: '把订单号发给我，我会请团队查一下现在是什么情况。' },
-    { draft: "Let me check the order itself instead of guessing. What's the order number?", draftZh: '我会直接核对订单，不靠猜。请问订单号是多少？' },
-    { draft: "Drop the order number here and I'll get the colleague handling it to check.", draftZh: '把订单号发在这里，我会请负责的同事核查。' },
+    { draft: "Send me the order number and I'll check what's happening.", draftZh: '把订单号发给我，我查一下现在是什么情况。' },
+    { draft: "Let me check the order itself. What's the order number?", draftZh: '我直接核对订单。订单号是多少？' },
+    { draft: "Drop the order number here and I'll look into it.", draftZh: '把订单号发在这里，我来核查。' },
   ],
   price_or_quote: [
-    { draft: "I won't guess the price here. I'm bringing sales in for the exact quote; if there's any spec or packaging detail we haven't covered, add it here.", draftZh: '我不会随口猜价格。我现在请销售核算准确报价；如果还有没提到的规格或包装细节，请在这里补充。' },
-    { draft: "Got it. Sales needs to confirm the real quote for this order, so I'm passing them the details you've already shared.", draftZh: '明白。这笔订单需要销售确认真实报价，我会把您已经说过的信息一起交给他们。' },
-    { draft: "Let me get a proper quote checked. I have the details above, so only add anything that's still missing.", draftZh: '我请销售核算正式报价。上面的信息我已经记下，只需补充尚未提到的内容。' },
+    { draft: "Let me work out the exact quote from the details you've sent. If any spec or packaging detail is still missing, add it here.", draftZh: '我按您发来的信息核算准确报价。如果还有没提到的规格或包装细节，请在这里补充。' },
+    { draft: "Got it. I have the details above—let me work out the quote for this order.", draftZh: '明白，上面的信息我已经记下。我来核算这笔订单的报价。' },
+    { draft: 'Let me check the proper quote. You only need to add anything that is still missing.', draftZh: '我来核算正式报价。您只需要补充还没提到的内容。' },
   ],
   high_value_or_peer: [
-    { draft: "That's a serious volume. I'm bringing in our sales lead now and passing over the details you've already shared.", draftZh: '这个数量需要认真跟进。我现在请销售负责人接手，并把您已经提供的信息一起交给他。' },
-    { draft: "Got it—this needs a proper commercial review. I'll bring in our sales lead with the context ready.", draftZh: '明白，这需要正式的商务评估。我会带着完整上下文请销售负责人接手。' },
-    { draft: "This is worth handling properly. I'm getting our sales lead involved now, and you won't need to repeat the brief.", draftZh: '这条需求值得认真处理。我现在请销售负责人参与，您不需要重复说明。' },
+    { draft: "That's a serious volume. Let me go through the details you've sent and work out the next step.", draftZh: '这个数量需要认真跟进。我先把您发来的信息过一遍，再确认下一步。' },
+    { draft: 'Got it—this needs a proper commercial review. I have the details above and will take it from here.', draftZh: '明白，这需要认真做商务评估。上面的信息我已经记下，后面我来跟进。' },
+    { draft: "This is worth handling properly. I've kept your full brief, so you won't need to repeat it.", draftZh: '这条需求值得认真处理。您的要求我都记下了，不用再重复。' },
   ],
   general_unknown: [
-    { draft: "I don't have a solid answer for that yet. Which exact part do you want me to check?", draftZh: '这件事我现在还没有可靠答案。您最想确认的是哪一部分？' },
-    { draft: "I don't want to guess here. Tell me the one detail that matters most and I'll check from there.", draftZh: '这件事我不想靠猜。请告诉我您最在意的一个细节，我从那里开始核实。' },
-    { draft: "I need one more detail before I can point you the right way: what exactly are you trying to confirm?", draftZh: '我还需要一个细节才能准确处理：您具体想确认什么？' },
+    { draft: 'Which part do you want to pin down first?', draftZh: '您想先确认哪一部分？' },
+    { draft: 'Can you tell me a little more about what you need?', draftZh: '可以再跟我说说您的具体需求吗？' },
+    { draft: 'What exactly do you need this to do?', draftZh: '您具体希望它实现什么？' },
   ],
 };
 
@@ -201,6 +212,10 @@ function localizedPairs(language: SupportedLanguage, scenario: KnowledgeGapScena
         { draft: 'No quiero prometer una fecha sin comprobar producción y envío reales. Voy a pedir a ventas que confirme el plazo para este pedido.', draftZh: '我不想在核实真实生产和运输时间前承诺日期。我会请销售确认这笔订单的时间。' },
         { draft: 'Esa fecha importa, así que no voy a adivinar. Ventas revisará el plazo real y lo confirmará aquí.', draftZh: '这个日期很重要，所以我不会靠猜。销售会核对真实时间并在这里确认。' },
       ],
+      product_discovery: [
+        { draft: '¿Qué tipo de producto buscas? Envíame una foto o el nombre y te enseño las opciones más cercanas.', draftZh: '您想找哪类产品？发一张图片或产品名称给我，我按这个方向给您找合适的。' },
+        { draft: 'Cuéntame qué buscas y para qué mercado; así puedo enseñarte productos más adecuados.', draftZh: '告诉我您在找什么、面向哪个市场，我好给您推荐更合适的产品。' },
+      ],
       quality_or_certification: [
         { draft: 'Tienes razón en comprobarlo. No diré que un certificado es válido hasta verificar que corresponde a este producto. Voy a llamar al responsable ahora.', draftZh: '您要核实是对的。在确认与产品一致前，我不会说证书有效。我现在请负责人处理。' },
         { draft: 'Es una duda justa. Vamos a verificar el documento y el número de certificado reales para este producto.', draftZh: '这个问题很合理。我们会核验这个产品对应的真实文件和证书编号。' },
@@ -214,7 +229,8 @@ function localizedPairs(language: SupportedLanguage, scenario: KnowledgeGapScena
       after_sale_complaint: spanish.after_sale_complaint![0],
       call_request: spanish.call_request![0],
       delivery_commitment: spanish.delivery_commitment![0],
-      product_availability: { draft: 'No quiero adivinar las opciones actuales. Voy a pedir al responsable de producto que revise este artículo ahora.', draftZh: '我不想靠猜现在有哪些选项。我正在请产品负责人核对这款产品。' },
+      product_discovery: spanish.product_discovery![0],
+      product_availability: { draft: 'Envíame una foto o el nombre del producto y reviso las opciones disponibles.', draftZh: '把产品图片或名称发给我，我帮您看现有选项。' },
       quality_or_certification: spanish.quality_or_certification![0],
       competitor_comparison: { draft: 'Vale la pena compararlo bien. Voy a pedir a ventas que revise el mismo alcance contigo, no solo el número principal.', draftZh: '这个报价值得认真比较。我会请销售按同一范围与您比较，而不只看表面的数字。' },
       customization_or_packaging: { draft: 'Entendido: marca privada y empaque bilingüe. Envíame el logo o una referencia y pediré que confirmen lo que realmente podemos hacer 👍', draftZh: '明白，您要贴牌和双语包装。请发来 Logo 或参考，我会请人确认真实可执行范围。' },
@@ -239,6 +255,10 @@ function localizedPairs(language: SupportedLanguage, scenario: KnowledgeGapScena
       { draft: 'لا أريد أن أعد بموعد قبل التحقق من وقت الإنتاج والشحن الفعلي. سأطلب من المبيعات تأكيد المدة لهذا الطلب.', draftZh: '我不想在核实真实生产和运输时间前承诺日期。我会请销售确认这笔订单的时间。' },
       { draft: 'هذا الموعد مهم، لذلك لن أخمّن. ستراجع المبيعات المدة الفعلية وتؤكدها هنا.', draftZh: '这个日期很重要，所以我不会靠猜。销售会核对真实时间并在这里确认。' },
     ],
+    product_discovery: [
+      { draft: 'ما نوع المنتج الذي تبحث عنه؟ أرسل صورة أو اسم المنتج وسأعرض لك أقرب الخيارات.', draftZh: '您想找哪类产品？发一张图片或产品名称给我，我按这个方向给您找合适的。' },
+      { draft: 'أخبرني بما تبحث عنه ولأي سوق، وسأساعدك في تضييق الخيارات.', draftZh: '告诉我您想找什么、面向哪个市场，我帮您缩小选择范围。' },
+    ],
     quality_or_certification: [
       { draft: 'من حقك أن تتحقق. لن أقول إن الشهادة صحيحة قبل مطابقتها مع هذا المنتج. سأطلب من المسؤول التحقق منها الآن.', draftZh: '您要核实是对的。在确认与产品一致前，我不会说证书有效。我现在请负责人核验。' },
       { draft: 'سؤال منطقي. لنتحقق من المستند الحقيقي ورقم الشهادة لهذا المنتج.', draftZh: '这个问题很合理。我们会核验这个产品对应的真实文件和证书编号。' },
@@ -252,7 +272,8 @@ function localizedPairs(language: SupportedLanguage, scenario: KnowledgeGapScena
     after_sale_complaint: arabic.after_sale_complaint![0],
     call_request: arabic.call_request![0],
     delivery_commitment: arabic.delivery_commitment![0],
-    product_availability: { draft: 'لا أريد أن أخمّن الخيارات المتاحة الآن. سأطلب من مسؤول المنتج مراجعة هذا المنتج.', draftZh: '我不想靠猜现在有哪些选项。我正在请产品负责人核对这款产品。' },
+    product_discovery: arabic.product_discovery![0],
+    product_availability: { draft: 'أرسل صورة المنتج أو اسمه وسأراجع الخيارات المتاحة.', draftZh: '把产品图片或名称发给我，我帮您看现有选项。' },
     quality_or_certification: arabic.quality_or_certification![0],
     competitor_comparison: { draft: 'هذا العرض يستحق مقارنة دقيقة. سأطلب من المبيعات مقارنة نفس النطاق معك، وليس الرقم الظاهر فقط.', draftZh: '这个报价值得认真比较。我会请销售按同一范围与您比较，而不只看表面的数字。' },
     customization_or_packaging: { draft: 'واضح: علامة خاصة وتغليف بلغتين. أرسل الشعار أو مرجعًا للتغليف وسأطلب تأكيد ما يمكن تنفيذه فعليًا 👍', draftZh: '明白，您要贴牌和双语包装。请发来 Logo 或包装参考，我会请人确认真实可执行范围。' },
@@ -298,25 +319,25 @@ function personalizeEnglishBridge(scenario: KnowledgeGapScenario, message: strin
     const size = String(message || '').match(/\bsize\s+([a-z0-9-]+)\b/i)?.[1];
     const color = String(message || '').match(/\b(black|white|navy|beige|red|blue|green)\b/i)?.[1];
     if (size) return {
-      draft: `I'll check size ${size.toUpperCase()} for this one with our product colleague now.`,
-      draftZh: `我现在请产品同事核对这款的 ${size.toUpperCase()} 码。`,
+      draft: `Size ${size.toUpperCase()}—let me double-check that for you.`,
+      draftZh: `${size.toUpperCase()} 码，我帮您确认一下。`,
     };
     if (color) {
       const colorZh: Record<string, string> = { black: '黑色', white: '白色', navy: '藏青色', beige: '米色', red: '红色', blue: '蓝色', green: '绿色' };
       return {
-      draft: `I'll check the ${color.toLowerCase()} option for this one with our product colleague now.`,
-        draftZh: `我现在请产品同事核对这款的${colorZh[color.toLowerCase()] || color}选项。`,
+        draft: `${color[0].toUpperCase()}${color.slice(1).toLowerCase()}—let me double-check that option for you.`,
+        draftZh: `${colorZh[color.toLowerCase()] || color}，我帮您确认一下这个选项。`,
       };
     }
     if (/colo(?:u)?rs?/i.test(message)) return {
-      draft: "I don't want to guess the colors. I'm asking our product colleague to confirm the current options now.",
-      draftZh: '我不想靠猜有哪些颜色。我现在请产品同事确认当前可选颜色。',
+      draft: 'Let me check the available colors for this one.',
+      draftZh: '我帮您查一下这款现有哪些颜色。',
     };
   }
   if (scenario === 'high_value_or_peer' && quantity) {
     return {
-      draft: `${quantity}—yes, that needs our sales lead. I'm bringing them in now, and I've already passed over what you sent.`,
-      draftZh: `${quantityInChinese(quantity)}，这个数量需要销售负责人跟进。我现在请他加入，并把您已经提供的信息一起交给他。`,
+      draft: `${quantity}—got it. Let me go through the details you've sent and work out the next step.`,
+      draftZh: `${quantityInChinese(quantity)}，明白。我先把您发来的信息过一遍，再确认下一步。`,
     };
   }
   if (scenario === 'competitor_comparison' && (quantity || deliveryWindow)) {
@@ -327,15 +348,15 @@ function personalizeEnglishBridge(scenario: KnowledgeGapScenario, message: strin
       ? `${quantityInChinese(quantity)}、交付时间 ${deliveryWindowInChinese(deliveryWindow)}`
       : quantityInChinese(quantity) || `交付时间 ${deliveryWindowInChinese(deliveryWindow)}`;
     return {
-      draft: `${offer} does sound attractive. Before you decide, let's check whether the packaging, documents and delivery terms are really the same. I'll ask sales to compare it properly with you.`,
-      draftZh: `${offerZh}确实有吸引力。决定前，我们先确认包装、文件和交付条件是否真的相同。我会请销售按同一口径与您比较。`,
+      draft: `${offer} does sound attractive. Before you decide, let's check whether the packaging, documents and delivery terms are really the same.`,
+      draftZh: `${offerZh}确实有吸引力。决定前，我们先确认包装、文件和交付条件是否真的相同。`,
     };
   }
   if (scenario === 'delivery_commitment' && deliveryWindow) {
     const days = deliveryWindow.match(/\d+/)?.[0] || '';
     return {
-      draft: `A ${days}-day delivery window is tight, so I don't want to say yes before production and shipping are checked. I'm getting sales to confirm the real timing for this order now.`,
-      draftZh: `${days} 天的交付时间比较紧，所以在核实生产和运输前我不会随口答应。我现在请销售确认这笔订单的真实时间。`,
+      draft: `A ${days}-day delivery window is tight. Let me check production and shipping before I say yes.`,
+      draftZh: `${days} 天的交付时间比较紧。我先核实生产和运输，再给您明确答复。`,
     };
   }
   return fallback;
@@ -390,6 +411,9 @@ export function scenarioHasGroundedEvidence(scenario: KnowledgeGapScenario, evid
   }
   if (scenario === 'product_availability') {
     return /"(?:color|size|material)"\s*:\s*"(?!\s*")[^"]+"/i.test(source);
+  }
+  if (scenario === 'product_discovery') {
+    return /"name"\s*:\s*"(?!\s*")[^"]+"/i.test(source);
   }
   return false;
 }
