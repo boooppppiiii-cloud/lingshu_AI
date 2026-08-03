@@ -35,6 +35,38 @@ export interface KnowledgeGapPlan {
 type SupportedLanguage = 'english' | 'spanish' | 'arabic';
 type ReplyPair = { draft: string; draftZh: string };
 
+function naturalList(values: string[], conjunction: string): string {
+  if (values.length <= 1) return values[0] || '';
+  if (values.length === 2) return `${values[0]} ${conjunction} ${values[1]}`;
+  return `${values.slice(0, -1).join(', ')} ${conjunction} ${values.at(-1)}`;
+}
+
+export function groundedProductDiscoveryReply(
+  buyerLanguageNames: string[],
+  language: unknown,
+  chineseNames = buyerLanguageNames,
+): ReplyPair {
+  const shown = buyerLanguageNames.map(value => String(value || '').trim()).filter(Boolean).slice(0, 3);
+  const shownZh = chineseNames.map(value => String(value || '').trim()).filter(Boolean).slice(0, 3);
+  const languageKey = normalizeLanguage(language);
+  const buyerList = naturalList(shown, languageKey === 'english' ? 'and' : languageKey === 'spanish' ? 'y' : 'و');
+  const chineseList = naturalList(shownZh, '和');
+  const hasMore = buyerLanguageNames.filter(value => String(value || '').trim()).length > shown.length;
+  const hasMoreZh = chineseNames.filter(value => String(value || '').trim()).length > shownZh.length;
+  if (languageKey === 'spanish') return {
+    draft: `Trabajamos principalmente con ${buyerList}${hasMore ? ' y algunos productos más' : ''}. ¿Buscas algo de este tipo o necesitas otro producto?`,
+    draftZh: `我们主要做${chineseList}${hasMoreZh ? '等产品' : ''}。您找的是这类，还是其他产品？`,
+  };
+  if (languageKey === 'arabic') return {
+    draft: `نعمل بشكل أساسي مع ${buyerList}${hasMore ? ' ومنتجات أخرى' : ''}. هل تبحث عن شيء من هذا النوع أم عن منتج آخر؟`,
+    draftZh: `我们主要做${chineseList}${hasMoreZh ? '等产品' : ''}。您找的是这类，还是其他产品？`,
+  };
+  return {
+    draft: `We mainly carry ${buyerList}${hasMore ? ' and a few more products' : ''}. Is that what you're looking for, or do you need something else?`,
+    draftZh: `我们主要做${chineseList}${hasMoreZh ? '等产品' : ''}。您找的是这类，还是其他产品？`,
+  };
+}
+
 const LARGE_ORDER_PATTERN = /\b(\d[\d,]*(?:\.\d+)?)\s*(?:pcs?|pieces?|units?|sets?|bottles?|boxes?|cartons?)\b/gi;
 const PEER_PATTERN = /\b(?:we are (?:also )?(?:a )?(?:supplier|factory|manufacturer|trading company)|i am (?:also )?(?:a )?(?:supplier|manufacturer|trader)|our factory|resell to other suppliers)\b|我们也是供应商|我们是工厂|我们也是厂家|同行/i;
 

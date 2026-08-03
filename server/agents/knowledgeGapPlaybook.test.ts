@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { classifyKnowledgeGapScenario, resolveKnowledgeGapPlan, scenarioHasGroundedEvidence } from './knowledgeGapPlaybook.js';
+import { classifyKnowledgeGapScenario, groundedProductDiscoveryReply, resolveKnowledgeGapPlan, scenarioHasGroundedEvidence } from './knowledgeGapPlaybook.js';
 import { planMobileChatMessages, splitMobileChatMessages } from './mobileChatStyle.js';
 
 const rounds = [
@@ -101,6 +101,11 @@ const productDiscovery = resolveKnowledgeGapPlan({ message: 'what do you have', 
 assert.equal(productDiscovery.scenario, 'product_discovery');
 assert.match(productDiscovery.draft, /what kind of product|what are you buying for|tell me what you are looking for/i);
 assert.doesNotMatch(productDiscovery.draft, /guess|colleague|team|sales|manager|right person|hand(?:ing)? over/i);
+
+const groundedDiscovery = groundedProductDiscoveryReply(['pleated skirts'], 'English', ['百褶裙']);
+assert.equal(groundedDiscovery.draft, "We mainly carry pleated skirts. Is that what you're looking for, or do you need something else?");
+assert.equal(groundedDiscovery.draftZh, '我们主要做百褶裙。您找的是这类，还是其他产品？');
+assert.doesNotMatch(groundedDiscovery.draft, /guess|colleague|team|sales|manager|right person|hand(?:ing)? over/i);
 
 const knownQuantity = resolveKnowledgeGapPlan({
   message: 'We need 5,000 bottles for Dubai and want your exact price.',
