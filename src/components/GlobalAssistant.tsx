@@ -916,7 +916,7 @@ export default function GlobalAssistant({
                   <p className="truncate text-[11px] text-text-muted">{panelSubtitle}</p>
                 </div>
               </div>
-              <button type="button" onClick={() => setMode('breathing')} className="rounded-lg p-1.5 text-text-muted hover:bg-surface-2" title="收回">
+              <button type="button" onClick={() => { setAssistantTool(null); setPanelView('chat'); setMode('breathing'); }} className="rounded-lg p-1.5 text-text-muted hover:bg-surface-2" title="关闭">
                 <X size={15} />
               </button>
             </header>

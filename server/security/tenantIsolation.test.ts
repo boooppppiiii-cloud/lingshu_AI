@@ -44,6 +44,17 @@ for (const brand of ['youtube', 'tiktok', 'instagram', 'facebook', 'whatsapp']) 
 const assistantUi = read('src/components/GlobalAssistant.tsx');
 assert.match(assistantUi, /ENTERPRISE_GUIDE_MEMORY_ID[\s\S]*?enterpriseGuideSeen/, 'enterprise center must remember its single proactive assistant guide');
 assert.match(assistantUi, /要补资料？点我/, 'enterprise center must leave a concise click-to-open reminder after the proactive guide');
+assert.match(assistantUi, /setAssistantTool\(null\); setPanelView\('chat'\); setMode\('breathing'\)/, 'assistant panels must fully close instead of leaving a hidden intake tool active');
+const diagnosisUi = read('src/components/BusinessDiagnosisModal.tsx');
+assert.match(diagnosisUi, /onClick=\{onClose\}[\s\S]*?关闭接待设置/, 'the reception guide must be closable after it is reopened from the sidebar');
+assert.match(diagnosisUi, /ui-field ui-select[\s\S]*?请选择主营品类[\s\S]*?请选择，可连续添加[\s\S]*?请选择海外平台经验/, 'guided enterprise choices must use consistent dropdown controls');
+const enterpriseUi = read('src/components/EnterprisePage.tsx');
+assert.match(enterpriseUi, /function OptionSelector[\s\S]*?<select[\s\S]*?请选择，可连续添加/, 'enterprise selectable fields must use dropdown controls');
+assert.doesNotMatch(enterpriseUi.slice(enterpriseUi.indexOf('function OptionSelector'), enterpriseUi.indexOf('function PaginationControls')), /<Chip/, 'enterprise option selectors must not fall back to chip-only selection');
+const globalStyles = read('src/index.css');
+for (const styleClass of ['.ui-field', '.ui-select', '.ui-chart-panel', '.ui-floating-panel']) {
+  assert.match(globalStyles, new RegExp(styleClass.replace('.', '\\.')), `${styleClass} must remain part of the shared UI system`);
+}
 const publishingUi = read('src/components/TrafficPage.tsx');
 assert.doesNotMatch(publishingUi, /平台发布推荐|publish-recommendations/, 'one-click publishing must not render the removed platform recommendation panel');
 assert.match(publishingUi, /applyContentToAll[\s\S]*?title: activeItem\.title[\s\S]*?description: activeItem\.description[\s\S]*?platformCopy:[\s\S]*?firstComment: activeItem\.firstComment/, 'applying content to all videos must copy the current publishing content');
@@ -57,6 +68,12 @@ assert.match(calendarPlannerUi, /全球电商节庆点/, 'publishing tide must l
 assert.doesNotMatch(calendarPlannerUi, /festivalNoticesByDay|dayFestivalNotices/, 'festival markers must not be rendered inside calendar day cells');
 assert.match(calendarPlannerUi, /pendingTimeSelection[\s\S]*?选择具体发布时间[\s\S]*?确认时间/, 'flexible calendar drops must ask for an explicit publishing time');
 assert.match(calendarPlannerUi, /draggable=\{!item\.platformPostId && !item\.scheduleLocked\}/, 'fixed calendar schedules must not be draggable');
+assert.match(calendarPlannerUi, /kind: 'tide'[\s\S]*?bestHour[\s\S]*?targetHour[\s\S]*?score/, 'publishing tide hover details must include time, target-market time, and score');
+assert.match(calendarPlannerUi, /kind: 'slot'[\s\S]*?startHour[\s\S]*?endHour[\s\S]*?items/, 'calendar schedule slots must expose detailed hover information');
+assert.match(calendarPlannerUi, /fallbackPeakScore[\s\S]*?Math\.sin/, 'publishing tide must retain a useful curve when live score data is temporarily unavailable');
+assert.doesNotMatch(calendarPlannerUi, /setError\(loadError instanceof Error \? loadError\.message : 'load_failed'\)/, 'calendar UI must not expose raw transport errors');
+const strategyUi = read('src/components/StrategyDataBoard.tsx');
+assert.match(strategyUi, /已接入账号 \{exposure\.accountCount\}[\s\S]*?openWorkspaceView\('traffic', 'accounts'\)/, 'home connected-account affordance must navigate to social account activity');
 const publishingRoutes = read('server/routes/publishing.ts');
 assert.match(publishingRoutes, /scheduleLocked: req\.body\?\.scheduleLocked === true/, 'calendar creation must persist the fixed-time lock');
 assert.match(publishingRoutes, /currentStats\.scheduleLocked === true[\s\S]*?定点排期时间已锁定/, 'calendar API must reject accidental fixed-time changes');

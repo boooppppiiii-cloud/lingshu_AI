@@ -271,18 +271,6 @@ function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (
   );
 }
 
-function Chip({ active, children, onClick }: { active: boolean; children: React.ReactNode; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-full border px-3 py-1.5 text-xs font-bold transition-colors ${active ? 'border-sky-200 bg-sky-50 text-sky-700' : 'border-border bg-white text-text-secondary hover:bg-surface-2'}`}
-    >
-      {children}
-    </button>
-  );
-}
-
 function OptionSelector({ value, options, onChange, multiple = true, manualPlaceholder = '手动补充' }: {
   value: string;
   options: string[];
@@ -304,14 +292,28 @@ function OptionSelector({ value, options, onChange, multiple = true, manualPlace
   }, [options, value]);
 
   const choose = (option: string) => {
+    if (option === '__manual__') {
+      setManualOpen(true);
+      return;
+    }
     if (!multiple) {
       onChange(option);
       setManualValue('');
       setManualOpen(false);
       return;
     }
-    const next = tokens.includes(option) ? tokens.filter(item => item !== option) : [...tokens, option];
+    if (!option || tokens.includes(option)) return;
+    onChange(joinTokens([...tokens, option]));
+  };
+
+  const remove = (option: string) => {
+    const next = tokens.filter(item => item !== option);
     onChange(joinTokens(next));
+    if (!options.includes(option)) {
+      const nextManual = next.filter(item => !options.includes(item)).join('、');
+      setManualValue(nextManual);
+      setManualOpen(Boolean(nextManual));
+    }
   };
 
   const commitManual = (nextManual: string) => {
@@ -325,10 +327,25 @@ function OptionSelector({ value, options, onChange, multiple = true, manualPlace
 
   return (
     <div className="space-y-2">
-      <div className="flex flex-wrap gap-2">
-        {options.map(option => <Chip key={option} active={tokens.includes(option)} onClick={() => choose(option)}>{option}</Chip>)}
-        <Chip active={manualOpen} onClick={() => setManualOpen(open => !open)}>手动补充</Chip>
-      </div>
+      <select
+        className={`${inputCls} ui-select`}
+        value={multiple ? '' : options.includes(value) ? value : value ? '__manual__' : ''}
+        onChange={event => choose(event.target.value)}
+        aria-label={multiple ? '添加选项' : '选择选项'}
+      >
+        <option value="">{multiple ? '请选择，可连续添加' : '请选择'}</option>
+        {options.map(option => <option key={option} value={option} disabled={multiple && tokens.includes(option)}>{option}</option>)}
+        <option value="__manual__">其他（手动补充）</option>
+      </select>
+      {multiple && tokens.length > 0 && (
+        <div className="flex flex-wrap gap-1.5" aria-label="已选项目">
+          {tokens.map(option => (
+            <button key={option} type="button" onClick={() => remove(option)} className="inline-flex items-center gap-1 rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700 hover:border-emerald-200 hover:bg-emerald-100" title={`移除 ${option}`}>
+              {option}<X size={11} />
+            </button>
+          ))}
+        </div>
+      )}
       {manualOpen && <input
         className={inputCls}
         value={manualValue}
@@ -419,8 +436,8 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   );
 }
 
-const inputCls = 'w-full px-3 py-2 text-sm bg-white border border-border rounded-lg outline-none focus:border-accent focus:ring-2 focus:ring-accent/10 transition-all placeholder:text-text-muted text-text-primary';
-const textareaCls = `${inputCls} resize-none`;
+const inputCls = 'ui-field';
+const textareaCls = 'ui-field resize-y';
 
 const MAX_PRODUCT_ASSETS = {
   images: 5,
@@ -1210,28 +1227,27 @@ export default function EnterprisePage() {
           当前：{AUTONOMY_OPTIONS.find(item => item.value === effectiveAutonomy)?.title}
         </span>
       </div>
-      <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
-        {AUTONOMY_OPTIONS.map(option => {
-          const active = effectiveAutonomy === option.value;
-          const disabled = option.value === 'auto' && !canAutoReply;
+      <div className="mt-4 grid gap-3 md:grid-cols-[minmax(220px,0.72fr)_1fr]">
+        <label className="block">
+          <span className="mb-2 block text-xs font-black text-text-primary">选择参与程度</span>
+          <select className={`${inputCls} ui-select`} value={effectiveAutonomy} onChange={event => setAutonomy(event.target.value as AutonomyLevel)}>
+            {AUTONOMY_OPTIONS.map(option => (
+              <option key={option.value} value={option.value} disabled={option.value === 'auto' && !canAutoReply}>
+                {option.title}{option.value === 'auto' && !canAutoReply ? '（需先审批 5 条问答）' : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+        {(() => {
+          const active = AUTONOMY_OPTIONS.find(option => option.value === effectiveAutonomy) ?? AUTONOMY_OPTIONS[1];
           return (
-            <button
-              key={option.value}
-              type="button"
-              title={disabled ? '需要先录入并审批至少 5 条常见问答' : undefined}
-              disabled={disabled}
-              onClick={() => setAutonomy(option.value)}
-              className={`min-h-[118px] rounded-lg border p-3 text-left transition-all disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400 ${active ? 'border-slate-950 bg-slate-950 text-white shadow-sm' : 'border-border bg-white text-text-primary hover:border-slate-300 hover:bg-surface-2'}`}
-            >
-              <span className={`inline-flex h-5 w-5 items-center justify-center rounded-full border text-[10px] font-black ${active ? 'border-white bg-white text-slate-950' : 'border-border text-text-muted'}`}>
-                {active ? '✓' : ''}
-              </span>
-              <p className="mt-2 text-xs font-black">{option.title}</p>
-              <p className={`mt-2 text-[11px] leading-5 ${active ? 'text-white/80' : disabled ? 'text-slate-400' : 'text-text-muted'}`}>{option.desc}</p>
-              <p className={`text-[11px] leading-5 ${active ? 'text-white/80' : disabled ? 'text-slate-400' : 'text-text-muted'}`}>{disabled ? '需要先录入并审批至少 5 条常见问答' : option.detail}</p>
-            </button>
+            <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 px-4 py-3">
+              <p className="text-xs font-black text-emerald-900">{active.title}</p>
+              <p className="mt-1 text-[11px] leading-5 text-emerald-800">{active.desc}</p>
+              <p className="text-[11px] leading-5 text-emerald-700">{active.detail}</p>
+            </div>
           );
-        })}
+        })()}
       </div>
       {configuredAutonomy === 'auto' && !canAutoReply && (
         <p className="mt-3 rounded-md bg-amber-50 px-3 py-2 text-[11px] font-semibold text-amber-800">
@@ -1304,7 +1320,7 @@ export default function EnterprisePage() {
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
             <label className="rounded-lg border border-amber-100 bg-white p-3">
               <span className="text-xs font-black text-amber-950">连续未命中阈值</span>
               <select
@@ -1353,7 +1369,7 @@ export default function EnterprisePage() {
 
   const companySection = (
     <KnowledgeCard icon={Building2} title="公司介绍" purpose="AI 开场白和自我介绍的素材" completed={completions.company} stat={`${profile.company.description.trim().length}/50 字`}>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
         <Field label="公司名称">
           <input className={inputCls} value={profile.company.name} onChange={e => set('company')('name', e.target.value)} placeholder="示例贸易有限公司" />
         </Field>
@@ -1407,7 +1423,7 @@ export default function EnterprisePage() {
         </button>
         {notificationMessage && <p className={`text-xs font-bold ${notificationMessageError ? 'text-red-600' : 'text-emerald-700'}`}>{notificationMessage}</p>}
       </div>
-      <div className="mt-4 grid grid-cols-3 gap-4">
+      <div className="mt-4 grid grid-cols-1 gap-4 md:grid-cols-3">
         <Field label="工作开始时间">
           <input className={inputCls} type="time" value={profile.notifications?.workHours.start ?? '09:00'} onChange={e => setProfile(prev => ({ ...prev, notifications: { ...(prev.notifications ?? DEFAULT.notifications!), workHours: { ...(prev.notifications?.workHours ?? DEFAULT.notifications!.workHours), start: e.target.value } } }))} />
         </Field>
@@ -1541,7 +1557,7 @@ export default function EnterprisePage() {
             {missingImageRatio > 0.5 && (
               <p className="mb-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">缺少图片的产品无法生成视频</p>
             )}
-            <div className="mb-4 grid grid-cols-2 gap-4">
+             <div className="mb-4 grid grid-cols-1 gap-4 md:grid-cols-2">
               <Field label="主营品类">
                 <OptionSelector value={profile.products.categories} options={CATEGORY_OPTIONS} onChange={value => set('products')('categories', value)} manualPlaceholder="补充其他主营品类" />
               </Field>
@@ -1572,7 +1588,7 @@ export default function EnterprisePage() {
                     <p className="text-xs font-black text-text-primary">产品 {index + 1}</p>
                     <button type="button" onClick={() => removeProduct(index)} className="rounded-md p-1 text-text-muted hover:bg-white hover:text-red" title="删除产品"><X size={13} /></button>
                   </div>
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                     <Field label="产品名称">
                       <input className={inputCls} value={product.name} onChange={e => updateProduct(index, { name: e.target.value })} placeholder={`产品${index + 1}`} />
                     </Field>
@@ -1617,7 +1633,7 @@ export default function EnterprisePage() {
                 return (
                   <div key={index} className="rounded-lg border border-border bg-surface-2/40 p-3">
                     <p className="mb-3 text-xs font-black text-text-primary">{product.name || `产品${index + 1}`}</p>
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-3">
                       {groups.map(({ key, label, limit, accept, icon: Icon, assets }) => (
                         <div key={key} className="min-w-0 rounded-lg border border-border bg-white p-3">
                           <div className="mb-2 flex items-center justify-between gap-2">
@@ -1656,7 +1672,7 @@ export default function EnterprisePage() {
                 <p className="text-sm font-black text-amber-900">客户询价 → 标记“等待人工报价”</p>
                 <p className="mt-1 text-xs leading-5 text-amber-800">AI 不回复价格，也不发送“稍后报价”占位消息；系统提醒销售查看数量、规格和包装要求后亲自回复。</p>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                 <Field label="内部参考价格（不会自动发给客户）">
                   <input className={inputCls} value={profile.bizRules?.priceRange ?? ''} onChange={e => setBizRule('priceRange', e.target.value)} placeholder="$5 - $500 USD，仅供销售参考" />
                 </Field>
@@ -1677,17 +1693,11 @@ export default function EnterprisePage() {
                 </Field>
               </div>
               <Field label="销售议价偏好（仅用于内部建议）：">
-                <div className="flex flex-wrap gap-2">
-                  {[
-                    { value: 'no' as BargainPolicy, label: '不议价' },
-                    { value: 'limited' as BargainPolicy, label: '有限让步' },
-                    { value: 'open' as BargainPolicy, label: '开放协商' },
-                  ].map(option => (
-                    <button key={option.value} type="button" onClick={() => setBizRule('bargainPolicy', option.value)} className={`rounded-lg border px-3 py-2 text-xs font-bold ${profile.bizRules?.bargainPolicy === option.value ? 'border-slate-950 bg-slate-950 text-white' : 'border-border bg-white text-text-secondary'}`}>
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
+                <select className={`${inputCls} ui-select`} value={profile.bizRules?.bargainPolicy ?? 'no'} onChange={event => setBizRule('bargainPolicy', event.target.value as BargainPolicy)}>
+                  <option value="no">不议价</option>
+                  <option value="limited">有限让步</option>
+                  <option value="open">开放协商</option>
+                </select>
               </Field>
             </div>
           </KnowledgeCard>
@@ -1830,7 +1840,7 @@ export default function EnterprisePage() {
                 </button>
               </div>
             </div>
-            <div className="mt-4 grid grid-cols-3 gap-3">
+            <div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-3">
               {([
                 ['greeting_style', '开场称呼'],
                 ['quoting_stance', '报价姿态'],
@@ -1872,7 +1882,7 @@ export default function EnterprisePage() {
             {(profile.salesStyleProfile?.sample_pairs ?? []).length > 0 && (
               <div className="mt-3 rounded-lg border border-border bg-surface-2/50 p-3">
                 <p className="text-xs font-black text-text-primary">代表样本</p>
-                <div className="mt-2 grid grid-cols-2 gap-2">
+                <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
                   {(profile.salesStyleProfile?.sample_pairs ?? []).slice(0, 4).map((pair, index) => (
                     <div key={`${pair.trigger}-${index}`} className="rounded-lg bg-white p-2 text-[11px] leading-5 text-text-secondary">
                       <p className="font-bold text-text-primary">买家：{pair.trigger}</p>
@@ -1902,7 +1912,7 @@ export default function EnterprisePage() {
 
                 <div className="rounded-lg border border-border bg-surface-2/40 p-4">
                   <div className="mb-3 flex items-center gap-2"><Compass size={14} className="text-text-secondary" /><h3 className="text-sm font-black text-text-primary">经营策略</h3></div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <Field label="当前阶段目标"><input className={inputCls} value={profile.strategy?.currentGoal ?? ''} onChange={e => set('strategy')('currentGoal', e.target.value)} /></Field>
                     <Field label="本期重点产品"><input className={inputCls} value={profile.strategy?.focusProducts ?? ''} onChange={e => set('strategy')('focusProducts', e.target.value)} /></Field>
                     <Field label="重点市场"><OptionSelector value={profile.strategy?.focusMarkets ?? ''} options={MARKET_OPTIONS} onChange={value => set('strategy')('focusMarkets', value)} manualPlaceholder="补充重点国家或地区" /></Field>
@@ -1914,7 +1924,7 @@ export default function EnterprisePage() {
 
                 <div className="rounded-lg border border-border bg-surface-2/40 p-4">
                   <div className="mb-3 flex items-center gap-2"><Megaphone size={14} className="text-text-secondary" /><h3 className="text-sm font-black text-text-primary">品牌调性</h3></div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <Field label="品牌调性关键词"><OptionSelector value={profile.brand.tone} options={BRAND_TONE_OPTIONS} onChange={value => set('brand')('tone', value)} manualPlaceholder="补充品牌调性" /></Field>
                     <Field label="沟通风格"><OptionSelector value={profile.brand.style} options={COMMUNICATION_STYLE_OPTIONS} multiple={false} onChange={value => set('brand')('style', value)} manualPlaceholder="补充沟通风格" /></Field>
                     <Field label="首选输出语言"><OptionSelector value={profile.brand.preferredLanguages ?? ''} options={LANGUAGE_OPTIONS} onChange={value => set('brand')('preferredLanguages', value)} manualPlaceholder="补充输出语言" /></Field>
@@ -1925,7 +1935,7 @@ export default function EnterprisePage() {
 
                 <div className="rounded-lg border border-border bg-surface-2/40 p-4">
                   <div className="mb-3 flex items-center gap-2"><BookOpen size={14} className="text-text-secondary" /><h3 className="text-sm font-black text-text-primary">Agent 学习记录</h3></div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
                     <Field label="已验证有效角度"><textarea className={textareaCls} rows={2} value={profile.agentLearning?.provenAngles ?? ''} onChange={e => set('agentLearning')('provenAngles', e.target.value)} /></Field>
                     <Field label="低效角度 / 需降权"><textarea className={textareaCls} rows={2} value={profile.agentLearning?.weakAngles ?? ''} onChange={e => set('agentLearning')('weakAngles', e.target.value)} /></Field>
                     <Field label="待确认推断"><textarea className={textareaCls} rows={2} value={profile.agentLearning?.pendingAssumptions ?? ''} onChange={e => set('agentLearning')('pendingAssumptions', e.target.value)} /></Field>

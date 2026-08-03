@@ -66,7 +66,10 @@ export type PendingPublishContent = {
 
 type ViewMode = 'week' | 'month';
 
-type HoverContentData = { kind: 'post'; post: CalendarPost };
+type HoverContentData =
+  | { kind: 'post'; post: CalendarPost }
+  | { kind: 'tide'; day: Date; bestHour: number; targetHour: number; score: number; source: string; events: MarketingEvent[] }
+  | { kind: 'slot'; day: Date; startHour: number; endHour: number; items: CalendarPost[] };
 
 type HoveredContent = HoverContentData & { x: number; y: number };
 
@@ -163,6 +166,20 @@ function hourLabel(value: number): string {
   const hour = Math.floor(value);
   const minutes = value % 1 ? '30' : '00';
   return `${String(hour).padStart(2, '0')}:${minutes}`;
+}
+
+function fallbackPeakScore(day: Date): number {
+  const weekdayBase = [0.68, 0.78, 0.74, 0.81, 0.86, 0.92, 0.84][day.getDay()];
+  const monthlyWave = Math.sin((day.getDate() / 31) * Math.PI * 4) * 0.045;
+  return Math.max(0.55, Math.min(0.96, weekdayBase + monthlyWave));
+}
+
+function calendarErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (!message || /request_failed|load_failed|failed to fetch|network/i.test(message)) {
+    return '日历数据暂时无法刷新，当前先展示平台参考节奏。';
+  }
+  return message;
 }
 
 type ChartPoint = { x: number; y: number };
@@ -317,7 +334,7 @@ export function CalendarPlanner({
       setScores(Object.fromEntries(scoreRows.map(row => [row.weekday, row.scores])));
       setScoreSource(scoreRows.some(row => row.source === 'account_history') ? '账号真实数据' : '平台参考');
     } catch (loadError) {
-      if (!silent) setError(loadError instanceof Error ? loadError.message : 'load_failed');
+      if (!silent) setError(calendarErrorMessage(loadError));
     } finally {
       if (!silent) setLoading(false);
     }
@@ -342,7 +359,7 @@ export function CalendarPlanner({
   const tideChartWidth = tideMonthDays.length * tideDayWidth;
   const tidePeakScores = tideMonthDays.map(day => {
     const dayScores = scores[day.getDay()] || [];
-    return dayScores.length ? Math.max(...dayScores) : 0.46;
+    return dayScores.length ? Math.max(...dayScores) : fallbackPeakScore(day);
   });
   const tideMinScore = Math.min(...tidePeakScores);
   const tideMaxScore = Math.max(...tidePeakScores);
@@ -369,6 +386,22 @@ export function CalendarPlanner({
     for (const event of tideEvents) grouped[event.date] = [...(grouped[event.date] || []), event];
     return grouped;
   }, [tideEvents]);
+
+  const tideHoverForDay = (day: Date, onlyEvent?: MarketingEvent): HoverContentData => {
+    const dayScores = scores[day.getDay()] || [];
+    const bestHour = dayScores.length
+      ? dayScores.reduce((best, score, hour, all) => score > all[best] ? hour : best, 0)
+      : 20;
+    return {
+      kind: 'tide',
+      day,
+      bestHour,
+      targetHour: targetHourFromBeijing(bestHour, utcOffset),
+      score: dayScores[bestHour] || fallbackPeakScore(day),
+      source: scoreSource,
+      events: onlyEvent ? [onlyEvent] : eventsByDay[dateKey(day)] || [],
+    };
+  };
 
   const placePendingContent = async (id: string, scheduledAt: Date) => {
     if (!onSchedulePending) throw new Error('排期功能暂不可用');
@@ -665,11 +698,18 @@ export function CalendarPlanner({
                   const bestHour = dayScores.length
                     ? dayScores.reduce((best, score, hour, all) => score > all[best] ? hour : best, 0)
                     : 20;
-                  const peakScore = dayScores[bestHour] || 0;
+                  const peakScore = dayScores[bestHour] || fallbackPeakScore(day);
                   const point = tidePoints[index];
                   const isSelected = isSameDay(day, selectedDate);
                   return (
-                    <g key={`${dateKey(day)}-point`} onClick={() => selectTideDate(day)} className="cursor-pointer">
+                    <g
+                      key={`${dateKey(day)}-point`}
+                      onClick={() => selectTideDate(day)}
+                      onMouseEnter={event => previewAt(event, tideHoverForDay(day))}
+                      onMouseMove={event => previewAt(event, tideHoverForDay(day))}
+                      onMouseLeave={() => setHoveredContent(null)}
+                      className="cursor-pointer"
+                    >
                       <circle cx={point.x} cy={point.y} r={isSelected ? 5 : 3.5} fill="#fff" stroke={isSelected ? '#0284c7' : '#059669'} strokeWidth={isSelected ? 3 : 2}>
                         <title>{`${day.toLocaleDateString('zh-CN')} · 北京 ${hourLabel(bestHour)} · ${market.timeZoneLabel} ${hourLabel(targetHourFromBeijing(bestHour, utcOffset))} · 推荐分 ${Math.round(peakScore * 100)}`}</title>
                       </circle>
@@ -689,6 +729,9 @@ export function CalendarPlanner({
                     key={event.id}
                     type="button"
                     onClick={() => selectTideDate(tideMonthDays[dayIndex])}
+                    onMouseEnter={mouseEvent => previewAt(mouseEvent, tideHoverForDay(tideMonthDays[dayIndex], event))}
+                    onMouseMove={mouseEvent => previewAt(mouseEvent, tideHoverForDay(tideMonthDays[dayIndex], event))}
+                    onMouseLeave={() => setHoveredContent(null)}
                     className={`absolute z-10 w-[96px] rounded-lg border px-1.5 py-1 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${eventTone(event)}`}
                     style={{ left: dayIndex * tideDayWidth + 5, top: 4 + sameDayIndex * 38 }}
                     title={`${event.name} · ${event.date} · ${event.note}（${event.source}）`}
@@ -779,7 +822,17 @@ export function CalendarPlanner({
                           return hour >= startHour && hour < startHour + 6;
                         });
                         return (
-                          <div key={startHour} className="grid min-h-[46px] grid-cols-[25px_minmax(0,1fr)] border-t border-dashed border-slate-200 first:border-t-0">
+                          <div
+                            key={startHour}
+                            onMouseEnter={event => previewAt(event, { kind: 'slot', day, startHour, endHour: startHour + 6, items: bucketItems })}
+                            onMouseMove={event => {
+                              const target = event.target;
+                              if (target instanceof Element && target.closest('[data-calendar-post]')) return;
+                              previewAt(event, { kind: 'slot', day, startHour, endHour: startHour + 6, items: bucketItems });
+                            }}
+                            onMouseLeave={() => setHoveredContent(null)}
+                            className="grid min-h-[46px] grid-cols-[25px_minmax(0,1fr)] border-t border-dashed border-slate-200 transition-colors first:border-t-0 hover:bg-emerald-50/50"
+                          >
                             <span className="border-r border-slate-100 pt-1.5 text-center text-[8px] font-black text-slate-400">{String(startHour).padStart(2, '0')}</span>
                             <div className="space-y-1 p-1">
                               {bucketItems.map(item => {
@@ -788,6 +841,7 @@ export function CalendarPlanner({
                                   <button
                                     key={item.id}
                                     type="button"
+                                    data-calendar-post={item.id}
                                     draggable={!item.platformPostId && !item.scheduleLocked}
                                     title={item.scheduleLocked ? '定点排期已锁定；点击可编辑发布内容' : '拖动可调整日期，发布时间保持不变'}
                                     onDragStart={event => {
@@ -815,7 +869,16 @@ export function CalendarPlanner({
                       {dayItems.slice(0, 1).map(item => {
                         const meta = statusMeta(item);
                         return (
-                          <button key={item.id} type="button" onClick={() => onOpenPost?.(item)} className={`w-full rounded-xl border p-1.5 text-left shadow-sm ${meta.className}`}>
+                          <button
+                            key={item.id}
+                            type="button"
+                            data-calendar-post={item.id}
+                            onMouseEnter={event => previewAt(event, { kind: 'post', post: item })}
+                            onMouseMove={event => previewAt(event, { kind: 'post', post: item })}
+                            onMouseLeave={() => setHoveredContent(null)}
+                            onClick={() => onOpenPost?.(item)}
+                            className={`w-full rounded-xl border p-1.5 text-left shadow-sm ${meta.className}`}
+                          >
                             <span className="flex items-center justify-between gap-1 text-[9px] font-black"><PlatformBadge platform={item.platform} compact /><span>{new Date(item.publishedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span></span>
                             <span className="mt-1 block truncate text-[10px] font-bold">{item.title}</span>
                           </button>
@@ -886,14 +949,14 @@ export function CalendarPlanner({
 
       {hoveredContent && (
         <div
-          className="pointer-events-none fixed z-[120] w-[292px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_18px_50px_rgba(15,23,42,0.22)]"
+          className="ui-floating-panel pointer-events-none fixed z-[120] w-[292px] overflow-hidden"
           style={{
             left: Math.max(12, Math.min(hoveredContent.x + 14, (typeof window === 'undefined' ? 1440 : window.innerWidth) - 304)),
             top: Math.max(12, Math.min(hoveredContent.y + 14, (typeof window === 'undefined' ? 900 : window.innerHeight) - 286)),
           }}
         >
-          {(() => {
-            const post = hoveredContent.post;
+          {hoveredContent.kind === 'post' ? (() => {
+            const { post } = hoveredContent;
             const meta = statusMeta(post);
             return (
               <>
@@ -930,7 +993,66 @@ export function CalendarPlanner({
                 </div>
               </>
             );
-          })()}
+          })() : hoveredContent.kind === 'tide' ? (
+            <div className="p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-black text-text-primary">{hoveredContent.day.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })}</p>
+                  <p className="mt-1 text-[10px] font-bold text-text-muted">{hoveredContent.source} · {enterpriseMarketLabel}</p>
+                </div>
+                <span className="rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-black text-emerald-700">热度 {Math.round(hoveredContent.score * 100)}</span>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <div className="rounded-xl bg-surface px-3 py-2">
+                  <p className="text-[9px] font-bold text-text-muted">北京时间</p>
+                  <p className="mt-1 text-sm font-black text-text-primary">{hourLabel(hoveredContent.bestHour)}</p>
+                </div>
+                <div className="rounded-xl bg-surface px-3 py-2">
+                  <p className="text-[9px] font-bold text-text-muted">{market.timeZoneLabel}</p>
+                  <p className="mt-1 text-sm font-black text-text-primary">{hourLabel(hoveredContent.targetHour)}</p>
+                </div>
+              </div>
+              {hoveredContent.events.length > 0 ? (
+                <div className="mt-3 space-y-2">
+                  {hoveredContent.events.map(event => (
+                    <div key={event.id} className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2">
+                      <p className="flex items-center gap-1 text-[10px] font-black text-amber-900"><Flag size={10} />{event.name}</p>
+                      <p className="mt-1 text-[9px] leading-4 text-amber-800">{event.note}</p>
+                      <p className="mt-1 text-[8px] font-bold text-amber-700">来源：{event.source}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : <p className="mt-3 text-[10px] text-text-muted">当天没有节庆点，建议时段按发布热度计算。</p>}
+            </div>
+          ) : (
+            <div className="p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-black text-text-primary">{hoveredContent.day.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })}</p>
+                  <p className="mt-1 text-[10px] font-bold text-text-muted">排期时间段</p>
+                </div>
+                <span className="rounded-full bg-sky-50 px-2 py-1 text-[10px] font-black text-sky-700">{hoveredContent.items.length} 条内容</span>
+              </div>
+              <div className="mt-3 flex items-center gap-2 rounded-xl bg-surface px-3 py-2.5">
+                <Clock size={14} className="text-emerald-600" />
+                <span className="text-sm font-black text-text-primary">{hourLabel(hoveredContent.startHour)} – {hourLabel(hoveredContent.endHour)}</span>
+              </div>
+              {hoveredContent.items.length > 0 ? (
+                <div className="mt-3 space-y-2">
+                  {hoveredContent.items.slice(0, 3).map(item => (
+                    <div key={item.id} className="rounded-xl border border-border bg-white px-3 py-2">
+                      <div className="flex items-center justify-between gap-2 text-[9px] font-black">
+                        <PlatformBadge platform={item.platform} compact />
+                        <span className="text-text-muted">{new Date(item.publishedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
+                      </div>
+                      <p className="mt-1 truncate text-[10px] font-bold text-text-primary">{item.title}</p>
+                    </div>
+                  ))}
+                  {hoveredContent.items.length > 3 && <p className="text-[9px] font-bold text-text-muted">另有 {hoveredContent.items.length - 3} 条内容</p>}
+                </div>
+              ) : <p className="mt-3 text-[10px] text-text-muted">这个时间段还没有内容，可点击当天添加或拖入待发布内容。</p>}
+            </div>
+          )}
         </div>
       )}
     </div>
