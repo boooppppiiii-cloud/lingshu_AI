@@ -6,6 +6,7 @@ import InquiryDataBoard from './InquiryDataBoard';
 import CrmDataBoard from './CrmDataBoard';
 import type { AgentAction, Page } from '../App';
 import { authHeader } from '../lib/auth';
+import { CHART_CURSOR_STYLE, CHART_TOOLTIP_STYLE } from '../lib/uiStyles';
 import { useCustomers } from '../hooks/useCustomers';
 
 /* 策略页「数据大屏」——全平台经营数据只在策略 agent 看（负责"想"）；
@@ -289,6 +290,20 @@ export default function StrategyDataBoard({
     onNavigate?.(page);
   };
 
+  const openWorkspaceView = (page: Page, view?: string) => {
+    try {
+      if (page === 'traffic' && view) localStorage.setItem('lingshu:traffic:initial-view', view);
+      if (page === 'conversion' && view) localStorage.setItem('lingshu:conversion:initial-view', view);
+    } catch { /* ignore unavailable storage */ }
+    window.dispatchEvent(new CustomEvent('lingshu:navigate', { detail: { page, view } }));
+    onNavigate?.(page);
+  };
+
+  const openMetric = (metric: MetricId) => {
+    if (metric === 'exposure') openWorkspaceView('traffic', 'accounts');
+    else openWorkspaceView('conversion', metric === 'followup' ? 'inbox' : 'leads');
+  };
+
   const toggleAdvisorDetails = (id: string) => {
     setExpandedActionIds(current => {
       const next = new Set(current);
@@ -323,15 +338,20 @@ export default function StrategyDataBoard({
                 <h2 className="text-base font-black text-text-primary">当前获客经营总览</h2>
                 <p className="mt-1 text-[11px] text-text-muted">从内容曝光到成交推进，先看趋势，再看渠道和待办。</p>
               </div>
-              <span className="rounded-full border border-green-200 bg-green-50 px-2.5 py-1 text-[10px] font-bold text-green-700">真实数据</span>
+              <button type="button" onClick={() => openWorkspaceView('traffic', 'accounts')} className="rounded-full border border-green-200 bg-green-50 px-2.5 py-1 text-[10px] font-bold text-green-700 transition hover:border-green-300 hover:bg-green-100" title="前往我的社媒 · 账号动态">
+                已接入账号 {exposure.accountCount} · 查看动态 →
+              </button>
             </div>
             <div className="grid gap-2.5 md:grid-cols-4">
               {chainMetrics.map(item => {
                 const active = selectedMetrics.has(item.id);
                 return (
-                <div
+                <button
+                  type="button"
                   key={item.label}
-                  className={`rounded-xl border p-3 transition-all ${
+                  onClick={() => openMetric(item.id)}
+                  title={item.id === 'exposure' ? '前往我的社媒 · 账号动态' : '前往我的客户查看明细'}
+                  className={`rounded-xl border p-3 text-left transition-all hover:-translate-y-0.5 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-green-200 ${
                     active
                       ? 'border-green-200 bg-green-50 shadow-sm ring-1 ring-green-100'
                       : 'border-border bg-surface'
@@ -346,7 +366,7 @@ export default function StrategyDataBoard({
                     {item.trend ? <span className="inline-flex items-center gap-0.5 text-[10px] font-bold text-green-700"><ArrowUpRight size={10} />{item.trend}</span> : <span />}
                     <span className="truncate text-[9px] text-text-muted">{item.source}</span>
                   </div>
-                </div>
+                </button>
                 );
               })}
             </div>
@@ -368,7 +388,7 @@ export default function StrategyDataBoard({
                       <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" horizontal={false}/>
                       <XAxis type="number" tick={{ fontSize: 10, fill: '#94a3b8' }} axisLine={false} tickLine={false}/>
                       <YAxis type="category" dataKey="channel" width={62} tick={{ fontSize: 10, fill: '#64748b' }} axisLine={false} tickLine={false}/>
-                      <Tooltip contentStyle={{ borderRadius: 12, borderColor: '#dcfce7', fontSize: 11 }}/>
+                      <Tooltip contentStyle={CHART_TOOLTIP_STYLE} cursor={CHART_CURSOR_STYLE}/>
                       <Bar dataKey="inquiries" name="询盘" fill="#86efac" radius={[0, 5, 5, 0]} barSize={12}/>
                       <Bar dataKey="converted" name="已转化" fill="#15803d" radius={[0, 5, 5, 0]} barSize={12}/>
                     </BarChart>
@@ -479,7 +499,9 @@ export default function StrategyDataBoard({
         </div>
 
         <div className="min-h-[520px] border-t border-border" id={tab === 'traffic' ? 'social-real-data' : undefined}>
-          <Active windowDays={windowDays} />
+          {tab === 'traffic'
+            ? <TrafficDataBoard windowDays={windowDays} onOpenAccounts={() => openWorkspaceView('traffic', 'accounts')} />
+            : <Active windowDays={windowDays} />}
         </div>
       </div>
     </div>

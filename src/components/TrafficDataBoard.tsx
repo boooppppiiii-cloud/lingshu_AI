@@ -71,7 +71,7 @@ function normalizeVideo(raw: any, platform: string, account: string): RealVideo 
   };
 }
 
-export default function TrafficDataBoard(_props: { windowDays?: number }) {
+export default function TrafficDataBoard({ onOpenAccounts }: { windowDays?: number; onOpenAccounts?: () => void }) {
   const [socialAccounts, setSocialAccounts] = useState<SocialAccount[]>([]);
   const [youtubeAccounts, setYoutubeAccounts] = useState<YouTubeAccount[]>([]);
   const [videos, setVideos] = useState<RealVideo[]>([]);
@@ -155,14 +155,17 @@ export default function TrafficDataBoard(_props: { windowDays?: number }) {
       ) : (
         <>
           <div className="mb-4 grid gap-3 md:grid-cols-4">
-            <StatCard label="已授权账号" value={compact(summary.accountCount)} icon={<Users size={14} />} />
+            <StatCard label="已授权账号" value={compact(summary.accountCount)} icon={<Users size={14} />} onClick={onOpenAccounts} hint="查看账号动态" />
             <StatCard label="可读取视频" value={compact(summary.videoCount)} icon={<Film size={14} />} />
             <StatCard label="视频播放" value={compact(summary.views)} icon={<Play size={14} />} />
             <StatCard label="互动合计" value={compact(summary.interactions)} icon={<Info size={14} />} />
           </div>
 
           <section className="mb-4 rounded-xl border border-border bg-white p-4">
-            <p className="mb-3 text-sm font-bold text-text-primary">已接入账号</p>
+            <button type="button" onClick={onOpenAccounts} disabled={!onOpenAccounts} className="mb-3 inline-flex items-center gap-2 text-sm font-bold text-text-primary transition-colors hover:text-green-700 disabled:cursor-default disabled:hover:text-text-primary">
+              已接入账号
+              {onOpenAccounts && <span className="text-[10px] font-black text-green-700">查看账号动态 →</span>}
+            </button>
             <div className="grid gap-2 md:grid-cols-2 xl:grid-cols-3">
               {accounts.map(account => (
                 <div key={`${account.platform}-${account.id}`} className="rounded-lg border border-border bg-surface px-3 py-2">
@@ -214,9 +217,18 @@ export default function TrafficDataBoard(_props: { windowDays?: number }) {
   );
 }
 
-function StatCard({ label, value, icon }: { label: string; value: string; icon: React.ReactNode }) {
+function StatCard({ label, value, icon, onClick, hint }: { label: string; value: string; icon: React.ReactNode; onClick?: () => void; hint?: string }) {
+  const className = `w-full rounded-xl border border-border bg-white p-3 text-left transition-all ${onClick ? 'cursor-pointer hover:-translate-y-0.5 hover:border-green-200 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-green-200' : ''}`;
+  if (onClick) {
+    return (
+      <button type="button" onClick={onClick} className={className} title={hint}>
+        <div className="flex items-center gap-2 text-green-700">{icon}<span className="text-xs font-semibold text-text-secondary">{label}</span><span className="ml-auto text-[9px] font-black">打开 →</span></div>
+        <p className="mt-2 text-2xl font-bold leading-none text-text-primary">{value}</p>
+      </button>
+    );
+  }
   return (
-    <div className="rounded-xl border border-border bg-white p-3">
+    <div className={className}>
       <div className="flex items-center gap-2 text-green-700">{icon}<span className="text-xs font-semibold text-text-secondary">{label}</span></div>
       <p className="mt-2 text-2xl font-bold leading-none text-text-primary">{value}</p>
     </div>

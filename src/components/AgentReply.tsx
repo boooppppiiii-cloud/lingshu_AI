@@ -4,6 +4,7 @@ import {
   Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
 import type { AgentType } from '../App';
+import { CHART_CURSOR_STYLE, CHART_TOOLTIP_STYLE } from '../lib/uiStyles';
 
 /* 渲染 Agent 回复的轻量 Markdown：
    ## / ### 分级加粗标题，**加粗**强调结论，- / 1. 列表，[文字](链接) 可点跳转。
@@ -149,7 +150,7 @@ function MiniChart({ raw }: { raw: string }) {
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,0.08)" vertical={false} />
               <XAxis dataKey="label" tick={axisTick} tickLine={false} axisLine={false} interval="preserveStartEnd" />
               <YAxis tick={axisTick} tickLine={false} axisLine={false} width={44} />
-              <Tooltip contentStyle={{ fontSize: 12, borderRadius: 10 }} />
+              <Tooltip contentStyle={CHART_TOOLTIP_STYLE} cursor={CHART_CURSOR_STYLE} />
               <Line type="monotone" dataKey="value" stroke="var(--color-accent)" strokeWidth={2} dot={{ r: 2.5 }} />
             </LineChart>
           ) : (
@@ -157,7 +158,7 @@ function MiniChart({ raw }: { raw: string }) {
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(15,23,42,0.08)" vertical={false} />
               <XAxis dataKey="label" tick={axisTick} tickLine={false} axisLine={false} interval={0} />
               <YAxis tick={axisTick} tickLine={false} axisLine={false} width={44} />
-              <Tooltip contentStyle={{ fontSize: 12, borderRadius: 10 }} cursor={{ fill: 'rgba(15,23,42,0.04)' }} />
+              <Tooltip contentStyle={CHART_TOOLTIP_STYLE} cursor={CHART_CURSOR_STYLE} />
               <Bar dataKey="value" fill="var(--color-accent)" radius={[5, 5, 0, 0]} maxBarSize={26} />
             </BarChart>
           )}

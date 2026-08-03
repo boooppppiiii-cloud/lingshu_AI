@@ -25,6 +25,7 @@ import {
   Bar,
 } from 'recharts';
 import { authHeader } from '../lib/auth';
+import { CHART_CURSOR_STYLE, CHART_TOOLTIP_STYLE } from '../lib/uiStyles';
 import { normalizeSocialBrand, SocialPlatformIcon } from './SocialPlatformIcon';
 
 type OrderStatus = '待付款' | '已付款' | '生产中' | '已发货' | '已完成' | '退款';
@@ -248,7 +249,7 @@ export default function OrderManagementPage() {
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" vertical={false} />
                   <XAxis dataKey="day" tick={{ fontSize: 10 }} stroke="var(--color-text-muted)" />
                   <YAxis tick={{ fontSize: 10 }} stroke="var(--color-text-muted)" tickFormatter={(value: number | string) => `$${Math.round(Number(value) / 1000)}k`} />
-                  <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} formatter={(value: unknown, name: unknown) => [name === 'gmv' ? money(tooltipNumber(value)) : tooltipNumber(value), name === 'gmv' ? 'GMV' : '订单']} />
+                  <Tooltip contentStyle={CHART_TOOLTIP_STYLE} cursor={CHART_CURSOR_STYLE} formatter={(value: unknown, name: unknown) => [name === 'gmv' ? money(tooltipNumber(value)) : tooltipNumber(value), name === 'gmv' ? 'GMV' : '订单']} />
                   <Line type="monotone" dataKey="gmv" stroke="#16a34a" strokeWidth={2.5} dot={{ r: 3, fill: '#16a34a' }} />
                 </LineChart>
               </ResponsiveContainer>
@@ -263,7 +264,7 @@ export default function OrderManagementPage() {
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border)" horizontal={false} />
                   <XAxis type="number" hide />
                   <YAxis type="category" dataKey="name" tick={{ fontSize: 11 }} stroke="var(--color-text-muted)" width={56} />
-                  <Tooltip contentStyle={{ fontSize: 12, borderRadius: 8 }} formatter={(value: unknown) => [money(tooltipNumber(value)), 'GMV']} />
+                  <Tooltip contentStyle={CHART_TOOLTIP_STYLE} cursor={CHART_CURSOR_STYLE} formatter={(value: unknown) => [money(tooltipNumber(value)), 'GMV']} />
                   <Bar dataKey="value" fill="#22c55e" radius={[0, 5, 5, 0]} />
                 </BarChart>
               </ResponsiveContainer>
