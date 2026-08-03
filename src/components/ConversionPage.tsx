@@ -43,6 +43,7 @@ import { LiveLocalTime } from './customers/LiveLocalTime';
 import { DailyBriefing } from './customers/DailyBriefing';
 import { useCustomers } from '../hooks/useCustomers';
 import { useDismissibleLayer } from '../hooks/useDismissibleLayer';
+import { isPredominantlyChineseText } from '../lib/messageLanguage';
 import { buildPrioritySuggestion, dailyTodoCustomers, isTodoCompleted, pendingCount, sortCustomersByPriority, type PrioritySuggestion } from '../lib/customerPriority';
 import type { AutonomyLevel, CustomerProfile, CustomerStage, HandlingMode, TimelineEvent } from '../types/customer';
 
@@ -342,17 +343,13 @@ function buildTemplatePlan(customer: CustomerProfile, templates: MessageTemplate
   return { template, variables, rendered: renderTemplateBody(template, variables) };
 }
 
-function containsChinese(text: string): boolean {
-  return /[\u4e00-\u9fff]/.test(text);
-}
-
 function normalizeDraftForChineseEditing(draft: string, customer: CustomerProfile): string {
   return draft.trim() || fallbackCustomerReplyZh(customer);
 }
 
 function translateChineseReplyForCustomer(customer: CustomerProfile, text: string): string {
   const body = text.trim();
-  if (!containsChinese(body)) return body;
+  if (!isPredominantlyChineseText(body)) return body;
 
   const product = customer.outboundProduct;
   const language = customerConversationLanguage(customer);
@@ -445,6 +442,7 @@ async function requestDraft(customer: CustomerProfile, instruction?: string, mod
         return {
           draft,
           originalDraft: draft,
+          translatedDraft: typeof data.translatedDraft === 'string' ? data.translatedDraft.trim() : undefined,
           fallbackCount: Number(data.fallbackCount || customer.fallbackCount || 0),
           knowledgeMiss: Boolean(data.knowledgeMiss),
           missReason: typeof data.missReason === 'string' ? data.missReason : '',
@@ -767,11 +765,11 @@ function DraftSuggestionBar({
     onChangeDraft(draftMessages.filter((_, itemIndex) => itemIndex !== index).join('\n\n'));
   };
   const fallbackChinese = () => chineseMessageTranslation(draft, customer) || fallbackCustomerReplyZh(customer);
-  const [chineseDraft, setChineseDraft] = useState(knownChineseDraft || (containsChinese(draft) ? draft : fallbackChinese()));
+  const [chineseDraft, setChineseDraft] = useState(knownChineseDraft || (isPredominantlyChineseText(draft) ? draft : fallbackChinese()));
 
   useEffect(() => {
     if (knownChineseDraft) { setChineseDraft(knownChineseDraft); return; }
-    if (containsChinese(draft)) { setChineseDraft(draft); return; }
+    if (isPredominantlyChineseText(draft)) { setChineseDraft(draft); return; }
     let cancelled = false;
     setChineseDraft('翻译中…');
     void fetch('/api/overseas/plugins/translate/run', {
@@ -1032,7 +1030,10 @@ function ChatThread({
             }
             const isBuyer = event.actor === 'buyer';
             const isAi = event.actor === 'ai';
-            const translation = event.translatedBody || chineseMessageTranslation(event.body, customer) || (isAi ? fallbackCustomerReplyZh(customer) : null);
+            // Only show a translation that belongs to this exact message. A generic
+            // fallback looks helpful but can silently tell the seller something the
+            // buyer or AI never said.
+            const translation = event.translatedBody || chineseMessageTranslation(event.body, customer) || null;
             return (
               <div key={event.id} className={`flex ${isBuyer ? 'justify-start' : 'justify-end'}`}>
                 <div className={`relative max-w-[74%] rounded-2xl px-4 py-3 shadow-sm ${isBuyer ? 'rounded-tl-sm border border-border bg-surface-2 text-text-primary' : 'rounded-tr-sm bg-[#0891b2] text-white'}`}>
@@ -1933,7 +1934,11 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
       return;
     }
     const reply = translateChineseReplyForCustomer(customerWithMessage, result.draft);
-    appendTimelineEvent(selected.id, createMessageEvent(selected.id, reply, 'ai', { autoSent: true, sendStatus: 'delivered' }));
+    appendTimelineEvent(selected.id, createMessageEvent(selected.id, reply, 'ai', {
+      autoSent: true,
+      sendStatus: 'delivered',
+      translatedBody: result.translatedDraft,
+    }));
     updateCustomer(selected.id, {
       handlingMode: 'ai_auto',
       handlingReason: 'Mock 智能客服已自动接待',
@@ -2010,7 +2015,7 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
   const sendReply = async () => {
     if (!selected) return;
     const templatePlan = isOutsideWhatsAppWindow(selected) ? buildTemplatePlan(selected, templates, input) : null;
-    const body = templatePlan?.rendered || (translatedInput.trim() || (containsChinese(input) ? translateChineseReplyForCustomer(selected, input) : input.trim()));
+    const body = templatePlan?.rendered || (translatedInput.trim() || (isPredominantlyChineseText(input) ? translateChineseReplyForCustomer(selected, input) : input.trim()));
     if (!body) return;
     if (isOutsideWhatsAppWindow(selected) && templatePlan?.template.status !== 'approved') {
       showToast('消息模板审核中，暂时不能发送超窗触达。');

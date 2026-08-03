@@ -100,26 +100,62 @@ export async function importWinningStyleMemories(
   return imported;
 }
 
-function tokenize(value: string): string[] {
-  return Array.from(new Set(
-    sanitizeStyleText(value)
-      .normalize('NFKC')
-      .toLowerCase()
-      .split(/[^a-z0-9\u4e00-\u9fff]+/i)
-      .map(item => item.trim())
-      .filter(item => item.length >= 2),
-  ));
+function styleFeatures(value: string): Set<string> {
+  const normalized = sanitizeStyleText(value).normalize('NFKC').toLowerCase();
+  const features = new Set<string>();
+  const conceptAliases: Record<string, string> = {
+    country: 'market', region: 'market', countries: 'market', markets: 'market',
+    sells: 'sell', selling: 'sell', sold: 'sell',
+    qty: 'quantity', quantities: 'quantity', amount: 'quantity',
+    cost: 'price', pricing: 'price', quote: 'price', quotation: 'price',
+    certificate: 'certification', certificates: 'certification', certified: 'certification',
+    ship: 'delivery', shipping: 'delivery', deliver: 'delivery', delivered: 'delivery',
+  };
+  for (const token of normalized.split(/[^a-z0-9]+/i).map(item => item.trim()).filter(item => item.length >= 2)) {
+    features.add(token);
+    if (conceptAliases[token]) features.add(conceptAliases[token]);
+  }
+  const cjk = Array.from(normalized.replace(/[^\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]/gu, ''));
+  for (let index = 0; index < cjk.length - 1; index += 1) features.add(cjk.slice(index, index + 2).join(''));
+  return features;
 }
 
-function overlapScore(a: string, b: string): number {
-  const left = tokenize(a);
-  const right = new Set(tokenize(b));
-  return left.reduce((sum, token) => sum + (right.has(token) ? 1 : 0), 0);
+function semanticStyleScore(leftValue: string, rightValue: string): number {
+  const left = styleFeatures(leftValue);
+  const right = styleFeatures(rightValue);
+  if (!left.size || !right.size) return 0;
+  let overlap = 0;
+  for (const item of left) if (right.has(item)) overlap += 1;
+  return overlap / (left.size + right.size - overlap);
 }
 
-function memoryWeight(item: StyleMemoryRecord, message: string): number {
-  const won = item.outcome === 'won';
-  return (won && item.edited ? 1000 : won ? 800 : item.edited ? 500 : 0) + overlapScore(item.trigger_message, message);
+function recencyScore(created: unknown, now = Date.now()): number {
+  const timestamp = Date.parse(String(created || ''));
+  if (!Number.isFinite(timestamp)) return 0.35;
+  const ageDays = Math.max(0, (now - timestamp) / 86_400_000);
+  return Math.exp(-ageDays / 180);
+}
+
+/**
+ * Hybrid retrieval keeps situational relevance in front of historical outcome.
+ * A won conversation is valuable evidence of style, but it must not swamp a
+ * much closer current buyer scenario simply because it once converted.
+ */
+export function styleMemoryRelevanceScore(
+  item: StyleMemoryRecord,
+  message: string,
+  customerId = '',
+  now = Date.now(),
+): number {
+  const semantic = semanticStyleScore(item.trigger_message, message);
+  const outcome = item.outcome === 'won' ? 1 : 0;
+  const edited = item.edited ? 1 : 0.35;
+  const sameCustomer = customerId && item.customer_id === customerId ? 1 : 0;
+  return semantic * 0.55
+    + recencyScore(item.created, now) * 0.15
+    + outcome * 0.15
+    + edited * 0.1
+    + sameCustomer * 0.05;
 }
 
 export async function recordStyleMemory(input: WriteStyleMemoryInput): Promise<void> {
@@ -174,16 +210,16 @@ async function updateWeeklyStyleAdoption(tenantId: string, edited: boolean): Pro
   else await store.create('style_adoption_stats', payload);
 }
 
-export async function retrieveStyleMemories(tenantId: string, category: string, message: string): Promise<StyleMemoryRecord[]> {
+export async function retrieveStyleMemories(tenantId: string, category: string, message: string, customerId = ''): Promise<StyleMemoryRecord[]> {
   const result = await store.list<StyleMemoryRecord>(COLLECTION, {
     where: { tenant_id: tenantId, category: category || 'reply' },
     sort: '-created',
     perPage: 100,
   });
   const items = result.items.filter(item => item.trigger_message && item.final_sent);
-  if (items.length < 5) return [];
+  if (items.length < 2) return [];
   return items
-    .sort((a, b) => memoryWeight(b, message) - memoryWeight(a, message))
+    .sort((a, b) => styleMemoryRelevanceScore(b, message, customerId) - styleMemoryRelevanceScore(a, message, customerId))
     .slice(0, 3);
 }
 
