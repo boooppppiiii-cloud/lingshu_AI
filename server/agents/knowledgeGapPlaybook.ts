@@ -112,7 +112,7 @@ const SCENARIO_PATTERNS: Array<{ scenario: KnowledgeGapScenario; pattern: RegExp
   },
   {
     scenario: 'price_or_quote',
-    pattern: /\b(?:price|quote|quotation|discount|payment terms?|deposit|lead time|delivery time|unit cost|how much)\b|报价|价格|单价|多少钱|折扣|付款条款|定金|交期/i,
+    pattern: /\b(?:price|quote|quotation|discount|payment terms?|deposit|lead time|delivery time|unit cost|how much|moq|minimum order(?: quantity)?)\b|报价|价格|单价|多少钱|折扣|付款条款|定金|交期|起订量|最小起订量/i,
   },
   {
     scenario: 'urgent_next_step',
@@ -402,6 +402,12 @@ function personalizeEnglishBridge(scenario: KnowledgeGapScenario, message: strin
     return {
       draft: `A ${days}-day delivery window is tight. Let me check production and shipping before I say yes.`,
       draftZh: `${days} 天的交付时间比较紧。我先核实生产和运输，再给您明确答复。`,
+    };
+  }
+  if (scenario === 'price_or_quote' && /\b(?:moq|minimum order(?: quantity)?)\b/i.test(message)) {
+    return {
+      draft: 'Which product do you need the MOQ for?',
+      draftZh: '您想确认哪款产品的起订量？',
     };
   }
   return fallback;

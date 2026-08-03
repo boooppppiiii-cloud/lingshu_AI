@@ -17,7 +17,7 @@ export function isSimpleGreetingMessage(value: unknown): boolean {
 
 export function isSimpleAcknowledgementMessage(value: unknown): boolean {
   const text = String(value || '').trim().toLowerCase();
-  return /^(?:thanks(?:,? that helps| for that| a lot)?|thank you(?:,? that helps)?|got it|understood|sounds good|perfect|great|okay|ok|vale|gracias|muchas gracias|明白了?|知道了?|好的?|谢谢|多谢)[\s!,.?。！？👍😊👌]*$/i.test(text);
+  return /^(?:thanks(?:,? that helps| for that| a lot)?|thank you(?:,? that helps)?|got it|understood|sounds good|perfect|great|okay|ok|(?:okay|ok),? that works|that works|works for me|all good|vale|gracias|muchas gracias|明白了?|知道了?|好的?|谢谢|多谢)[\s!,.?。！？👍😊👌]*$/i.test(text);
 }
 
 export function isDeferredDecisionMessage(value: unknown): boolean {
@@ -25,11 +25,16 @@ export function isDeferredDecisionMessage(value: unknown): boolean {
   return /\b(?:not (?:yet|now|ready)|maybe (?:later|next (?:week|month|season|year))|need (?:some )?time|let me think|i(?:'ll| will) come back)\b|再考虑|想一想|还没准备好|暂时不要|下周再说|下个月再说|以后再说/i.test(text);
 }
 
-export function conciseAcknowledgementReply(language: unknown): { draft: string; draftZh: string } {
+export function conciseAcknowledgementReply(language: unknown, buyerMessage = ''): { draft: string; draftZh: string } {
   const normalized = String(language || '').toLowerCase();
-  if (normalized.includes('arabic') || normalized.includes('阿拉伯')) return { draft: 'العفو 👍', draftZh: '不客气 👍' };
-  if (normalized.includes('spanish') || normalized.includes('español') || normalized.includes('西语')) return { draft: '¡De nada! 👍', draftZh: '不客气 👍' };
-  return { draft: 'Anytime 👍', draftZh: '不客气 👍' };
+  const gratitude = /^(?:thanks|thank you|gracias|muchas gracias|شكرا|شكرًا|谢谢|多谢)/i.test(String(buyerMessage || '').trim());
+  if (normalized.includes('arabic') || normalized.includes('阿拉伯')) {
+    return gratitude ? { draft: 'العفو 👍', draftZh: '不客气 👍' } : { draft: 'تمام 👍', draftZh: '好的 👍' };
+  }
+  if (normalized.includes('spanish') || normalized.includes('español') || normalized.includes('西语')) {
+    return gratitude ? { draft: '¡De nada! 👍', draftZh: '不客气 👍' } : { draft: 'Perfecto 👍', draftZh: '好的 👍' };
+  }
+  return gratitude || !buyerMessage ? { draft: 'Anytime 👍', draftZh: '不客气 👍' } : { draft: 'Perfect 👍', draftZh: '好的 👍' };
 }
 
 export function conciseDeferredReply(language: unknown, message: string): { draft: string; draftZh: string } {
