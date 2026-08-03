@@ -74,7 +74,7 @@ export default function InquiryDataBoard(_props: { windowDays?: number }) {
               <table className="w-full text-xs">
                 <thead className="bg-surface-2 text-text-secondary">
                   <tr>
-                    {['客户', '产品/需求', '阶段', '意向分', '预估金额', '最近消息', '下一步'].map(head => (
+                    {['客户', '产品/需求', '阶段', '商机判断', '预估金额', '最近消息', '下一步'].map(head => (
                       <th key={head} className="px-3 py-2 text-left font-semibold">{head}</th>
                     ))}
                   </tr>
@@ -92,7 +92,15 @@ export default function InquiryDataBoard(_props: { windowDays?: number }) {
                         <td className="px-3 py-2">
                           <span className="rounded bg-green-50 px-2 py-0.5 font-semibold text-green-700">{STAGE_LABEL[customer.stage]}</span>
                         </td>
-                        <td className="px-3 py-2 font-semibold text-text-primary">{customer.intentScore}</td>
+                        <td className="px-3 py-2 font-semibold text-text-primary">
+                          {customer.bant?.band === 'black'
+                            ? '信息待核实'
+                            : customer.bant?.level === 'hot' || customer.intentScore >= 75
+                            ? '高价值'
+                            : customer.bant?.level === 'qualified' || customer.intentScore >= 50
+                            ? '重点跟进'
+                            : '继续了解'}
+                        </td>
                         <td className="px-3 py-2 font-semibold text-text-primary">{customer.estimatedValue}</td>
                         <td className="max-w-[300px] px-3 py-2 text-text-secondary">{message?.body || customer.summary}</td>
                         <td className="max-w-[260px] px-3 py-2 text-text-secondary">{customer.nextStep}</td>

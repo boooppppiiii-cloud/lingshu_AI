@@ -21,6 +21,7 @@ export interface BantDimension {
   score: number;
   status: 'unknown' | 'partial' | 'confirmed';
   evidence: string[];
+  signalPoints?: Record<string, number>;
 }
 
 export interface AuthenticityAssessment {
@@ -41,6 +42,7 @@ export interface BantAssessment {
   band: QualificationBand;
   completeness: number;
   level: 'early' | 'qualified' | 'hot';
+  evidence?: string[];
   updatedAt: string;
 }
 

@@ -54,6 +54,7 @@ interface DraftResult {
   draft: string;
   translatedDraft?: string;
   handoffRequired?: boolean;
+  fallbackCount?: number;
   safeToSendBeforeHandoff?: boolean;
   handlingReason?: string;
   replyConfidence?: { level: string; score: number; reason: string };
@@ -406,6 +407,7 @@ async function requestDraft(customer: CustomerProfile, instruction?: string, mod
         bant: customer.bant,
         progressionGoal: customer.progressionGoal,
         spinGuidance: customer.spinGuidance,
+        fallbackCount: customer.fallbackCount ?? 0,
         instruction,
         mode,
         intent,
@@ -420,6 +422,7 @@ async function requestDraft(customer: CustomerProfile, instruction?: string, mod
           originalDraft: bridgeDraft,
           translatedDraft: typeof data.translatedDraft === 'string' ? data.translatedDraft.trim() : undefined,
           handoffRequired: true,
+          fallbackCount: Number(data.fallbackCount || customer.fallbackCount || 0),
           safeToSendBeforeHandoff: Boolean(data.safeToSendBeforeHandoff),
           handlingReason: typeof data.handlingReason === 'string' ? data.handlingReason : '客户正在询价，需要人工报价',
           replyConfidence: data.replyConfidence && typeof data.replyConfidence === 'object'
@@ -441,6 +444,7 @@ async function requestDraft(customer: CustomerProfile, instruction?: string, mod
         return {
           draft,
           originalDraft: draft,
+          fallbackCount: Number(data.fallbackCount || customer.fallbackCount || 0),
           knowledgeMiss: Boolean(data.knowledgeMiss),
           missReason: typeof data.missReason === 'string' ? data.missReason : '',
           evidence: Array.isArray(data.evidence) ? data.evidence.map(String) : [],
@@ -1911,7 +1915,11 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
         const bridgeReply = translateChineseReplyForCustomer(customerWithMessage, result.draft);
         appendTimelineEvent(selected.id, createMessageEvent(selected.id, bridgeReply, 'ai', { autoSent: true, sendStatus: 'delivered', translatedBody: result.translatedDraft }));
       }
-      updateCustomer(selected.id, { handlingMode: 'human_needed', handlingReason: result.handlingReason || '该消息需要人工接待' });
+      updateCustomer(selected.id, {
+        handlingMode: 'human_needed',
+        handlingReason: result.handlingReason || '该消息需要人工接待',
+        fallbackCount: result.fallbackCount ?? selected.fallbackCount,
+      });
       setDraftMeta(result);
       showToast(result.safeToSendBeforeHandoff && result.draft.trim()
         ? 'AI 已先承接客户，并把完整上下文转给人工'
@@ -1920,7 +1928,13 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
     }
     const reply = translateChineseReplyForCustomer(customerWithMessage, result.draft);
     appendTimelineEvent(selected.id, createMessageEvent(selected.id, reply, 'ai', { autoSent: true, sendStatus: 'delivered' }));
-    updateCustomer(selected.id, { handlingMode: 'ai_auto', handlingReason: 'Mock 智能客服已自动接待', hasUnread: false, aiAutoCount: (selected.aiAutoCount ?? 0) + 1 });
+    updateCustomer(selected.id, {
+      handlingMode: 'ai_auto',
+      handlingReason: 'Mock 智能客服已自动接待',
+      hasUnread: false,
+      aiAutoCount: (selected.aiAutoCount ?? 0) + 1,
+      fallbackCount: result.fallbackCount ?? selected.fallbackCount,
+    });
   };
 
   const markMessageStatus = (customerId: string, messageId: string, status: TimelineEvent['sendStatus']) => {

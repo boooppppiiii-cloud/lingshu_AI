@@ -3,7 +3,7 @@ import { hasLargeQuantity } from '../lib/dealSize.js';
 import type { BantAssessment } from './qualification.js';
 
 export type HandoffLine = 'business_value' | 'risk' | 'capability';
-export type RiskKind = 'price_or_terms' | 'dispute_or_quality';
+export type RiskKind = 'price_or_terms' | 'dispute_or_quality' | 'sensitive_business_fact';
 
 export interface HandoffDecision {
   required: boolean;
@@ -28,25 +28,36 @@ export function evaluateHandoff(input: {
   knowledgeGap?: boolean;
   historicalOrderValue?: number;
   repeatCustomer?: boolean;
+  bantTotal?: number;
+  salesActions?: Array<{ id: string; risk: string; scenario?: string; escalate?: string }>;
 }): HandoffDecision {
   const lines: HandoffLine[] = [];
   const reasons: string[] = [];
   const message = String(input.message || '');
-  if (VALUE_PATTERN.test(message) || hasLargeQuantity(message) || (input.historicalOrderValue ?? 0) >= 5000 || input.repeatCustomer) {
+  if (VALUE_PATTERN.test(message) || hasLargeQuantity(message) || (input.historicalOrderValue ?? 0) >= 5000 || input.repeatCustomer || (input.bantTotal ?? 0) >= 75) {
     lines.push('business_value');
     reasons.push(input.repeatCustomer || (input.historicalOrderValue ?? 0) >= 5000
       ? '历史已成交或累计采购价值高，属于优先人工维护客户'
+      : (input.bantTotal ?? 0) >= 75
+      ? '客户已达到高价值商机门槛，需要销售立即接手'
       : '命中大单、明确采购、PI/合同、复购或 OEM/独家等商业价值信号');
   }
   const disputeRisk = DISPUTE_RISK_PATTERN.test(message) || input.sentiment === 'negative';
   const priceRisk = PRICE_RISK_PATTERN.test(message);
+  const l4Actions = (input.salesActions ?? []).filter(item => item.risk === 'L4');
   let riskKind: RiskKind | undefined;
-  if (disputeRisk || priceRisk) {
+  if (disputeRisk || priceRisk || l4Actions.length) {
     lines.push('risk');
-    riskKind = disputeRisk ? 'dispute_or_quality' : 'price_or_terms';
-    reasons.push(input.sentiment === 'negative' ? '客户情绪负面或存在投诉风险' : disputeRisk ? '涉及客诉、质量或纠纷类 L4 事项' : '涉及价格、付款、交期或同行探价等 L4 事项');
+    riskKind = disputeRisk ? 'dispute_or_quality' : priceRisk ? 'price_or_terms' : 'sensitive_business_fact';
+    reasons.push(input.sentiment === 'negative'
+      ? '客户情绪负面或存在投诉风险'
+      : disputeRisk
+      ? '涉及客诉、质量或纠纷类 L4 事项'
+      : priceRisk
+      ? '涉及价格、付款、交期或同行探价等 L4 事项'
+      : `命中需人工确认的销售场景：${l4Actions.map(item => `${item.id}${item.scenario ? ` ${item.scenario}` : ''}`).join('、')}`);
   }
-  if (input.requestedHuman || input.knowledgeGap || (input.knowledgeMissStreak ?? 0) >= 2 || (input.fallbackCount ?? 0) > 2) {
+  if (input.requestedHuman || input.knowledgeGap || (input.knowledgeMissStreak ?? 0) >= 2 || (input.fallbackCount ?? 0) >= 2) {
     lines.push('capability');
     reasons.push(input.requestedHuman
       ? '客户主动要求人工'
@@ -96,6 +107,12 @@ function publicAppOrigin(): string {
   return String(process.env.PUBLIC_APP_URL || process.env.APP_PUBLIC_URL || process.env.PUBLIC_BASE_URL || 'https://app.lingshu.site').replace(/\/+$/, '');
 }
 
+function opportunityLabel(bant: BantAssessment | undefined, intentScore = 0): string {
+  if (bant?.band === 'black') return '信息待核实';
+  const level = bant?.level ?? (intentScore >= 75 ? 'hot' : intentScore >= 50 ? 'qualified' : 'early');
+  return level === 'hot' ? '高价值商机' : level === 'qualified' ? '值得重点跟进' : '继续了解需求';
+}
+
 export async function notifyCustomerHandoff(input: {
   tenantId: string;
   customer: {
@@ -122,13 +139,13 @@ export async function notifyCustomerHandoff(input: {
     : '灵小枢｜知识缺口待处理';
   const summary = [
     `客户要什么：${compact(input.message)}`,
-    `聊到哪一步：${compact(customer.stage || '询盘')}，BANT ${customer.bant?.total ?? customer.intentScore ?? 0}/100`,
+    `聊到哪一步：${compact(customer.stage || '询盘')}，${opportunityLabel(customer.bant, customer.intentScore)}`,
     `为什么需要人：${compact(decision.reasons.join('；'))}`,
   ];
   const content = [
     `**客户**：${compact(customer.name)}（${compact(customer.countryName || '国家未知')}，当地 ${compact(customer.localTime || '时间未知')}）`,
     `**WhatsApp**：${compact(customer.waNumber)}`,
-    `**意向 / 预估价值**：${customer.bant?.total ?? customer.intentScore ?? 0}/100 / ${compact(customer.estimatedValue || '$0')}`,
+    `**商机判断 / 预估价值**：${opportunityLabel(customer.bant, customer.intentScore)} / ${compact(customer.estimatedValue || '$0')}`,
     `**分流线**：${decision.lines.join(' + ')}`,
     ...summary,
     input.bridgeSent === undefined ? '' : input.bridgeSent ? 'AI 已发送安全承接短消息。' : 'AI 未自动发送，已有待审核草稿。',

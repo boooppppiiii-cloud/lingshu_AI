@@ -95,8 +95,12 @@ function hardSplit(value: string): string[] {
 export function planMobileChatMessages(value: unknown): { messages: string[]; truncated: boolean } {
   const normalized = normalizeMobileChatFormatting(value);
   if (!normalized) return { messages: [], truncated: false };
-  const sentences = normalized.match(/[^.!?。！？]+[.!?。！？]?/gu)?.map(item => item.trim()).filter(Boolean) ?? [normalized];
-  const pieces = sentences.flatMap(hardSplit);
+  const sentences = normalized.match(/[^.!?。！？؟]+[.!?。！？؟]?/gu)?.map(item => item.trim()).filter(Boolean) ?? [normalized];
+  const statements = sentences.filter(sentence => !/[?？？]/.test(sentence));
+  const firstQuestion = sentences.find(sentence => /[?？？]/.test(sentence));
+  // SPIN 和动作库都要求“一次只问一个问题”。先给价值/陈述，再放唯一的问题。
+  const dialogueSentences = firstQuestion ? [...statements, firstQuestion] : statements;
+  const pieces = dialogueSentences.flatMap(hardSplit);
   const messages: string[] = [];
   let current = '';
   let sentenceCount = 0;
