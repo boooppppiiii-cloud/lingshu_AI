@@ -4,6 +4,7 @@ export type KnowledgeGapScenario =
   | 'after_sale_complaint'
   | 'call_request'
   | 'delivery_commitment'
+  | 'product_availability'
   | 'quality_or_certification'
   | 'competitor_comparison'
   | 'customization_or_packaging'
@@ -58,6 +59,10 @@ const SCENARIO_PATTERNS: Array<{ scenario: KnowledgeGapScenario; pattern: RegExp
     pattern: /\b(?:quality|reliable|certificate|certification|gmp|iso|coa|lab report|test report|inspection|compliance|fake cert|standard)\b|质量|可靠|证书|认证|检测报告|验货|合规|假证/i,
   },
   {
+    scenario: 'product_availability',
+    pattern: /\b(?:do you have|have you got|available|in stock|what colo(?:u)?rs|which colo(?:u)?rs|what sizes|which sizes|size\s+[a-z0-9-]+|black|white|navy|beige|red|blue|green)\b|有货吗|现货|有哪些颜色|什么颜色|有哪些尺码|什么尺码|黑色|白色|藏青|米色/i,
+  },
+  {
     scenario: 'order_or_logistics',
     pattern: /\b(?:tracking|where is my order|order status|has it shipped|invoice|payment status|in transit|dispatch)\b|物流|运单|订单状态|发货了吗|发票|付款状态/i,
   },
@@ -85,11 +90,11 @@ function hasLargeOrderSignal(message: string): boolean {
 
 export function classifyKnowledgeGapScenario(message: string): KnowledgeGapScenario {
   const value = String(message || '').trim();
-  for (const item of SCENARIO_PATTERNS.slice(0, 5)) {
+  for (const item of SCENARIO_PATTERNS.slice(0, 6)) {
     if (item.pattern.test(value)) return item.scenario;
   }
   if (PEER_PATTERN.test(value) || hasLargeOrderSignal(value)) return 'high_value_or_peer';
-  for (const item of SCENARIO_PATTERNS.slice(5)) {
+  for (const item of SCENARIO_PATTERNS.slice(6)) {
     if (item.pattern.test(value)) return item.scenario;
   }
   return 'general_unknown';
@@ -106,6 +111,7 @@ const HANDLING_REASON: Record<KnowledgeGapScenario, string> = {
   after_sale_complaint: '客户正在投诉或要求退款，需要负责人立即接管并核对订单证据',
   call_request: '客户希望电话或视频沟通，需要人工确认可用时间并接管',
   delivery_commitment: '客户要求保证交付时间，需要人工核实生产与物流后确认',
+  product_availability: '客户正在确认颜色、尺码或库存，需要核对当前产品资料与实时可用状态',
   quality_or_certification: '客户在确认质量或资质真实性，需要人工核验真实文件',
   competitor_comparison: '客户正在比较供应商条件，需要销售确认同口径方案',
   customization_or_packaging: '客户提出定制或包装需求，需要确认真实可执行范围',
@@ -131,6 +137,11 @@ const ENGLISH: Record<KnowledgeGapScenario, ReplyPair[]> = {
     { draft: "I don't want to promise a date before checking the real production and shipping time. I'm getting sales to confirm it for this order now.", draftZh: '我不想在核实真实生产和运输时间前随口承诺日期。我现在请销售按这笔订单确认。' },
     { draft: "That date is important, so I won't guess. I'm bringing in sales to check the actual timeline and confirm it here.", draftZh: '这个日期很重要，所以我不会靠猜。我现在请销售核对真实时间并在这里确认。' },
     { draft: "Let me get the real timeline checked first. Sales will confirm whether that delivery date is workable for this order.", draftZh: '我先请人核对真实时间。销售会确认这笔订单是否能做到这个交付日期。' },
+  ],
+  product_availability: [
+    { draft: "I don't want to guess the current options. I'm asking our product colleague to check this item now.", draftZh: '我不想靠猜现在有哪些选项。我正在请产品同事核对这款产品。' },
+    { draft: "Let me check this exact option with our product colleague first, then we'll confirm it here.", draftZh: '我先请产品同事核对这个具体选项，然后在这里给您确认。' },
+    { draft: "I'll get the product colleague to check the current options for this one now.", draftZh: '我现在请产品同事核对这款产品当前可选的内容。' },
   ],
   quality_or_certification: [
     { draft: "You're right to check. I won't say a certificate is valid before it's matched to this product. I'm bringing in a colleague to verify the real file with you now.", draftZh: '您要核实是对的。在证书与这个产品核对一致前，我不会说它有效。我现在请同事一起核验真实文件。' },
@@ -203,6 +214,7 @@ function localizedPairs(language: SupportedLanguage, scenario: KnowledgeGapScena
       after_sale_complaint: spanish.after_sale_complaint![0],
       call_request: spanish.call_request![0],
       delivery_commitment: spanish.delivery_commitment![0],
+      product_availability: { draft: 'No quiero adivinar las opciones actuales. Voy a pedir al responsable de producto que revise este artículo ahora.', draftZh: '我不想靠猜现在有哪些选项。我正在请产品负责人核对这款产品。' },
       quality_or_certification: spanish.quality_or_certification![0],
       competitor_comparison: { draft: 'Vale la pena compararlo bien. Voy a pedir a ventas que revise el mismo alcance contigo, no solo el número principal.', draftZh: '这个报价值得认真比较。我会请销售按同一范围与您比较，而不只看表面的数字。' },
       customization_or_packaging: { draft: 'Entendido: marca privada y empaque bilingüe. Envíame el logo o una referencia y pediré que confirmen lo que realmente podemos hacer 👍', draftZh: '明白，您要贴牌和双语包装。请发来 Logo 或参考，我会请人确认真实可执行范围。' },
@@ -240,6 +252,7 @@ function localizedPairs(language: SupportedLanguage, scenario: KnowledgeGapScena
     after_sale_complaint: arabic.after_sale_complaint![0],
     call_request: arabic.call_request![0],
     delivery_commitment: arabic.delivery_commitment![0],
+    product_availability: { draft: 'لا أريد أن أخمّن الخيارات المتاحة الآن. سأطلب من مسؤول المنتج مراجعة هذا المنتج.', draftZh: '我不想靠猜现在有哪些选项。我正在请产品负责人核对这款产品。' },
     quality_or_certification: arabic.quality_or_certification![0],
     competitor_comparison: { draft: 'هذا العرض يستحق مقارنة دقيقة. سأطلب من المبيعات مقارنة نفس النطاق معك، وليس الرقم الظاهر فقط.', draftZh: '这个报价值得认真比较。我会请销售按同一范围与您比较，而不只看表面的数字。' },
     customization_or_packaging: { draft: 'واضح: علامة خاصة وتغليف بلغتين. أرسل الشعار أو مرجعًا للتغليف وسأطلب تأكيد ما يمكن تنفيذه فعليًا 👍', draftZh: '明白，您要贴牌和双语包装。请发来 Logo 或包装参考，我会请人确认真实可执行范围。' },
@@ -265,13 +278,45 @@ function firstBuyerDeliveryWindow(message: string): string {
   return String(message || '').match(/\b(?:within|in)\s+\d+\s+days?\b/i)?.[0] || '';
 }
 
+function quantityInChinese(value: string): string {
+  return value
+    .replace(/\bpcs?\b|\bpieces?\b|\bunits?\b/i, '件')
+    .replace(/\bsets?\b/i, '套')
+    .replace(/\bbottles?\b/i, '瓶')
+    .replace(/\bboxes?\b|\bcartons?\b/i, '箱');
+}
+
+function deliveryWindowInChinese(value: string): string {
+  const days = value.match(/\d+/)?.[0];
+  return days ? `${days} 天内` : value;
+}
+
 function personalizeEnglishBridge(scenario: KnowledgeGapScenario, message: string, fallback: ReplyPair): ReplyPair {
   const quantity = firstBuyerQuantity(message);
   const deliveryWindow = firstBuyerDeliveryWindow(message);
+  if (scenario === 'product_availability') {
+    const size = String(message || '').match(/\bsize\s+([a-z0-9-]+)\b/i)?.[1];
+    const color = String(message || '').match(/\b(black|white|navy|beige|red|blue|green)\b/i)?.[1];
+    if (size) return {
+      draft: `I'll check size ${size.toUpperCase()} for this one with our product colleague now.`,
+      draftZh: `我现在请产品同事核对这款的 ${size.toUpperCase()} 码。`,
+    };
+    if (color) {
+      const colorZh: Record<string, string> = { black: '黑色', white: '白色', navy: '藏青色', beige: '米色', red: '红色', blue: '蓝色', green: '绿色' };
+      return {
+      draft: `I'll check the ${color.toLowerCase()} option for this one with our product colleague now.`,
+        draftZh: `我现在请产品同事核对这款的${colorZh[color.toLowerCase()] || color}选项。`,
+      };
+    }
+    if (/colo(?:u)?rs?/i.test(message)) return {
+      draft: "I don't want to guess the colors. I'm asking our product colleague to confirm the current options now.",
+      draftZh: '我不想靠猜有哪些颜色。我现在请产品同事确认当前可选颜色。',
+    };
+  }
   if (scenario === 'high_value_or_peer' && quantity) {
     return {
       draft: `${quantity}—yes, that needs our sales lead. I'm bringing them in now, and I've already passed over what you sent.`,
-      draftZh: `${quantity}，这个数量需要销售负责人跟进。我现在请他加入，并把您已经提供的信息一起交给他。`,
+      draftZh: `${quantityInChinese(quantity)}，这个数量需要销售负责人跟进。我现在请他加入，并把您已经提供的信息一起交给他。`,
     };
   }
   if (scenario === 'competitor_comparison' && (quantity || deliveryWindow)) {
@@ -279,17 +324,18 @@ function personalizeEnglishBridge(scenario: KnowledgeGapScenario, message: strin
       ? `${quantity} with delivery ${deliveryWindow}`
       : quantity || `delivery ${deliveryWindow}`;
     const offerZh = quantity && deliveryWindow
-      ? `${quantity}、交付时间 ${deliveryWindow}`
-      : quantity || `交付时间 ${deliveryWindow}`;
+      ? `${quantityInChinese(quantity)}、交付时间 ${deliveryWindowInChinese(deliveryWindow)}`
+      : quantityInChinese(quantity) || `交付时间 ${deliveryWindowInChinese(deliveryWindow)}`;
     return {
       draft: `${offer} does sound attractive. Before you decide, let's check whether the packaging, documents and delivery terms are really the same. I'll ask sales to compare it properly with you.`,
       draftZh: `${offerZh} 确实有吸引力。决定前，我们先确认包装、文件和交付条件是否真的相同。我会请销售按同一口径与您比较。`,
     };
   }
   if (scenario === 'delivery_commitment' && deliveryWindow) {
+    const days = deliveryWindow.match(/\d+/)?.[0] || '';
     return {
-      draft: `${deliveryWindow} is tight, so I don't want to say yes before production and shipping are checked. I'm getting sales to confirm the real timing for this order now.`,
-      draftZh: `${deliveryWindow} 的时间比较紧，所以在核实生产和运输前我不会随口答应。我现在请销售确认这笔订单的真实时间。`,
+      draft: `A ${days}-day delivery window is tight, so I don't want to say yes before production and shipping are checked. I'm getting sales to confirm the real timing for this order now.`,
+      draftZh: `${days} 天的交付时间比较紧，所以在核实生产和运输前我不会随口答应。我现在请销售确认这笔订单的真实时间。`,
     };
   }
   return fallback;
@@ -341,6 +387,9 @@ export function scenarioHasGroundedEvidence(scenario: KnowledgeGapScenario, evid
   const source = String(evidenceSource || '').toLowerCase();
   if (scenario === 'customization_or_packaging') {
     return /\b(?:private[ -]?label|oem|odm|custom packaging|bilingual|arabic packaging)\b|贴牌|代工|定制包装|双语包装|阿拉伯语包装/.test(source);
+  }
+  if (scenario === 'product_availability') {
+    return /"(?:color|size|material)"\s*:\s*"(?!\s*")[^"]+"/i.test(source);
   }
   return false;
 }

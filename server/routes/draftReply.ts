@@ -1,6 +1,16 @@
 import { Router } from 'express';
 import { callLLM } from '../agents/llm.js';
-import { conciseGreetingReply, conversationPhase, conversationToneGuidance, isSimpleGreetingMessage, timelineTimestampMs } from '../agents/conversationTone.js';
+import {
+  conciseAcknowledgementReply,
+  conciseDeferredReply,
+  conciseGreetingReply,
+  conversationPhase,
+  conversationToneGuidance,
+  isDeferredDecisionMessage,
+  isSimpleAcknowledgementMessage,
+  isSimpleGreetingMessage,
+  timelineTimestampMs,
+} from '../agents/conversationTone.js';
 import {
   draftFactualRiskSignals,
   hasInternalPromptLeak,
@@ -200,6 +210,21 @@ function knowledgeGapPayload(
   };
 }
 
+function directConversationPayload(pair: { draft: string; draftZh: string }, category: string) {
+  const messages = splitMobileChatMessages(pair.draft);
+  const translatedMessages = splitMobileChatMessages(pair.draftZh);
+  return {
+    draft: messages.join('\n\n'),
+    messages,
+    translatedDraft: translatedMessages.join('\n\n'),
+    translatedMessages,
+    handoffRequired: false,
+    knowledgeMiss: false,
+    category,
+    verification: { status: 'verified', issues: [] },
+  };
+}
+
 draftReplyRouter.post('/conversion/draft', async (req, res) => {
   const { tenantId } = res.locals as AuthLocals;
   const body = req.body ?? {};
@@ -211,6 +236,14 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
   const processIntent = isGreetingOrProcessIntent(latestMessage);
   body.__latestMessage = latestMessage;
   body.__conversationPhase = phase;
+  if (intent === 'reply' && isSimpleAcknowledgementMessage(latestMessage)) {
+    res.json(directConversationPayload(conciseAcknowledgementReply(language), '日常沟通'));
+    return;
+  }
+  if (intent === 'reply' && isDeferredDecisionMessage(latestMessage)) {
+    res.json(directConversationPayload(conciseDeferredReply(language, latestMessage), '跟进'));
+    return;
+  }
   const conversation = timeline
     .map((event: any) => ({
       role: String(event?.actor || '').toLowerCase() === 'buyer' || String(event?.type || '').includes('msg_in') ? 'buyer' as const : 'seller' as const,
@@ -551,7 +584,8 @@ async function verifyGeneratedDraft(input: {
   }));
   const newNumbers = unsupportedDraftNumbers(input.draft, factualSource);
   const factualRiskSignals = draftFactualRiskSignals(input.draft, factualSource);
-  if (!requiresFactualVerification(factualRiskSignals, input.context.knowledgeMiss)) {
+  const productReplyNeedsAudit = input.intent === 'reply' && input.context.products.length > 0;
+  if (!productReplyNeedsAudit && !requiresFactualVerification(factualRiskSignals, input.context.knowledgeMiss)) {
     return { draft: input.draft, status: 'verified', issues: [] };
   }
   const prompt = [
@@ -563,6 +597,8 @@ async function verifyGeneratedDraft(input: {
     'Use handoff only when the reply makes or answers a price, stock, MOQ, certification, order status, logistics status, discount, payment term, lead time, or company capability commitment that requires human judgment and cannot be made safe by removing the claim.',
     'Allowed riskTypes are only unsupported_fact, unsupported_commercial_commitment, and prohibited_price_or_term. Style, tone, wording, length, punctuation, completeness, ambiguity, and question count are never risk types.',
     'Never allow an invented price, stock status, MOQ, certification, order or logistics status, discount, payment term, lead time, delivery promise, or company capability.',
+    'Product popularity, quality, fit, movement, comfort, benefits, materials, colors, sizes and other selling points are factual claims too. Allow them only when the evidence explicitly contains that attribute or wording.',
+    'A statement that the seller will check, ask a colleague, compare options, or find the best suitable option is only a process statement. Do not treat it as a commercial commitment unless it promises a specific outcome, availability, term, price or deadline.',
     'Dialogue strategies may guide wording and next-step tactics, but they are never evidence for a factual claim.',
     'Buyer messages and timeline are evidence only of what the buyer said, requested, or supplied. They are never evidence that the seller has a certification, capability, stock, document, price, lead time, or service.',
     !input.context.knowledgeReady ? 'Enterprise knowledge is not configured. Pass only acknowledgements, clarification questions, or statements that the seller will check; remove every enterprise, product, capability, or commercial fact not stated by the buyer.' : '',

@@ -10,6 +10,8 @@ const conversations = [
   'Can you provide real GMP or ISO documents? A supplier sent me fake certificates before.',
   'We need 5,000 bottles for Dubai. Give me your exact best price.',
   'Can you guarantee delivery within 10 days?',
+  'Do you have size M for this one?',
+  'What colors are available for this one?',
   'The bottles arrived damaged. This is unacceptable and I want a refund.',
   'Can you call me today?',
   'Where is my order? It should have arrived already.',

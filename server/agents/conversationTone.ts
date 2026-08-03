@@ -15,6 +15,41 @@ export function isSimpleGreetingMessage(value: unknown): boolean {
   return /^(hi|hello|hey|hi there|hello there|good morning|good afternoon|good evening|hola|buenas|你好|您好)[\s!,.?。！？]*$/i.test(text);
 }
 
+export function isSimpleAcknowledgementMessage(value: unknown): boolean {
+  const text = String(value || '').trim().toLowerCase();
+  return /^(?:thanks(?:,? that helps| for that| a lot)?|thank you(?:,? that helps)?|got it|understood|sounds good|perfect|great|okay|ok|vale|gracias|muchas gracias|明白了?|知道了?|好的?|谢谢|多谢)[\s!,.?。！？👍😊👌]*$/i.test(text);
+}
+
+export function isDeferredDecisionMessage(value: unknown): boolean {
+  const text = String(value || '').trim().toLowerCase();
+  return /\b(?:not (?:yet|now|ready)|maybe (?:later|next (?:week|month|season|year))|need (?:some )?time|let me think|i(?:'ll| will) come back)\b|再考虑|想一想|还没准备好|暂时不要|下周再说|下个月再说|以后再说/i.test(text);
+}
+
+export function conciseAcknowledgementReply(language: unknown): { draft: string; draftZh: string } {
+  const normalized = String(language || '').toLowerCase();
+  if (normalized.includes('arabic') || normalized.includes('阿拉伯')) return { draft: 'العفو 👍', draftZh: '不客气 👍' };
+  if (normalized.includes('spanish') || normalized.includes('español') || normalized.includes('西语')) return { draft: '¡De nada! 👍', draftZh: '不客气 👍' };
+  return { draft: 'Anytime 👍', draftZh: '不客气 👍' };
+}
+
+export function conciseDeferredReply(language: unknown, message: string): { draft: string; draftZh: string } {
+  const normalized = String(language || '').toLowerCase();
+  const hasNextMonth = /next month|下个月/i.test(message);
+  if (normalized.includes('arabic') || normalized.includes('阿拉伯')) {
+    return hasNextMonth
+      ? { draft: 'ولا يهمك، الشهر القادم مناسب. هل أرجع لك وقتها؟', draftZh: '没问题，下个月可以。需要我到时候再联系您吗？' }
+      : { draft: 'ولا يهمك، خذ وقتك. متى تحب أن أرجع لك؟', draftZh: '没问题，您慢慢考虑。什么时候方便我再联系您？' };
+  }
+  if (normalized.includes('spanish') || normalized.includes('español') || normalized.includes('西语')) {
+    return hasNextMonth
+      ? { draft: 'Sin problema, el próximo mes está bien. ¿Quieres que te escriba entonces?', draftZh: '没问题，下个月可以。需要我到时候再联系您吗？' }
+      : { draft: 'Sin problema, tómate tu tiempo. ¿Cuándo quieres que te escriba otra vez?', draftZh: '没问题，您慢慢考虑。什么时候方便我再联系您？' };
+  }
+  return hasNextMonth
+    ? { draft: 'No problem—next month is fine. Want me to check back then?', draftZh: '没问题，下个月可以。需要我到时候再联系您吗？' }
+    : { draft: 'No pressure—take your time. When would you like me to check back?', draftZh: '不着急，您慢慢考虑。什么时候方便我再联系您？' };
+}
+
 function isBuyer(event: TimelineLike): boolean {
   return String(event.actor || '').toLowerCase() === 'buyer' || String(event.type || '').includes('msg_in');
 }

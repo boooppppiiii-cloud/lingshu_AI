@@ -39,9 +39,13 @@ assert.equal(classifyKnowledgeGapScenario('We need 5,000 bottles for our chain.'
 assert.equal(classifyKnowledgeGapScenario('We are also a supplier in this market.'), 'high_value_or_peer');
 assert.equal(classifyKnowledgeGapScenario('We need 5,000 bottles with private-label packaging.'), 'high_value_or_peer');
 assert.equal(classifyKnowledgeGapScenario('What is the price for 300 pieces?'), 'price_or_quote');
+assert.equal(classifyKnowledgeGapScenario('Do you have size M for this one?'), 'product_availability');
+assert.equal(classifyKnowledgeGapScenario('What colors are available for this one?'), 'product_availability');
 assert.equal(scenarioHasGroundedEvidence('quality_or_certification', 'Approved documents: GMP and ISO 22716'), false);
 assert.equal(scenarioHasGroundedEvidence('quality_or_certification', 'No documents configured'), false);
 assert.equal(scenarioHasGroundedEvidence('customization_or_packaging', 'OEM and bilingual packaging are approved'), true);
+assert.equal(scenarioHasGroundedEvidence('product_availability', '{"color":"black, navy","size":""}'), true);
+assert.equal(scenarioHasGroundedEvidence('product_availability', '{"color":"","size":""}'), false);
 
 const repeated = resolveKnowledgeGapPlan({
   message: 'How can I know your quality is reliable?',
@@ -104,5 +108,10 @@ assert.doesNotMatch(complaint.draft, /refund approved|compensat|our fault|guaran
 const call = resolveKnowledgeGapPlan({ message: 'Can you call me today?', language: 'English' });
 assert.equal(call.scenario, 'call_request');
 assert.match(call.draft, /time|today|time zone/i);
+
+const sizeCheck = resolveKnowledgeGapPlan({ message: 'Do you have size M for this one?', language: 'English' });
+assert.equal(sizeCheck.scenario, 'product_availability');
+assert.match(sizeCheck.draft, /size M/i);
+assert.doesNotMatch(sizeCheck.draft, /which size|what size/i);
 
 console.log('knowledge gap playbook passed');
