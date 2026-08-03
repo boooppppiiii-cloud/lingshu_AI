@@ -18,7 +18,7 @@ import {
   unsupportedDraftNumbers,
   unsupportedHighRiskClaims,
 } from '../agents/draftSafety.js';
-import { ambiguousFaqClarification, groundedProductDiscoveryReply, resolveKnowledgeGapPlan, scenarioHasGroundedEvidence, type KnowledgeGapPlan } from '../agents/knowledgeGapPlaybook.js';
+import { ambiguousFaqClarification, groundedProductDiscoveryReply, groundedProductNames, resolveKnowledgeGapPlan, scenarioHasGroundedEvidence, type KnowledgeGapPlan } from '../agents/knowledgeGapPlaybook.js';
 import { mobileChatRewritePrompt, normalizeMobileChatFormatting, planMobileChatMessages, shouldReshapeMobileChatDraft, splitMobileChatMessages } from '../agents/mobileChatStyle.js';
 import { isGreetingOrProcessIntent, retrieveContext, type RetrievedContext } from '../knowledge/retrieve.js';
 import { buildKnowledgePromptBlock } from '../knowledge/promptBlocks.js';
@@ -398,13 +398,17 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
   const matchedSalesActions = matchSalesActions(salesActionInput);
   const forcedHandoffActions = matchedSalesActions.filter(action => shouldEscalateSalesAction(action, latestMessage));
   const forceHandoff = forcedHandoffActions.length > 0;
-  if (intent === 'reply' && gapPlan.scenario === 'product_discovery' && context.products.length > 0) {
-    const sourceNames = context.products.map(product => product.name).filter(Boolean);
+  const productDiscoveryNames = groundedProductNames(
+    context.products.map(product => product.name).filter(Boolean),
+    body.product,
+  );
+  if (intent === 'reply' && gapPlan.scenario === 'product_discovery' && productDiscoveryNames.length > 0) {
+    const sourceNames = productDiscoveryNames;
     const buyerLanguageNames = await translateProductNamesForBuyer(sourceNames, language);
     const pair = groundedProductDiscoveryReply(buyerLanguageNames, language, sourceNames);
     res.json({
       ...directConversationPayload(pair, '产品咨询'),
-      evidence: [...context.evidence, '产品浏览回复仅使用产品表中的真实产品名称'],
+      evidence: [...context.evidence, '产品浏览回复仅使用产品表或当前客户已绑定的真实产品名称'],
       products: context.products,
       knowledgeReady: context.knowledgeReady,
       knowledgeSafetyMode: 'grounded',

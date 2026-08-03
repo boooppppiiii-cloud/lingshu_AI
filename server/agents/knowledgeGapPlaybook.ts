@@ -35,6 +35,13 @@ export interface KnowledgeGapPlan {
 type SupportedLanguage = 'english' | 'spanish' | 'arabic';
 type ReplyPair = { draft: string; draftZh: string };
 
+export function groundedProductNames(contextNames: string[], selectedProduct: unknown): string[] {
+  const names = [...contextNames, String(selectedProduct || '')]
+    .map(value => String(value || '').trim())
+    .filter(Boolean);
+  return Array.from(new Map(names.map(name => [name.toLocaleLowerCase(), name])).values()).slice(0, 5);
+}
+
 function naturalList(values: string[], conjunction: string): string {
   if (values.length <= 1) return values[0] || '';
   if (values.length === 2) return `${values[0]} ${conjunction} ${values[1]}`;

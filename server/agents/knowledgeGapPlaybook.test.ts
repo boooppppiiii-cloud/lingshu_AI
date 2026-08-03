@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { classifyKnowledgeGapScenario, groundedProductDiscoveryReply, resolveKnowledgeGapPlan, scenarioHasGroundedEvidence } from './knowledgeGapPlaybook.js';
+import { classifyKnowledgeGapScenario, groundedProductDiscoveryReply, groundedProductNames, resolveKnowledgeGapPlan, scenarioHasGroundedEvidence } from './knowledgeGapPlaybook.js';
 import { planMobileChatMessages, splitMobileChatMessages } from './mobileChatStyle.js';
 
 const rounds = [
@@ -46,6 +46,8 @@ assert.equal(classifyKnowledgeGapScenario('¿Qué productos tienen?'), 'product_
 assert.equal(classifyKnowledgeGapScenario('¿Qué venden ustedes?'), 'product_discovery');
 assert.equal(classifyKnowledgeGapScenario('ما المنتجات المتوفرة لديكم؟'), 'product_discovery');
 assert.equal(classifyKnowledgeGapScenario('ماذا تبيعون؟'), 'product_discovery');
+assert.deepEqual(groundedProductNames([], 'Pleated skirt'), ['Pleated skirt']);
+assert.deepEqual(groundedProductNames(['Pleated skirt'], 'pleated skirt'), ['pleated skirt']);
 
 const combinedAvailability = resolveKnowledgeGapPlan({
   message: 'Black, size M. We still need 500 pcs.',
