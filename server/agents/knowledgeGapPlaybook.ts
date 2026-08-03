@@ -328,7 +328,7 @@ function personalizeEnglishBridge(scenario: KnowledgeGapScenario, message: strin
       : quantityInChinese(quantity) || `交付时间 ${deliveryWindowInChinese(deliveryWindow)}`;
     return {
       draft: `${offer} does sound attractive. Before you decide, let's check whether the packaging, documents and delivery terms are really the same. I'll ask sales to compare it properly with you.`,
-      draftZh: `${offerZh} 确实有吸引力。决定前，我们先确认包装、文件和交付条件是否真的相同。我会请销售按同一口径与您比较。`,
+      draftZh: `${offerZh}确实有吸引力。决定前，我们先确认包装、文件和交付条件是否真的相同。我会请销售按同一口径与您比较。`,
     };
   }
   if (scenario === 'delivery_commitment' && deliveryWindow) {

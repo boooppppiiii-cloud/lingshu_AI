@@ -36,6 +36,7 @@ const prompt = buildStrategyPromptBlock([{
 } satisfies RetrievedStrategy]);
 assert.match(prompt, /enterprise knowledge > response strategy > seller style memory/);
 assert.match(prompt, /dialogue tactics, not business facts/);
+assert.match(prompt, /already gave that answer/i);
 assert.match(prompt, /Never copy numbers or company claims/);
 assert.match(prompt, /Ask at most one question/);
 assert.match(prompt, /BANT impact|Progression goal/);

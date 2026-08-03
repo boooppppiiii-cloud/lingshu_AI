@@ -74,6 +74,10 @@ function hardSplit(value: string): string[] {
   const chunks: string[] = [];
   let current = '';
   for (const char of Array.from(value.trim())) {
+    if (/^[，。！？；：、,.!?;:]$/u.test(char) && current) {
+      current += char;
+      continue;
+    }
     const candidate = `${current}${char}`;
     if (messageUnits(candidate) > limit && current.trim()) {
       chunks.push(current.trim());
@@ -96,10 +100,15 @@ export function planMobileChatMessages(value: unknown): { messages: string[]; tr
   const normalized = normalizeMobileChatFormatting(value);
   if (!normalized) return { messages: [], truncated: false };
   const sentences = normalized.match(/[^.!?。！？؟]+[.!?。！？؟]?/gu)?.map(item => item.trim()).filter(Boolean) ?? [normalized];
-  const statements = sentences.filter(sentence => !/[?？？]/.test(sentence));
-  const firstQuestion = sentences.find(sentence => /[?？？]/.test(sentence));
-  // SPIN 和动作库都要求“一次只问一个问题”。先给价值/陈述，再放唯一的问题。
-  const dialogueSentences = firstQuestion ? [...statements, firstQuestion] : statements;
+  let keptQuestion = false;
+  // 保留原始口语顺序，只去掉第二个及之后的问题。强行把问题移到末尾会让
+  // “That helps me check it” 之类的承接句跑到问题前面，听起来像机器拼句。
+  const dialogueSentences = sentences.filter(sentence => {
+    if (!/[?？？]/.test(sentence)) return true;
+    if (keptQuestion) return false;
+    keptQuestion = true;
+    return true;
+  });
   const pieces = dialogueSentences.flatMap(hardSplit);
   const messages: string[] = [];
   let current = '';
