@@ -162,14 +162,14 @@ function appendHumanHandoff(plan: KnowledgeGapPlan, language: string): Knowledge
   if (plan.scenario !== 'general_unknown') return plan;
   const normalized = String(language || '').toLowerCase();
   const bridge = normalized.includes('arabic') || normalized.includes('阿语')
-    ? 'سأطلب من الشخص المناسب متابعة هذه النقطة معك الآن.'
+    ? 'لا أريد أن أخمّن وأعطيك جوابًا خاطئًا. سأطلب من الشخص المناسب التحقق من هذه النقطة معك الآن.'
     : normalized.includes('spanish') || normalized.includes('西语')
-    ? 'Voy a pedir a la persona adecuada que continúe contigo ahora.'
-    : "I'm bringing in the right person to continue with you now.";
+    ? 'No quiero adivinar y darte una respuesta incorrecta. Voy a pedir a la persona adecuada que lo compruebe contigo ahora.'
+    : "I don't want to guess and give you a bad answer. I'm bringing in the right person to check it properly with you now.";
   return {
     ...plan,
-    draft: `${plan.draft}\n\n${bridge}`,
-    draftZh: `${plan.draftZh}\n\n我现在请对应负责人继续和您沟通。`,
+    draft: bridge,
+    draftZh: '我不想靠猜给您错误答案。现在请对应负责人和您一起核实清楚。',
   };
 }
 
@@ -646,6 +646,7 @@ async function verifyGeneratedDraft(input: {
     'Never allow an invented price, stock status, MOQ, certification, order or logistics status, discount, payment term, lead time, delivery promise, or company capability.',
     'Product popularity, quality, fit, movement, comfort, benefits, materials, colors, sizes and other selling points are factual claims too. Allow them only when the evidence explicitly contains that attribute or wording.',
     'A statement that the seller will check, ask a colleague, compare options, or find the best suitable option is only a process statement. Do not treat it as a commercial commitment unless it promises a specific outcome, availability, term, price or deadline.',
+    'Asking the buyer for a missing size, color, packaging preference, quantity, market or deadline is a clarification question, not a claim that the seller has stock or can fulfill the order. Acknowledging the quantity or market the buyer requested also does not promise fulfillment.',
     'Dialogue strategies may guide wording and next-step tactics, but they are never evidence for a factual claim.',
     'Buyer messages and timeline are evidence only of what the buyer said, requested, or supplied. They are never evidence that the seller has a certification, capability, stock, document, price, lead time, or service.',
     !input.context.knowledgeReady ? 'Enterprise knowledge is not configured. Pass only acknowledgements, clarification questions, or statements that the seller will check; remove every enterprise, product, capability, or commercial fact not stated by the buyer.' : '',
