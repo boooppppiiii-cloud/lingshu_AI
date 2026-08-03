@@ -777,6 +777,35 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
     else setPendingTargetAccountIds(ids);
   };
 
+  const applyContentToAll = () => {
+    if (!activeItem) return;
+    const lockedStatuses: PublishItemStatus[] = ['publishing', 'scheduled', 'published'];
+    const targetIds = new Set(
+      items
+        .filter(item => item.id !== activeItem.id && !lockedStatuses.includes(item.status))
+        .map(item => item.id),
+    );
+    if (!targetIds.size) return;
+
+    setItems(previous => previous.map(item => targetIds.has(item.id) ? {
+      ...item,
+      title: activeItem.title,
+      description: activeItem.description,
+      platformCopy: Object.fromEntries(
+        Object.entries(activeItem.platformCopy).map(([platform, copy]) => [platform, {
+          ...copy,
+          tags: copy.tags ? [...copy.tags] : undefined,
+          hashtags: copy.hashtags ? [...copy.hashtags] : undefined,
+        }]),
+      ),
+      firstComment: activeItem.firstComment,
+      trackWaLink: activeItem.trackWaLink,
+      status: 'draft',
+      error: undefined,
+    } : item));
+    setNotice(`已把当前视频的发布内容同步到另外 ${targetIds.size} 条视频，视频文件、平台账号和发布时间保持不变。`);
+  };
+
   const duplicatePublishItem = (item: PublishQueueItem) => {
     const next: PublishQueueItem = {
       ...item,
@@ -1100,6 +1129,15 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
                 <button type="button" onClick={() => videoInputRef.current?.click()} disabled={uploadingVideos} className="inline-flex h-9 w-24 items-center justify-center gap-1.5 rounded-lg bg-accent text-xs font-bold text-white disabled:opacity-50">
                   {uploadingVideos ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
                   {uploadingVideos ? '上传中' : '上传'}
+                </button>
+                <button
+                  type="button"
+                  onClick={applyContentToAll}
+                  disabled={!activeItem || items.every(item => item.id === activeItem.id || ['publishing', 'scheduled', 'published'].includes(item.status))}
+                  title="复制当前视频的标题、发布配文、分平台文案、首评和询盘追踪设置；不会覆盖视频文件、平台账号和发布时间"
+                  className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-accent/30 bg-accent-glow px-3 text-xs font-bold text-accent hover:border-accent disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Copy size={13} /> 应用到全部视频
                 </button>
                 <button type="button" onClick={toggleAllQueueItems} className="inline-flex h-9 w-24 items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-xs font-bold text-emerald-700">
                   <CheckCircle2 size={13} />
