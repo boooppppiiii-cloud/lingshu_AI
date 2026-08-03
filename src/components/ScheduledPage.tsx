@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Activity, AlertTriangle, BarChart3, ChevronDown, Clock, Download, DownloadCloud, Play, Plus, X, Trash2, CheckCircle, Loader } from 'lucide-react';
+import { Activity, AlertTriangle, BarChart3, Building2, ChevronDown, CircleDollarSign, Clock, Download, DownloadCloud, ExternalLink, Globe2, Loader, Play, Plus, RefreshCw, Search, Trash2, TrendingUp, X, CheckCircle } from 'lucide-react';
 import type { AgentAction, AgentType } from '../App';
 import { completeDemoStep, readDemoProgress } from '../lib/demoProgress';
 import { authHeader } from '../lib/auth';
@@ -52,7 +52,40 @@ interface VideoStatsPayload {
   };
 }
 
+interface BusinessDynamicsPayload {
+  generatedAt?: string;
+  cached?: boolean;
+  profile?: {
+    companyName?: string;
+    industry?: string;
+    markets?: string[];
+    products?: string[];
+    pricingRule?: string;
+    completion?: number;
+    completionTotal?: number;
+    missingFields?: string[];
+    aiAccessEnabled?: boolean;
+  };
+  quote?: {
+    baseCurrency?: string;
+    sourceDate?: string;
+    rates?: Array<{ code: string; rate: number; market: string }>;
+    productPriceRange?: string;
+    moq?: string;
+    minMargin?: string;
+    recommendation?: string;
+  };
+  intelligence?: {
+    status?: 'ready' | 'profile_incomplete' | 'unavailable';
+    summary?: string;
+    signals?: Array<{ market: string; title: string; impact: string; action: string; risk: 'low' | 'medium' | 'high'; sourceTitle?: string; sourceUrl?: string }>;
+    sources?: Array<{ title: string; url: string }>;
+    error?: string;
+  };
+}
+
 type AgentTaskGroup = 'social' | 'conversion' | 'customer';
+type SocialTaskTab = 'crawler' | 'analysis';
 interface NextAction {
   label: string;
   agent: AgentType;
@@ -61,8 +94,8 @@ interface NextAction {
 }
 
 const AGENT_GROUPS: { id: AgentTaskGroup; label: string; desc: string }[] = [
+  { id: 'conversion', label: '经营动态定时任务', desc: '报价、主要市场和行业情报' },
   { id: 'social', label: '我的社媒定时任务', desc: '内容采集、趋势监控、社媒素材分析' },
-  { id: 'conversion', label: '我的客户定时任务', desc: '报价、询盘、经营复盘和跟单动作' },
   { id: 'customer', label: '老客唤醒定时任务', desc: '老客分层、沉默唤醒、复购触达' },
 ];
 
@@ -139,8 +172,8 @@ const TASK_TEMPLATES = [
     config: { platforms: 'facebook', keywords: 'skincare', limit: '5', dateWindowDays: '7' },
   },
   { templateId: 'trend_report', taskType: 'trend_report', name: 'TikTok 爆款日报', category: 'daily' as const, cronExpr: '0 8 * * *', cronLabel: '每天 08:00', icon: <SocialPlatformIcon platform="tiktok" size={24} />, desc: '每日生成 TikTok 跨境电商热门趋势简报' },
-  { templateId: 'exchange_rate', taskType: 'exchange_rate', name: '汇率日报', category: 'daily' as const, cronExpr: '0 9 * * *', cronLabel: '每天 09:00', icon: '💱', desc: '实时获取 USD/SAR/AED/VND/MYR 等汇率并发送' },
-  { templateId: 'weekly_review', taskType: 'weekly_review', name: '每周经营复盘', category: 'report' as const, cronExpr: '0 18 * * 5', cronLabel: '每周五 18:00', icon: '📊', desc: 'AI 生成本周流量、询盘、转化、复购复盘报告' },
+  { templateId: 'exchange_rate', taskType: 'exchange_rate', name: '汇率与报价日报', category: 'daily' as const, cronExpr: '0 9 * * *', cronLabel: '每天 09:00', icon: '💱', desc: '按企业主要市场刷新汇率，并结合价格区间、MOQ 和毛利规则给出报价提醒' },
+  { templateId: 'market_intelligence', taskType: 'market_intelligence', name: '主要市场行业周报', category: 'report' as const, cronExpr: '0 9 * * 1', cronLabel: '每周一 09:00', icon: '🌐', desc: '基于企业中心行业与市场，联网检索需求、合规、渠道和竞争动态并附公开来源' },
   { templateId: 'crm_wakeup', taskType: 'crm_wakeup', name: '沉默客户唤醒', category: 'automation' as const, cronExpr: '0 10 * * 1', cronLabel: '每周一 10:00', icon: '💌', desc: '自动生成针对 60 天沉默老客的唤醒消息并推送' },
   { templateId: 'holiday_push', taskType: 'holiday_push', name: '节日推品提醒', category: 'monitor' as const, cronExpr: '0 9 * * *', cronLabel: '每天 09:00', icon: '🎉', desc: '节日前 7 天自动提醒备货和推品策略' },
 ];
@@ -150,7 +183,7 @@ const TEMPLATE_GROUPS = [
   { id: 'video', label: '视频采集', desc: '按平台和关键词采集视频', taskTypes: ['video_keyword_crawl'] },
   { id: 'image', label: '图文采集', desc: '采集图片帖与图文内容', taskTypes: ['image_post_crawl'] },
   { id: 'competitor', label: '对标账号采集', desc: '采集已保存账号的最新内容', taskTypes: ['competitor_account_crawl'] },
-  { id: 'automation', label: '其他自动化', desc: '报告、提醒和客户运营任务', taskTypes: ['trend_report', 'holiday_push', 'exchange_rate', 'weekly_review', 'crm_wakeup'] },
+  { id: 'automation', label: '其他自动化', desc: '报告、提醒和客户运营任务', taskTypes: ['trend_report', 'holiday_push', 'exchange_rate', 'market_intelligence', 'weekly_review', 'crm_wakeup'] },
 ] as const;
 
 const CRON_PRESETS = [
@@ -198,7 +231,8 @@ function normalizeCrawlerLimit(value: string): string {
 export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) {
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeGroup, setActiveGroup] = useState<AgentTaskGroup>('social');
+  const [activeGroup, setActiveGroup] = useState<AgentTaskGroup>('conversion');
+  const [socialTaskTab, setSocialTaskTab] = useState<SocialTaskTab>('crawler');
   const [showAdd, setShowAdd] = useState(false);
   const [selectedTemplateIds, setSelectedTemplateIds] = useState<string[]>([]);
   const [scheduleOpen, setScheduleOpen] = useState(false);
@@ -218,6 +252,9 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
   const [exportNotice, setExportNotice] = useState<{ taskId: string; message: string; error: boolean } | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
   const [videoStats, setVideoStats] = useState<VideoStatsPayload | null>(null);
+  const [businessDynamics, setBusinessDynamics] = useState<BusinessDynamicsPayload | null>(null);
+  const [businessDynamicsLoading, setBusinessDynamicsLoading] = useState(true);
+  const [businessDynamicsError, setBusinessDynamicsError] = useState('');
   const didAutoOpenDemoTask = useRef(false);
 
   const closeResultPanel = () => {
@@ -230,6 +267,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
   useEffect(() => {
     void fetchTasks();
     void fetchVideoStats();
+    void fetchBusinessDynamics();
     const timer = window.setInterval(() => {
       void fetchTasks(false);
       void fetchVideoStats();
@@ -273,6 +311,22 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
       setVideoStats(await r.json());
     } catch {
       // Keep the previous snapshot visible during backend hot reloads.
+    }
+  }
+
+  async function fetchBusinessDynamics(forceRefresh = false) {
+    setBusinessDynamicsLoading(true);
+    setBusinessDynamicsError('');
+    try {
+      const query = forceRefresh ? '?refresh=1' : '';
+      const response = await fetch(`/api/overseas/scheduler/business-dynamics${query}`, { headers: authHeader() });
+      const payload = await response.json().catch(() => null) as BusinessDynamicsPayload & { message?: string } | null;
+      if (!response.ok || !payload) throw new Error(payload?.message || '经营动态暂时无法生成');
+      setBusinessDynamics(payload);
+    } catch (error) {
+      setBusinessDynamicsError(error instanceof Error ? error.message : '经营动态暂时无法生成');
+    } finally {
+      setBusinessDynamicsLoading(false);
     }
   }
 
@@ -402,6 +456,8 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
 
   function selectGroup(group: AgentTaskGroup) {
     setActiveGroup(group);
+    if (group !== 'social') setSocialTaskTab('crawler');
+    if (group === 'conversion' && !businessDynamics && !businessDynamicsLoading) void fetchBusinessDynamics();
     setSelectedTemplateIds([]);
     setCustomName('');
     setTaskKeywords('foundation');
@@ -440,7 +496,15 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
   const crawl = stats?.crawl ?? {};
   const fetchQueue = stats?.fetchQueue ?? {};
   const analysisQueue = stats?.analysisQueue ?? {};
+  const analysisStatusRows = [
+    { label: 'Gemini 队列', value: analysisQueue.queued ?? 0, desc: '等待/处理中' },
+    { label: '待处理素材', value: analysisQueue.pendingRecords ?? 0, desc: '已入库但未完成分析' },
+    { label: '已分析素材', value: analysisQueue.analyzedRecords ?? 0, desc: '可进入灵感大屏/素材库' },
+    { label: '失败素材', value: analysisQueue.failedRecords ?? 0, desc: '需要重试或排查源文件' },
+  ];
+  const analysisStatusEntries = Object.entries(analysisQueue.byStatus ?? {});
   const crawlTasks = (videoStats?.tasks ?? tasks).filter(t => ['video_keyword_crawl', 'image_post_crawl', 'competitor_account_crawl'].includes(t.taskType));
+  const showTaskList = activeGroup !== 'social' || socialTaskTab === 'crawler';
   const formatTime = (value?: string) => value
     ? new Date(value).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })
     : '暂无';
@@ -591,6 +655,28 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
         },
       ];
     }
+    if (task.taskType === 'market_intelligence') {
+      return [
+        {
+          label: '按市场拆解报价和选品动作',
+          agent: 'strategy',
+          agentLabel: '首页',
+          prompt: `根据主要市场行业周报，按市场拆解未来 7 天的报价、选品、合规和销售动作，并标注依据来源。${context}`,
+        },
+        {
+          label: '把行业动态转成内容方向',
+          agent: 'traffic',
+          agentLabel: '我的社媒',
+          prompt: `根据主要市场行业周报，把可用事实转成 3 个社媒选题和短视频内容方向，避免把未经证实的信息写成企业卖点。${context}`,
+        },
+        {
+          label: '生成重点客户跟进理由',
+          agent: 'conversion',
+          agentLabel: '我的客户',
+          prompt: `根据主要市场行业周报，生成不同市场客户的跟进理由、询盘问题和报价注意事项。${context}`,
+        },
+      ];
+    }
     if (task.taskType === 'weekly_review') {
       return [
         {
@@ -688,10 +774,20 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
           title: '汇率报价工作台',
           cards: [
             { label: '基础币种', value: 'USD', desc: '统一用于报价换算' },
-            { label: '覆盖币种', value: 'CNY/SAR/AED', desc: '适配中东和人民币成本核算' },
-            { label: '报价规则', value: '24h 有效', desc: '减少汇率波动风险' },
+            { label: '覆盖币种', value: '按主要市场', desc: '由企业中心目标市场自动匹配' },
+            { label: '报价规则', value: '人工确认', desc: '结合价格区间、MOQ 和毛利线' },
           ],
           actions: ['生成多币种报价', '复制汇率摘要', '生成询盘报价话术'],
+        };
+      case 'market_intelligence':
+        return {
+          title: '主要市场行业情报工作台',
+          cards: [
+            { label: '内部依据', value: '企业中心', desc: '行业、产品、主要市场与报价规则' },
+            { label: '外部依据', value: '公开检索', desc: '需求、合规、渠道和竞争动态' },
+            { label: '更新周期', value: '每周', desc: '保留来源并生成行动建议' },
+          ],
+          actions: ['查看公开来源', '拆解市场动作', '生成客户跟进理由'],
         };
       case 'weekly_review':
         return {
@@ -728,83 +824,258 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
 
   const resultWorkspace = resultTask ? taskWorkspace(resultTask) : null;
 
-  const groupWorkspace = (group: AgentTaskGroup) => {
-    const templates = TASK_TEMPLATES.filter(t => taskAgentGroup(t.taskType) === group);
-    const cards = group === 'conversion'
-      ? [
-          { label: '报价辅助', value: '多币种', desc: '汇率日报联动询盘报价，减少手动换算' },
-          { label: '经营复盘', value: '周维度', desc: '自动生成流量、询盘、转化复盘' },
-          { label: '动作输出', value: '待创建', desc: '生成下周优化任务和跟进建议' },
-        ]
-      : [
-          { label: '客户分层', value: '60 天', desc: '识别沉默客户和复购机会' },
-          { label: '唤醒触达', value: 'WhatsApp', desc: '生成老客唤醒文案与推品理由' },
-          { label: '复购节奏', value: '每周', desc: '沉淀客户偏好和下一次跟进时间' },
-        ];
-    const workflow = group === 'conversion'
-      ? ['汇率与经营数据汇总', '生成报价/复盘建议', '输出给我的客户执行']
-      : ['筛选沉默客户', '匹配历史采购偏好', '生成触达话术和推品清单'];
+  const renderAutomationTemplates = (group: AgentTaskGroup) => {
+    const templates = TASK_TEMPLATES.filter(template => taskAgentGroup(template.taskType) === group);
+    return (
+      <section className="rounded-lg border border-gray-200 bg-white p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <p className="text-sm font-semibold text-gray-900">可用自动化模板</p>
+          <span className="text-xs text-gray-400">{templates.length} 个模板</span>
+        </div>
+        <div className="space-y-2">
+          {templates.map(template => {
+            const exists = tasks.some(task => templateForTask(task)?.templateId === template.templateId);
+            return (
+              <div key={template.templateId} className="flex items-start gap-3 rounded-lg border border-gray-100 bg-gray-50/70 p-3">
+                <span className="text-xl">{template.icon}</span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium text-gray-900">{template.name}</p>
+                  <p className="mt-0.5 text-xs leading-relaxed text-gray-500">{template.desc}</p>
+                  <p className="mt-1 flex items-center gap-1 text-xs text-gray-400"><Clock size={11} /> {template.cronLabel}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={event => { event.preventDefault(); event.stopPropagation(); if (!exists) void createTaskFromTemplate(template); }}
+                  disabled={exists}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-medium ${exists ? 'cursor-default bg-green-50 text-green-700' : 'bg-green-600 text-white hover:bg-green-700'}`}
+                >
+                  {exists ? '已创建' : '创建'}
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+    );
+  };
 
+  const businessDynamicsWorkspace = () => {
+    const profile = businessDynamics?.profile;
+    const quote = businessDynamics?.quote;
+    const intelligence = businessDynamics?.intelligence;
+    const rates = quote?.rates ?? [];
+    const signals = intelligence?.signals ?? [];
+    const sources = intelligence?.sources ?? [];
+    const missingFields = profile?.missingFields ?? [];
+    const statusLabel = businessDynamicsLoading
+      ? '正在生成经营动态'
+      : intelligence?.status === 'ready'
+      ? '外部检索已接入'
+      : intelligence?.status === 'profile_incomplete'
+        ? '等待企业资料'
+        : '外部检索暂不可用';
+    const summaryCards = [
+      { label: '报价币种', value: rates.length || 0, desc: rates.map(rate => rate.code).join(' / ') || '等待实时汇率', icon: CircleDollarSign },
+      { label: '主要市场', value: profile?.markets?.length || 0, desc: profile?.markets?.join('、') || '企业中心未配置', icon: Globe2 },
+      { label: '行业动态', value: signals.length || 0, desc: intelligence?.status === 'ready' ? '最近 30 天公开动态' : statusLabel, icon: TrendingUp },
+      { label: '企业资料', value: `${profile?.completion ?? 0}/${profile?.completionTotal ?? 6}`, desc: missingFields.length ? `缺少：${missingFields.join('、')}` : '经营分析依据已就绪', icon: Building2 },
+    ];
+
+    return (
+      <div className="mb-6 space-y-4">
+        <section className="rounded-lg border border-gray-200 bg-white p-4">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <p className="text-sm font-semibold text-gray-900">企业经营画像 + 外部市场检索</p>
+                <span className={`rounded-full px-2 py-0.5 text-[11px] ${intelligence?.status === 'ready' ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-700'}`}>{statusLabel}</span>
+              </div>
+              <p className="mt-1 text-xs text-gray-500">
+                企业中心提供内部事实，公开检索补充当前市场变化；生成时间 {formatTime(businessDynamics?.generatedAt)}{businessDynamics?.cached ? ' · 缓存结果' : ''}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => window.dispatchEvent(new CustomEvent('lingshu:navigate', { detail: { page: 'enterprise' } }))}
+                className="flex items-center gap-1.5 rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50"
+              >
+                <Building2 size={14} /> 企业中心
+              </button>
+              <button
+                type="button"
+                onClick={() => void fetchBusinessDynamics(true)}
+                disabled={businessDynamicsLoading}
+                className="flex items-center gap-1.5 rounded-lg bg-green-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-green-700 disabled:opacity-60"
+              >
+                <RefreshCw size={14} className={businessDynamicsLoading ? 'animate-spin' : ''} /> 刷新动态
+              </button>
+            </div>
+          </div>
+          {businessDynamicsError && (
+            <div className="mt-3 flex items-center gap-2 rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-700">
+              <AlertTriangle size={14} /> {businessDynamicsError}
+            </div>
+          )}
+          {missingFields.length > 0 && !businessDynamicsLoading && (
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-100 bg-amber-50 px-3 py-2">
+              <p className="text-xs text-amber-800">缺少 {missingFields.join('、')}，当前动态只能生成部分结果。</p>
+              <button
+                type="button"
+                onClick={() => window.dispatchEvent(new CustomEvent('lingshu:navigate', { detail: { page: 'enterprise' } }))}
+                className="text-xs font-medium text-amber-800 hover:underline"
+              >
+                去补充资料
+              </button>
+            </div>
+          )}
+        </section>
+
+        <div className="grid grid-cols-4 gap-3">
+          {summaryCards.map(card => {
+            const Icon = card.icon;
+            return (
+              <div key={card.label} className="rounded-lg border border-gray-200 bg-white p-4">
+                <div className="flex items-center gap-2 text-xs text-gray-500"><Icon size={14} className="text-green-600" /> {card.label}</div>
+                <p className="mt-2 text-2xl font-semibold text-gray-900">{businessDynamicsLoading ? '—' : card.value}</p>
+                <p className="mt-1 truncate text-xs text-gray-500" title={card.desc}>{card.desc}</p>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="grid grid-cols-[0.9fr_1.4fr] gap-3">
+          <section className="rounded-lg border border-gray-200 bg-white p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold text-gray-900">报价监控</p>
+                <p className="mt-0.5 text-xs text-gray-500">1 USD 基准 · 数据日期 {quote?.sourceDate || '待更新'}</p>
+              </div>
+              <CircleDollarSign size={18} className="text-green-600" />
+            </div>
+            {businessDynamicsLoading ? (
+              <div className="flex h-24 items-center justify-center text-xs text-gray-400"><Loader size={16} className="mr-2 animate-spin" />正在读取汇率和报价规则</div>
+            ) : (
+              <>
+                <div className="grid grid-cols-2 gap-2">
+                  {rates.map(rate => (
+                    <div key={rate.code} className="rounded-lg bg-gray-50 px-3 py-2">
+                      <p className="text-[11px] text-gray-400">{rate.market}</p>
+                      <p className="mt-1 text-sm font-semibold text-gray-900">{rate.code} {rate.rate >= 1000 ? rate.rate.toFixed(0) : rate.rate.toFixed(4)}</p>
+                    </div>
+                  ))}
+                  {rates.length === 0 && <p className="col-span-2 py-4 text-center text-xs text-gray-400">实时汇率暂不可用</p>}
+                </div>
+                <div className="mt-3 space-y-2 border-t border-gray-100 pt-3 text-xs">
+                  <div className="flex justify-between gap-3"><span className="text-gray-500">价格区间</span><span className="text-right font-medium text-gray-800">{quote?.productPriceRange || '未配置'}</span></div>
+                  <div className="flex justify-between gap-3"><span className="text-gray-500">MOQ</span><span className="text-right font-medium text-gray-800">{quote?.moq || '未配置'}</span></div>
+                  <div className="flex justify-between gap-3"><span className="text-gray-500">最低毛利</span><span className="text-right font-medium text-gray-800">{quote?.minMargin || '未配置'}</span></div>
+                </div>
+                <p className="mt-3 rounded-lg bg-green-50 px-3 py-2 text-xs leading-relaxed text-green-800">{quote?.recommendation}</p>
+              </>
+            )}
+          </section>
+
+          <section className="rounded-lg border border-gray-200 bg-white p-4">
+            <div className="mb-3 flex items-center justify-between">
+              <div>
+                <p className="text-sm font-semibold text-gray-900">主要市场行业动态</p>
+                <p className="mt-0.5 text-xs text-gray-500">只展示与报价、需求、合规、渠道或竞争相关的公开事实</p>
+              </div>
+              <Search size={18} className="text-green-600" />
+            </div>
+            {businessDynamicsLoading ? (
+              <div className="flex h-40 items-center justify-center text-xs text-gray-400"><Loader size={16} className="mr-2 animate-spin" />正在结合企业资料检索外部动态</div>
+            ) : (
+              <>
+                <p className="rounded-lg bg-gray-50 px-3 py-2 text-xs leading-relaxed text-gray-700">{intelligence?.summary || '暂无可用经营判断'}</p>
+                <div className="mt-3 space-y-2">
+                  {signals.slice(0, 4).map((signal, index) => (
+                    <div key={`${signal.market}-${index}`} className="rounded-lg border border-gray-100 p-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-[11px] font-medium text-green-700">{signal.market}</p>
+                          <p className="mt-0.5 text-xs font-semibold leading-relaxed text-gray-900">{signal.title}</p>
+                        </div>
+                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] ${signal.risk === 'high' ? 'bg-red-50 text-red-700' : signal.risk === 'medium' ? 'bg-amber-50 text-amber-700' : 'bg-green-50 text-green-700'}`}>
+                          {signal.risk === 'high' ? '高关注' : signal.risk === 'medium' ? '需关注' : '机会'}
+                        </span>
+                      </div>
+                      <p className="mt-2 text-xs leading-relaxed text-gray-500">影响：{signal.impact}</p>
+                      <p className="mt-1 text-xs leading-relaxed text-gray-700">建议：{signal.action}</p>
+                    </div>
+                  ))}
+                  {signals.length === 0 && <p className="py-5 text-center text-xs text-gray-400">补充企业中心行业与主要市场后，可生成针对性动态。</p>}
+                </div>
+                {sources.length > 0 && (
+                  <div className="mt-3 border-t border-gray-100 pt-3">
+                    <p className="mb-2 text-[11px] font-medium text-gray-500">公开来源</p>
+                    <div className="flex flex-wrap gap-2">
+                      {sources.slice(0, 6).map(source => (
+                        <a key={source.url} href={source.url} target="_blank" rel="noreferrer" className="inline-flex max-w-[240px] items-center gap-1 rounded-lg border border-gray-200 px-2 py-1 text-[11px] text-gray-600 hover:border-green-200 hover:text-green-700">
+                          <span className="truncate">{source.title}</span><ExternalLink size={10} className="shrink-0" />
+                        </a>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+        </div>
+
+        <div className="grid grid-cols-[1fr_1.05fr] gap-3">
+          {renderAutomationTemplates('conversion')}
+          <section className="rounded-lg border border-gray-200 bg-white p-4">
+            <p className="text-sm font-semibold text-gray-900">经营动态生成链路</p>
+            <div className="mt-3 space-y-3">
+              {[
+                '读取企业中心：行业、产品、主要市场与报价边界',
+                '刷新汇率，并检索最近 30 天公开市场与行业动态',
+                '形成带来源的报价提醒、风险判断和 7 天行动建议',
+              ].map((step, index) => (
+                <div key={step} className="flex items-center gap-3">
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-green-50 text-xs font-semibold text-green-700">{index + 1}</span>
+                  <div className="flex-1 rounded-lg bg-gray-50 px-3 py-2"><p className="text-xs font-medium text-gray-800">{step}</p></div>
+                </div>
+              ))}
+            </div>
+            <p className="mt-4 rounded-lg border border-green-100 bg-green-50 p-3 text-xs leading-relaxed text-green-800">定时任务产出可导出 PDF，也可以继续交给首页、我的社媒或我的客户拆解执行。</p>
+          </section>
+        </div>
+      </div>
+    );
+  };
+
+  const groupWorkspace = (group: AgentTaskGroup) => {
+    if (group === 'conversion') return businessDynamicsWorkspace();
+    const cards = [
+      { label: '客户分层', value: '60 天', desc: '识别沉默客户和复购机会' },
+      { label: '唤醒触达', value: 'WhatsApp', desc: '生成老客唤醒文案与推品理由' },
+      { label: '复购节奏', value: '每周', desc: '沉淀客户偏好和下一次跟进时间' },
+    ];
     return (
       <div className="mb-6 space-y-4">
         <div className="grid grid-cols-3 gap-3">
           {cards.map(card => (
-            <div key={card.label} className="rounded-xl border border-gray-200 bg-white p-4">
+            <div key={card.label} className="rounded-lg border border-gray-200 bg-white p-4">
               <p className="text-xs text-gray-500">{card.label}</p>
-              <p className="text-2xl font-semibold text-gray-900 mt-2">{card.value}</p>
-              <p className="text-xs text-gray-500 mt-2 leading-relaxed">{card.desc}</p>
+              <p className="mt-2 text-2xl font-semibold text-gray-900">{card.value}</p>
+              <p className="mt-2 text-xs leading-relaxed text-gray-500">{card.desc}</p>
             </div>
           ))}
         </div>
-
-        <div className="grid grid-cols-[1fr_1.2fr] gap-3">
-          <section className="rounded-xl border border-gray-200 bg-white p-4">
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-sm font-semibold text-gray-900">可用自动化模板</p>
-              <span className="text-xs text-gray-400">{templates.length} 个模板</span>
-            </div>
-            <div className="space-y-2">
-              {templates.map(tmpl => {
-                const exists = tasks.some(task => templateForTask(task)?.templateId === tmpl.templateId);
-                return (
-                  <div key={tmpl.taskType} className="rounded-xl border border-gray-100 bg-gray-50/60 p-3 flex items-start gap-3">
-                    <span className="text-2xl">{tmpl.icon}</span>
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm font-medium text-gray-900">{tmpl.name}</p>
-                      <p className="text-xs text-gray-500 mt-0.5 leading-relaxed">{tmpl.desc}</p>
-                      <p className="text-xs text-gray-400 mt-1 flex items-center gap-1"><Clock size={10} /> {tmpl.cronLabel}</p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={e => { e.preventDefault(); e.stopPropagation(); if (!exists) void createTaskFromTemplate(tmpl); }}
-                      disabled={exists}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${exists ? 'bg-green-50 text-green-700 cursor-default' : 'text-white'}`}
-                      style={exists ? undefined : { background: '#16a34a' }}
-                    >
-                      {exists ? '已创建' : '创建'}
-                    </button>
-                  </div>
-                );
-              })}
-            </div>
-          </section>
-
-          <section className="rounded-xl border border-gray-200 bg-white p-4">
-            <p className="text-sm font-semibold text-gray-900 mb-3">工作流预览</p>
-            <div className="space-y-3">
-              {workflow.map((step, index) => (
+        <div className="grid grid-cols-[1fr_1.1fr] gap-3">
+          {renderAutomationTemplates(group)}
+          <section className="rounded-lg border border-gray-200 bg-white p-4">
+            <p className="text-sm font-semibold text-gray-900">工作流预览</p>
+            <div className="mt-3 space-y-3">
+              {['筛选沉默客户', '匹配历史采购偏好', '生成触达话术和推品清单'].map((step, index) => (
                 <div key={step} className="flex items-center gap-3">
-                  <span className="w-7 h-7 rounded-full bg-green-50 text-green-700 text-xs font-semibold flex items-center justify-center flex-shrink-0">{index + 1}</span>
-                  <div className="flex-1 rounded-lg bg-gray-50 px-3 py-2">
-                    <p className="text-xs font-medium text-gray-800">{step}</p>
-                  </div>
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-green-50 text-xs font-semibold text-green-700">{index + 1}</span>
+                  <div className="flex-1 rounded-lg bg-gray-50 px-3 py-2"><p className="text-xs font-medium text-gray-800">{step}</p></div>
                 </div>
               ))}
-            </div>
-            <div className="mt-4 rounded-xl bg-green-50 border border-green-100 p-3">
-              <p className="text-xs text-green-800 leading-relaxed">
-                创建任务后，可以进入任务页面查看配置、导出说明并安排下一步。
-              </p>
             </div>
           </section>
         </div>
@@ -861,12 +1132,28 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
 
         <div className="flex-1 overflow-y-auto px-8 py-6">
           {activeGroup === 'social' && (
-          <div className="mb-6">
-            <div className="flex items-center justify-between mb-3">
+          <div className="mb-6 space-y-4">
+            <div className="flex items-center justify-between gap-4">
               <div>
-                <h2 className="text-sm font-semibold text-gray-900">社媒爬虫定时任务 / 视频采集实时看板</h2>
-                <p className="text-xs text-gray-500 mt-0.5">
-                  {crawlTasks.length > 0 ? `${crawlTasks.map(task => task.name).join(' / ')} · ${CRAWLER_CRON_PRESET.label}` : '自动采集任务未创建'} · 更新时间 {formatTime(stats?.updatedAt)}
+                <div className="inline-flex rounded-xl border border-gray-200 bg-gray-50 p-1">
+                  {[
+                    { id: 'crawler' as const, label: '社媒爬虫定时任务' },
+                    { id: 'analysis' as const, label: '视频入库分析队列' },
+                  ].map(tab => (
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setSocialTaskTab(tab.id)}
+                      className={`h-8 rounded-lg px-3 text-xs font-medium transition-colors ${socialTaskTab === tab.id ? 'bg-white text-green-700 shadow-sm' : 'text-gray-500 hover:text-gray-700'}`}
+                    >
+                      {tab.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-xs text-gray-500 mt-2">
+                  {socialTaskTab === 'crawler'
+                    ? `${crawlTasks.length > 0 ? `${crawlTasks.map(task => task.name).join(' / ')} · ${CRAWLER_CRON_PRESET.label}` : '自动采集任务未创建'} · 更新时间 ${formatTime(stats?.updatedAt)}`
+                    : `视频下载入库后的 Gemini 分析进度 · 更新时间 ${formatTime(stats?.updatedAt)}`}
                 </p>
               </div>
               <button
@@ -877,44 +1164,80 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
                 刷新
               </button>
             </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div className="rounded-xl border border-gray-200 p-4 bg-white">
-                <div className="flex items-center gap-2 text-xs text-gray-500">
-                  <BarChart3 size={14} className="text-orange-500" />
-                  视频爬取数据
-                </div>
-                <div className="mt-3 flex items-end gap-3">
-                  <span className="text-2xl font-semibold text-gray-900">{crawl.today ?? 0}</span>
-                  <span className="text-xs text-gray-500 pb-1">今日新增</span>
-                </div>
-                <p className="text-xs text-gray-500 mt-2">24小时 {crawl.last24h ?? 0} 条 · 累计库内 {crawl.total ?? 0} 条 · 最新 {formatTime(crawl.latestAt)}</p>
-                <p className="text-xs text-gray-400 mt-1">累计来源：YT {crawl.byPlatform?.youtube ?? 0} / TK {crawl.byPlatform?.tiktok ?? 0} / IG {crawl.byPlatform?.instagram ?? 0} / FB {crawl.byPlatform?.facebook ?? 0}</p>
-              </div>
 
-              <div className="rounded-xl border border-gray-200 p-4 bg-white">
-                <div className="flex items-center gap-2 text-xs text-gray-500">
-                  <DownloadCloud size={14} className="text-blue-500" />
-                  获取视频排队数据
+            {socialTaskTab === 'crawler' ? (
+              <div className="grid grid-cols-2 gap-3">
+                <div className="rounded-xl border border-gray-200 p-4 bg-white">
+                  <div className="flex items-center gap-2 text-xs text-gray-500">
+                    <BarChart3 size={14} className="text-orange-500" />
+                    视频爬取数据
+                  </div>
+                  <div className="mt-3 flex items-end gap-3">
+                    <span className="text-2xl font-semibold text-gray-900">{crawl.today ?? 0}</span>
+                    <span className="text-xs text-gray-500 pb-1">今日新增</span>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2">24小时 {crawl.last24h ?? 0} 条 · 累计库内 {crawl.total ?? 0} 条 · 最新 {formatTime(crawl.latestAt)}</p>
+                  <p className="text-xs text-gray-400 mt-1">累计来源：YT {crawl.byPlatform?.youtube ?? 0} / TK {crawl.byPlatform?.tiktok ?? 0} / IG {crawl.byPlatform?.instagram ?? 0} / FB {crawl.byPlatform?.facebook ?? 0}</p>
                 </div>
-                <div className="mt-3 flex items-end gap-3">
-                  <span className="text-2xl font-semibold text-gray-900">{fetchQueue.queued ?? 0}</span>
-                  <span className="text-xs text-gray-500 pb-1">等待/处理中</span>
-                </div>
-                <p className="text-xs text-gray-500 mt-2">Ops 队列 {fetchQueue.ops?.total ?? 0} · Worker {fetchQueue.ops?.workerActive ? '运行中' : fetchQueue.ops?.workerEnabled ? '待命' : '关闭'}</p>
-              </div>
 
-              <div className="rounded-xl border border-gray-200 p-4 bg-white">
-                <div className="flex items-center gap-2 text-xs text-gray-500">
-                  <Activity size={14} className="text-green-500" />
-                  视频分析排队数据
+                <div className="rounded-xl border border-gray-200 p-4 bg-white">
+                  <div className="flex items-center gap-2 text-xs text-gray-500">
+                    <DownloadCloud size={14} className="text-blue-500" />
+                    获取视频排队数据
+                  </div>
+                  <div className="mt-3 flex items-end gap-3">
+                    <span className="text-2xl font-semibold text-gray-900">{fetchQueue.queued ?? 0}</span>
+                    <span className="text-xs text-gray-500 pb-1">等待/处理中</span>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2">Ops 队列 {fetchQueue.ops?.total ?? 0} · Worker {fetchQueue.ops?.workerActive ? '运行中' : fetchQueue.ops?.workerEnabled ? '待命' : '关闭'}</p>
                 </div>
-                <div className="mt-3 flex items-end gap-3">
-                  <span className="text-2xl font-semibold text-gray-900">{analysisQueue.queued ?? 0}</span>
-                  <span className="text-xs text-gray-500 pb-1">Gemini 队列</span>
-                </div>
-                <p className="text-xs text-gray-500 mt-2">已分析 {analysisQueue.analyzedRecords ?? 0} · 待处理 {analysisQueue.pendingRecords ?? 0} · 失败 {analysisQueue.failedRecords ?? 0}</p>
               </div>
-            </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="rounded-xl border border-gray-200 p-4 bg-white">
+                  <div className="flex items-center gap-2 text-xs text-gray-500">
+                    <Activity size={14} className="text-green-500" />
+                    视频分析排队数据
+                  </div>
+                  <div className="mt-3 flex items-end gap-3">
+                    <span className="text-2xl font-semibold text-gray-900">{analysisQueue.queued ?? 0}</span>
+                    <span className="text-xs text-gray-500 pb-1">Gemini 队列</span>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2">已分析 {analysisQueue.analyzedRecords ?? 0} · 待处理 {analysisQueue.pendingRecords ?? 0} · 失败 {analysisQueue.failedRecords ?? 0}</p>
+                </div>
+
+                <section className="rounded-xl border border-gray-200 bg-white p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">分析队列</p>
+                      <p className="text-xs text-gray-500 mt-0.5">展示已入库视频进入 Gemini 分析后的处理状态。</p>
+                    </div>
+                    <span className="text-xs text-gray-400">自动刷新 5 秒</span>
+                  </div>
+                  <div className="grid grid-cols-4 gap-3">
+                    {analysisStatusRows.map(row => (
+                      <div key={row.label} className="rounded-xl border border-gray-100 bg-gray-50/70 p-3">
+                        <p className="text-xs text-gray-500">{row.label}</p>
+                        <p className="mt-2 text-xl font-semibold text-gray-900">{row.value}</p>
+                        <p className="mt-1 text-[11px] text-gray-400">{row.desc}</p>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="mt-3 rounded-xl border border-gray-100 bg-gray-50/60 p-3">
+                    <p className="text-xs font-medium text-gray-700">状态分布</p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {analysisStatusEntries.length > 0 ? analysisStatusEntries.map(([status, count]) => (
+                        <span key={status} className="rounded-full bg-white px-2.5 py-1 text-xs text-gray-500 border border-gray-100">
+                          {status}: {count}
+                        </span>
+                      )) : (
+                        <span className="text-xs text-gray-400">暂无状态明细</span>
+                      )}
+                    </div>
+                  </div>
+                </section>
+              </div>
+            )}
           </div>
           )}
 
@@ -922,14 +1245,14 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
 
           {loading && <div className="text-sm text-gray-400 py-12 text-center">加载中...</div>}
 
-          {!loading && filtered.length === 0 && (
+          {!loading && showTaskList && filtered.length === 0 && (
             <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/50 p-8 text-center text-gray-400">
               <Clock size={40} className="mb-3 opacity-40" />
               <p className="text-sm font-medium">还没有定时任务</p>
             </div>
           )}
 
-          {!loading && filtered.length > 0 && (
+          {!loading && showTaskList && filtered.length > 0 && (
             <div className="mb-8">
               <h2 className="text-sm font-semibold text-gray-500 mb-3">{activeGroupMeta.label}</h2>
               <div className="grid grid-cols-3 gap-3 items-stretch">

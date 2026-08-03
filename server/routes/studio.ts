@@ -1613,47 +1613,52 @@ Requirements:
       /参考节奏|Reference video|对标视频|基础要求|分析摘要|竞品识别|产品替换|参考爆款|成片目标|指定画风|核心情绪|行业锁定|结构迁移|不迁移行业|不继承原视频|企业产品组合|主推产品|<具体|不得|必须满足/.test(script) ? '脚本泄漏了生成规则或占位说明' : '',
       /不破|不裂|纹丝不动|吹不烂|保证|最快|最低价|全网|no tear|won'?t tear|never breaks?|unbreakable/i.test(script) ? '脚本包含绝对化或不可验证承诺' : '',
     ].filter(Boolean);
-    const shouldFallback = validationIssues.length > 0 || unsafeScript;
-    const fallback = generationMode === 'material'
-      ? fallbackMaterialStoryboard(normalizedMaterialInfos, Number(duration) || 20, productInfo)
-      : fallbackStoryboard(duration, productInfo, Number(variantSeed) || 0);
-    const repairedFallback = generationMode === 'material'
-      ? repairMaterialScript(fallback, productInfo, structuredMaterials)
-      : fallback;
+    const shouldBlockScript = validationIssues.length > 0 || unsafeScript;
+    if (shouldBlockScript) {
+      res.status(422).json({
+        ok: false,
+        source: 'ai_rejected',
+        error: validationIssues[0] || '脚本未通过安全与可执行性检查，请补充产品资料或重新生成。',
+        qualityStatus: 'rejected',
+        qualityChecks: {
+          materialGrounded: groundingIssues.length === 0,
+          productGrounded: !missingProduct && !missingSelectedProduct && unsupportedNumberClaims.length === 0,
+          dialogueFits: speechIssues.length === 0,
+          structurallyComplete: !incompleteCloneStoryboard && !incompleteProductStoryboard,
+        },
+        validationIssues,
+      });
+      return;
+    }
     res.json({
       ok: true,
-      source: shouldFallback ? 'fallback' : 'ai',
-      script: shouldFallback ? (generationMode === 'clone' ? '' : repairedFallback) : script,
-      qualityStatus: shouldFallback ? 'repaired' : 'passed',
+      source: 'ai',
+      script,
+      qualityStatus: 'passed',
       qualityChecks: {
         materialGrounded: groundingIssues.length === 0,
         productGrounded: !missingProduct && !missingSelectedProduct && unsupportedNumberClaims.length === 0,
         dialogueFits: speechIssues.length === 0,
         structurallyComplete: !incompleteCloneStoryboard && !incompleteProductStoryboard,
       },
-      fallbackReason: shouldFallback ? validationIssues[0] || '脚本未通过安全与可执行性检查' : undefined,
-      validationIssues: shouldFallback ? validationIssues : [],
+      validationIssues: [],
     });
   } catch (error) {
     const rawError = String(error instanceof Error ? error.message : error);
-    console.warn('[studio] script generation fell back:', rawError.slice(0, 500));
+    console.warn('[studio] script generation failed:', rawError.slice(0, 500));
     const publicFailureReason = /429|RESOURCE_EXHAUSTED|prepayment credits|quota|billing/i.test(rawError)
-      ? '上游模型额度不足，已自动切换为安全兜底稿'
+      ? '上游模型额度不足，未生成脚本。请更换模型 Key 或稍后重试。'
       : /401|403|api.?key|unauthorized|permission/i.test(rawError)
-        ? '上游模型授权暂不可用，已自动切换为安全兜底稿'
+        ? '上游模型授权暂不可用，未生成脚本。请检查模型 Key 或权限。'
         : /timeout|timed out|超时|503|502|504|UNAVAILABLE/i.test(rawError)
-          ? '上游模型暂时繁忙，已自动切换为安全兜底稿'
-          : '上游模型生成失败，已自动切换为安全兜底稿';
-    res.json({
-      ok: true,
-      source: 'fallback',
-      script: generationMode === 'clone'
-        ? ''
-        : generationMode === 'material'
-        ? repairMaterialScript(fallbackMaterialStoryboard(normalizedMaterialInfos, Number(duration) || 20, productInfo), productInfo, structuredMaterials)
-        : scriptType === 'storyboard' ? fallbackStoryboard(duration, productInfo, Number(variantSeed) || 0) : fallbackScript(productInfo, duration),
-      qualityStatus: generationMode === 'material' ? 'recovered' : 'fallback',
-      fallbackReason: publicFailureReason,
+          ? '上游模型暂时繁忙，未生成脚本。请稍后重试。'
+          : '上游模型生成失败，未生成脚本。请补充素材/产品信息后重试。';
+    res.status(502).json({
+      ok: false,
+      source: 'ai_failed',
+      script: '',
+      qualityStatus: 'failed',
+      error: publicFailureReason,
       validationIssues: [publicFailureReason],
     });
   }
@@ -2002,6 +2007,13 @@ ${src}`;
       .replace(/\s+/g, ' ')
       .trim();
     if (!spokenValue) return true;
+    const timestampPattern = /\[[^\]]*?\d+(?:\.\d+)?\s*s?\s*-\s*\d+(?:\.\d+)?\s*s?[^\]]*\]/gi;
+    const sourceCueCount = (src.match(timestampPattern) || []).length;
+    const translatedCueCount = (textValue.match(timestampPattern) || []).length;
+    const minimumCueCount = sourceCueCount > 1 ? Math.max(2, Math.ceil(sourceCueCount * 0.6)) : sourceCueCount;
+    if (translatedCueCount < minimumCueCount) return true;
+    const compactSpokenValue = spokenValue.replace(/\s+/g, '');
+    if (compactSpokenValue.length < 6) return true;
     if (code !== 'zh' && /[\u4e00-\u9fff]/.test(textValue)) return true;
     if (/translation unavailable|无法翻译|不能翻译|作为AI|Here is|```/i.test(textValue)) return true;
     return false;

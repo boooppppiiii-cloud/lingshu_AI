@@ -7,7 +7,6 @@ import {
   Film,
   Loader2,
   Copy,
-  Plus,
   PlayCircle,
   RefreshCw,
   Send,
@@ -60,15 +59,6 @@ type PlatformCopy = {
   tags?: string[];
   hashtags?: string[];
   firstComment?: string;
-};
-
-type GeneratedVideoVersion = {
-  id: string;
-  versionNumber: number;
-  title: string;
-  url?: string;
-  promptSnapshot?: { ratio?: string };
-  context?: { projectId?: string };
 };
 
 type PublishItemStatus = 'draft' | 'ready' | 'publishing' | 'scheduled' | 'published' | 'partial' | 'failed';
@@ -193,16 +183,19 @@ function expandPublishDraft(draft?: PublishDraft | null): PublishDraftItem[] {
 }
 
 function createPublishItems(draft?: PublishDraft | null, targetAccountIds: string[] = []): PublishQueueItem[] {
-  const drafts = expandPublishDraft(draft);
+  const drafts = expandPublishDraft(draft).filter(item => Boolean(item.videoPath?.trim()));
   return drafts.length
     ? drafts.map(item => createPublishItem(item, targetAccountIds))
-    : [createPublishItem(null, targetAccountIds)];
+    : draft ? [] : [createPublishItem(null, targetAccountIds)];
 }
 
 function mergePublishItems(previous: PublishQueueItem[], additions: PublishQueueItem[]): PublishQueueItem[] {
   if (!additions.length) return previous;
   const onlyBlank = previous.length === 1 && !previous[0].videoPath.trim() && !previous[0].title.trim();
-  const base = onlyBlank ? [] : previous;
+  const replacementProjectIds = new Set(additions.map(item => item.sourceProjectId).filter(Boolean));
+  const base = onlyBlank
+    ? []
+    : previous.filter(item => !item.sourceProjectId || !replacementProjectIds.has(item.sourceProjectId));
   const existingKeys = new Set(base.map(item => item.videoPath.trim() || item.title.trim()).filter(Boolean));
   const unique = additions.filter(item => {
     const key = item.videoPath.trim() || item.title.trim();
@@ -395,8 +388,6 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
   const [accounts, setAccounts] = useState<PublishAccount[]>([]);
   const [items, setItems] = useState<PublishQueueItem[]>(() => createPublishItems(draft || readStoredPublishDraft()));
   const [activeItemId, setActiveItemId] = useState('');
-  const [batchPathsOpen, setBatchPathsOpen] = useState(false);
-  const [batchPaths, setBatchPaths] = useState('');
   const [loading, setLoading] = useState(true);
   const [uploadingVideos, setUploadingVideos] = useState(false);
   const [savingContent, setSavingContent] = useState(false);
@@ -406,9 +397,11 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
   const [calendarRefreshKey, setCalendarRefreshKey] = useState(0);
+  const [contentEditorMode, setContentEditorMode] = useState<'common' | 'platform'>('common');
+  const [pendingTargetAccountIds, setPendingTargetAccountIds] = useState<string[]>([]);
   const accountTargetsSeededRef = useRef(false);
+  const pendingAccountTargetsSeededRef = useRef(false);
   const appliedDraftRef = useRef(JSON.stringify(draft || readStoredPublishDraft() || {}));
-  const loadedVersionProjectRef = useRef('');
   const materializedVideoPathsRef = useRef(new Set<string>());
   const videoInputRef = useRef<HTMLInputElement | null>(null);
   const publishSettingsRef = useRef<HTMLElement | null>(null);
@@ -437,7 +430,8 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
       scheduledAt: item.scheduledAt,
       status: item.status,
     }));
-  const selectedConnectedAccounts = connectedAccounts.filter(account => activeItem?.targetAccountIds.includes(account.id));
+  const selectedTargetAccountIds = activeItem?.targetAccountIds ?? pendingTargetAccountIds;
+  const selectedConnectedAccounts = connectedAccounts.filter(account => selectedTargetAccountIds.includes(account.id));
   const selectedPlatforms = Array.from(new Set(selectedConnectedAccounts.map(account => account.platform)));
   const connectedAccountIds = new Set(connectedAccounts.map(account => account.id));
   const totalAssignments = items.reduce(
@@ -697,6 +691,10 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
         ...(facebook.items ?? []).map(account => ({ id: account.id, platform: 'facebook' as const, title: account.title, handle: account.handle, status: account.status, avatarUrl: account.avatarUrl })),
       ];
       setAccounts(next);
+      if (!pendingAccountTargetsSeededRef.current) {
+        setPendingTargetAccountIds(next.filter(account => account.status === 'connected').map(account => account.id));
+        pendingAccountTargetsSeededRef.current = true;
+      }
       if (!accountTargetsSeededRef.current) {
         const connected = next.filter(account => account.status === 'connected');
         setItems(prev => prev.map(item => {
@@ -756,94 +754,27 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
     });
   }, [items]);
 
-  useEffect(() => {
-    const projectId = String(draft?.sourceProjectId || readStoredPublishDraft()?.sourceProjectId || '').trim();
-    if (!projectId || loadedVersionProjectRef.current === projectId) return;
-    loadedVersionProjectRef.current = projectId;
-    void fetchJson<GeneratedVideoVersion[]>(`/api/overseas/studio/video-versions?projectId=${encodeURIComponent(projectId)}`)
-      .then(versions => {
-        const additions = versions
-          .filter(version => Boolean(version.url?.trim()))
-          .map(version => createPublishItem({
-            videoPath: String(version.url),
-            title: `${version.title || draft?.title || 'AI 生成视频'} · V${version.versionNumber}`,
-            description: draft?.description || '',
-            ratio: version.promptSnapshot?.ratio || draft?.ratio,
-            sourceProjectId: projectId,
-            platform: draft?.platform,
-          }));
-        if (!additions.length) return;
-        setItems(previous => {
-          const existingPaths = new Set(previous.map(item => item.videoPath.trim()).filter(Boolean));
-          const fallbackTargets = previous.find(item => item.targetAccountIds.length)?.targetAccountIds
-            || connectedAccounts.map(account => account.id);
-          const unique = additions
-            .filter(item => !existingPaths.has(item.videoPath.trim()))
-            .map(item => ({ ...item, targetAccountIds: [...fallbackTargets] }));
-          if (!unique.length) return previous;
-          const onlyBlank = previous.length === 1 && !previous[0].videoPath.trim() && !previous[0].title.trim();
-          return onlyBlank ? unique : [...previous, ...unique];
-        });
-      })
-      .catch(versionError => {
-        loadedVersionProjectRef.current = '';
-        setError(versionError instanceof Error ? versionError.message : '无法读取全部视频版本');
-      });
-  }, [draft?.sourceProjectId, accounts]);
-
   const toggleAccount = (accountId: string) => {
-    if (!activeItem) return;
-    const next = new Set(activeItem.targetAccountIds);
+    const next = new Set(selectedTargetAccountIds);
     if (next.has(accountId)) next.delete(accountId);
     else next.add(accountId);
-    updateItem(activeItem.id, { targetAccountIds: Array.from(next), status: 'draft', error: undefined });
+    if (activeItem) updateItem(activeItem.id, { targetAccountIds: Array.from(next), status: 'draft', error: undefined });
+    else setPendingTargetAccountIds(Array.from(next));
   };
 
   const togglePlatform = (platform: PublishPlatform) => {
-    if (!activeItem) return;
     const ids = connectedAccounts.filter(account => account.platform === platform).map(account => account.id);
-    const next = new Set(activeItem.targetAccountIds);
+    const next = new Set(selectedTargetAccountIds);
     const allSelected = ids.length > 0 && ids.every(id => next.has(id));
     ids.forEach(id => allSelected ? next.delete(id) : next.add(id));
-    updateItem(activeItem.id, { targetAccountIds: Array.from(next), status: 'draft', error: undefined });
+    if (activeItem) updateItem(activeItem.id, { targetAccountIds: Array.from(next), status: 'draft', error: undefined });
+    else setPendingTargetAccountIds(Array.from(next));
   };
 
   const selectAllAccounts = () => {
-    if (!activeItem) return;
-    updateItem(activeItem.id, {
-      targetAccountIds: connectedAccounts.map(account => account.id),
-      status: 'draft',
-      error: undefined,
-    });
-  };
-
-  const applyContentToAll = () => {
-    if (!activeItem) return;
-    setItems(prev => prev.map(item => ({
-      ...item,
-      title: activeItem.title,
-      description: activeItem.description,
-      platformCopy: Object.fromEntries(
-        Object.entries(activeItem.platformCopy).map(([platform, copy]) => [platform, {
-          ...copy,
-          tags: copy.tags ? [...copy.tags] : undefined,
-          hashtags: copy.hashtags ? [...copy.hashtags] : undefined,
-        }]),
-      ),
-      firstComment: activeItem.firstComment,
-      trackWaLink: activeItem.trackWaLink,
-      status: item.status === 'publishing' ? item.status : 'draft',
-      error: undefined,
-    })));
-    setNotice(`已把当前视频的发布内容应用到 ${items.length} 条视频，素材、账号和排期保持不变。`);
-  };
-
-  const addPublishItem = () => {
-    const next = createPublishItem(null, connectedAccounts.map(account => account.id));
-    setItems(prev => [...prev, next]);
-    setActiveItemId(next.id);
-    setNotice('');
-    setError('');
+    const ids = connectedAccounts.map(account => account.id);
+    if (activeItem) updateItem(activeItem.id, { targetAccountIds: ids, status: 'draft', error: undefined });
+    else setPendingTargetAccountIds(ids);
   };
 
   const duplicatePublishItem = (item: PublishQueueItem) => {
@@ -874,45 +805,13 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
     });
   };
 
-  const addBatchPaths = () => {
-    const paths = Array.from(new Set(batchPaths
-      .split(/\r?\n/)
-      .map(value => value.trim().replace(/^['"]|['"]$/g, ''))
-      .filter(Boolean)));
-    if (!paths.length) {
-      setError('请至少输入一个本地视频路径');
-      return;
-    }
-    const targetAccountIds = activeItem?.targetAccountIds.length
-      ? activeItem.targetAccountIds
-      : connectedAccounts.map(account => account.id);
-    const additions = paths.map(videoPath => createPublishItem({
-      videoPath,
-      title: titleFromVideoPath(videoPath),
-      description: activeItem?.description || '',
-      ratio: activeItem?.ratio,
-      platform: activeItem?.sourcePlatform,
-    }, targetAccountIds));
-    setItems(prev => {
-      const onlyBlank = prev.length === 1 && !prev[0].videoPath.trim() && !prev[0].title.trim();
-      return onlyBlank ? additions : [...prev, ...additions];
-    });
-    setActiveItemId(additions[0].id);
-    setBatchPaths('');
-    setBatchPathsOpen(false);
-    setError('');
-    setNotice(`已加入 ${additions.length} 条视频。`);
-  };
-
   const addSelectedVideoFiles = async (fileList: FileList | null) => {
     const files = Array.from(fileList || []).filter(file => /\.(mp4|mov|webm|mkv|avi)$/i.test(file.name));
     if (!files.length) return;
     setUploadingVideos(true);
     setError('');
     setNotice('');
-    const targetAccountIds = activeItem?.targetAccountIds.length
-      ? activeItem.targetAccountIds
-      : connectedAccounts.map(account => account.id);
+    const targetAccountIds = activeItem ? activeItem.targetAccountIds : pendingTargetAccountIds;
     const additions: PublishQueueItem[] = [];
     const failures: string[] = [];
     for (const file of files) {
@@ -1198,49 +1097,16 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
                   className="hidden"
                   onChange={event => void addSelectedVideoFiles(event.target.files)}
                 />
-                <button type="button" onClick={() => videoInputRef.current?.click()} disabled={uploadingVideos} className="inline-flex items-center gap-1.5 rounded-lg bg-accent px-3 py-2 text-xs font-bold text-white disabled:opacity-50">
+                <button type="button" onClick={() => videoInputRef.current?.click()} disabled={uploadingVideos} className="inline-flex h-9 w-24 items-center justify-center gap-1.5 rounded-lg bg-accent text-xs font-bold text-white disabled:opacity-50">
                   {uploadingVideos ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
-                  {uploadingVideos ? '加入中' : '选择'}
+                  {uploadingVideos ? '上传中' : '上传'}
                 </button>
-                <button type="button" onClick={() => setBatchPathsOpen(open => !open)} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold text-text-secondary hover:border-accent hover:text-accent">
-                  <Film size={13} /> 路径
-                </button>
-                <button type="button" onClick={addPublishItem} className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-xs font-bold text-text-secondary hover:border-accent hover:text-accent">
-                  <Plus size={13} /> 空白
-                </button>
-                <button
-                  type="button"
-                  onClick={applyContentToAll}
-                  disabled={!activeItem || items.length < 2}
-                  title="复制当前视频的标题、发布配文、分平台文案、首评和询盘追踪设置；不会覆盖视频文件、账号和排期"
-                  className="inline-flex items-center gap-1.5 rounded-lg border border-accent/30 bg-accent-glow px-3 py-2 text-xs font-bold text-accent hover:border-accent disabled:cursor-not-allowed disabled:opacity-40"
-                >
-                  <Copy size={13} /> 同步内容
-                </button>
-                <button type="button" onClick={toggleAllQueueItems} className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-xs font-bold text-emerald-700">
+                <button type="button" onClick={toggleAllQueueItems} className="inline-flex h-9 w-24 items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-xs font-bold text-emerald-700">
+                  <CheckCircle2 size={13} />
                   {allQueueItemsSelected ? '取消全选' : '全选'}
                 </button>
               </div>
             </div>
-
-            {batchPathsOpen && (
-              <div className="mt-3 rounded-xl border border-border bg-surface p-3">
-                <label className="block">
-                  <span className="mb-1.5 block text-[11px] font-semibold text-text-secondary">每行一个本地视频路径</span>
-                  <textarea
-                    value={batchPaths}
-                    onChange={event => setBatchPaths(event.target.value)}
-                    rows={4}
-                    placeholder={'D:\\videos\\product-a.mp4\nD:\\videos\\product-b.mp4'}
-                    className="w-full resize-y rounded-lg border border-border bg-white px-3 py-2 font-mono text-xs outline-none focus:border-accent"
-                  />
-                </label>
-                <div className="mt-2 flex justify-end gap-2">
-                  <button type="button" onClick={() => setBatchPathsOpen(false)} className="rounded-lg border border-border px-3 py-1.5 text-xs font-bold text-text-secondary">取消</button>
-                  <button type="button" onClick={addBatchPaths} className="rounded-lg bg-accent px-3 py-1.5 text-xs font-bold text-white">加入队列</button>
-                </div>
-              </div>
-            )}
 
             <div className="mt-3 grid gap-2 md:grid-cols-2 xl:grid-cols-3">
               {items.map((item, index) => {
@@ -1290,7 +1156,7 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
               <div className="flex flex-wrap gap-2">
                 {Object.entries(PLATFORM_META).map(([platform, meta]) => {
                   const platformAccounts = connectedAccounts.filter(account => account.platform === platform);
-                  const selected = platformAccounts.length > 0 && platformAccounts.every(account => activeItem?.targetAccountIds.includes(account.id));
+                  const selected = platformAccounts.length > 0 && platformAccounts.every(account => selectedTargetAccountIds.includes(account.id));
                   return (
                     <button key={platform} type="button" disabled={!platformAccounts.length} onClick={() => togglePlatform(platform as PublishPlatform)} className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-bold disabled:opacity-40 ${selected ? 'border-accent bg-accent-glow text-accent' : 'border-border text-text-secondary'}`}>
                       <SocialPlatformIcon platform={platform} size={15} /> {platformAccounts.length}
@@ -1313,14 +1179,14 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
               </div>
             ) : accounts.map(account => {
               const meta = PLATFORM_META[account.platform];
-              const active = Boolean(activeItem?.targetAccountIds.includes(account.id));
+              const active = selectedTargetAccountIds.includes(account.id);
               return (
                 <button key={account.id} type="button" onClick={() => toggleAccount(account.id)} disabled={account.status !== 'connected'} className={`rounded-xl border p-2.5 text-left transition-all disabled:cursor-not-allowed disabled:opacity-55 ${active ? 'border-accent bg-accent-glow shadow-sm' : 'border-border bg-surface hover:border-border-bright'}`}>
                   <div className="flex items-center justify-between gap-3">
                     {account.avatarUrl ? (
-                      <img src={account.avatarUrl} alt={account.title} className="h-10 w-10 rounded-xl object-cover" />
+                      <img src={account.avatarUrl} alt={account.title} className="h-10 w-10 shrink-0 rounded-xl object-cover" />
                     ) : (
-                      <span className="flex h-9 w-9 items-center justify-center rounded-xl text-white" style={{ background: meta.color }}>
+                      <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white" style={{ background: meta.color }}>
                         <SocialPlatformIcon platform={account.platform} size={20} />
                       </span>
                     )}
@@ -1337,10 +1203,22 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
           </div>
         </section>
 
-            <div id="publishing-content-editor" className="scroll-mt-24 rounded-2xl border border-border bg-white p-4 shadow-sm">
+            <section id="publishing-content-editor" className="scroll-mt-24 rounded-2xl border border-border bg-white p-4 shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3">
-                <h3 className="text-sm font-bold text-text-primary">内容编辑</h3>
+                <div>
+                  <h3 className="text-sm font-bold text-text-primary">发布内容编辑</h3>
+                  <p className="mt-1 text-xs text-text-muted">统一编辑通用内容，或切换到各平台的差异化文案。</p>
+                </div>
+                <div className="inline-grid grid-cols-2 gap-1 rounded-xl border border-border bg-surface-2 p-1">
+                  <button type="button" onClick={() => setContentEditorMode('common')} className={`h-8 rounded-lg px-4 text-xs font-black transition ${contentEditorMode === 'common' ? 'bg-white text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'}`}>
+                    通用内容
+                  </button>
+                  <button type="button" onClick={() => setContentEditorMode('platform')} className={`h-8 rounded-lg px-4 text-xs font-black transition ${contentEditorMode === 'platform' ? 'bg-white text-text-primary shadow-sm' : 'text-text-muted hover:text-text-secondary'}`}>
+                    分平台内容
+                  </button>
+                </div>
               </div>
+              {contentEditorMode === 'common' && (
               <div className="mt-4 space-y-3">
                 <label className="block">
                   <span className="mb-1.5 block text-[11px] font-semibold text-text-secondary">素材文件</span>
@@ -1384,16 +1262,10 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
                   </button>
                 </div>
               </div>
-            </div>
+              )}
 
-            <details className="rounded-2xl border border-border bg-white p-4 shadow-sm">
-              <summary className="flex cursor-pointer list-none items-center justify-between gap-3">
-                <div>
-                  <h3 className="text-sm font-bold text-text-primary">分平台发布内容</h3>
-                  <p className="mt-1 text-xs text-text-muted">每个平台文案互不相同，单卡可换一版。</p>
-                </div>
-                <span className="rounded-lg border border-border px-3 py-2 text-xs font-bold text-text-secondary">展开编辑</span>
-              </summary>
+              {contentEditorMode === 'platform' && (
+              <div className="mt-4 border-t border-border pt-4">
               <div className="mt-4 flex justify-end">
                 <button type="button" onClick={() => void adaptCopy()} disabled={adapting || selectedPlatforms.length === 0} className="inline-flex items-center gap-2 rounded-lg bg-accent px-3 py-2 text-xs font-bold text-white disabled:opacity-50">
                   {adapting ? <Loader2 size={14} className="animate-spin" /> : <Wand2 size={14} />}
@@ -1423,7 +1295,9 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
                   );
                 })}
               </div>
-            </details>
+              </div>
+              )}
+            </section>
           </section>
 
           <aside ref={publishSettingsRef} className="scroll-mt-24 rounded-2xl border border-border bg-white p-4 shadow-sm xl:sticky xl:top-4 xl:max-h-[calc(100vh-7rem)] xl:overflow-y-auto">

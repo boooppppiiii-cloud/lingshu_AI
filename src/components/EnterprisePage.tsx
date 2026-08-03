@@ -521,6 +521,7 @@ export default function EnterprisePage() {
   const [notificationMessageError, setNotificationMessageError] = useState(false);
   const [knowledgeView, setKnowledgeView] = useState<KnowledgeView>(advisorInitialEnterpriseView);
   const [enterpriseArea, setEnterpriseArea] = useState<EnterpriseArea>(() => ['bizRules', 'faq', 'salesStyle', 'advanced'].includes(advisorInitialEnterpriseView()) ? 'service' : 'facts');
+  const [languageSettingsHighlight, setLanguageSettingsHighlight] = useState(false);
   const [productPage, setProductPage] = useState(1);
   const [materialPage, setMaterialPage] = useState(1);
   const [faqPage, setFaqPage] = useState(1);
@@ -531,6 +532,22 @@ export default function EnterprisePage() {
   const [styleMessage, setStyleMessage] = useState('');
   const persistedProfileRef = useRef('');
   const hasUnsavedChanges = !loading && persistedProfileRef.current !== JSON.stringify(profile);
+
+  useEffect(() => {
+    if (window.sessionStorage.getItem('lingshu:enterprise-focus') !== 'language-settings') return;
+    window.sessionStorage.removeItem('lingshu:enterprise-focus');
+    setEnterpriseArea('facts');
+    setKnowledgeView('company');
+    setLanguageSettingsHighlight(true);
+    const scrollTimer = window.setTimeout(() => {
+      document.getElementById('enterprise-language-settings')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 120);
+    const highlightTimer = window.setTimeout(() => setLanguageSettingsHighlight(false), 3000);
+    return () => {
+      window.clearTimeout(scrollTimer);
+      window.clearTimeout(highlightTimer);
+    };
+  }, []);
 
   useEffect(() => {
     Promise.all([
@@ -1322,7 +1339,7 @@ export default function EnterprisePage() {
   );
 
   const marketSection = (
-    <KnowledgeCard icon={Globe2} title="目标市场与语言" purpose="决定 AI 说什么语言、按哪个时区建议联系时间" completed={completions.market}>
+    <KnowledgeCard id="enterprise-language-settings" highlight={languageSettingsHighlight} icon={Globe2} title="目标市场与语言" purpose="决定 AI 说什么语言、按哪个时区建议联系时间" completed={completions.market}>
       <div className="space-y-4">
         <Field label="主要市场">
           <OptionSelector value={profile.company.mainMarkets} options={MARKET_OPTIONS} onChange={value => set('company')('mainMarkets', value)} manualPlaceholder="补充目标国家或地区，例如：加勒比地区" />

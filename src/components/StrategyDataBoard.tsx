@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { ArrowRight, ListChecks, Target, TrendingUp, Users, Zap, MessageSquare, ArrowUpRight, CircleDollarSign, ExternalLink, Loader2, RefreshCw } from 'lucide-react';
+import { ArrowRight, ChevronDown, ListChecks, Target, TrendingUp, Users, Zap, MessageSquare, ArrowUpRight, CircleDollarSign, ExternalLink, Loader2, RefreshCw } from 'lucide-react';
 import { Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import TrafficDataBoard from './TrafficDataBoard';
 import InquiryDataBoard from './InquiryDataBoard';
@@ -137,6 +137,7 @@ export default function StrategyDataBoard({
   const [advisor, setAdvisor] = useState<AdvisorResult | null>(null);
   const [advisorLoading, setAdvisorLoading] = useState(false);
   const [advisorError, setAdvisorError] = useState('');
+  const [expandedActionIds, setExpandedActionIds] = useState<Set<string>>(() => new Set());
   const { customers, loading: customersLoading } = useCustomers();
   const windowDays = 30;
 
@@ -288,6 +289,15 @@ export default function StrategyDataBoard({
     onNavigate?.(page);
   };
 
+  const toggleAdvisorDetails = (id: string) => {
+    setExpandedActionIds(current => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
   return (
     <div className="h-full flex flex-col" data-lingshu-guide="strategy-dashboard">
       <div className="px-6 pt-3 pb-3 border-b border-border flex-shrink-0">
@@ -398,26 +408,54 @@ export default function StrategyDataBoard({
                     </div>
                   )}
                   {advisorError && <p className="rounded-lg bg-red-50 px-3 py-2 text-xs font-bold text-red-700">{advisorError}</p>}
-                  {actionItems.map(item => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      onClick={() => executeAdvisorAction(item)}
-                      className="flex w-full items-start gap-3 rounded-xl border border-border bg-surface px-3.5 py-2.5 text-left transition-colors hover:border-green-200 hover:bg-green-50/60"
-                    >
-                      <span className="min-w-0 flex-1">
-                        <span className="flex flex-wrap items-center gap-2">
-                          <span className={actionTitleText}>{item.title}</span>
-                          <span className="rounded-md border border-green-200 bg-green-50 px-1.5 py-0.5 text-[9px] font-bold text-green-700">置信度 {item.confidence}</span>
+                  {actionItems.map(item => {
+                    const expanded = expandedActionIds.has(item.id);
+                    return (
+                      <div
+                        key={item.id}
+                        role="button"
+                        tabIndex={0}
+                        aria-expanded={expanded}
+                        onClick={() => toggleAdvisorDetails(item.id)}
+                        onKeyDown={event => {
+                          if (event.key === 'Enter' || event.key === ' ') {
+                            event.preventDefault();
+                            toggleAdvisorDetails(item.id);
+                          }
+                        }}
+                        className="group flex w-full cursor-pointer items-start gap-3 rounded-xl border border-border bg-surface px-3.5 py-2.5 text-left transition-colors hover:border-green-200 hover:bg-green-50/60 focus:outline-none focus:ring-2 focus:ring-green-200"
+                      >
+                        <span className="min-w-0 flex-1">
+                          <span className="flex flex-wrap items-center gap-2">
+                            <ChevronDown size={13} className={`shrink-0 text-text-muted transition-transform ${expanded ? 'rotate-180' : ''}`} />
+                            <span className={actionTitleText}>{item.title}</span>
+                            <span className="rounded-md border border-green-200 bg-green-50 px-1.5 py-0.5 text-[9px] font-bold text-green-700">置信度 {item.confidence}</span>
+                          </span>
+                          <span className={`mt-1 block ${bodyText}`}>{item.desc}</span>
+                          <span className={`grid transition-all duration-200 ${expanded ? 'mt-1.5 grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'}`}>
+                            <span className="overflow-hidden">
+                              <span className={`block ${supplementText}`}>{item.basis}</span>
+                              <span className="mt-1 block text-[11px] font-semibold text-text-secondary">{item.target}</span>
+                              <span className="mt-1 block text-[10px] text-text-muted">限制：{item.limitation}</span>
+                            </span>
+                          </span>
                         </span>
-                        <span className={`mt-1 block ${bodyText}`}>{item.desc}</span>
-                        <span className={`mt-1.5 block ${supplementText}`}>{item.basis}</span>
-                        <span className="mt-1 block text-[11px] font-semibold text-text-secondary">{item.target}</span>
-                        <span className="mt-1 block text-[10px] text-text-muted">限制：{item.limitation}</span>
-                      </span>
-                      <ArrowRight size={14} className="mt-1 text-text-muted" />
-                    </button>
-                  ))}
+                        <button
+                          type="button"
+                          title="前往对应任务"
+                          aria-label={`前往${item.title}`}
+                          onClick={event => {
+                            event.stopPropagation();
+                            executeAdvisorAction(item);
+                          }}
+                          onKeyDown={event => event.stopPropagation()}
+                          className="group/nav mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-text-muted transition-colors hover:bg-white hover:text-green-700 focus:outline-none focus:ring-2 focus:ring-green-200"
+                        >
+                          <ArrowRight size={14} className="transition-transform duration-150 group-hover/nav:scale-125" />
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
                 {advisor?.marketContext.summary && (
                   <div className="mt-3 rounded-xl border border-sky-100 bg-sky-50/60 px-3.5 py-3">

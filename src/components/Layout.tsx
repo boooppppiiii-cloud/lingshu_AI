@@ -10,6 +10,7 @@ import { authApi, exitSupportSession, type AuthSession } from '../lib/auth';
 import RightPanel from './RightPanel';
 import DemoGuide from './DemoGuide';
 import AccountSettingsModal from './AccountSettingsModal';
+import { useDismissibleLayer } from '../hooks/useDismissibleLayer';
 
 interface NavSection {
   items: { id: Page; label: string; icon: ReactNode }[];
@@ -204,21 +205,10 @@ export default function Layout({ page, onNavigate, conversation, children, sessi
     try { localStorage.setItem('lingshu:sidebar-collapsed', String(sidebarCollapsed)); } catch { /* storage can be unavailable */ }
     if (sidebarCollapsed) { setQuotaOpen(false); setAccountMenuOpen(false); }
   }, [sidebarCollapsed]);
-  useEffect(() => {
-    if (!quotaOpen && !accountMenuOpen) return;
-    const onPointerDown = (event: PointerEvent) => {
-      if (!quotaAreaRef.current?.contains(event.target as Node)) { setQuotaOpen(false); setAccountMenuOpen(false); }
-    };
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') { setQuotaOpen(false); setAccountMenuOpen(false); }
-    };
-    document.addEventListener('pointerdown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('pointerdown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [quotaOpen, accountMenuOpen]);
+  useDismissibleLayer(quotaOpen || accountMenuOpen, quotaAreaRef, () => {
+    setQuotaOpen(false);
+    setAccountMenuOpen(false);
+  });
   const secondaryItems = isAdminSession(activeSession)
     ? [
       ...SECONDARY_NAV.items,
