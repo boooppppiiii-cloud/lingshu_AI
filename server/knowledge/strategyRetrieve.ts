@@ -5,6 +5,7 @@ import { callLLM } from '../agents/llm.js';
 import { store } from '../storage/index.js';
 import type { ConversationTurn } from './retrieve.js';
 import { progressionForStrategy } from '../sales/salesSkill.js';
+import { matchSalesActions, SALES_ACTION_LIBRARY } from '../sales/actionLibrary.js';
 
 export interface ResponseStrategy {
   id: string;
@@ -15,6 +16,12 @@ export interface ResponseStrategy {
   examples: string[];
   risk_link: string;
   escalate: string;
+  bant_impact?: string[];
+  goal?: string;
+  actions?: string[];
+  talk?: string[][];
+  talk_variants?: string[][];
+  risk?: string;
 }
 
 interface StrategyMemoryRecord {
@@ -47,6 +54,12 @@ export interface StrategyRetrieveInput {
   conversation?: ConversationTurn[];
   stage?: string;
   intent?: string;
+  firstTurn?: boolean;
+  knowledgeMiss?: boolean;
+  productAvailable?: boolean;
+  redFlagCount?: number;
+  fallbackCount?: number;
+  sentiment?: string;
 }
 
 interface ScoredStrategy {
@@ -57,7 +70,25 @@ interface ScoredStrategy {
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const strategyFile = path.join(__dirname, 'strategies.json');
-const STRATEGIES = JSON.parse(fs.readFileSync(strategyFile, 'utf8')) as ResponseStrategy[];
+const JSON_STRATEGIES = JSON.parse(fs.readFileSync(strategyFile, 'utf8')) as ResponseStrategy[];
+const ACTION_STRATEGIES: ResponseStrategy[] = SALES_ACTION_LIBRARY.map(item => ({
+  id: item.id,
+  scenario: item.scenario,
+  signals: item.signals,
+  intent: item.goal,
+  strategy: item.actions,
+  examples: item.talk.flat(),
+  risk_link: item.risk,
+  escalate: item.escalate ?? '',
+  bant_impact: item.bantImpact,
+  goal: item.goal,
+  actions: item.actions,
+  talk: item.talk,
+  talk_variants: item.talk,
+  risk: item.risk,
+}));
+const ACTION_IDS = new Set(ACTION_STRATEGIES.map(item => item.id));
+const STRATEGIES = [...ACTION_STRATEGIES, ...JSON_STRATEGIES.filter(item => !ACTION_IDS.has(item.id))];
 
 if (!Array.isArray(STRATEGIES) || STRATEGIES.length === 0) {
   throw new Error('response_strategy_library_empty');
@@ -92,12 +123,26 @@ function rankStrategies(input: StrategyRetrieveInput, library: readonly Response
   const latest = normalize(input.latestMessage);
   const recent = normalize(conversationText(input));
   const metadata = normalize(`${input.stage ?? ''} ${input.intent ?? ''}`);
+  const deterministicIds = new Set(matchSalesActions({
+    message: input.latestMessage,
+    firstTurn: input.firstTurn,
+    stage: input.stage,
+    knowledgeMiss: input.knowledgeMiss,
+    productAvailable: input.productAvailable,
+    redFlagCount: input.redFlagCount,
+    fallbackCount: input.fallbackCount,
+    sentiment: input.sentiment,
+  }).map(item => item.id));
   return library.map(strategy => {
     const matchedSignals = strategy.signals.filter(signal => recent.includes(normalize(signal)));
     const latestScore = strategy.signals.reduce((sum, signal) => sum + phraseScore(latest, signal) * 2, 0);
     const contextScore = strategy.signals.reduce((sum, signal) => sum + phraseScore(recent, signal), 0);
     const metadataScore = strategy.signals.reduce((sum, signal) => sum + phraseScore(metadata, signal), 0);
-    return { strategy, score: latestScore + contextScore + metadataScore, matchedSignals };
+    return {
+      strategy,
+      score: latestScore + contextScore + metadataScore + (deterministicIds.has(strategy.id) ? 40 : 0),
+      matchedSignals,
+    };
   }).filter(item => item.score > 0).sort((a, b) => b.score - a.score || a.strategy.id.localeCompare(b.strategy.id));
 }
 
@@ -182,6 +227,12 @@ function customStrategies(records: StrategyMemoryRecord[]): ResponseStrategy[] {
       examples: [],
       risk_link: text(item.risk_link) || 'L3',
       escalate: text(item.escalate),
+      bant_impact: [],
+      goal: text(item.intent),
+      actions: steps,
+      talk: [],
+      talk_variants: [],
+      risk: text(item.risk_link) || 'L3',
     }];
   });
 }
@@ -245,16 +296,21 @@ export function buildStrategyPromptBlock(matches: RetrievedStrategy[]): string {
     'Mandatory precedence: current redline rules and enterprise knowledge > response strategy > seller style memory.',
     'Use strategies to decide how to ask, explain, negotiate, follow up, or hand off. Never treat a strategy or its examples as evidence for price, discount, MOQ, inventory, certification, payment, shipping, lead time, capability, or any other company fact.',
     'Never copy numbers or company claims from strategy examples. If a strategy conflicts with current enterprise facts or redline rules, ignore the conflicting strategy instruction.',
+    'Write like a real WhatsApp seller: plain text, no markdown or lists. Ask at most one question in this turn. Keep each message short.',
     ...matches.map((match, index) => {
       const progression = progressionForStrategy(match.strategy.id);
       return [
       `Matched strategy ${index + 1}: ${match.strategy.id} ${match.strategy.scenario} (confidence=${match.confidence.toFixed(2)})`,
       `Why matched: ${match.reason}`,
       `Buyer intent: ${match.strategy.intent}`,
-      `Tactics: ${match.strategy.strategy.join('；')}`,
-      `Risk link: ${match.strategy.risk_link}`,
+      match.strategy.bant_impact?.length ? `BANT impact: ${match.strategy.bant_impact.join(' / ')}` : '',
+      `Progression goal: ${match.strategy.goal || match.strategy.intent}`,
+      `Tactics: ${(match.strategy.actions || match.strategy.strategy).join('；')}`,
+      `Risk link: ${match.strategy.risk || match.strategy.risk_link}`,
       match.strategy.escalate ? `Handoff condition: ${match.strategy.escalate}` : '',
-      match.strategy.examples.length ? `Wording references only: ${match.strategy.examples.join(' | ')}` : '',
+      (match.strategy.talk_variants?.length || match.strategy.talk?.length)
+        ? `Short-message wording references only: ${(match.strategy.talk_variants || match.strategy.talk || []).map(variant => variant.join(' / ')).join(' | ')}`
+        : match.strategy.examples.length ? `Wording references only: ${match.strategy.examples.join(' | ')}` : '',
       progression ? `Progression goal for this strategy: ${progression.goal}` : '',
       progression ? `Optional indirect question (ask only one if it fits the current turn): ${progression.indirectQuestion}` : '',
       match.learnedAdjustment

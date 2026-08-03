@@ -15,6 +15,19 @@ assert.ok(risk.lines.includes('risk'));
 const capability = evaluateHandoff({ message: 'Can somebody help?', knowledgeMissStreak: 2 });
 assert.equal(capability.severity, 'normal');
 assert.ok(capability.lines.includes('capability'));
+const secondFallback = evaluateHandoff({ message: 'Unknown question', fallbackCount: 2 });
+assert.ok(secondFallback.lines.includes('capability'));
+
+const bantThreshold = evaluateHandoff({ message: 'Here are the details.', bantTotal: 75 });
+assert.ok(bantThreshold.lines.includes('business_value'));
+assert.equal(bantThreshold.severity, 'urgent');
+
+const certificationAction = evaluateHandoff({
+  message: 'Can you send GMP?',
+  salesActions: [{ id: 'D02', risk: 'L4', scenario: '索要知识库未覆盖的认证文件' }],
+});
+assert.ok(certificationAction.lines.includes('risk'));
+assert.equal(certificationAction.riskKind, 'sensitive_business_fact');
 
 const safe = evaluateHandoff({ message: 'Hello' });
 assert.equal(safe.required, false);
@@ -35,6 +48,7 @@ const blackBant = assessBant({
   turns: [
     { role: 'buyer', text: 'What is your factory address and production line details? Also who else do you supply?' },
     { role: 'buyer', text: "What is your best price? I don't want to give quantity yet." },
+    { role: 'buyer', text: 'Just tell me the lowest price.' },
   ],
 });
 assert.equal(shouldRestrictToPublicInfo(blackBant), true);
