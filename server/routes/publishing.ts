@@ -115,6 +115,7 @@ function publicPost(post: PostRecord) {
     videoPath: text(stats.videoPath),
     videoPreviewUrl: publishingPreviewUrl(post.tenant_id, stats.videoPath) || text(stats.videoPreviewUrl),
     trackWaLink: stats.trackWaLink !== false,
+    scheduleLocked: Boolean(stats.scheduleLocked),
     targetAccountIds: Array.isArray(stats.targetAccountIds) ? stats.targetAccountIds.map(String).map(text).filter(Boolean) : [],
     targetAccountLabels: Array.isArray(stats.targetAccountLabels) ? stats.targetAccountLabels.map(String).map(text).filter(Boolean) : [],
     warnings: Array.isArray(stats.warnings) ? stats.warnings : [],
@@ -431,6 +432,7 @@ publishingRouter.post('/calendar', async (req, res) => {
       firstComment: text(req.body?.firstComment),
       videoPath: text(req.body?.videoPath),
       trackWaLink: req.body?.trackWaLink !== false,
+      scheduleLocked: req.body?.scheduleLocked === true,
       targetAccountIds: Array.isArray(req.body?.targetAccountIds)
         ? req.body.targetAccountIds.map(String).map(text).filter(Boolean)
         : [],
@@ -513,6 +515,10 @@ publishingRouter.patch('/calendar/:id', async (req, res) => {
   const stats = { ...currentStats };
   let changed = false;
   if (Object.prototype.hasOwnProperty.call(req.body || {}, 'scheduledAt')) {
+    if (currentStats.scheduleLocked === true && req.body?.overrideScheduleLock !== true) {
+      res.status(409).json({ error: '定点排期时间已锁定，请先取消原排期再重新设置。' });
+      return;
+    }
     const scheduledAt = text(req.body?.scheduledAt);
     if (!scheduledAt || !Number.isFinite(Date.parse(scheduledAt))) {
       res.status(400).json({ error: 'valid_scheduled_at_required' });

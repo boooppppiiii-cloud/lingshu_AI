@@ -45,6 +45,7 @@
     "test:customer-visibility": "tsx server/whatsapp/customerVisibility.test.ts",
     "test:customer-profile": "tsx server/whatsapp/customerProfilePersistence.test.ts",
     "test:best-time": "tsx server/publishing/bestTime.test.ts",
+    "test:schedule-policy": "tsx server/publishing/schedulePolicy.test.ts",
     "test:autonomy": "tsx server/autonomy/actionRules.test.ts",
     "test:knowledge-policy": "tsx server/knowledge/retrieve.test.ts",
     "test:strategy-policy": "tsx server/knowledge/strategyRetrieve.test.ts",
@@ -52,7 +53,7 @@
     "test:scheduled-publishing": "tsx server/publishing/scheduledPublisher.test.ts",
     "test:pb-admin": "tsx server/storage/pb.test.ts",
     "test:tenant-sync-smoke": "tsx scripts/verify-tenant-sync.ts",
-    "test": "npm run test:outbound-guard && npm run test:autonomy && npm run test:knowledge-policy && npm run test:strategy-policy && npm run test:tenant-isolation && npm run test:scheduled-publishing && npm run test:pb-admin",
+    "test": "npm run test:outbound-guard && npm run test:autonomy && npm run test:knowledge-policy && npm run test:strategy-policy && npm run test:tenant-isolation && npm run test:schedule-policy && npm run test:scheduled-publishing && npm run test:pb-admin",
     "desktop": "electron desktop/main.cjs",
     "lint": "tsc --noEmit",
     "migrate:thumbnails-to-pb": "tsx scripts/migrate-thumbnails-to-pb.ts"

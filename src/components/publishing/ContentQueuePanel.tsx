@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CalendarClock, Check, ChevronDown, Clock, Film, Loader2, Play, Sparkles } from 'lucide-react';
+import { CalendarClock, Check, ChevronDown, Clock, Film, Loader2, LockKeyhole, Pencil, Play, Sparkles } from 'lucide-react';
 import { authHeader } from '../../lib/auth';
 import type { MarketId } from './marketingCalendar';
 import type { CalendarPost, PendingPublishContent } from './CalendarPlanner';
@@ -180,6 +180,14 @@ export function ContentQueuePanel({
     () => upcomingSlots(schedule).filter(slot => !futurePosts.some(post => isSameSlot(new Date(post.publishedAt), slot.scheduledAt))),
     [futurePosts, schedule],
   );
+  const arrangeableItems = useMemo(
+    () => pendingItems.filter(item => item.deliveryMode === 'flexible'),
+    [pendingItems],
+  );
+  const draggableItems = pendingItems.filter(item => (
+    item.deliveryMode === 'flexible' ||
+    (item.deliveryMode === 'schedule' && Boolean(item.scheduledAt && Number.isFinite(Date.parse(item.scheduledAt))))
+  ));
 
   const savePreset = async (preset: RhythmPreset) => {
     const next: PostingSchedule = {
@@ -217,7 +225,7 @@ export function ContentQueuePanel({
   };
 
   const arrangeWithAi = async () => {
-    const placements = pendingItems.slice(0, openSlots.length).map((item, index) => ({
+    const placements = arrangeableItems.slice(0, openSlots.length).map((item, index) => ({
       id: item.id,
       scheduledAt: openSlots[index].scheduledAt,
     }));
@@ -246,7 +254,7 @@ export function ContentQueuePanel({
             type="button"
             data-lingshu-guide="ai-layout"
             onClick={() => void arrangeWithAi()}
-            disabled={arranging || scheduleLoading || scheduleSaving || pendingItems.length === 0 || openSlots.length === 0}
+            disabled={arranging || scheduleLoading || scheduleSaving || arrangeableItems.length === 0 || openSlots.length === 0}
             className="inline-flex items-center gap-1 rounded-lg border border-violet-200 bg-violet-50 px-2 py-1.5 text-[10px] font-black text-violet-700 hover:bg-violet-100 disabled:cursor-not-allowed disabled:opacity-40"
           >
             {arranging ? <Loader2 size={11} className="animate-spin" /> : <Sparkles size={11} />}
@@ -291,7 +299,7 @@ export function ContentQueuePanel({
           <div className="flex min-w-0 items-center gap-2">
             <CalendarClock size={14} className="text-emerald-600" />
             <h3 className="shrink-0 text-sm font-black text-text-primary">待发布内容</h3>
-            <span className="truncate text-[10px] font-bold text-text-muted">{pendingItems.length} 条 · 可拖入日历</span>
+            <span className="truncate text-[10px] font-bold text-text-muted">{pendingItems.length} 条 · {draggableItems.length} 条可排入日历</span>
           </div>
           {pendingItems.length > 0 && (
             <button type="button" onClick={() => setQueueExpanded(previous => !previous)} className="inline-flex items-center gap-1 rounded-lg border border-border bg-white px-2 py-1.5 text-[10px] font-black text-text-secondary hover:border-emerald-200 hover:text-emerald-700" aria-expanded={queueExpanded}>
@@ -315,32 +323,46 @@ export function ContentQueuePanel({
               <div className="text-left"><p className="text-[11px] font-black text-text-primary">还没有待发布视频</p><p className="mt-0.5 text-[9px] text-text-muted">视频编辑完成并保存后，会出现在这里</p></div>
             </div>
           ) : pendingItems.map(item => {
-            const scheduledLabel = item.scheduledAt
-              ? new Date(item.scheduledAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
-              : '20:00';
+            const fixedDate = item.scheduledAt ? new Date(item.scheduledAt) : null;
+            const hasFixedDate = Boolean(fixedDate && Number.isFinite(fixedDate.getTime()));
+            const canDrag = item.deliveryMode === 'flexible' || (item.deliveryMode === 'schedule' && hasFixedDate);
+            const isFlexible = item.deliveryMode === 'flexible';
+            const isFixed = item.deliveryMode === 'schedule';
             const platforms = item.platforms?.length ? item.platforms : [item.sourcePlatform || selectedPlatform];
             return (
               <button
                 key={item.id}
                 type="button"
-                draggable
+                draggable={canDrag}
                 onDragStart={event => {
+                  if (!canDrag) {
+                    event.preventDefault();
+                    return;
+                  }
                   event.dataTransfer.effectAllowed = 'move';
                   event.dataTransfer.setData('application/x-lingshu-pending-content', item.id);
                   event.dataTransfer.setData('text/plain', item.title);
                 }}
                 onClick={() => onOpenPending?.(item.id)}
-                className={`group flex min-w-0 cursor-grab flex-col rounded-xl border border-emerald-200 bg-emerald-50/50 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-emerald-400 hover:shadow-md active:cursor-grabbing ${queueExpanded ? 'h-[154px] p-2.5' : 'h-[108px] p-2'}`}
+                title={canDrag ? (isFixed ? '拖入日历后仍按锁定时间发布；点击可编辑内容' : '拖入日历后选择具体时间；点击可编辑内容') : '点击可继续编辑；立即发布内容不会进入日历'}
+                className={`group flex min-w-0 flex-col rounded-xl border text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${canDrag ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${isFixed ? 'border-violet-200 bg-violet-50/55 hover:border-violet-400' : isFlexible ? 'border-sky-200 bg-sky-50/55 hover:border-sky-400' : 'border-emerald-200 bg-emerald-50/50 hover:border-emerald-400'} ${queueExpanded ? 'h-[154px] p-2.5' : 'h-[108px] p-2'}`}
               >
                 <span className="flex items-center justify-between gap-2">
                   <span className="flex min-w-0 items-center gap-1">{platforms.slice(0, 3).map(platform => <PlatformBadge key={platform} platform={platform} compact />)}</span>
-                  <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-white px-1.5 py-0.5 text-[8px] font-black text-emerald-700 shadow-sm"><Play size={8} fill="currentColor" /> 待发布</span>
+                  <span className={`inline-flex shrink-0 items-center gap-1 rounded-full bg-white px-1.5 py-0.5 text-[8px] font-black shadow-sm ${isFixed ? 'text-violet-700' : isFlexible ? 'text-sky-700' : 'text-emerald-700'}`}>
+                    {isFixed ? <LockKeyhole size={8} /> : isFlexible ? <Clock size={8} /> : <Play size={8} fill="currentColor" />}
+                    {isFixed ? '定点排期' : isFlexible ? '时间待定' : '立即发布'}
+                  </span>
                 </span>
                 <span className={`${queueExpanded ? 'mt-2 line-clamp-2' : 'mt-1.5 truncate'} text-[11px] font-black leading-[1.35] text-text-primary`}>{item.title || '待填写标题的视频'}</span>
                 {queueExpanded && item.description && <span className="mt-1 line-clamp-2 text-[9px] leading-relaxed text-text-muted">{item.description}</span>}
                 <span className="mt-auto flex items-center justify-between gap-2 text-[8px] font-bold text-text-muted">
-                  <span className="truncate">{item.sourceProjectId || item.sourcePlatform ? 'AI 智能素材' : '已保存内容'}</span>
-                  <span className="shrink-0 text-emerald-700">计划 {scheduledLabel}</span>
+                  <span className="inline-flex min-w-0 items-center gap-1 truncate"><Pencil size={8} /> 点击可再编辑</span>
+                  <span className={`shrink-0 ${isFixed ? 'text-violet-700' : isFlexible ? 'text-sky-700' : 'text-emerald-700'}`}>
+                    {isFixed && hasFixedDate
+                      ? `锁定 ${fixedDate!.toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })} ${fixedDate!.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`
+                      : isFlexible ? '拖入后选时间' : '确认后马上发布'}
+                  </span>
                 </span>
               </button>
             );
