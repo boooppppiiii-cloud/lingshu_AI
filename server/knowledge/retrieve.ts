@@ -7,6 +7,7 @@ export interface CustomerLite {
   language?: string;
   stage?: string;
   product?: string;
+  internalProduct?: string;
 }
 
 export interface ProductLite {
@@ -64,7 +65,7 @@ export interface RetrievedContext {
   sentiment?: 'negative' | 'neutral' | 'positive';
 }
 
-interface ProductQuery {
+export interface ProductQuery {
   sku?: string;
   keywords?: string[];
   category?: string;
@@ -316,6 +317,46 @@ function productIntentLikely(message: string): boolean {
     || /价格|报价|多少钱|货号|款号|产品|目录|起订|样品|面料|材质|颜色|尺码/.test(raw);
 }
 
+function refersToCurrentProduct(message: string): boolean {
+  const raw = normalize(message);
+  if (!raw) return false;
+  return /\b(?:it|this|that|these|those|same one|the item|the product|size|color|colour|material|fabric|sample|moq)\b/i.test(raw)
+    || /(?:这个|那个|这款|那款|同款|它|尺码|颜色|材质|面料|样品|起订)/.test(raw);
+}
+
+export function seedCurrentProductQuery(
+  query: ProductQuery | null,
+  customer: CustomerLite,
+  latestMessage: string,
+  conversation: ConversationTurn[],
+  evidence: string[],
+): ProductQuery | null {
+  const internalProduct = text(customer.internalProduct);
+  if (!internalProduct) return query;
+
+  const latest = normalize(latestMessage);
+  const publicProduct = normalize(customer.product);
+  const internalNormalized = normalize(internalProduct);
+  const priorConversation = conversation.slice(0, -1).slice(-6).map(turn => normalize(turn.text)).join(' ');
+  const explicitCurrentProduct = Boolean(
+    (publicProduct && latest.includes(publicProduct))
+    || latest.includes(internalNormalized),
+  );
+  const referencedCurrentProduct = refersToCurrentProduct(latestMessage) && Boolean(
+    publicProduct
+    || priorConversation.includes(internalNormalized),
+  );
+  if (!explicitCurrentProduct && !referencedCurrentProduct) return query;
+
+  const keywords = Array.from(new Set([
+    ...(query?.keywords ?? []),
+    internalProduct,
+    ...tokenize(internalProduct),
+  ].map(text).filter(Boolean))).slice(0, 10);
+  evidence.push(`根据当前会话产品映射补充内部检索词：${internalProduct}`);
+  return { ...(query ?? {}), keywords, sentiment: query?.sentiment ?? heuristicSentiment(latestMessage) };
+}
+
 export function isGreetingOrProcessIntent(message: string): boolean {
   const raw = text(message);
   if (!raw) return true;
@@ -469,7 +510,8 @@ export async function retrieveContext(
   if (customer?.id || customer?.name) evidence.push(`客户上下文：${customer.name || customer.id}`);
   const conversation = recentConversation(options, message);
   const conversationQuery = conversation.map(turn => turn.text).join(' ');
-  const query = await parseProductQuery(message, evidence);
+  const parsedQuery = await parseProductQuery(message, evidence);
+  const query = seedCurrentProductQuery(parsedQuery, customer, message, conversation, evidence);
   const products = retrieveProducts(profile, query, evidence);
   const faqs = retrieveFaqs(profile, conversationQuery || message, evidence);
   const faqMatch = await resolveFaqMatch(faqs, message, conversation, evidence);

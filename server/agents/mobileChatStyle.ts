@@ -147,7 +147,7 @@ export function mobileChatRewritePrompt(draft: string, latestBuyerMessage: strin
   return [
     'Rewrite one seller reply so it sounds typed by a real, experienced Yiwu trader on a phone.',
     `Use ${language} throughout. Return one to three plain-text WhatsApp messages separated by a blank line.`,
-    'Each message must contain at most two sentences and about 30 Chinese characters or 25 English words.',
+    'Keep each message brief enough to feel naturally typed on a phone. A quick buyer question needs a quick reply; a serious detail question may need a little more explanation.',
     'Keep every supported business fact and the original intent. Do not add product facts, prices, promises, or capabilities.',
     'Match the length to the buyer: keep a casual message brief; give a serious detail question only the extra explanation it genuinely needs.',
     'Use natural spoken trade language, not an essay, brochure, customer-service template, or polished marketing copy.',
