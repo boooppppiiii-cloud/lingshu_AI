@@ -93,7 +93,7 @@ const SCENARIO_PATTERNS: Array<{ scenario: KnowledgeGapScenario; pattern: RegExp
   },
   {
     scenario: 'product_discovery',
-    pattern: /\b(?:what (?:products? )?do you have|what do you sell|show me what you have|show me your products?|what can you offer|product range|send (?:me )?(?:your )?catalog(?:ue)?)\b|你们有什么|你卖什么|有什么产品|看看产品|发.{0,6}目录/i,
+    pattern: /\b(?:what (?:products? )?do you have|what do you sell|show me what you have|show me your products?|what can you offer|product range|send (?:me )?(?:your )?catalog(?:ue)?)\b|(?:¿?\s*qué productos (?:tienen|venden|ofrecen)|¿?\s*qué (?:tienen|venden|ofrecen)|qué productos hay|muéstrame (?:sus|tus) productos|envíame (?:su|tu) catálogo|catálogo de productos)|(?:ما (?:هي )?المنتجات (?:المتوفرة )?(?:لديكم|عندكم)|ما المنتجات التي لديكم|ماذا تبيعون|ما الذي تبيعونه|أرسل(?:وا)? (?:لي )?الكتالوج|اعرض(?:وا)? (?:لي )?منتجاتكم)|你们有什么|你卖什么|有什么产品|看看产品|发.{0,6}目录/iu,
   },
   {
     scenario: 'product_availability',
@@ -223,8 +223,8 @@ const ENGLISH: Record<KnowledgeGapScenario, ReplyPair[]> = {
   ],
   general_unknown: [
     { draft: 'Which part do you want to pin down first?', draftZh: '您想先确认哪一部分？' },
-    { draft: 'Can you tell me a little more about what you need?', draftZh: '可以再跟我说说您的具体需求吗？' },
-    { draft: 'What exactly do you need this to do?', draftZh: '您具体希望它实现什么？' },
+    { draft: "Got it—that's clear now. Let me check it properly before I answer.", draftZh: '明白，这次说清楚了。我先认真核实再回复您。' },
+    { draft: "I have the detail now. I'll verify it and come back with a proper answer.", draftZh: '具体要求我记下了。我核实清楚后给您准确答复。' },
   ],
 };
 
@@ -254,7 +254,7 @@ function localizedPairs(language: SupportedLanguage, scenario: KnowledgeGapScena
       ],
       general_unknown: [
         { draft: 'Todavía no tengo una respuesta fiable. ¿Qué punto exacto quieres que compruebe?', draftZh: '这件事我现在还没有可靠答案。您具体想确认哪一点？' },
-        { draft: 'No quiero adivinar. Dime el detalle más importante y lo reviso desde ahí.', draftZh: '我不想靠猜。请告诉我最重要的细节，我从那里开始核实。' },
+        { draft: 'Entendido, ahora está claro. Déjame comprobarlo bien antes de responder.', draftZh: '明白，这次说清楚了。我先认真核实再回复您。' },
       ],
     };
     const fallback: Record<KnowledgeGapScenario, ReplyPair> = {
@@ -297,7 +297,7 @@ function localizedPairs(language: SupportedLanguage, scenario: KnowledgeGapScena
     ],
     general_unknown: [
       { draft: 'ليس لدي جواب موثوق بعد. ما النقطة التي تريد مني التحقق منها بالضبط؟', draftZh: '这件事我现在还没有可靠答案。您具体想确认哪一点？' },
-      { draft: 'لا أريد أن أخمّن. أخبرني بأهم تفصيل لديك وسأبدأ التحقق منه.', draftZh: '我不想靠猜。请告诉我最重要的细节，我从那里开始核实。' },
+      { draft: 'واضح الآن. دعني أتحقق منه جيدًا قبل أن أجيبك.', draftZh: '明白，这次说清楚了。我先认真核实再回复您。' },
     ],
   };
   const fallback: Record<KnowledgeGapScenario, ReplyPair> = {
@@ -350,15 +350,21 @@ function personalizeEnglishBridge(scenario: KnowledgeGapScenario, message: strin
   if (scenario === 'product_availability') {
     const size = String(message || '').match(/\bsize\s+([a-z0-9-]+)\b/i)?.[1];
     const color = String(message || '').match(/\b(black|white|navy|beige|red|blue|green)\b/i)?.[1];
-    if (size) return {
-      draft: `Size ${size.toUpperCase()}—let me double-check that for you.`,
-      draftZh: `${size.toUpperCase()} 码，我帮您确认一下。`,
-    };
-    if (color) {
+    if (size || color) {
       const colorZh: Record<string, string> = { black: '黑色', white: '白色', navy: '藏青色', beige: '米色', red: '红色', blue: '蓝色', green: '绿色' };
+      const details = [
+        color ? `${color[0].toUpperCase()}${color.slice(1).toLowerCase()}` : '',
+        size ? `size ${size.toUpperCase()}` : '',
+        quantity,
+      ].filter(Boolean);
+      const detailsZh = [
+        color ? colorZh[color.toLowerCase()] || color : '',
+        size ? `${size.toUpperCase()} 码` : '',
+        quantity ? quantityInChinese(quantity) : '',
+      ].filter(Boolean);
       return {
-        draft: `${color[0].toUpperCase()}${color.slice(1).toLowerCase()}—let me double-check that option for you.`,
-        draftZh: `${colorZh[color.toLowerCase()] || color}，我帮您确认一下这个选项。`,
+        draft: `${details.join(', ')}—got it. Let me double-check that combination for you.`,
+        draftZh: `${detailsZh.join('、')}，明白。我帮您确认一下这个组合。`,
       };
     }
     if (/colo(?:u)?rs?/i.test(message)) return {

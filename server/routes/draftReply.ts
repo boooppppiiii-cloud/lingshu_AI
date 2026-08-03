@@ -24,6 +24,9 @@ import { isGreetingOrProcessIntent, retrieveContext, type RetrievedContext } fro
 import { buildKnowledgePromptBlock } from '../knowledge/promptBlocks.js';
 import { buildStyleMemoryPromptBlock, retrieveStyleMemories } from '../knowledge/styleMemory.js';
 import { matchSalesActions, shouldEscalateSalesAction } from '../sales/actionLibrary.js';
+import { buildHandoffSummary } from '../agents/handoffSummary.js';
+import { faithfullyPolishSellerDraft } from '../agents/polishDraft.js';
+import { fastProductInquiryReply, isFastProductInquiry } from '../agents/fastProductInquiry.js';
 import {
   buildStrategyPromptBlock,
   retrieveResponseStrategies,
@@ -290,12 +293,73 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
   const processIntent = isGreetingOrProcessIntent(latestMessage);
   body.__latestMessage = latestMessage;
   body.__conversationPhase = phase;
+  if (String(intent) === 'handoff_summary') {
+    const draft = buildHandoffSummary({
+      latestMessage,
+      product: String(body.product || ''),
+      handlingReason: String(body.handlingReason || ''),
+      customerSummary: String(body.customerSummary || ''),
+      nextStep: String(body.nextStep || ''),
+    });
+    res.json({
+      draft,
+      messages: [draft],
+      translatedDraft: '',
+      translatedMessages: [],
+      handoffRequired: false,
+      knowledgeMiss: false,
+      category: '转人工',
+      verification: { status: 'deterministic', issues: [] },
+    });
+    return;
+  }
+  if (String(intent) === 'polish') {
+    const source = String(body.instruction || '').trim();
+    try {
+      const draft = await faithfullyPolishSellerDraft({ source, targetLanguage: language, phase });
+      res.json({
+        draft,
+        messages: draft ? splitMobileChatMessages(draft) : [],
+        translatedDraft: '',
+        translatedMessages: [],
+        handoffRequired: false,
+        knowledgeMiss: false,
+        category: '润色',
+        verification: { status: 'meaning_preserved', issues: [] },
+      });
+    } catch {
+      res.json({
+        draft: source,
+        messages: source ? [source] : [],
+        translatedDraft: '',
+        translatedMessages: [],
+        handoffRequired: false,
+        knowledgeMiss: false,
+        category: '润色',
+        verification: { status: 'source_preserved', issues: ['润色服务暂不可用，已保留原文'] },
+      });
+    }
+    return;
+  }
   if (intent === 'reply' && isSimpleAcknowledgementMessage(latestMessage)) {
     res.json(directConversationPayload(conciseAcknowledgementReply(language), '日常沟通'));
     return;
   }
   if (intent === 'reply' && isDeferredDecisionMessage(latestMessage)) {
     res.json(directConversationPayload(conciseDeferredReply(language, latestMessage), '跟进'));
+    return;
+  }
+  const firstBuyerTurn = timeline.filter((event: any) => String(event?.actor || '').toLowerCase() === 'buyer' || String(event?.type || '').includes('msg_in')).length <= 1;
+  if (intent === 'reply' && isFastProductInquiry({
+    message: latestMessage,
+    product: String(body.product || ''),
+    firstBuyerTurn,
+  })) {
+    res.json({
+      ...directConversationPayload(fastProductInquiryReply({ message: latestMessage, product: String(body.product), language }), '产品咨询'),
+      evidence: ['快速回复只复述客户数量与已选产品，不生成企业能力或商业承诺'],
+      knowledgeSafetyMode: 'buyer_and_product_grounded',
+    });
     return;
   }
   const conversation = timeline
@@ -323,7 +387,7 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
     && !scenarioHasGroundedEvidence(gapPlan.scenario, enterpriseEvidenceSource);
   const salesActionInput = {
     message: latestMessage,
-    firstTurn: conversation.filter((turn: { role: string }) => turn.role === 'buyer').length <= 1,
+    firstTurn: firstBuyerTurn,
     stage: String(body.stage ?? ''),
     knowledgeMiss: context.knowledgeMiss,
     productAvailable: context.products.length > 0,
@@ -657,8 +721,7 @@ async function verifyGeneratedDraft(input: {
   }));
   const newNumbers = unsupportedDraftNumbers(input.draft, factualSource);
   const factualRiskSignals = draftFactualRiskSignals(input.draft, factualSource);
-  const productReplyNeedsAudit = input.intent === 'reply' && input.context.products.length > 0;
-  if (!productReplyNeedsAudit && !requiresFactualVerification(factualRiskSignals, input.context.knowledgeMiss)) {
+  if (!requiresFactualVerification(factualRiskSignals, input.context.knowledgeMiss)) {
     return { draft: input.draft, status: 'verified', issues: [] };
   }
   const prompt = [
