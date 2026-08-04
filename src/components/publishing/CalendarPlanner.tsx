@@ -8,6 +8,7 @@ import {
   Clock,
   Flag,
   Grid2X2,
+  LockKeyhole,
   Play,
   Plus,
   RefreshCw,
@@ -23,6 +24,7 @@ import {
 } from './marketingCalendar';
 import { ContentQueuePanel, type PendingPlacement } from './ContentQueuePanel';
 import { PlatformBadge } from './PlatformBadge';
+import { localTimeValue, moveScheduleToDay, resolvePendingDrop, type PublishDeliveryMode } from './schedulePolicy';
 
 export type CalendarPost = {
   id: string;
@@ -47,6 +49,7 @@ export type CalendarPost = {
   inquiries: number;
   isRecycle?: boolean;
   platformPostId?: string;
+  scheduleLocked?: boolean;
 };
 
 export type PendingPublishContent = {
@@ -56,14 +59,17 @@ export type PendingPublishContent = {
   sourceProjectId?: string;
   sourcePlatform?: string;
   platforms?: string[];
-  deliveryMode?: 'now' | 'schedule';
+  deliveryMode?: PublishDeliveryMode;
   scheduledAt?: string;
   status?: string;
 };
 
 type ViewMode = 'week' | 'month';
 
-type HoverContentData = { kind: 'post'; post: CalendarPost };
+type HoverContentData =
+  | { kind: 'post'; post: CalendarPost }
+  | { kind: 'tide'; day: Date; bestHour: number; targetHour: number; score: number; source: string; events: MarketingEvent[] }
+  | { kind: 'slot'; day: Date; startHour: number; endHour: number; items: CalendarPost[] };
 
 type HoveredContent = HoverContentData & { x: number; y: number };
 
@@ -131,19 +137,14 @@ function isSameDay(left: Date, right: Date): boolean {
   return dateKey(left) === dateKey(right);
 }
 
-function roundToHalfHour(date: Date): Date {
-  const next = new Date(date);
-  const minutes = next.getMinutes();
-  next.setMinutes(minutes < 30 ? 0 : 30, 0, 0);
-  return next;
-}
-
 function statusMeta(item: CalendarPost): { label: string; className: string; Icon: typeof Clock } {
   if (item.platformPostId || item.status === 'published') {
     return { label: '已发布', className: 'border-emerald-200 bg-emerald-50 text-emerald-700', Icon: CheckCircle2 };
   }
   if (item.status === 'scheduled') {
-    return { label: '已排期', className: 'border-sky-200 bg-sky-50 text-sky-700', Icon: CalendarClock };
+    return item.scheduleLocked
+      ? { label: '定点排期', className: 'border-violet-200 bg-violet-50 text-violet-700', Icon: LockKeyhole }
+      : { label: '已排期', className: 'border-sky-200 bg-sky-50 text-sky-700', Icon: CalendarClock };
   }
   if (item.status === 'publishing') {
     return { label: '正在发布', className: 'border-amber-200 bg-amber-50 text-amber-700', Icon: RefreshCw };
@@ -165,6 +166,20 @@ function hourLabel(value: number): string {
   const hour = Math.floor(value);
   const minutes = value % 1 ? '30' : '00';
   return `${String(hour).padStart(2, '0')}:${minutes}`;
+}
+
+function fallbackPeakScore(day: Date): number {
+  const weekdayBase = [0.68, 0.78, 0.74, 0.81, 0.86, 0.92, 0.84][day.getDay()];
+  const monthlyWave = Math.sin((day.getDate() / 31) * Math.PI * 4) * 0.045;
+  return Math.max(0.55, Math.min(0.96, weekdayBase + monthlyWave));
+}
+
+function calendarErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error || '');
+  if (!message || /request_failed|load_failed|failed to fetch|network/i.test(message)) {
+    return '日历数据暂时无法刷新，当前先展示平台参考节奏。';
+  }
+  return message;
 }
 
 type ChartPoint = { x: number; y: number };
@@ -236,6 +251,8 @@ export function CalendarPlanner({
   const [isTideDragging, setIsTideDragging] = useState(false);
   const [hoveredContent, setHoveredContent] = useState<HoveredContent | null>(null);
   const [interactionMessage, setInteractionMessage] = useState('');
+  const [pendingTimeSelection, setPendingTimeSelection] = useState<{ id: string; title: string; day: Date; time: string } | null>(null);
+  const [pendingTimeSaving, setPendingTimeSaving] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [scoreSource, setScoreSource] = useState('平台参考');
@@ -317,7 +334,7 @@ export function CalendarPlanner({
       setScores(Object.fromEntries(scoreRows.map(row => [row.weekday, row.scores])));
       setScoreSource(scoreRows.some(row => row.source === 'account_history') ? '账号真实数据' : '平台参考');
     } catch (loadError) {
-      if (!silent) setError(loadError instanceof Error ? loadError.message : 'load_failed');
+      if (!silent) setError(calendarErrorMessage(loadError));
     } finally {
       if (!silent) setLoading(false);
     }
@@ -342,7 +359,7 @@ export function CalendarPlanner({
   const tideChartWidth = tideMonthDays.length * tideDayWidth;
   const tidePeakScores = tideMonthDays.map(day => {
     const dayScores = scores[day.getDay()] || [];
-    return dayScores.length ? Math.max(...dayScores) : 0.46;
+    return dayScores.length ? Math.max(...dayScores) : fallbackPeakScore(day);
   });
   const tideMinScore = Math.min(...tidePeakScores);
   const tideMaxScore = Math.max(...tidePeakScores);
@@ -370,10 +387,27 @@ export function CalendarPlanner({
     return grouped;
   }, [tideEvents]);
 
+  const tideHoverForDay = (day: Date, onlyEvent?: MarketingEvent): HoverContentData => {
+    const dayScores = scores[day.getDay()] || [];
+    const bestHour = dayScores.length
+      ? dayScores.reduce((best, score, hour, all) => score > all[best] ? hour : best, 0)
+      : 20;
+    return {
+      kind: 'tide',
+      day,
+      bestHour,
+      targetHour: targetHourFromBeijing(bestHour, utcOffset),
+      score: dayScores[bestHour] || fallbackPeakScore(day),
+      source: scoreSource,
+      events: onlyEvent ? [onlyEvent] : eventsByDay[dateKey(day)] || [],
+    };
+  };
+
   const placePendingContent = async (id: string, scheduledAt: Date) => {
     if (!onSchedulePending) throw new Error('排期功能暂不可用');
     await onSchedulePending(id, scheduledAt);
     setSelectedDate(startOfDay(scheduledAt));
+    setAnchor(new Date(scheduledAt));
   };
 
   const arrangePendingContent = async (placements: PendingPlacement[]) => {
@@ -397,32 +431,80 @@ export function CalendarPlanner({
   const schedulePendingOnDay = async (id: string, day: Date) => {
     const pending = pendingItems.find(item => item.id === id);
     if (!pending) return;
-    const planned = pending.scheduledAt ? new Date(pending.scheduledAt) : new Date();
-    const target = startOfDay(day);
-    target.setHours(
-      Number.isFinite(planned.getTime()) ? planned.getHours() : 20,
-      Number.isFinite(planned.getTime()) ? planned.getMinutes() : 0,
-      0,
-      0,
-    );
+    const resolution = resolvePendingDrop(pending, day);
+    if (resolution.kind === 'blocked') {
+      setInteractionMessage(resolution.message);
+      return;
+    }
+    if (resolution.kind === 'needs-time') {
+      const suggested = new Date(day);
+      suggested.setHours(selectedBestHour, 0, 0, 0);
+      if (suggested.getTime() <= Date.now()) {
+        const nextAvailable = new Date(Date.now() + 60 * 60_000);
+        nextAvailable.setMinutes(nextAvailable.getMinutes() < 30 ? 30 : 0, 0, 0);
+        if (nextAvailable.getMinutes() === 0) nextAvailable.setHours(nextAvailable.getHours() + 1);
+        if (!isSameDay(nextAvailable, day)) {
+          setInteractionMessage('今天已经没有合适的未来时间，请拖到明天或之后。');
+          return;
+        }
+        suggested.setHours(nextAvailable.getHours(), nextAvailable.getMinutes(), 0, 0);
+      }
+      setPendingTimeSelection({ id, title: pending.title, day: startOfDay(day), time: localTimeValue(suggested) });
+      return;
+    }
     try {
-      await placePendingContent(id, target);
+      await placePendingContent(id, resolution.scheduledAt);
       await load();
-      setInteractionMessage(`“${pending.title}”已安排到 ${target.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}。`);
+      setInteractionMessage(`“${pending.title}”已按锁定时间安排到 ${resolution.scheduledAt.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}。`);
     } catch (scheduleError) {
       setInteractionMessage(scheduleError instanceof Error ? scheduleError.message : '排期失败，请重试');
     }
   };
 
-  const reschedule = async (postId: string, day: Date, hour = 10) => {
-    const target = roundToHalfHour(new Date(day));
-    target.setHours(hour, 0, 0, 0);
+  const confirmPendingTime = async () => {
+    if (!pendingTimeSelection) return;
+    const pending = pendingItems.find(item => item.id === pendingTimeSelection.id);
+    if (!pending) {
+      setPendingTimeSelection(null);
+      return;
+    }
+    const resolution = resolvePendingDrop(pending, pendingTimeSelection.day, pendingTimeSelection.time);
+    if (resolution.kind !== 'ready') {
+      setInteractionMessage(resolution.kind === 'blocked' ? resolution.message : '请选择具体发布时间。');
+      return;
+    }
+    setPendingTimeSaving(true);
+    try {
+      await placePendingContent(pending.id, resolution.scheduledAt);
+      await load();
+      setInteractionMessage(`“${pending.title}”已安排到 ${resolution.scheduledAt.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}。`);
+      setPendingTimeSelection(null);
+    } catch (scheduleError) {
+      setInteractionMessage(scheduleError instanceof Error ? scheduleError.message : '排期失败，请重试');
+    } finally {
+      setPendingTimeSaving(false);
+    }
+  };
+
+  const reschedule = async (postId: string, day: Date) => {
+    const current = items.find(item => item.id === postId);
+    if (!current) return;
+    if (current.scheduleLocked) {
+      setInteractionMessage('这条内容使用定点排期，时间已经锁定。');
+      return;
+    }
+    const target = moveScheduleToDay(current.publishedAt, day);
+    if (!target || target.getTime() <= Date.now()) {
+      setInteractionMessage('新的发布时间必须晚于当前时间。');
+      return;
+    }
     const data = await api<{ item: CalendarPost }>(`/api/overseas/publishing/calendar/${postId}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ scheduledAt: target.toISOString() }),
     });
     setItems(previous => previous.map(item => item.id === postId ? data.item : item));
+    setInteractionMessage(`已调整到 ${target.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}，原发布时间保持不变。`);
   };
 
   const previewAt = (event: React.MouseEvent, content: HoverContentData) => {
@@ -616,11 +698,18 @@ export function CalendarPlanner({
                   const bestHour = dayScores.length
                     ? dayScores.reduce((best, score, hour, all) => score > all[best] ? hour : best, 0)
                     : 20;
-                  const peakScore = dayScores[bestHour] || 0;
+                  const peakScore = dayScores[bestHour] || fallbackPeakScore(day);
                   const point = tidePoints[index];
                   const isSelected = isSameDay(day, selectedDate);
                   return (
-                    <g key={`${dateKey(day)}-point`} onClick={() => selectTideDate(day)} className="cursor-pointer">
+                    <g
+                      key={`${dateKey(day)}-point`}
+                      onClick={() => selectTideDate(day)}
+                      onMouseEnter={event => previewAt(event, tideHoverForDay(day))}
+                      onMouseMove={event => previewAt(event, tideHoverForDay(day))}
+                      onMouseLeave={() => setHoveredContent(null)}
+                      className="cursor-pointer"
+                    >
                       <circle cx={point.x} cy={point.y} r={isSelected ? 5 : 3.5} fill="#fff" stroke={isSelected ? '#0284c7' : '#059669'} strokeWidth={isSelected ? 3 : 2}>
                         <title>{`${day.toLocaleDateString('zh-CN')} · 北京 ${hourLabel(bestHour)} · ${market.timeZoneLabel} ${hourLabel(targetHourFromBeijing(bestHour, utcOffset))} · 推荐分 ${Math.round(peakScore * 100)}`}</title>
                       </circle>
@@ -640,6 +729,9 @@ export function CalendarPlanner({
                     key={event.id}
                     type="button"
                     onClick={() => selectTideDate(tideMonthDays[dayIndex])}
+                    onMouseEnter={mouseEvent => previewAt(mouseEvent, tideHoverForDay(tideMonthDays[dayIndex], event))}
+                    onMouseMove={mouseEvent => previewAt(mouseEvent, tideHoverForDay(tideMonthDays[dayIndex], event))}
+                    onMouseLeave={() => setHoveredContent(null)}
                     className={`absolute z-10 w-[96px] rounded-lg border px-1.5 py-1 text-left shadow-sm transition hover:-translate-y-0.5 hover:shadow-md ${eventTone(event)}`}
                     style={{ left: dayIndex * tideDayWidth + 5, top: 4 + sameDayIndex * 38 }}
                     title={`${event.name} · ${event.date} · ${event.note}（${event.source}）`}
@@ -688,7 +780,7 @@ export function CalendarPlanner({
                       return;
                     }
                     const id = event.dataTransfer.getData('text/post-id') || dragId;
-                    if (id) void reschedule(id, day, 10);
+                    if (id) void reschedule(id, day);
                     setDragId('');
                     setDragOverDate('');
                   }}
@@ -730,7 +822,17 @@ export function CalendarPlanner({
                           return hour >= startHour && hour < startHour + 6;
                         });
                         return (
-                          <div key={startHour} className="grid min-h-[46px] grid-cols-[25px_minmax(0,1fr)] border-t border-dashed border-slate-200 first:border-t-0">
+                          <div
+                            key={startHour}
+                            onMouseEnter={event => previewAt(event, { kind: 'slot', day, startHour, endHour: startHour + 6, items: bucketItems })}
+                            onMouseMove={event => {
+                              const target = event.target;
+                              if (target instanceof Element && target.closest('[data-calendar-post]')) return;
+                              previewAt(event, { kind: 'slot', day, startHour, endHour: startHour + 6, items: bucketItems });
+                            }}
+                            onMouseLeave={() => setHoveredContent(null)}
+                            className="grid min-h-[46px] grid-cols-[25px_minmax(0,1fr)] border-t border-dashed border-slate-200 transition-colors first:border-t-0 hover:bg-emerald-50/50"
+                          >
                             <span className="border-r border-slate-100 pt-1.5 text-center text-[8px] font-black text-slate-400">{String(startHour).padStart(2, '0')}</span>
                             <div className="space-y-1 p-1">
                               {bucketItems.map(item => {
@@ -739,7 +841,9 @@ export function CalendarPlanner({
                                   <button
                                     key={item.id}
                                     type="button"
-                                    draggable={!item.platformPostId}
+                                    data-calendar-post={item.id}
+                                    draggable={!item.platformPostId && !item.scheduleLocked}
+                                    title={item.scheduleLocked ? '定点排期已锁定；点击可编辑发布内容' : '拖动可调整日期，发布时间保持不变'}
                                     onDragStart={event => {
                                       setDragId(item.id);
                                       event.dataTransfer.setData('text/post-id', item.id);
@@ -750,7 +854,7 @@ export function CalendarPlanner({
                                     onClick={() => onOpenPost?.(item)}
                                     className={`w-full rounded-lg border px-1.5 py-1 text-left shadow-sm transition hover:-translate-y-0.5 ${meta.className}`}
                                   >
-                                    <span className="flex items-center justify-between gap-1 text-[8px] font-black"><PlatformBadge platform={item.platform} compact /><span>{new Date(item.publishedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span></span>
+                                    <span className="flex items-center justify-between gap-1 text-[8px] font-black"><PlatformBadge platform={item.platform} compact /><span className="inline-flex items-center gap-0.5">{item.scheduleLocked && <LockKeyhole size={8} />}{new Date(item.publishedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span></span>
                                     <span className="mt-0.5 block truncate text-[9px] font-bold">{item.title}</span>
                                   </button>
                                 );
@@ -765,7 +869,16 @@ export function CalendarPlanner({
                       {dayItems.slice(0, 1).map(item => {
                         const meta = statusMeta(item);
                         return (
-                          <button key={item.id} type="button" onClick={() => onOpenPost?.(item)} className={`w-full rounded-xl border p-1.5 text-left shadow-sm ${meta.className}`}>
+                          <button
+                            key={item.id}
+                            type="button"
+                            data-calendar-post={item.id}
+                            onMouseEnter={event => previewAt(event, { kind: 'post', post: item })}
+                            onMouseMove={event => previewAt(event, { kind: 'post', post: item })}
+                            onMouseLeave={() => setHoveredContent(null)}
+                            onClick={() => onOpenPost?.(item)}
+                            className={`w-full rounded-xl border p-1.5 text-left shadow-sm ${meta.className}`}
+                          >
                             <span className="flex items-center justify-between gap-1 text-[9px] font-black"><PlatformBadge platform={item.platform} compact /><span>{new Date(item.publishedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span></span>
                             <span className="mt-1 block truncate text-[10px] font-bold">{item.title}</span>
                           </button>
@@ -797,16 +910,53 @@ export function CalendarPlanner({
         onArrangePending={arrangePendingContent}
       />
 
+      {pendingTimeSelection && (
+        <div className="fixed inset-0 z-[170] flex items-center justify-center bg-slate-950/45 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="pending-time-title">
+          <div className="w-full max-w-sm rounded-2xl border border-border bg-white p-5 shadow-2xl">
+            <div className="flex items-start gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-sky-50 text-sky-700"><CalendarClock size={18} /></span>
+              <div className="min-w-0">
+                <h3 id="pending-time-title" className="text-sm font-black text-text-primary">选择具体发布时间</h3>
+                <p className="mt-1 truncate text-xs text-text-muted">{pendingTimeSelection.title}</p>
+              </div>
+            </div>
+            <div className="mt-4 grid grid-cols-[1fr_130px] gap-2">
+              <div className="rounded-xl border border-border bg-surface px-3 py-2.5">
+                <span className="block text-[10px] font-bold text-text-muted">发布日期</span>
+                <span className="mt-1 block text-xs font-black text-text-primary">{pendingTimeSelection.day.toLocaleDateString('zh-CN', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' })}</span>
+              </div>
+              <label className="block">
+                <span className="mb-1.5 block text-[10px] font-bold text-text-muted">发布时间</span>
+                <input
+                  type="time"
+                  value={pendingTimeSelection.time}
+                  onChange={event => setPendingTimeSelection(previous => previous ? { ...previous, time: event.target.value } : previous)}
+                  className="w-full rounded-xl border border-border bg-white px-3 py-2.5 text-xs font-black outline-none focus:border-sky-400"
+                />
+              </label>
+            </div>
+            <p className="mt-3 text-[10px] leading-4 text-text-muted">这个时间只用于当前视频；以后拖动到其他日期时，时分会保持不变。</p>
+            <div className="mt-5 flex justify-end gap-2">
+              <button type="button" disabled={pendingTimeSaving} onClick={() => setPendingTimeSelection(null)} className="rounded-xl border border-border px-4 py-2.5 text-xs font-black text-text-secondary hover:bg-surface disabled:opacity-50">取消</button>
+              <button type="button" disabled={pendingTimeSaving || !pendingTimeSelection.time} onClick={() => void confirmPendingTime()} className="inline-flex items-center gap-2 rounded-xl bg-sky-600 px-4 py-2.5 text-xs font-black text-white hover:bg-sky-700 disabled:opacity-50">
+                {pendingTimeSaving ? <RefreshCw size={13} className="animate-spin" /> : <CalendarClock size={13} />}
+                {pendingTimeSaving ? '安排中' : '确认时间'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {hoveredContent && (
         <div
-          className="pointer-events-none fixed z-[120] w-[292px] overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-[0_18px_50px_rgba(15,23,42,0.22)]"
+          className="ui-floating-panel pointer-events-none fixed z-[120] w-[292px] overflow-hidden"
           style={{
             left: Math.max(12, Math.min(hoveredContent.x + 14, (typeof window === 'undefined' ? 1440 : window.innerWidth) - 304)),
             top: Math.max(12, Math.min(hoveredContent.y + 14, (typeof window === 'undefined' ? 900 : window.innerHeight) - 286)),
           }}
         >
-          {(() => {
-            const post = hoveredContent.post;
+          {hoveredContent.kind === 'post' ? (() => {
+            const { post } = hoveredContent;
             const meta = statusMeta(post);
             return (
               <>
@@ -843,7 +993,66 @@ export function CalendarPlanner({
                 </div>
               </>
             );
-          })()}
+          })() : hoveredContent.kind === 'tide' ? (
+            <div className="p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-black text-text-primary">{hoveredContent.day.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })}</p>
+                  <p className="mt-1 text-[10px] font-bold text-text-muted">{hoveredContent.source} · {enterpriseMarketLabel}</p>
+                </div>
+                <span className="rounded-full bg-emerald-50 px-2 py-1 text-[10px] font-black text-emerald-700">热度 {Math.round(hoveredContent.score * 100)}</span>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <div className="rounded-xl bg-surface px-3 py-2">
+                  <p className="text-[9px] font-bold text-text-muted">北京时间</p>
+                  <p className="mt-1 text-sm font-black text-text-primary">{hourLabel(hoveredContent.bestHour)}</p>
+                </div>
+                <div className="rounded-xl bg-surface px-3 py-2">
+                  <p className="text-[9px] font-bold text-text-muted">{market.timeZoneLabel}</p>
+                  <p className="mt-1 text-sm font-black text-text-primary">{hourLabel(hoveredContent.targetHour)}</p>
+                </div>
+              </div>
+              {hoveredContent.events.length > 0 ? (
+                <div className="mt-3 space-y-2">
+                  {hoveredContent.events.map(event => (
+                    <div key={event.id} className="rounded-xl border border-amber-100 bg-amber-50 px-3 py-2">
+                      <p className="flex items-center gap-1 text-[10px] font-black text-amber-900"><Flag size={10} />{event.name}</p>
+                      <p className="mt-1 text-[9px] leading-4 text-amber-800">{event.note}</p>
+                      <p className="mt-1 text-[8px] font-bold text-amber-700">来源：{event.source}</p>
+                    </div>
+                  ))}
+                </div>
+              ) : <p className="mt-3 text-[10px] text-text-muted">当天没有节庆点，建议时段按发布热度计算。</p>}
+            </div>
+          ) : (
+            <div className="p-4">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs font-black text-text-primary">{hoveredContent.day.toLocaleDateString('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' })}</p>
+                  <p className="mt-1 text-[10px] font-bold text-text-muted">排期时间段</p>
+                </div>
+                <span className="rounded-full bg-sky-50 px-2 py-1 text-[10px] font-black text-sky-700">{hoveredContent.items.length} 条内容</span>
+              </div>
+              <div className="mt-3 flex items-center gap-2 rounded-xl bg-surface px-3 py-2.5">
+                <Clock size={14} className="text-emerald-600" />
+                <span className="text-sm font-black text-text-primary">{hourLabel(hoveredContent.startHour)} – {hourLabel(hoveredContent.endHour)}</span>
+              </div>
+              {hoveredContent.items.length > 0 ? (
+                <div className="mt-3 space-y-2">
+                  {hoveredContent.items.slice(0, 3).map(item => (
+                    <div key={item.id} className="rounded-xl border border-border bg-white px-3 py-2">
+                      <div className="flex items-center justify-between gap-2 text-[9px] font-black">
+                        <PlatformBadge platform={item.platform} compact />
+                        <span className="text-text-muted">{new Date(item.publishedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}</span>
+                      </div>
+                      <p className="mt-1 truncate text-[10px] font-bold text-text-primary">{item.title}</p>
+                    </div>
+                  ))}
+                  {hoveredContent.items.length > 3 && <p className="text-[9px] font-bold text-text-muted">另有 {hoveredContent.items.length - 3} 条内容</p>}
+                </div>
+              ) : <p className="mt-3 text-[10px] text-text-muted">这个时间段还没有内容，可点击当天添加或拖入待发布内容。</p>}
+            </div>
+          )}
         </div>
       )}
     </div>

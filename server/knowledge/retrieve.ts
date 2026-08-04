@@ -7,6 +7,7 @@ export interface CustomerLite {
   language?: string;
   stage?: string;
   product?: string;
+  internalProduct?: string;
 }
 
 export interface ProductLite {
@@ -64,7 +65,7 @@ export interface RetrievedContext {
   sentiment?: 'negative' | 'neutral' | 'positive';
 }
 
-interface ProductQuery {
+export interface ProductQuery {
   sku?: string;
   keywords?: string[];
   category?: string;
@@ -317,6 +318,51 @@ function productIntentLikely(message: string): boolean {
     || /价格|报价|多少钱|货号|款号|产品|目录|起订|样品|面料|材质|颜色|尺码/.test(raw);
 }
 
+export function isProductDiscoveryIntent(message: string): boolean {
+  const raw = text(message);
+  return /\b(?:what (?:products? )?do you have|what do you sell|show me what you have|show me your products?|what can you offer|product range|send (?:me )?(?:your )?catalog(?:ue)?)\b|你们有什么|你卖什么|有什么产品|看看产品|发.{0,6}目录/i.test(raw);
+}
+
+function refersToCurrentProduct(message: string): boolean {
+  const raw = normalize(message);
+  if (!raw) return false;
+  return /\b(?:it|this|that|these|those|same one|the item|the product|size|color|colour|material|fabric|sample|moq)\b/i.test(raw)
+    || /(?:这个|那个|这款|那款|同款|它|尺码|颜色|材质|面料|样品|起订)/.test(raw);
+}
+
+export function seedCurrentProductQuery(
+  query: ProductQuery | null,
+  customer: CustomerLite,
+  latestMessage: string,
+  conversation: ConversationTurn[],
+  evidence: string[],
+): ProductQuery | null {
+  const internalProduct = text(customer.internalProduct);
+  if (!internalProduct) return query;
+
+  const latest = normalize(latestMessage);
+  const publicProduct = normalize(customer.product);
+  const internalNormalized = normalize(internalProduct);
+  const priorConversation = conversation.slice(0, -1).slice(-6).map(turn => normalize(turn.text)).join(' ');
+  const explicitCurrentProduct = Boolean(
+    (publicProduct && latest.includes(publicProduct))
+    || latest.includes(internalNormalized),
+  );
+  const referencedCurrentProduct = refersToCurrentProduct(latestMessage) && Boolean(
+    publicProduct
+    || priorConversation.includes(internalNormalized),
+  );
+  if (!explicitCurrentProduct && !referencedCurrentProduct) return query;
+
+  const keywords = Array.from(new Set([
+    ...(query?.keywords ?? []),
+    internalProduct,
+    ...tokenize(internalProduct),
+  ].map(text).filter(Boolean))).slice(0, 10);
+  evidence.push(`根据当前会话产品映射补充内部检索词：${internalProduct}`);
+  return { ...(query ?? {}), keywords, sentiment: query?.sentiment ?? heuristicSentiment(latestMessage) };
+}
+
 export function isGreetingOrProcessIntent(message: string): boolean {
   const raw = text(message);
   if (!raw) return true;
@@ -421,12 +467,16 @@ function productHaystack(product: ProductLite): string {
   ].filter(Boolean).join(' '));
 }
 
-function retrieveProducts(profile: EnterpriseProfile, query: ProductQuery | null, evidence: string[]): ProductLite[] {
+function retrieveProducts(profile: EnterpriseProfile, query: ProductQuery | null, evidence: string[], includeCatalog = false): ProductLite[] {
   if (!query) return [];
   const all = (profile.products.items ?? []).map(toProductLite).filter(item => item.name || item.sku);
   if (!all.length) {
     evidence.push('产品表为空，未命中产品');
     return [];
+  }
+  if (includeCatalog) {
+    evidence.push(`客户正在浏览产品，返回已录入产品 ${Math.min(5, all.length)} 条`);
+    return all.slice(0, 5);
   }
   const sku = normalize(query.sku);
   if (sku) {
@@ -470,8 +520,9 @@ export async function retrieveContext(
   if (customer?.id || customer?.name) evidence.push(`客户上下文：${customer.name || customer.id}`);
   const conversation = recentConversation(options, message);
   const conversationQuery = conversation.map(turn => turn.text).join(' ');
-  const query = await parseProductQuery(message, evidence);
-  const products = retrieveProducts(profile, query, evidence);
+  const parsedQuery = await parseProductQuery(message, evidence);
+  const query = seedCurrentProductQuery(parsedQuery, customer, message, conversation, evidence);
+  const products = retrieveProducts(profile, query, evidence, isProductDiscoveryIntent(message));
   const faqs = retrieveFaqs(profile, conversationQuery || message, evidence);
   const faqMatch = await resolveFaqMatch(faqs, message, conversation, evidence);
   const lexicalMatches = matchedFaqs(faqs, conversationQuery || message);

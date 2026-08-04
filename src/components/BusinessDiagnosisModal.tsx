@@ -141,7 +141,7 @@ async function uploadManualImage(file: File) {
   return response.json() as Promise<{ name: string; type: string; size: number; updatedAt: string; url?: string }>;
 }
 
-export default function BusinessDiagnosisModal({ open, session, onDismissToday, onNavigate }: Props) {
+export default function BusinessDiagnosisModal({ open, session, onClose, onDismissToday, onNavigate }: Props) {
   const reduceMotion = useReducedMotion();
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [celebrating, setCelebrating] = useState(false);
@@ -441,7 +441,7 @@ export default function BusinessDiagnosisModal({ open, session, onDismissToday, 
           >
             <header className="flex items-start justify-between gap-4 border-b border-border px-6 py-4">
               <div>
-                <p className="text-xs font-semibold text-green-700">首次登录 · 全程可跳过</p>
+                <p className="text-xs font-semibold text-green-700">AI 接待设置 · 随时可关闭</p>
                 <h2 className="text-xl font-bold text-text-primary">5分钟让 AI 开始接待</h2>
                 <p className="mt-1 text-sm text-text-muted">先给 AI 一点真实原料，它来整理，你只负责确认。</p>
               </div>
@@ -452,14 +452,14 @@ export default function BusinessDiagnosisModal({ open, session, onDismissToday, 
                     {diagnosisSaveStatus === 'saving' ? '正在保存' : diagnosisSaveStatus === 'error' ? '同步失败' : '已同步企业中心'}
                   </span>
                 )}
-                <button type="button" onClick={() => setStep(3)} className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-text-muted hover:bg-surface-2" title="跳到最后一步">
+                <button type="button" onClick={onClose} className="flex h-8 w-8 items-center justify-center rounded-lg border border-border text-text-muted hover:bg-surface-2" title="关闭接待设置" aria-label="关闭接待设置">
                   <X size={16} />
                 </button>
               </div>
             </header>
 
             <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-              <div className="mb-5 grid grid-cols-3 gap-2 text-sm font-bold">
+              <div className="mb-5 grid grid-cols-1 gap-2 text-sm font-bold sm:grid-cols-3">
                 <div className={`rounded-lg px-4 py-3 ${step === 1 ? 'bg-slate-950 text-white' : 'bg-surface text-text-muted'}`}>1. 生意画像（30秒）</div>
                 <div className={`rounded-lg px-4 py-3 ${step === 2 ? 'bg-slate-950 text-white' : 'bg-surface text-text-muted'}`}>2. 产品接入</div>
                 <div className={`rounded-lg px-4 py-3 ${step === 3 ? 'bg-slate-950 text-white' : 'bg-surface text-text-muted'}`}>3. 设置初始接待</div>
@@ -469,35 +469,47 @@ export default function BusinessDiagnosisModal({ open, session, onDismissToday, 
                 <div className="grid gap-5">
                   <label className="grid gap-2">
                     <span className="text-sm font-bold text-text-primary">公司名</span>
-                    <input className="rounded-xl border border-border px-4 py-3 text-sm outline-none focus:border-green-500" value={companyName} onChange={e => setCompanyName(e.target.value)} placeholder="例如：星河贸易有限公司" />
+                    <input className="ui-field" value={companyName} onChange={e => setCompanyName(e.target.value)} placeholder="例如：星河贸易有限公司" />
                   </label>
                   <div>
                     <p className="mb-2 text-sm font-bold text-text-primary">主营品类</p>
-                    <div className="flex flex-wrap gap-2">
-                      {CATEGORIES.map(item => (
-                        <button key={item} type="button" onClick={() => setCategory(item)} className={`rounded-lg border px-4 py-2 text-sm font-bold ${category === item ? 'border-slate-950 bg-slate-950 text-white' : 'border-border bg-white text-text-secondary'}`}>{item}</button>
-                      ))}
-                    </div>
-                    {category === '其他' && <input className="mt-3 w-full rounded-xl border border-border px-4 py-3 text-sm outline-none focus:border-green-500" value={customCategory} onChange={event => setCustomCategory(event.target.value)} placeholder="补充主营品类，例如：汽摩配件" />}
+                    <select className="ui-field ui-select" value={category} onChange={event => setCategory(event.target.value as Category | '')}>
+                      <option value="">请选择主营品类</option>
+                      {CATEGORIES.map(item => <option key={item} value={item}>{item}</option>)}
+                    </select>
+                    {category === '其他' && <input className="ui-field mt-3" value={customCategory} onChange={event => setCustomCategory(event.target.value)} placeholder="补充主营品类，例如：汽摩配件" />}
                   </div>
                   <div>
                     <p className="mb-2 text-sm font-bold text-text-primary">目标市场</p>
-                    <div className="flex flex-wrap gap-2">
-                      {MARKETS.map(item => {
-                        const active = markets.includes(item);
-                        return <button key={item} type="button" onClick={() => setMarkets(prev => active ? prev.filter(v => v !== item) : [...prev, item])} className={`rounded-lg border px-4 py-2 text-sm font-bold ${active ? 'border-green-600 bg-green-600 text-white' : 'border-border bg-white text-text-secondary'}`}>{item}</button>;
-                      })}
-                    </div>
-                    {markets.includes('其他') && <input className="mt-3 w-full rounded-xl border border-border px-4 py-3 text-sm outline-none focus:border-green-500" value={customMarket} onChange={event => setCustomMarket(event.target.value)} placeholder="补充目标国家或地区，例如：加勒比地区" />}
+                    <select
+                      className="ui-field ui-select"
+                      value=""
+                      onChange={event => {
+                        const next = event.target.value as Market | '';
+                        if (next && !markets.includes(next)) setMarkets(previous => [...previous, next]);
+                      }}
+                    >
+                      <option value="">请选择，可连续添加</option>
+                      {MARKETS.map(item => <option key={item} value={item} disabled={markets.includes(item)}>{item}</option>)}
+                    </select>
+                    {markets.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {markets.map(item => (
+                          <button key={item} type="button" onClick={() => setMarkets(previous => previous.filter(value => value !== item))} className="inline-flex items-center gap-1 rounded-full border border-emerald-100 bg-emerald-50 px-2.5 py-1 text-[11px] font-bold text-emerald-700 hover:bg-emerald-100" title={`移除 ${item}`}>
+                            {item}<X size={11} />
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {markets.includes('其他') && <input className="ui-field mt-3" value={customMarket} onChange={event => setCustomMarket(event.target.value)} placeholder="补充目标国家或地区，例如：加勒比地区" />}
                     {language && <p className="mt-2 text-xs text-text-muted">创作室默认语言：{language}</p>}
                   </div>
                   <div>
                     <p className="mb-2 text-sm font-bold text-text-primary">有没有做过海外平台</p>
-                    <div className="flex flex-wrap gap-2">
-                      {PLATFORM_OPTIONS.map(item => (
-                        <button key={item} type="button" onClick={() => setPlatform(item)} className={`rounded-lg border px-4 py-2 text-sm font-bold ${platform === item ? 'border-slate-950 bg-slate-950 text-white' : 'border-border bg-white text-text-secondary'}`}>{item}</button>
-                      ))}
-                    </div>
+                    <select className="ui-field ui-select" value={platform} onChange={event => setPlatform(event.target.value as PlatformStatus | '')}>
+                      <option value="">请选择海外平台经验</option>
+                      {PLATFORM_OPTIONS.map(item => <option key={item} value={item}>{item}</option>)}
+                    </select>
                   </div>
                   <div className="flex justify-end gap-3 pt-2">
                     <button type="button" className="rounded-xl border border-border px-5 py-3 text-sm font-bold text-text-secondary" onClick={() => setStep(2)}>跳过此步</button>

@@ -4,7 +4,11 @@ import {
   conversationPhase,
   conversationToneGuidance,
   hasPreviousConversation,
+  isDeferredDecisionMessage,
+  isSimpleAcknowledgementMessage,
   isSimpleGreetingMessage,
+  conciseAcknowledgementReply,
+  conciseDeferredReply,
   timelineTimestampMs,
 } from './conversationTone.js';
 
@@ -23,6 +27,14 @@ const resumedGreeting = [
 
 assert.equal(isSimpleGreetingMessage('Hi!'), true);
 assert.equal(isSimpleGreetingMessage('Hi, what is your MOQ?'), false);
+assert.equal(isSimpleAcknowledgementMessage('Thanks, that helps.'), true);
+assert.equal(isSimpleAcknowledgementMessage('Thanks!'), true);
+assert.equal(isSimpleAcknowledgementMessage('Okay, that works.'), true);
+assert.equal(isDeferredDecisionMessage('Not yet, maybe next month.'), true);
+assert.equal(conciseAcknowledgementReply('English').draft, 'Anytime 👍');
+assert.equal(conciseAcknowledgementReply('English', 'Okay, that works.').draft, 'Perfect 👍');
+assert.equal(conciseAcknowledgementReply('English', 'Thanks!').draft, 'Anytime 👍');
+assert.match(conciseDeferredReply('English', 'Maybe next month.').draft, /next month/i);
 assert.equal(timelineTimestampMs({ timestamp: Math.floor(now / 1000) }), now);
 assert.equal(conversationPhase(firstGreeting), 'first_contact');
 assert.equal(conversationPhase(ongoingGreeting), 'ongoing');

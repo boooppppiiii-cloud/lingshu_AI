@@ -44,15 +44,39 @@ for (const brand of ['youtube', 'tiktok', 'instagram', 'facebook', 'whatsapp']) 
 const assistantUi = read('src/components/GlobalAssistant.tsx');
 assert.match(assistantUi, /ENTERPRISE_GUIDE_MEMORY_ID[\s\S]*?enterpriseGuideSeen/, 'enterprise center must remember its single proactive assistant guide');
 assert.match(assistantUi, /要补资料？点我/, 'enterprise center must leave a concise click-to-open reminder after the proactive guide');
+assert.match(assistantUi, /setAssistantTool\(null\); setPanelView\('chat'\); setMode\('breathing'\)/, 'assistant panels must fully close instead of leaving a hidden intake tool active');
+const diagnosisUi = read('src/components/BusinessDiagnosisModal.tsx');
+assert.match(diagnosisUi, /onClick=\{onClose\}[\s\S]*?关闭接待设置/, 'the reception guide must be closable after it is reopened from the sidebar');
+assert.match(diagnosisUi, /ui-field ui-select[\s\S]*?请选择主营品类[\s\S]*?请选择，可连续添加[\s\S]*?请选择海外平台经验/, 'guided enterprise choices must use consistent dropdown controls');
+const enterpriseUi = read('src/components/EnterprisePage.tsx');
+assert.match(enterpriseUi, /function OptionSelector[\s\S]*?<select[\s\S]*?请选择，可连续添加/, 'enterprise selectable fields must use dropdown controls');
+assert.doesNotMatch(enterpriseUi.slice(enterpriseUi.indexOf('function OptionSelector'), enterpriseUi.indexOf('function PaginationControls')), /<Chip/, 'enterprise option selectors must not fall back to chip-only selection');
+const globalStyles = read('src/index.css');
+for (const styleClass of ['.ui-field', '.ui-select', '.ui-chart-panel', '.ui-floating-panel']) {
+  assert.match(globalStyles, new RegExp(styleClass.replace('.', '\\.')), `${styleClass} must remain part of the shared UI system`);
+}
 const publishingUi = read('src/components/TrafficPage.tsx');
 assert.doesNotMatch(publishingUi, /平台发布推荐|publish-recommendations/, 'one-click publishing must not render the removed platform recommendation panel');
 assert.match(publishingUi, /applyContentToAll[\s\S]*?title: activeItem\.title[\s\S]*?description: activeItem\.description[\s\S]*?platformCopy:[\s\S]*?firstComment: activeItem\.firstComment/, 'applying content to all videos must copy the current publishing content');
 assert.match(publishingUi, /发布队列[\s\S]*?平台账号选择[\s\S]*?内容编辑/, 'publishing queue, account selection, and content editing must remain separate sections');
+assert.match(publishingUi, /setDeliveryMode\('now'\)[\s\S]*?立即发布[\s\S]*?setDeliveryMode\('flexible'\)[\s\S]*?时间待定[\s\S]*?setDeliveryMode\('schedule'\)[\s\S]*?定点排期/, 'one-click publishing must expose three unambiguous delivery modes');
+assert.match(publishingUi, /item\.deliveryMode !== 'flexible'/, 'time-undecided content must never be included in direct real publishing');
 const calendarPlannerUi = read('src/components/publishing/CalendarPlanner.tsx');
 assert.match(calendarPlannerUi, /tideMonthDays/, 'publishing tide must cover a complete month');
 assert.match(calendarPlannerUi, /onPointerDown=\{startTideDrag\}/, 'publishing tide must support horizontal pointer dragging');
 assert.match(calendarPlannerUi, /全球电商节庆点/, 'publishing tide must label global ecommerce festivals');
 assert.doesNotMatch(calendarPlannerUi, /festivalNoticesByDay|dayFestivalNotices/, 'festival markers must not be rendered inside calendar day cells');
+assert.match(calendarPlannerUi, /pendingTimeSelection[\s\S]*?选择具体发布时间[\s\S]*?确认时间/, 'flexible calendar drops must ask for an explicit publishing time');
+assert.match(calendarPlannerUi, /draggable=\{!item\.platformPostId && !item\.scheduleLocked\}/, 'fixed calendar schedules must not be draggable');
+assert.match(calendarPlannerUi, /kind: 'tide'[\s\S]*?bestHour[\s\S]*?targetHour[\s\S]*?score/, 'publishing tide hover details must include time, target-market time, and score');
+assert.match(calendarPlannerUi, /kind: 'slot'[\s\S]*?startHour[\s\S]*?endHour[\s\S]*?items/, 'calendar schedule slots must expose detailed hover information');
+assert.match(calendarPlannerUi, /fallbackPeakScore[\s\S]*?Math\.sin/, 'publishing tide must retain a useful curve when live score data is temporarily unavailable');
+assert.doesNotMatch(calendarPlannerUi, /setError\(loadError instanceof Error \? loadError\.message : 'load_failed'\)/, 'calendar UI must not expose raw transport errors');
+const strategyUi = read('src/components/StrategyDataBoard.tsx');
+assert.match(strategyUi, /已接入账号 \{exposure\.accountCount\}[\s\S]*?openWorkspaceView\('traffic', 'accounts'\)/, 'home connected-account affordance must navigate to social account activity');
+const publishingRoutes = read('server/routes/publishing.ts');
+assert.match(publishingRoutes, /scheduleLocked: req\.body\?\.scheduleLocked === true/, 'calendar creation must persist the fixed-time lock');
+assert.match(publishingRoutes, /currentStats\.scheduleLocked === true[\s\S]*?定点排期时间已锁定/, 'calendar API must reject accidental fixed-time changes');
 const events2026 = buildMarketingEvents(new Date(2026, 0, 1));
 const eventDates2026 = Object.fromEntries(events2026.filter(event => event.date.startsWith('2026-')).map(event => [event.id, event.date]));
 assert.equal(eventDates2026['2026-lunar-new-year'], '2026-02-17', '2026 Lunar New Year must use its real calendar date');
@@ -61,7 +85,7 @@ assert.equal(eventDates2026['2026-diwali'], '2026-11-08', '2026 Diwali must use 
 assert.equal(eventDates2026['2026-black-friday'], '2026-11-27', 'Black Friday must be derived from Thanksgiving');
 assert.equal(eventDates2026['2026-cyber-monday'], '2026-11-30', 'Cyber Monday must be derived from Thanksgiving');
 const studioUi = read('src/components/AiCreateStudio.tsx');
-assert.match(studioUi, /goPublishCurrentWork[\s\S]*?sourceProjectId: projectId \|\| undefined[\s\S]*?platform: platform as/, 'AI materials must carry their project and platform format into one-click publishing');
+assert.match(studioUi, /buildPublishPayload[\s\S]*?sourceProjectId: projectId \|\| undefined[\s\S]*?platform: platform as[\s\S]*?goPublishCurrentWork[\s\S]*?buildPublishPayload\(\)/, 'AI materials must carry their project and platform format into one-click publishing');
 const socialSetupGuide = read('docs/客户社媒账号配置与授权操作指南.md');
 assert.doesNotMatch(socialSetupGuide, /https:\/\/lingshu\.site\/api\//, 'production OAuth guidance must use the canonical app subdomain');
 assert.match(socialSetupGuide, /https:\/\/app\.lingshu\.site\/api\/overseas\/youtube\/oauth\/callback/, 'the canonical YouTube callback must remain documented');

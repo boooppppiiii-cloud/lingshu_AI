@@ -53,29 +53,29 @@ export const SALES_ACTION_LIBRARY: readonly SalesAction[] = [
   action('C01', '直接问价', ['how much', 'price', '多少钱', '价格'], '先拿数量再谈价', ['AI不报批发价', '说明价格随数量变化', '只问数量'], ['Price depends on quantity 🙂', "How many do you need? I'll get sales to quote it."], 'L4', '客户给出数量并要报价时转人工'),
   action('C02', '客户说太贵', ['too expensive', 'high price', '太贵', '价格高'], '不立即让价，转到价值和数量', ['先认可感受', '不擅自降价', '只问比较口径'], ['I hear you 🙂', 'Are you comparing the same quality and package?'], 'L4', '要求具体折扣数字时转人工'),
   action('C03', '客户用同行低价压价', ['another supplier', 'competitor price', '另一家报价', '同行低价'], '不贬低同行，引出隐性成本', ['先认可', '让客户核对报价包含项', '不承诺对比让价'], ["That's a good price 👍", 'Does it include the documents and packaging you need?'], 'L4', '需要对比让价时转人工'),
-  action('C04', '临下单索要折扣', ['discount before order', 'best discount', '下单前折扣', '再便宜点'], '守住价格并把成交机会交给人工', ['不擅自给折扣', '标记高意向'], ['Let me check what we can do.', 'I’m bringing in our sales lead 🙌'], 'L4', '立即转人工'),
-  action('C05', '要求完整报价单或PI', ['send quotation', 'proforma invoice', 'send pi', '正式报价单', '形式发票'], '收齐开单信息并交人工', ['收集品类、数量、规格和收货国', '不由AI生成正式报价'], ['Sure 👍', 'Send the items and quantities, and sales will prepare it.'], 'L4', '必转人工', ['T +16', 'A +10']),
+  action('C04', '临下单索要折扣', ['discount before order', 'best discount', '下单前折扣', '再便宜点'], '守住价格并把成交机会交给人工', ['不擅自给折扣', '标记高意向'], ['Let me see what I can do for this order.'], 'L4', '立即转人工'),
+  action('C05', '要求完整报价单或PI', ['send quotation', 'proforma invoice', 'send pi', '正式报价单', '形式发票'], '收齐开单信息并交人工', ['收集品类、数量、规格和收货国', '不由AI生成正式报价'], ['Sure 👍', 'Send me the items and quantities so I can get the quote prepared.'], 'L4', '必转人工', ['T +16', 'A +10']),
 
   action('D01', '质疑品质或第一次从中国进货', ['how do i know quality', 'first time buying from china', '质量可靠吗', '第一次从中国采购'], '用可验证凭据降低风险感', ['只引用知识库真实凭据', '可以提出样品验证', '知识库没有的认证不提'], ['Totally fair question 🙂', 'Want to verify it with a sample first?'], 'L2', '要求认证原件或编号核验时转人工'),
   action('D02', '索要知识库未覆盖的认证文件', ['gmp', 'iso', 'coa', 'lab report', '认证文件', '检测报告'], '不撒谎且不丢客户', ['不承诺拥有文件', '说明需要核验', '记录知识库缺口'], ['Let me confirm exactly which documents are available.', 'I’m passing this to the team to verify.'], 'L4', '必转人工并标记知识库补充'),
-  action('D03', '怀疑证书造假', ['fake certificate', 'fake document', '假证', '证书造假'], '共情并交人工核验', ['不辩解', '不承诺真伪', '让负责人提供可核验资料'], ['I understand why you’re careful 😔', 'Our manager will verify the documents with you directly.'], 'L4', '必转人工'),
+  action('D03', '怀疑证书造假', ['fake certificate', 'fake document', '假证', '证书造假'], '共情并交人工核验', ['不辩解', '不承诺真伪', '让负责人提供可核验资料'], ['You’re right to be careful.', 'Let me match the document to this product before I confirm anything.'], 'L4', '必转人工'),
   action('D04', '询问工厂或公司实力', ['factory or trading', 'how big is your company', '工厂还是贸易', '公司实力'], '按知识库如实回答并判断是否同行', ['只给知识库和公开信息', '多条红旗时限制信息深度'], ['I can share the verified company information.', 'What part matters most for your check?'], 'L2', '追问工厂地址或产线细节时红旗+1并转人工'),
 
   action('E01', '索要样品', ['sample', '样品'], '促成样品单', ['只给知识库中的样品政策', '问想测试哪一款'], ['Samples are available when the policy allows 👍', 'Which one do you want to try?'], 'L3', '要求免费样品或免运费时转人工', ['N +10', 'T +10']),
-  action('E02', '要求免费样品', ['free sample', 'you pay shipping', '免费样品', '免运费'], '不硬拒也不擅自答应', ['说明需要人工确认', '不承诺免费或免运费'], ['Let me check the sample terms with our manager 🙂'], 'L4', '转人工'),
+  action('E02', '要求免费样品', ['free sample', 'you pay shipping', '免费样品', '免运费'], '不硬拒也不擅自答应', ['说明需要人工确认', '不承诺免费或免运费'], ['Let me check the sample terms for this order 🙂'], 'L4', '转人工'),
   action('E03', '样品寄出后无反馈', ['sample delivered', 'sample follow-up', '样品寄出未回复'], '轻量唤醒并拿到反馈', ['确认是否收到', '只问一个反馈问题'], ['Hi! Did the samples arrive ok? 📦', 'Any feedback from your side?'], 'L2'),
 
   action('F01', '询问物流方式或时效', ['shipping', 'how long', 'delivery', '物流方式', '多久到'], '提供真实范围但不承诺日期', ['只说知识库中的常规方式', '具体交期交人工确认'], ['Exact timing depends on the order.', 'Which country and quantity should we check?'], 'L4', '要求确定到货日时转人工'),
-  action('F02', '询问运费', ['shipping cost', 'freight', '运费'], '收集计算运费所需信息', ['不估算运费', '收集城市、数量和重量'], ['Freight depends on quantity and address.', 'Send your city and quantity, and sales will calculate it 👍'], 'L4', '转人工计算'),
+  action('F02', '询问运费', ['shipping cost', 'freight', '运费'], '收集计算运费所需信息', ['不估算运费', '收集城市、数量和重量'], ['Freight depends on quantity and address.', 'Send me your city and quantity so I can get it checked 👍'], 'L4', '转人工计算'),
   action('F03', '询问清关税费或进口手续', ['customs', 'duty', 'import', '清关', '税费', '进口手续'], '说明资料边界，不做法律税务承诺', ['只说知识库可提供的单据', '明确当地税费由当地规则决定'], ['Duties depend on your local rules 🙂', 'Which country are you importing into?'], 'L4', '要求包税或包清关时转人工'),
 
   action('G01', '询问付款方式', ['payment', 'how to pay', 't/t', '付款方式'], '提供已确认的常规条款', ['仅引用知识库付款条款', '不议价、不修改条款'], ['I can share the approved payment terms.', 'Which method do you normally use?'], 'L4', '议付款比例、账期或信用证时转人工'),
-  action('G02', '要求账期或先货后款', ['credit terms', 'pay after receive', '30 days credit', '账期', '先货后款'], '不答应，交人工评估', ['绝不擅自同意', '保持礼貌承接'], ['Let me check the payment terms with our manager 👍'], 'L4', '必转人工；大单同时异常宽松要求时触发红旗'),
+  action('G02', '要求账期或先货后款', ['credit terms', 'pay after receive', '30 days credit', '账期', '先货后款'], '不答应，交人工评估', ['绝不擅自同意', '保持礼貌承接'], ['Let me check what payment terms work for this order.'], 'L4', '必转人工；大单同时异常宽松要求时触发红旗'),
 
   action('H01', '要求定制、私标或OEM', ['private label', 'oem', 'our logo', 'custom packaging', '贴牌', '定制包装'], '识别高意向并收集需求', ['积极承接', '一次只问定制内容、数量、市场或时间中的一个', '不承诺可行性、价格和周期'], ['Got it — you need private label 👍', 'What do you want on the packaging?'], 'L4', '立即转人工', ['N +18', 'A +10']),
   action('H02', '要求独家代理', ['exclusive', 'sole distributor', '独家代理', '总代'], '收集市场覆盖并交负责人', ['只表达兴趣', '不做独家承诺'], ["That's interesting 🙂", 'Tell me about your market coverage.'], 'L4', '立即转人工并即时通知'),
 
-  action('I01', '客户表达购买意向', ['i want to order', "let's proceed", 'ready to order', '我要下单', '继续下单'], '锁定细节并交人工开单', ['确认品项、数量和收货信息', '不由AI开单'], ['Great! 🎉', 'Send the items and quantities, and sales will take it from here.'], 'L4', '转人工', ['T +20']),
+  action('I01', '客户表达购买意向', ['i want to order', "let's proceed", 'ready to order', '我要下单', '继续下单'], '锁定细节并交人工开单', ['确认品项、数量和收货信息', '不由AI开单'], ['Great! 🎉', 'Send me the items, quantities and delivery country, and I’ll take it from there.'], 'L4', '转人工', ['T +20']),
   action('I02', '客户犹豫不决', ['let me think', "i'll consider", '考虑一下', '再想想'], '降低决策门槛且不施压', ['给样品或小单选项', '给客户留出口'], ['Sure, take your time 🙂', 'A small trial may be easier if you want.'], 'L2'),
   action('I03', '客户要求简化流程', ["don't want a long process", 'keep it simple', '流程太长', '简单一点'], '只给一个明确动作', ['回复不能用列表', '只说下一步的一件事'], ["Got it — let's keep it simple 👍", 'Just send the quantity.'], 'L2'),
   action('I04', '客户要求总结已确认内容', ['summarize', 'confirm what we discussed', '总结一下', '确认聊过的内容'], '准确复述已确认内容', ['只从timeline提取', '分条短消息', '不遗漏、不添加'], ['Sure 👍', 'I’ll recap only what we confirmed.', 'Anything to add?'], 'L2'),
@@ -90,14 +90,12 @@ export const SALES_ACTION_LIBRARY: readonly SalesAction[] = [
 
   action('L01', '客户要求通话或视频', ['call', 'voice', 'video call', 'speak to manager', '通话', '视频聊'], '停止自动回复并约时间', ['挂起自动回复', '只问方便时间', '创建通话任务'], ['Of course! 📞', 'What time works for you?'], 'L4', '立即转人工、创建通话任务并即时通知', ['真实性 +0.1']),
   action('L02', '疑似同行套价', ['two red flags', '疑似套价'], '礼貌但限制信息深度', ['只给公开信息', '不报价、不发详细规格、不透露客户信息'], ['We cover the public product categories 🙂', 'For pricing I need your quantity and market.'], 'L2', '标记提醒负责人，不主动断联'),
-  action('L03', '疑似诈骗', ['unusual large order', 'ship first', 'identity conflict', '异常大单', '先发货', '身份矛盾'], '停止推进并交人工判断', ['不承诺任何条款', '礼貌转交负责人'], ['Thanks for your interest 🙂', 'Our manager will follow up properly.'], 'L4', '转人工并标记信息待核实'),
-  action('L04', '情绪激动或辱骂', ['angry', 'swearing', '辱骂', '情绪激动'], '一句共情后立即转人工', ['不辩解', '不连续追问'], ["I'm really sorry about this 😔", 'Let me get our manager to help right away.'], 'L4', '立即human_needed'),
-  action('L05', '知识库完全未覆盖', ['knowledgeMiss', 'unknown question'], '不编造且不丢客户', ['轮换兜底话术', '第一轮只生成草稿', '同会话第二次兜底强制转人工'], [
-    ['Let me confirm that properly.', 'I’m passing it to the right person 👌'],
-    ['Good question — I want to give you the exact answer.', 'Let me check it with the team.'],
-    ['I’ll double-check that.', 'The team will confirm it here.'],
-    ['Let me get the accurate info.', 'I’m handing over the full context 🙂'],
-    ['That one needs verification.', 'I’ll ask the right person to confirm.'],
+  action('L03', '疑似诈骗', ['unusual large order', 'ship first', 'identity conflict', '异常大单', '先发货', '身份矛盾'], '停止推进并交人工判断', ['不承诺任何条款', '礼貌转交负责人'], ['I need to verify a few details before we go further.'], 'L4', '转人工并标记信息待核实'),
+  action('L04', '情绪激动或辱骂', ['angry', 'swearing', '辱骂', '情绪激动'], '一句共情后立即转人工', ['不辩解', '不连续追问'], ["I'm sorry this got frustrating.", 'Give me a moment and I’ll look into it.'], 'L4', '立即human_needed'),
+  action('L05', '知识库完全未覆盖', ['knowledgeMiss', 'unknown question'], '不编造且不丢客户', ['先问一个贴合当前问题的具体问题', '人工接管只在系统内部发生', '不得向客户解释队列、团队或转交流程'], [
+    ['Which part do you want to pin down first?'],
+    ['Can you tell me a little more about what you need?'],
+    ['What exactly do you need this to do?'],
   ], 'L2', '同会话兜底达到2次时强制转人工'),
 ];
 

@@ -21,6 +21,7 @@ import InspirationDashboard from './InspirationDashboard';
 import AiCreateStudio from './AiCreateStudio';
 import AccountActivity from './AccountActivity';
 import { CalendarPlanner, type CalendarPost } from './publishing/CalendarPlanner';
+import type { PublishDeliveryMode } from './publishing/schedulePolicy';
 import type { ConversationContext, Page, RestoreSignal, KickoffSignal, AgentAction } from '../App';
 import { authHeader } from '../lib/auth';
 import { SocialPlatformIcon } from './SocialPlatformIcon';
@@ -62,7 +63,7 @@ type PlatformCopy = {
 };
 
 type PublishItemStatus = 'draft' | 'ready' | 'publishing' | 'scheduled' | 'published' | 'partial' | 'failed';
-type DeliveryMode = 'now' | 'schedule';
+type DeliveryMode = PublishDeliveryMode;
 
 type PublishQueueItem = {
   id: string;
@@ -438,12 +439,10 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
     (sum, item) => sum + item.targetAccountIds.filter(id => connectedAccountIds.has(id)).length,
     0,
   );
-  const selectedAssignments = items.reduce(
-    (sum, item) => item.selected ? sum + item.targetAccountIds.filter(id => connectedAccountIds.has(id)).length : sum,
-    0,
-  );
   const publishableItems = items.filter(item => (
     item.selected &&
+    item.deliveryMode !== 'flexible' &&
+    (item.deliveryMode === 'now' || Boolean(item.scheduledAt)) &&
     item.videoPath.trim() &&
     item.title.trim() &&
     item.targetAccountIds.some(id => connectedAccountIds.has(id)) &&
@@ -451,6 +450,7 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
   ));
   const immediateItems = publishableItems.filter(item => item.deliveryMode === 'now');
   const scheduledItems = publishableItems.filter(item => item.deliveryMode === 'schedule' && Boolean(item.scheduledAt));
+  const flexibleItems = items.filter(item => item.selected && item.deliveryMode === 'flexible' && ['ready', 'partial', 'failed'].includes(item.status));
   const publishableAssignments = publishableItems.reduce(
     (sum, item) => sum + item.targetAccountIds.filter(id => connectedAccountIds.has(id)).length,
     0,
@@ -470,9 +470,13 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
 
   const setDeliveryMode = (mode: DeliveryMode) => {
     if (!activeItem) return;
+    if (activeCalendarPost) {
+      setNotice('日历里的内容会保留当前排期；如需改日期，可回到日历拖动未锁定的内容。');
+      return;
+    }
     updateItem(activeItem.id, {
       deliveryMode: mode,
-      scheduledAt: mode === 'schedule' ? (activeItem.scheduledAt || nextScheduleValue()) : activeItem.scheduledAt,
+      scheduledAt: mode === 'schedule' ? (activeItem.scheduledAt || nextScheduleValue()) : '',
       status: 'draft',
       error: undefined,
     });
@@ -538,15 +542,17 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
             targetAccountIds: platformTargets.map(account => account.id),
             targetAccountLabels: platformTargets.map(account => account.handle || account.title),
             trackWaLink: activeItem.trackWaLink,
+            ...(activeItem.deliveryMode === 'flexible' && activeItem.scheduledAt
+              ? { scheduledAt: new Date(activeItem.scheduledAt).toISOString() }
+              : {}),
           }),
         })));
         updateItem(activeItem.id, {
-          status: 'ready',
-          deliveryMode: 'now',
+          status: 'scheduled',
           error: undefined,
         });
         setCalendarRefreshKey(value => value + 1);
-        setNotice(`“${activeItem.title.trim()}”的日历内容已保存，可以确认真实发布。`);
+        setNotice(`“${activeItem.title.trim()}”的内容修改已保存，原排期保持不变。`);
       } catch (saveError) {
         setError(saveError instanceof Error ? saveError.message : '保存日历内容失败');
       } finally {
@@ -554,15 +560,25 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
       }
       return;
     }
-    const scheduledAt = activeItem.scheduledAt || nextScheduleValue();
+    if (activeItem.deliveryMode === 'schedule') {
+      const scheduledTime = Date.parse(activeItem.scheduledAt);
+      if (!Number.isFinite(scheduledTime) || scheduledTime <= Date.now()) {
+        setError('请为定点排期选择一个未来时间');
+        return;
+      }
+    }
     updateItem(activeItem.id, {
       status: 'ready',
-      deliveryMode: 'schedule',
-      scheduledAt,
+      deliveryMode: activeItem.deliveryMode,
+      scheduledAt: activeItem.deliveryMode === 'schedule' ? activeItem.scheduledAt : '',
       error: undefined,
     });
     setError('');
-    setNotice(`“${activeItem.title.trim()}”已保存并进入待发布内容。`);
+    setNotice(activeItem.deliveryMode === 'now'
+      ? `“${activeItem.title.trim()}”已保存，可直接立即发布。`
+      : activeItem.deliveryMode === 'flexible'
+        ? `“${activeItem.title.trim()}”已保存，拖入日历时再选择时间。`
+        : `“${activeItem.title.trim()}”已保存，定点时间已经锁定。`);
     setWorkspaceTab('schedule');
     window.setTimeout(() => document.getElementById('publishing-calendar')?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 80);
   };
@@ -598,6 +614,7 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
             targetAccountIds: platformAccounts.map(account => account.id),
             targetAccountLabels: platformAccounts.map(account => account.handle || account.title),
             trackWaLink: item.trackWaLink,
+            scheduleLocked: item.deliveryMode === 'schedule',
           }),
         });
         createdIds.push(result.item.id);
@@ -606,7 +623,7 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
       }
     }
     updateItem(item.id, {
-      deliveryMode: 'schedule',
+      deliveryMode: item.deliveryMode,
       scheduledAt: dateTimeLocalValue(scheduledAt),
       status: failures.length ? (createdIds.length ? 'partial' : 'ready') : 'scheduled',
       calendarPostIds: createdIds.length ? createdIds : undefined,
@@ -653,7 +670,7 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
       targetAccountIds: targetAccountIds.length ? targetAccountIds : fallbackTargetIds,
       firstComment: post.firstComment || '',
       trackWaLink: post.trackWaLink !== false,
-      deliveryMode: 'now',
+      deliveryMode: post.scheduleLocked ? 'schedule' : 'flexible',
       scheduledAt: dateTimeLocalValue(new Date(post.publishedAt)),
       calendarPostIds: [post.id],
       status: 'draft',
@@ -669,7 +686,9 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
       setItems(previous => [...previous, next]);
       setActiveItemId(next.id);
     }
-    setNotice(`已将“${post.title}”带回发布队列。确认素材和账号后，可直接提交平台。`);
+    setNotice(post.scheduleLocked
+      ? `已打开“${post.title}”，内容可以修改，定点发布时间保持锁定。`
+      : `已打开“${post.title}”，内容可以修改，时间仍可在日历中调整。`);
     setWorkspaceTab('publish');
     window.setTimeout(() => publishSettingsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 60);
   };
@@ -775,6 +794,35 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
     const ids = connectedAccounts.map(account => account.id);
     if (activeItem) updateItem(activeItem.id, { targetAccountIds: ids, status: 'draft', error: undefined });
     else setPendingTargetAccountIds(ids);
+  };
+
+  const applyContentToAll = () => {
+    if (!activeItem) return;
+    const lockedStatuses: PublishItemStatus[] = ['publishing', 'scheduled', 'published'];
+    const targetIds = new Set(
+      items
+        .filter(item => item.id !== activeItem.id && !lockedStatuses.includes(item.status))
+        .map(item => item.id),
+    );
+    if (!targetIds.size) return;
+
+    setItems(previous => previous.map(item => targetIds.has(item.id) ? {
+      ...item,
+      title: activeItem.title,
+      description: activeItem.description,
+      platformCopy: Object.fromEntries(
+        Object.entries(activeItem.platformCopy).map(([platform, copy]) => [platform, {
+          ...copy,
+          tags: copy.tags ? [...copy.tags] : undefined,
+          hashtags: copy.hashtags ? [...copy.hashtags] : undefined,
+        }]),
+      ),
+      firstComment: activeItem.firstComment,
+      trackWaLink: activeItem.trackWaLink,
+      status: 'draft',
+      error: undefined,
+    } : item));
+    setNotice(`已把当前视频的发布内容同步到另外 ${targetIds.size} 条视频，视频文件、平台账号和发布时间保持不变。`);
   };
 
   const duplicatePublishItem = (item: PublishQueueItem) => {
@@ -909,6 +957,7 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
     for (const item of items) {
       if (!item.selected) continue;
       if (item.status === 'published' || item.status === 'scheduled') continue;
+      if (item.deliveryMode === 'flexible') continue;
       const targets = connectedAccounts.filter(account => item.targetAccountIds.includes(account.id));
       if (!item.videoPath.trim() || !item.title.trim() || !targets.length) {
         skippedItems += 1;
@@ -959,6 +1008,7 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
                 targetAccountIds: platformAccounts.map(account => account.id),
                 targetAccountLabels: platformAccounts.map(account => account.handle || account.title),
                 trackWaLink: item.trackWaLink,
+                scheduleLocked: true,
               }),
             });
             createdIds.push(result.item.id);
@@ -1101,6 +1151,15 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
                   {uploadingVideos ? <Loader2 size={13} className="animate-spin" /> : <Upload size={13} />}
                   {uploadingVideos ? '上传中' : '上传'}
                 </button>
+                <button
+                  type="button"
+                  onClick={applyContentToAll}
+                  disabled={!activeItem || items.every(item => item.id === activeItem.id || ['publishing', 'scheduled', 'published'].includes(item.status))}
+                  title="复制当前视频的标题、发布配文、分平台文案、首评和询盘追踪设置；不会覆盖视频文件、平台账号和发布时间"
+                  className="inline-flex h-9 items-center justify-center gap-1.5 rounded-lg border border-accent/30 bg-accent-glow px-3 text-xs font-bold text-accent hover:border-accent disabled:cursor-not-allowed disabled:opacity-40"
+                >
+                  <Copy size={13} /> 应用到全部视频
+                </button>
                 <button type="button" onClick={toggleAllQueueItems} className="inline-flex h-9 w-24 items-center justify-center gap-1.5 rounded-lg border border-emerald-200 bg-emerald-50 text-xs font-bold text-emerald-700">
                   <CheckCircle2 size={13} />
                   {allQueueItemsSelected ? '取消全选' : '全选'}
@@ -1131,7 +1190,7 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
                         <span className={`flex-shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${hasVideo ? status.className : 'bg-amber-50 text-amber-700'}`}>{hasVideo ? status.label : '未生成成片'}</span>
                       </div>
                       <p className="mt-1 truncate text-[11px] text-text-muted">
-                        {item.videoPath || '请返回 AI 智能素材生成该版本成片'} · {targetCount} 个账号 · {item.deliveryMode === 'now' ? '立即发布' : item.scheduledAt ? `排期 ${new Date(item.scheduledAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : '待选排期'}
+                        {item.videoPath || '请返回 AI 智能素材生成该版本成片'} · {targetCount} 个账号 · {item.deliveryMode === 'now' ? '立即发布' : item.deliveryMode === 'flexible' ? '时间待定' : item.scheduledAt ? `定点 ${new Date(item.scheduledAt).toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}` : '待选定点时间'}
                       </p>
                       {item.error && <p className="mt-1 truncate text-[11px] font-semibold text-red-600" title={item.error}>{item.error}</p>}
                     </button>
@@ -1244,8 +1303,8 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
                 <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-3">
                   <p className="text-[11px] text-text-muted">
                     {activeCalendarPost
-                      ? '保存会同步更新内容日历；保存成功后可在右侧确认并真实发布。'
-                      : '保存后进入待发布队列，可立即发布或排期。'}
+                      ? '保存只更新内容，日历中的发布时间和锁定状态保持不变。'
+                      : '保存后进入待发布内容；立即发布、时间待定和定点排期互不混用。'}
                   </p>
                   <button
                     type="button"
@@ -1313,20 +1372,30 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
             </div>
             <div data-lingshu-guide="publish-mode" className="mt-4 rounded-2xl border border-border bg-surface p-3">
               <p className="text-[11px] font-bold text-text-secondary">当前视频的发布方式</p>
-              <div className="mt-2 grid grid-cols-2 gap-2">
+              <div className="mt-2 grid grid-cols-3 gap-2">
                 <button
                   type="button"
                   onClick={() => setDeliveryMode('now')}
+                  disabled={activeCalendarPost}
                   className={`rounded-xl border px-3 py-2 text-xs font-black ${activeItem?.deliveryMode === 'now' ? 'border-accent bg-accent text-white' : 'border-border bg-white text-text-secondary'}`}
                 >
                   立即发布
                 </button>
                 <button
                   type="button"
+                  onClick={() => setDeliveryMode('flexible')}
+                  disabled={activeCalendarPost}
+                  className={`rounded-xl border px-3 py-2 text-xs font-black ${activeItem?.deliveryMode === 'flexible' ? 'border-sky-500 bg-sky-600 text-white' : 'border-border bg-white text-text-secondary'} disabled:cursor-not-allowed disabled:opacity-60`}
+                >
+                  时间待定
+                </button>
+                <button
+                  type="button"
                   onClick={() => setDeliveryMode('schedule')}
+                  disabled={activeCalendarPost}
                   className={`rounded-xl border px-3 py-2 text-xs font-black ${activeItem?.deliveryMode === 'schedule' ? 'border-violet-500 bg-violet-600 text-white' : 'border-border bg-white text-text-secondary'}`}
                 >
-                  加入排期
+                  定点排期
                 </button>
               </div>
               {activeItem?.deliveryMode === 'schedule' && (
@@ -1336,11 +1405,23 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
                     type="datetime-local"
                     min={dateTimeLocalValue(new Date(Date.now() + 5 * 60_000))}
                     value={activeItem.scheduledAt}
+                    disabled={activeCalendarPost}
                     onChange={event => updateItem(activeItem.id, { scheduledAt: event.target.value, status: 'draft', error: undefined })}
-                    className="w-full rounded-xl border border-border bg-white px-3 py-2.5 text-xs outline-none focus:border-violet-400"
+                    className="w-full rounded-xl border border-border bg-white px-3 py-2.5 text-xs outline-none focus:border-violet-400 disabled:cursor-not-allowed disabled:bg-slate-100"
                   />
                 </label>
               )}
+              <p className="mt-2 text-[10px] leading-4 text-text-muted">
+                {activeCalendarPost
+                  ? activeItem?.deliveryMode === 'schedule'
+                    ? '这条内容使用定点排期，拖动不会改变锁定时间。'
+                    : '这条内容已选好时间；可在日历拖到其他日期，时分保持不变。'
+                  : activeItem?.deliveryMode === 'now'
+                    ? '确认发布后立即提交平台，不进入日历。'
+                    : activeItem?.deliveryMode === 'flexible'
+                      ? '先保存到待发布内容，拖入日历时再选择具体时间。'
+                      : '保存完整日期和时间，拖入日历后按这个唯一时间执行。'}
+              </p>
             </div>
             <div id="publishing-video-preview" className="mt-4 scroll-mt-24 rounded-2xl border border-border bg-surface p-3">
               <div className="mb-3 flex items-center justify-between gap-2">
@@ -1383,7 +1464,7 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
                 发布前检查
               </div>
               <ul className="mt-2 space-y-1 text-[11px] leading-relaxed text-green-800">
-                <li>队列：{items.length} 条视频，{immediateItems.length} 条立即发布，{scheduledItems.length} 条加入排期</li>
+                <li>队列：{items.length} 条视频，{immediateItems.length} 条立即发布，{flexibleItems.length} 条时间待定，{scheduledItems.length} 条定点排期</li>
                 <li>目标：{totalAssignments} 个账号任务，覆盖 {new Set(items.flatMap(item => connectedAccounts.filter(account => item.targetAccountIds.includes(account.id)).map(account => account.platform))).size} 个平台</li>
                 <li>当前视频追踪链接：{activeItem?.trackWaLink ? '开启' : '关闭'}</li>
               </ul>
@@ -1401,9 +1482,7 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
               {publishing ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle2 size={16} />}
               {publishing
                 ? '正在遍历账号群发...'
-                : activeCalendarPost && activeItem?.deliveryMode === 'now'
-                  ? `确认并真实发布 · ${publishableItems.length} 条`
-                  : `群发选中素材 · ${publishableItems.length} 条 / ${selectedAssignments} 个账号目标`}
+                  : `发布已确定时间的内容 · ${publishableItems.length} 条 / ${publishableAssignments} 个账号目标`}
             </button>
           </aside>
         </div>
@@ -1414,7 +1493,7 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
                 <span className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-emerald-50 text-emerald-700"><Send size={18} /></span>
                 <div>
                   <h3 id="publish-confirmation-title" className="text-base font-black text-text-primary">确认发布这些内容？</h3>
-                  <p className="mt-1 text-xs leading-5 text-text-muted">立即发布会直接调用已授权平台账号；排期内容会在设定时间自动提交。两种方式都是真实发布，不是模拟操作。</p>
+                  <p className="mt-1 text-xs leading-5 text-text-muted">立即发布会直接调用已授权平台账号；定点排期会在锁定时间自动提交。时间待定内容需要先拖入日历选时，不会被误发布。</p>
                 </div>
               </div>
               <div className="mt-4 grid grid-cols-2 gap-2">
