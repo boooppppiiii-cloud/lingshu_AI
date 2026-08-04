@@ -111,6 +111,8 @@ function knowledgeGapPayload(
   strategies: RetrievedStrategy[] = [],
   styleMemoryUsed = 0,
   blockingIssues: string[] = [],
+  handoffRequired = true,
+  fallbackCount?: number,
 ) {
   const messages = splitMobileChatMessages(plan.draft);
   const translatedMessages = splitMobileChatMessages(plan.draftZh);
@@ -119,8 +121,9 @@ function knowledgeGapPayload(
     messages,
     translatedDraft: translatedMessages.join('\n\n'),
     translatedMessages,
-    handoffRequired: plan.handoffRequired,
-    safeToSendBeforeHandoff: plan.safeToSendBeforeHandoff,
+    handoffRequired,
+    safeToSendBeforeHandoff: handoffRequired && plan.safeToSendBeforeHandoff,
+    fallbackCount,
     handlingReason: plan.handlingReason,
     followUpMinutes: plan.followUpMinutes,
     followUpDueAt: plan.followUpDueAt,
@@ -211,7 +214,9 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
     return;
   }
   if (intent === 'reply' && (context.knowledgeMiss || predictableGapWithoutEvidence)) {
-    res.json(knowledgeGapPayload(gapPlan, context));
+    const nextFallbackCount = Math.max(1, Number(body.fallbackCount ?? 0) + 1);
+    const handoffRequired = gapPlan.scenario !== 'general_unknown' || nextFallbackCount >= 2;
+    res.json(knowledgeGapPayload(gapPlan, context, [], 0, [], handoffRequired, nextFallbackCount));
     return;
   }
   const strategies = await retrieveResponseStrategies(tenantId, {
@@ -219,6 +224,11 @@ draftReplyRouter.post('/conversion/draft', async (req, res) => {
     conversation,
     stage: String(body.stage ?? ''),
     intent,
+    firstTurn: conversation.filter((turn: { role: string }) => turn.role === 'buyer').length <= 1,
+    knowledgeMiss: context.knowledgeMiss,
+    productAvailable: context.products.length > 0,
+    redFlagCount: Number(body.bant?.authenticity?.redFlags?.length ?? 0),
+    sentiment: context.sentiment,
   });
   const styleMemories = await retrieveStyleMemories(tenantId, categoryForIntent(intent), latestMessage);
   const salesStyleProfile = (await readTenantEnterpriseProfile(tenantId)).salesStyleProfile;

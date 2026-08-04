@@ -30,5 +30,8 @@ const overflow = planMobileChatMessages('One short sentence. Two short sentence.
 assert.equal(overflow.messages.length, 3);
 assert.equal(overflow.truncated, true);
 assert.equal(shouldReshapeMobileChatDraft('One short sentence. Two short sentence. Three short sentence. Four short sentence. Five short sentence. Six short sentence. Seven short sentence.', 'Hi'), true);
+const oneQuestion = splitMobileChatMessages('Which market are you in? I can check the matching option. What quantity do you need?');
+assert.equal((oneQuestion.join(' ').match(/[?？]/g) ?? []).length, 1);
+assert.match(oneQuestion.join(' '), /^I can check the matching option\./);
 
 console.log('mobile chat style policy passed');

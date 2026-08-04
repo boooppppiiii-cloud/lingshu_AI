@@ -274,6 +274,10 @@ customerSuggestionsRouter.get('/:id/suggestions', async (req, res) => {
     conversation,
     stage: hint.stage,
     intent: 'suggestion',
+    firstTurn: conversation.filter((turn: { role: string }) => turn.role === 'buyer').length <= 1,
+    knowledgeMiss: context.knowledgeMiss,
+    productAvailable: context.products.length > 0,
+    sentiment: context.sentiment,
   });
 
   const prompt = [

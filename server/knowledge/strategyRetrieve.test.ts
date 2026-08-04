@@ -7,16 +7,16 @@ import {
 } from './strategyRetrieve.js';
 
 const library = responseStrategyLibrary();
-assert.equal(library.length, 43, 'the built-in strategy library must contain all 43 reviewed scenarios');
-assert.equal(new Set(library.map(item => item.id)).size, 43, 'strategy IDs must be unique');
+assert.equal(library.length, 57, 'the strategy library must contain 42 document actions plus 15 compatible legacy strategies');
+assert.equal(new Set(library.map(item => item.id)).size, 57, 'strategy IDs must be unique');
 
 const cases: Array<{ message: string; expected: string }> = [
-  { message: 'Your price is too high. Can you make it cheaper?', expected: 'S01' },
-  { message: 'Another supplier offers a much lower price.', expected: 'S02' },
-  { message: 'What is your MOQ?', expected: 'S06' },
-  { message: 'Can you do OEM private label for us?', expected: 'S13' },
-  { message: 'The goods are damaged. I need a refund.', expected: 'S14' },
-  { message: 'Can your manager call me tomorrow?', expected: 'S15' },
+  { message: 'Your price is too high. Can you make it cheaper?', expected: 'C02' },
+  { message: 'Another supplier offers a much lower price.', expected: 'C03' },
+  { message: 'How much is it?', expected: 'C01' },
+  { message: 'Can you do OEM private label for us?', expected: 'H01' },
+  { message: 'The goods are damaged. I need a refund.', expected: 'K03' },
+  { message: 'Can your manager call me tomorrow?', expected: 'L01' },
 ];
 
 for (const item of cases) {
@@ -24,7 +24,7 @@ for (const item of cases) {
   assert.equal(ranked[0]?.strategy.id, item.expected, `wrong top strategy for: ${item.message}`);
 }
 
-const strategy = library.find(item => item.id === 'S01');
+const strategy = library.find(item => item.id === 'C02');
 assert.ok(strategy);
 const prompt = buildStrategyPromptBlock([{
   strategy,
@@ -37,6 +37,8 @@ const prompt = buildStrategyPromptBlock([{
 assert.match(prompt, /enterprise knowledge > response strategy > seller style memory/);
 assert.match(prompt, /dialogue tactics, not business facts/);
 assert.match(prompt, /Never copy numbers or company claims/);
+assert.match(prompt, /Ask at most one question/);
+assert.match(prompt, /BANT impact|Progression goal/);
 assert.match(prompt, /8 real edited replies/);
 
 console.log('strategy retrieval policy tests passed');

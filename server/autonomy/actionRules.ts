@@ -7,6 +7,16 @@ export interface ActionRule {
   desc: string;
 }
 
+const SALES_ACTION_RISK: Record<ActionRisk, string[]> = {
+  L1: ['J03'],
+  L2: ['A03', 'B02', 'D01', 'D04', 'E03', 'I02', 'I03', 'I04', 'J01', 'J02', 'K01', 'K02', 'L02', 'L05'],
+  L3: ['A01', 'A02', 'A04', 'B01', 'B04', 'E01'],
+  L4: ['B03', 'C01', 'C02', 'C03', 'C04', 'C05', 'D02', 'D03', 'E02', 'F01', 'F02', 'F03', 'G01', 'G02', 'H01', 'H02', 'I01', 'K03', 'L01', 'L03', 'L04'],
+};
+
+export const SALES_ACTION_RULES: ActionRule[] = (Object.entries(SALES_ACTION_RISK) as Array<[ActionRisk, string[]]>)
+  .flatMap(([risk, ids]) => ids.map(id => ({ action: `sales:${id}`, risk, desc: `销售动作 ${id}` })));
+
 export const ACTION_RULES: ActionRule[] = [
   { action: 'remind_silent_high_value', risk: 'L1', desc: '高价值客户沉默提醒' },
   { action: 'remind_local_worktime', risk: 'L1', desc: '到达对方工作时间提醒' },
@@ -33,12 +43,17 @@ export const ACTION_RULES: ActionRule[] = [
   { action: 'proactive_call', risk: 'L4', desc: '主动约电话' },
   { action: 'complaint_compensation', risk: 'L4', desc: '客诉补偿' },
   { action: 'edit_customer_core', risk: 'L4', desc: '修改客户核心资料' },
+  ...SALES_ACTION_RULES,
 ];
 
 export type ActionDecision = 'remind' | 'draft' | 'auto';
 
 export function findActionRule(action: string): ActionRule {
   return ACTION_RULES.find(rule => rule.action === action) ?? ACTION_RULES.find(rule => rule.action === 'draft_greeting')!;
+}
+
+export function salesActionRule(id: string): ActionRule {
+  return findActionRule(`sales:${String(id || '').trim().toUpperCase()}`);
 }
 
 export function decideAction(action: string, autonomy: AutonomyLevel = 'draft'): { decision: ActionDecision; rule: ActionRule } {

@@ -21,7 +21,7 @@ export interface SpinGuidance {
   updatedAt: string;
 }
 
-const PROBLEM_SIGNAL_PATTERN = /\b(?:current supplier|slow delivery|late delivery|quality issue|inconsistent quality|moq (?:is |too )?high|too expensive|hard to reach|no certificate)\b|现有供应商|交货慢|质量不稳|起订量太高|联系不上|没有认证/i;
+const PROBLEM_SIGNAL_PATTERN = /\b(?:current supplier|slow delivery|late delivery|quality issue|inconsistent quality|moq (?:is |too )?high|too expensive|hard to reach|no certificate|stock.?out|returns?|complaints?|compliance|fake certificate|trust issue)\b|现有供应商|交货慢|质量不稳|起订量太高|联系不上|没有认证|缺货|退货|客诉|合规|假证|信任问题/i;
 
 function normalizedLanguage(value: unknown): 'zh' | 'es' | 'ar' | 'en' {
   const language = String(value || '').toLowerCase();
@@ -57,9 +57,9 @@ export function advanceSpinStage(input: {
 
   let stage: SpinStage = previous?.stage ?? 'situation';
   if (!previous) {
-    stage = turnIndex >= 4 ? 'problem' : 'situation';
+    stage = turnIndex >= 3 ? 'problem' : 'situation';
   } else if (input.isNewBuyerTurn) {
-    if (stage === 'situation' && (turnIndex >= 4 || hasProblemSignal(input.turns))) {
+    if (stage === 'situation' && turnIndex >= 3) {
       stage = 'problem';
     } else if (stage === 'problem' && dealSizeHint === 'large' && !implicationUsed && hasProblemSignal(input.turns)) {
       stage = 'implication';
@@ -140,10 +140,10 @@ const PHRASING: Record<SpinStage, StagePhrasing> = {
       ar: ['إليك طريقة عملية يمكننا المساعدة بها.', 'لنرَ إن كان هذا يغيّر الأمور بالنسبة لك.'],
     },
     questionBank: {
-      en: ['If you could get stock in two weeks instead, would that help your season?', 'Would having the right certificates open up bigger buyers for you?', 'Want me to check what we can do for you?'],
-      zh: ['如果能提前两周到货，会不会帮到您这一季？', '如果拿到合适的认证，是不是能接更大的客户？', '需要我帮您具体核实一下能做到什么程度吗？'],
-      es: ['Si pudieras tener el stock en dos semanas, ¿ayudaría a tu temporada?', '¿Tener los certificados adecuados te abriría compradores más grandes?', '¿Quieres que revise qué podemos hacer por ti?'],
-      ar: ['لو استطعت الحصول على المخزون خلال أسبوعين، هل سيساعد موسمك؟', 'هل امتلاك الشهادات المناسبة يفتح لك مشترين أكبر؟', 'هل تريد أن أتحقق مما يمكننا فعله من أجلك؟'],
+      en: ['If the timing can be confirmed, would that solve the main issue?', 'If we find a lower-risk first step, would you want to try it?', 'Want me to check the exact next step?'],
+      zh: ['如果交付时间能确认下来，是不是就解决了主要问题？', '如果先从风险更低的一步开始，您愿意试试吗？', '需要我帮您核实准确的下一步吗？'],
+      es: ['Si podemos confirmar el plazo, ¿resolvería el problema principal?', 'Si encontramos un primer paso con menos riesgo, ¿lo probarías?', '¿Quieres que confirme el siguiente paso exacto?'],
+      ar: ['إذا تأكد موعد التسليم، هل سيحل ذلك المشكلة الأساسية؟', 'إذا وجدنا خطوة أولى أقل مخاطرة، هل ترغب في تجربتها؟', 'هل تريد أن أتحقق من الخطوة التالية بدقة؟'],
     },
   },
 };

@@ -18,7 +18,7 @@ const largeTurns = [
 ];
 
 let state: SpinState | undefined;
-const expectedStages = ['situation', 'situation', 'situation', 'problem', 'implication', 'need_payoff', 'need_payoff'];
+const expectedStages = ['situation', 'situation', 'problem', 'implication', 'need_payoff', 'need_payoff', 'need_payoff'];
 for (let i = 0; i < largeTurns.length; i += 1) {
   const turnsSoFar = largeTurns.slice(0, i + 1);
   const bant = assessBant({ turns: turnsSoFar });
@@ -65,6 +65,7 @@ for (const stage of stages) {
     assert.ok(guidance.statement.length > 0, `${stage}/${language} statement empty`);
     assert.ok(guidance.question.length > 0, `${stage}/${language} question empty`);
     assert.equal(guidance.stage, stage);
+    assert.equal((guidance.question.match(/[?？؟]/g) ?? []).length, 1, `${stage}/${language} must ask exactly one question`);
   }
 }
 
@@ -75,5 +76,8 @@ const first = selectSpinGuidance(repeatState, 'English');
 const timelineWithFirst = [{ actor: 'ai', type: 'msg_out', body: `${first.statement} ${first.question}` }];
 const second = selectSpinGuidance(repeatState, 'English', timelineWithFirst);
 assert.notEqual(second.question, first.question, 'expected a different question when a prior one was already used');
+
+const needPayoff = selectSpinGuidance({ stage: 'need_payoff', turnIndex: 6, implicationUsed: true, dealSizeHint: 'large', updatedAt: new Date().toISOString() }, 'English');
+assert.doesNotMatch(needPayoff.question, /two weeks|certificate|guarantee/i, 'SPIN guidance must not invent delivery or certification capabilities');
 
 console.log('SPIN stage progression passed');
