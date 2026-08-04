@@ -14,6 +14,7 @@ import type { Page } from '../App';
 import { completeDemoStep, readDemoProgress } from '../lib/demoProgress';
 import { SocialPlatformIcon } from './SocialPlatformIcon';
 import { useDismissibleLayer } from '../hooks/useDismissibleLayer';
+import { readScriptGapTasks, updateScriptGapTask, SCRIPT_GAP_QUEUE_EVENT, type ScriptGapTask } from '../lib/scriptGapQueue';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type Platform = 'all' | 'tiktok' | 'instagram' | 'youtube' | 'facebook';
@@ -2875,6 +2876,8 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   const [materialsLoading, setMaterialsLoading] = useState(false);
   const [uploadingMaterial, setUploadingMaterial] = useState(false);
   const [generatingNeedId, setGeneratingNeedId] = useState('');
+  const [scriptGapTasks, setScriptGapTasks] = useState<ScriptGapTask[]>(() => readScriptGapTasks());
+  const [uploadingScriptGapId, setUploadingScriptGapId] = useState('');
   const [classifyingMaterialId, setClassifyingMaterialId] = useState('');
   const [showAccountsModal, setShowAccountsModal] = useState(false);
   const uploadInputRef = useRef<HTMLInputElement | null>(null);
@@ -2882,6 +2885,11 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   const platformLabel = PLATFORM_FILTERS.find(f => f.id === platform)?.label ?? '全部平台';
   const sortLabel = sortMode === 'crawlTime' ? '按爬取时间' : '按热度';
   const contentFormatLabel = contentFormat === 'video' ? '视频' : '图文';
+  useEffect(() => {
+    const refresh = () => setScriptGapTasks(readScriptGapTasks());
+    window.addEventListener(SCRIPT_GAP_QUEUE_EVENT, refresh);
+    return () => window.removeEventListener(SCRIPT_GAP_QUEUE_EVENT, refresh);
+  }, []);
 
   const openMaterialSmartGeneration = () => {
     window.dispatchEvent(new CustomEvent('lingshu:navigate', { detail: { page: 'traffic', view: 'create' } }));
@@ -3200,6 +3208,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
     setMaterialMessage('');
     try {
       const uploadedVideos: Material[] = [];
+      const uploadedIds: string[] = [];
       for (const file of Array.from(files)) {
         const type = file.type.startsWith('video') ? 'video' : file.type.startsWith('audio') ? 'audio' : 'image';
         const dataBase64 = await fileToDataUrl(file);
@@ -3213,12 +3222,14 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
           sourceType: 'local-upload',
         });
         if (!result.ok || !result.material?.id) throw new Error(`「${file.name}」上传失败，请检查素材服务后重试`);
+        uploadedIds.push(result.material.id);
         if (type === 'video' && result.material?.id) uploadedVideos.push(result.material);
       }
       setMaterialMessage(uploadedVideos.length ? `已上传，正在分析 ${uploadedVideos.length} 个视频的可用片段…` : `已上传 ${files.length} 个素材到社媒素材库`);
       const analysisResults = await Promise.allSettled(uploadedVideos.map(material => studioApi.analyzeMaterialSegments(material.id)));
       await refreshMaterials();
       window.dispatchEvent(new Event('lingshu:materials-updated'));
+      if (uploadingScriptGapId && uploadedIds.length) updateScriptGapTask(uploadingScriptGapId, { uploadedMaterialIds: uploadedIds });
       const analyzedCount = analysisResults.filter(result => result.status === 'fulfilled' && result.value.ok).length;
       const failedCount = uploadedVideos.length - analyzedCount;
       setMaterialMessage(uploadedVideos.length
@@ -3229,6 +3240,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
       setMaterialMessage(e instanceof Error ? e.message : '素材上传失败');
     } finally {
       setUploadingMaterial(false);
+      setUploadingScriptGapId('');
       if (uploadInputRef.current) uploadInputRef.current.value = '';
     }
   };
@@ -3978,6 +3990,15 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
 
           {innerView === 'shooting' && (
             <div className="space-y-4">
+              {scriptGapTasks.length > 0 && <div className="space-y-3">
+                <p className="text-xs font-black text-text-secondary">脚本缺口</p>
+                {scriptGapTasks.map(task => <article key={task.id} className="rounded-2xl border border-amber-200 bg-amber-50/50 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div><span className="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-black text-amber-800">脚本缺口</span><h3 className="mt-2 text-sm font-bold text-text-primary">{task.title}</h3><p className="mt-1 text-xs text-text-secondary">{task.shotBrief}</p><p className="mt-2 text-[11px] text-text-muted">{task.productLabel} · {task.themeTitle} · 建议 {task.suggestedDurationSec} 秒</p></div>
+                    <div className="flex gap-2"><button type="button" onClick={() => { setUploadingScriptGapId(task.id); setInnerView('library'); setTimeout(() => uploadInputRef.current?.click(), 50); }} className="rounded-lg border border-amber-300 bg-white px-3 py-2 text-xs font-bold text-amber-800">上传补拍素材</button>{task.uploadedMaterialIds.length > 0 && <button type="button" onClick={() => window.dispatchEvent(new CustomEvent('lingshu:script-gap-refill', { detail: task }))} className="rounded-lg bg-amber-600 px-3 py-2 text-xs font-bold text-white">一键回填</button>}</div>
+                  </div>
+                </article>)}
+              </div>}
               <div className="grid gap-3 md:grid-cols-3">
                 {[
                   { label: '待拍摄缺口', value: shootingNeeds.length, color: 'text-accent' },

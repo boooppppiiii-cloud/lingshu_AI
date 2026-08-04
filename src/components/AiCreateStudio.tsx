@@ -11,6 +11,7 @@ import type { Page } from '../App';
 import { completeDemoStep } from '../lib/demoProgress';
 import { authHeader } from '../lib/auth';
 import { useDismissibleLayer } from '../hooks/useDismissibleLayer';
+import { createScriptGapTask } from '../lib/scriptGapQueue';
 
 /* ──────────────────────────────────────────────────────────────────────────
    AI 生成内容工作台 — 社媒（流量）页子模块
@@ -26,6 +27,15 @@ const PUBLISH_RETURN_PREVIEW_KEY = 'ow_publish_return_to_preview';
 const PUBLISH_RETURN_PREVIEW_TTL = 2 * 60 * 60 * 1000;
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
+
+function pendingClaimLocations(script: string, productInfo: string): string[] {
+  const source = productInfo.toLowerCase();
+  return script.split('\n').map(line => line.trim()).filter(line => {
+    if (!line || !/(MOQ|起订|交期|天|认证|CE|FDA|SGS|价格|\$|客户|案例|销量|保证|guarantee)/i.test(line)) return false;
+    const facts = line.match(/(?:MOQ|起订|交期|认证|CE|FDA|SGS|价格|\$|客户案例|销量|保证)[^，。；\n]*/ig) || [];
+    return facts.some(fact => !source.includes(fact.toLowerCase()));
+  }).slice(0, 4);
+}
 
 const PLAYABLE_AUDIO_BLOB_CACHE = new Map<string, string>();
 const PLAYABLE_VIDEO_BLOB_CACHE = new Map<string, string>();
@@ -213,6 +223,7 @@ type VideoTheme = {
   id: VideoThemeId;
   title: string;
   description: string;
+  /** Legacy metadata; no longer displayed or used to decide CTA. */
   painPoint: string;
   conversionGoal: string;
   requires: Array<'product' | 'material' | 'factory' | 'comparison' | 'case' | 'trend'>;
@@ -1049,6 +1060,7 @@ interface EnterpriseProfileLite {
   brand?: { tone?: string; usp?: string; preferredLanguages?: string };
   strategy?: { focusProducts?: string; focusMarkets?: string };
   customers?: { targetProfiles?: string };
+  socialStrategy?: { enabledRoutes?: Array<'oem_odm' | 'wholesale_distribution' | 'consumer_retail'>; routeStrategies?: Record<string, { targetBuyerRoles?: string[]; primaryCta?: string }> };
 }
 
 interface VideoKickoff {
@@ -1405,7 +1417,7 @@ function referenceVoiceProfile(kickoff: VideoKickoff | null) {
 }
 
 interface ProductOption { id: string; label: string; info: string; imageUrls?: string[] }
-interface ModeScriptOutput { id: string; title: string; script: string; mode: 'material' | 'product' | 'clone' }
+interface ModeScriptOutput { id: string; title: string; script: string; mode: 'material' | 'product' | 'clone'; contentTheme?: VideoThemeId; buyerLabel?: string }
 type EnterpriseProductItem = NonNullable<NonNullable<EnterpriseProfileLite['products']>['items']>[number];
 
 const compact = (value?: string) => String(value || '').trim();
@@ -2906,6 +2918,10 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   const [cloneCount] = useState(1);
   const [cloneOutputMode, setCloneOutputMode] = useState<'ideas' | 'languages'>('ideas');
   const [audience, setAudience] = useState('');
+  const [primaryCta, setPrimaryCta] = useState(DEFAULT_VIDEO_CONVERSION_GOAL);
+  const [cooperationRoute, setCooperationRoute] = useState('');
+  const [availableCooperationRoutes, setAvailableCooperationRoutes] = useState<string[]>([]);
+  const [enterpriseRouteStrategies, setEnterpriseRouteStrategies] = useState<Record<string, { targetBuyerRoles?: string[]; primaryCta?: string }>>({});
   const [sellingPoints, setSellingPoints] = useState('');
   const [tone, setTone] = useState('高转化 · 口语化');
   const [videoThemeId, setVideoThemeId] = useState<VideoThemeId>('buyer_pain');
@@ -2934,8 +2950,10 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   const videoThemePayload = {
     id: activeVideoTheme.id,
     title: activeVideoTheme.title,
-    painPoint: themePainPoint.trim() || activeVideoTheme.painPoint,
-    conversionGoal: themeConversionGoal.trim() || DEFAULT_VIDEO_CONVERSION_GOAL,
+    painPoint: audience.trim() || activeVideoTheme.painPoint,
+    conversionGoal: primaryCta.trim() || DEFAULT_VIDEO_CONVERSION_GOAL,
+    primaryCta: primaryCta.trim() || DEFAULT_VIDEO_CONVERSION_GOAL,
+    cooperationRoute,
   };
   const variationDimensionConfig = variationStrategy === 'remix' ? [
     { label: '素材组合规则', hint: '从真实素材库选择不同组合', value: variationPeople, setter: setVariationPeople, suggestions: ['自动优选素材组', '产品实拍优先', '工厂素材优先', '人物口播优先'] },
@@ -3174,7 +3192,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
 
   useEffect(() => {
     let alive = true;
-    fetch('/api/overseas/enterprise/profile')
+    fetch('/api/overseas/enterprise/profile', { headers: authHeader(), credentials: 'same-origin' })
       .then(r => r.json())
       .then((profile: EnterpriseProfileLite) => {
         if (!alive) return;
@@ -3207,9 +3225,16 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
           profile.products?.moq,
         ].filter(Boolean).join('；'));
         setAudience(prev => prev || [
+          profile.socialStrategy?.routeStrategies?.[profile.socialStrategy.enabledRoutes?.[0] || '']?.targetBuyerRoles?.[0],
           profile.customers?.targetProfiles,
           profile.strategy?.focusMarkets || profile.company?.mainMarkets,
         ].filter(Boolean).join('；'));
+        const inheritedRoute = profile.socialStrategy?.enabledRoutes?.[0] || '';
+        const inheritedCta = profile.socialStrategy?.routeStrategies?.[inheritedRoute]?.primaryCta;
+        setCooperationRoute(current => current || inheritedRoute);
+        setAvailableCooperationRoutes(profile.socialStrategy?.enabledRoutes || []);
+        setEnterpriseRouteStrategies(profile.socialStrategy?.routeStrategies || {});
+        setPrimaryCta(current => current === DEFAULT_VIDEO_CONVERSION_GOAL ? inheritedCta || current : current);
         setSellingPoints(prev => prev || [
           profile.brand?.usp,
           profile.products?.highlights,
@@ -4236,7 +4261,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     setScriptLoading(true);
     try {
       const response = await studioApi.script(
-        { materials: matNames, productInfo: activeProductInfo, language: lang, platform, duration, scriptType: type, generationMode: mode, provider, audience, sellingPoints, tone, videoTheme: videoThemePayload }, script,
+        { materials: matNames, productInfo: activeProductInfo, language: lang, platform, duration, scriptType: type, generationMode: mode, cooperationRoute, provider, audience, sellingPoints, tone, videoTheme: videoThemePayload }, script,
       );
       if (response.source && response.source !== 'ai') throw new Error(response.fallbackReason || 'AI脚本未通过检查，未生成兜底稿。');
       const s = response.script || '';
@@ -4344,7 +4369,6 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     setModeActionLoading(true);
     setModeActionStatus('正在快速匹配本地素材…');
     setModeNotice('');
-    setModeScripts([]);
     try {
       const pool = materials.filter(item => item.type !== 'audio' && isClipCompatibleWithRatio(item, ratio));
       if (pool.length === 0) {
@@ -4395,6 +4419,8 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
             duration,
             scriptType: 'storyboard',
             generationMode: 'material',
+            cooperationRoute,
+            voiceoverMode,
             provider,
             audience,
             sellingPoints,
@@ -4410,9 +4436,11 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
           : '后端脚本生成接口未返回结果。');
         outputs.push({
           id: `material-${Date.now()}-${i}`,
-          title: `素材库时间戳脚本 ${i + 1}`,
+          title: `${activeVideoTheme.title} · ${audience.trim() || '默认买家'}（${modeScripts.filter(item => item.contentTheme === activeVideoTheme.id && item.buyerLabel === (audience.trim() || '默认买家')).length + i + 1}）`,
           script: nextScript,
           mode: 'material',
+          contentTheme: activeVideoTheme.id,
+          buyerLabel: audience.trim() || '默认买家',
         });
       }
       const sceneCount = outputs[0] ? parseStoryboardSlots(outputs[0].script, duration).length : finalSelected.length;
@@ -4430,7 +4458,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         setScriptView('timestamp');
         setActiveModeScriptId(outputs[0].id);
       }
-      setModeScripts(outputs);
+      setModeScripts(current => [...current, ...outputs]);
       setProjectTitle(projectTitle === '未命名草稿' ? `素材库智能素材 · ${langZh(enterpriseScriptLanguage) || enterpriseScriptLanguage}口播脚本` : projectTitle);
       setModeNotice(hookOnly
           ? `已仅根据钩子素材生成分镜规划；本步骤未补充其他素材，下一步将从第二个分镜开始匹配。`
@@ -4458,7 +4486,6 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     setModeActionLoading(true);
     setModeActionStatus('正在生成产品脚本，最长等待 30 秒…');
     setModeNotice('');
-    setModeScripts([]);
     try {
       const product = activeProductInfo.trim();
       if (!product) {
@@ -4478,6 +4505,8 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
             duration,
             scriptType: 'storyboard',
             generationMode: 'product',
+            cooperationRoute,
+            voiceoverMode,
             provider: 'qwen',
             audience,
             sellingPoints,
@@ -4494,9 +4523,11 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
           : '后端脚本生成接口未返回结果。');
         outputs.push({
           id: `product-${Date.now()}-${i}`,
-          title: `产品时间戳脚本 ${i + 1}`,
+          title: `${activeVideoTheme.title} · ${audience.trim() || '默认买家'}（${modeScripts.filter(item => item.contentTheme === activeVideoTheme.id && item.buyerLabel === (audience.trim() || '默认买家')).length + i + 1}）`,
           script: nextScript,
           mode: 'product',
+          contentTheme: activeVideoTheme.id,
+          buyerLabel: audience.trim() || '默认买家',
         });
       }
       const firstScript = outputs[0]?.script || script;
@@ -4509,7 +4540,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       setActiveVoiceLang(enterpriseScriptLanguage);
       setScriptView('timestamp');
       if (outputs[0]) setActiveModeScriptId(outputs[0].id);
-      setModeScripts(outputs);
+      setModeScripts(current => [...current, ...outputs]);
       setProjectTitle(projectTitle === '未命名草稿' ? '产品生成 · AI智能素材' : projectTitle);
       setModeNotice('产品脚本已生成。确认脚本后，可继续选择配音和素材；不会自动生成视频。');
       autoGen.current = true;
@@ -4610,10 +4641,12 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
               duration,
               scriptType: 'storyboard',
               generationMode: 'clone',
+              cooperationRoute,
               provider,
               audience,
               sellingPoints,
-              tone: `${tone} · 迁移方式：${migrationMode === 'fidelity' ? '高保真复刻' : migrationMode === 'structure' ? '结构迁移' : '机制借鉴'} · 第 ${variantSeed + 1} 版 · 保留原片 hook、证明顺序、切镜节奏和音画形态 · ${migrationMode === 'fidelity' ? '仅替换竞品事实' : '按所选产品重建场景、动作和证明内容'} · 禁止新增原片不存在的口播、字幕或 CTA`,
+              tone: `${tone} · 迁移方式：${migrationMode === 'fidelity' ? '高保真复刻' : migrationMode === 'structure' ? '结构迁移' : '机制借鉴'} · 第 ${variantSeed + 1} 版 · 保留原片 hook、证明顺序、切镜节奏和音画形态 · ${migrationMode === 'fidelity' ? '仅替换竞品事实' : '按所选产品重建场景、动作和证明内容'} · ${voiceoverMode === 'none' ? '原片无口播时保持台词为无，不新增口播' : '仅可在原片已有口播位重建短台词，不得增加新的口播镜头'} · 禁止新增原片不存在的字幕或 CTA`,
+              voiceoverMode,
               videoTheme: videoThemePayload,
               referenceTitle: cloneReference.video?.title || '',
               referenceAnalysis: cloneReferenceAnalysisText(cloneReference),
@@ -4688,6 +4721,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
           duration,
           scriptType: 'storyboard',
           generationMode: mode,
+          cooperationRoute,
           provider,
           audience,
           sellingPoints,
@@ -5450,6 +5484,17 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   };
   useEffect(() => { void refreshMaterials(); }, []);
   useEffect(() => {
+    const refill = (event: Event) => {
+      const task = (event as CustomEvent<{ sourceProjectId?: string; uploadedMaterialIds?: string[] }>).detail;
+      if (!task?.uploadedMaterialIds?.length || !projectId || task.sourceProjectId !== projectId) return;
+      void refreshMaterials();
+      setSelected(current => [...new Set([...current, ...task.uploadedMaterialIds!])]);
+      setModeNotice('补拍素材已回填到当前草稿选材，原脚本未改写。');
+    };
+    window.addEventListener('lingshu:script-gap-refill', refill);
+    return () => window.removeEventListener('lingshu:script-gap-refill', refill);
+  }, [projectId]);
+  useEffect(() => {
     const missing = materials.filter(item => item.type !== 'audio' && !clipAspectRatio(item) && (item.url || item.poster));
     if (!missing.length) return;
     let cancelled = false;
@@ -6003,7 +6048,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   const collectSpec = () => ({
     mode, contentMode, posterStyle, platform, ratio, duration, lang, provider,
     videoKickoff,
-    productInfo, productSelectMode, selectedProductIds, audience, sellingPoints, tone,
+    productInfo, productSelectMode, selectedProductIds, audience, primaryCta, cooperationRoute, sellingPoints, tone,
     videoThemeId, themePainPoint, themeConversionGoal,
     selected, scriptRecommendedMaterialIds, storyboardAssignments, storyboardSourcePlans, assemblyName, hookMaterialId, materialSnapshots,
     storyboardAssemblies: assembliesForSave, activeAssemblyId, script, scriptType, modeScripts, activeModeScriptId, voice, voiceCandidates,
@@ -6100,6 +6145,8 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     if (s.productSelectMode === 'single' || s.productSelectMode === 'multi') setProductSelectMode('multi');
     if (Array.isArray(s.selectedProductIds)) setSelectedProductIds(s.selectedProductIds as string[]);
     if (typeof s.audience === 'string') setAudience(s.audience);
+    if (typeof s.primaryCta === 'string') setPrimaryCta(s.primaryCta);
+    if (typeof s.cooperationRoute === 'string') setCooperationRoute(s.cooperationRoute);
     if (typeof s.sellingPoints === 'string') setSellingPoints(s.sellingPoints);
     if (typeof s.tone === 'string') setTone(s.tone);
     if (typeof s.videoThemeId === 'string' && VIDEO_THEMES.some(item => item.id === s.videoThemeId)) setVideoThemeId(s.videoThemeId as VideoThemeId);
@@ -6589,7 +6636,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                   </div>
                 </div>
               </div>
-              {contentMode === 'video' && mode === 'clone' && (
+              {false && contentMode === 'video' && mode === 'clone' && (
                 <div className="rounded-2xl border border-emerald-200 bg-emerald-50/60 p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="min-w-0">
@@ -7764,35 +7811,61 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                 </div>
                 <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                   {VIDEO_THEMES.map(theme => {
-                    const unavailable = themeUnavailableReason(theme);
                     const selectedTheme = videoThemeId === theme.id;
                     return (
-                      <button key={theme.id} type="button" disabled={Boolean(unavailable)} title={unavailable || theme.description}
+                      <button key={theme.id} type="button" title={theme.description}
                         onClick={() => {
                           setVideoThemeId(theme.id);
                           setThemePainPoint(theme.painPoint);
                           setThemeConversionGoal(DEFAULT_VIDEO_CONVERSION_GOAL);
                           if (script.trim()) setModeNotice(`视频主题已切换为“${theme.title}”，请重新生成可执行分镜。`);
                         }}
-                        className={`rounded-xl border p-3 text-left transition ${selectedTheme ? 'border-accent bg-accent/5 shadow-sm' : 'border-border bg-white hover:border-accent/40'} disabled:cursor-not-allowed disabled:bg-surface-2 disabled:opacity-50`}>
+                        className={`rounded-xl border p-3 text-left transition ${selectedTheme ? 'border-accent bg-accent/5 shadow-sm' : 'border-border bg-white hover:border-accent/40'}`}>
                         <div className="flex items-center justify-between gap-2">
                           <p className="text-xs font-black text-text-primary">{theme.title}</p>
                           {selectedTheme && <Check size={13} className="text-accent" />}
                         </div>
-                        <p className="mt-1 text-[10px] leading-4 text-text-muted">{unavailable || theme.description}</p>
+                        <p className="mt-1 text-[10px] leading-4 text-text-muted">{theme.description}</p>
                       </button>
                     );
                   })}
                 </div>
+                {themeUnavailableReason(activeVideoTheme) && (
+                  <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 px-3 py-3">
+                    <div>
+                      <p className="text-xs font-black text-amber-900">缺少：{themeUnavailableReason(activeVideoTheme)}</p>
+                      <p className="mt-1 text-[11px] text-amber-700">当前可先生成：产品识别 + 钩子结构</p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button type="button" onClick={() => setStepIdx(STEPS.findIndex(item => item.id === 'material'))} className="rounded-lg border border-amber-300 bg-white px-3 py-2 text-[11px] font-black text-amber-800">选择其他素材</button>
+                      <button type="button" onClick={() => {
+                        createScriptGapTask({ title: themeUnavailableReason(activeVideoTheme), productLabel: activeProductLabel || '当前产品', themeTitle: activeVideoTheme.title, shotBrief: `补拍可用于“${activeVideoTheme.title}”的${themeUnavailableReason(activeVideoTheme)}镜头`, suggestedDurationSec: 3, sourceProjectId: projectId || undefined, sourceStoryboardSlotId: activeStoryboardSlotId || undefined });
+                        setModeNotice('已创建建议补拍任务，可在灵感大屏 → 待拍查看。');
+                      }} className="rounded-lg bg-amber-600 px-3 py-2 text-[11px] font-black text-white">创建建议补拍</button>
+                    </div>
+                  </div>
+                )}
                 <div className="mt-4 grid gap-3 md:grid-cols-2">
+                  {availableCooperationRoutes.length > 1 && <label className="block">
+                    <span className="mb-1.5 block text-[10px] font-black text-text-secondary">本条视频合作路线</span>
+                    <select value={cooperationRoute} onChange={event => {
+                      const route = event.target.value;
+                      const defaults = enterpriseRouteStrategies[route];
+                      setCooperationRoute(route);
+                      if (defaults?.targetBuyerRoles?.[0]) setAudience(defaults.targetBuyerRoles[0]);
+                      if (defaults?.primaryCta) setPrimaryCta(defaults.primaryCta);
+                    }} className="w-full rounded-xl border border-border bg-surface-2 px-3 py-2 text-xs text-text-primary outline-none focus:border-accent">
+                      {availableCooperationRoutes.map(route => <option key={route} value={route}>{route === 'oem_odm' ? 'OEM / ODM' : route === 'wholesale_distribution' ? '现货批发 / 经销' : 'C 端零售'}</option>)}
+                    </select>
+                  </label>}
                   <label className="block">
-                    <span className="mb-1.5 block text-[10px] font-black text-text-secondary">潜在客户的核心痛点</span>
-                    <textarea value={themePainPoint} onChange={event => setThemePainPoint(event.target.value)} rows={3}
+                    <span className="mb-1.5 block text-[10px] font-black text-text-secondary">目标买家</span>
+                    <textarea value={audience} onChange={event => setAudience(event.target.value)} rows={3}
                       className="w-full resize-none rounded-xl border border-border bg-surface-2 px-3 py-2 text-xs leading-5 text-text-primary outline-none focus:border-accent" />
                   </label>
                   <label className="block">
-                    <span className="mb-1.5 block text-[10px] font-black text-text-secondary">本条视频的转化目标</span>
-                    <textarea value={themeConversionGoal} onChange={event => setThemeConversionGoal(event.target.value)} rows={3}
+                    <span className="mb-1.5 block text-[10px] font-black text-text-secondary">主 CTA</span>
+                    <textarea value={primaryCta} onChange={event => setPrimaryCta(event.target.value)} rows={3}
                       className="w-full resize-none rounded-xl border border-border bg-surface-2 px-3 py-2 text-xs leading-5 text-text-primary outline-none focus:border-accent" />
                   </label>
                 </div>
@@ -7805,10 +7878,10 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <p className="text-sm font-black text-text-primary">
-                    {mode === 'material' ? '素材库分镜生成' : mode === 'product' ? '产品分镜生成' : `${migrationRecommendation.label}分镜生成`}
+                    {mode === 'material' ? '素材库分镜生成' : mode === 'product' ? '产品分镜生成' : '爆款裂变分镜生成'}
                   </p>
                   <p className="mt-1 text-xs text-text-muted">
-                    {mode === 'clone' ? `${migrationRecommendation.reason}系统只保留可迁移的钩子、证明顺序与节奏，产品场景和动作以企业资料为准。` : mode === 'product' ? '先生成带预估时间戳的可执行分镜；配音后再按真实音频校准时间轴。' : '按已选素材生成可执行分镜，再选择是否需要口播与配音。'}
+                    {mode === 'clone' ? (referenceAnalysisIncomplete ? '正在分析镜头…' : '镜头分析完成，可生成裂变脚本') : mode === 'product' ? '先生成带预估时间戳的可执行分镜；配音后再按真实音频校准时间轴。' : '按已选素材生成可执行分镜，再选择是否需要口播与配音。'}
                   </p>
                 </div>
 	                <button
@@ -7818,7 +7891,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
 	                    event.stopPropagation();
 	                    void generateTimestampScriptsForMode();
 	                  }}
-                  disabled={modeActionLoading}
+                  disabled={modeActionLoading || (mode === 'clone' && referenceAnalysisIncomplete)}
 	                  title={referenceAnalysisIncomplete ? '对标逐镜分析不完整，点击查看处理提示' : undefined}
 	                  className="inline-flex items-center gap-1.5 rounded-xl bg-accent px-4 py-2.5 text-xs font-bold text-white disabled:opacity-60"
 	                >
@@ -7870,7 +7943,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                       onClick={() => openModeScript(item)}
                       className={`rounded-lg border px-3 py-1.5 text-xs font-bold transition ${activeModeScriptId === item.id ? 'border-accent bg-accent-glow text-accent' : 'border-border bg-white text-text-muted hover:text-text-secondary'}`}
                     >
-                      脚本 {number}{activeModeScriptId === item.id ? ' · 当前' : ''}
+                      {item.title}{activeModeScriptId === item.id ? ' · 当前' : ''}
                     </button>
                   ))}
                 </div>
@@ -8360,6 +8433,11 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                 spellCheck={false}
                 className="min-h-[430px] max-h-[620px] w-full resize-y overflow-y-auto rounded-xl border border-border bg-white p-4 font-sans text-xs leading-6 text-text-secondary outline-none focus:border-accent focus:bg-white"
               />
+              {pendingClaimLocations(activeScriptPreview.content, activeProductInfo).length > 0 && (
+                <div className="mt-3 space-y-2">
+                  {pendingClaimLocations(activeScriptPreview.content, activeProductInfo).map((line, index) => <div key={`${line}-${index}`} className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] leading-5 text-amber-800"><span className="mr-1 font-black">待确认：</span>{line}</div>)}
+                </div>
+              )}
               {!activeScriptPreview.content && (
                 <div className="mt-3 flex min-h-[120px] flex-col items-center justify-center rounded-xl border border-dashed border-border bg-surface-2 px-8 text-center">
                   <FileText size={28} className="text-text-muted opacity-35" />

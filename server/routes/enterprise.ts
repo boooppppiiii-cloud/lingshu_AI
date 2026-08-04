@@ -112,6 +112,11 @@ export interface EnterpriseProfile {
     founded: string;
     description: string;
   };
+  socialStrategy?: {
+    enabledRoutes: Array<'oem_odm' | 'wholesale_distribution' | 'consumer_retail'>;
+    routeStrategies: Partial<Record<'oem_odm' | 'wholesale_distribution' | 'consumer_retail', { targetBuyerRoles: string[]; primaryCta: string }>>;
+    manuallyEditedFields?: string[];
+  };
   products: {
     categories: string;
     priceRange: string;
@@ -590,6 +595,26 @@ function normalizeProfile(profile: EnterpriseProfile): EnterpriseProfile {
     lastSavedAt: text(profile.dataGovernance?.lastSavedAt),
     lastSavedSource: profile.dataGovernance?.lastSavedSource,
   };
+  const socialInput: NonNullable<EnterpriseProfile['socialStrategy']> = profile.socialStrategy ?? { enabledRoutes: [], routeStrategies: {} };
+  const allowedRoutes = ['oem_odm', 'wholesale_distribution', 'consumer_retail'] as const;
+  let enabledRoutes = Array.isArray(socialInput.enabledRoutes)
+    ? socialInput.enabledRoutes.filter((route): route is typeof allowedRoutes[number] => allowedRoutes.includes(route))
+    : [];
+  if (!enabledRoutes.length) {
+    const inferenceSource = `${company.companyType} ${products.categories} ${products.highlights} ${operations.customization}`.toLowerCase();
+    if (/oem|odm|定制|贴牌|工厂|工贸/.test(inferenceSource)) enabledRoutes = ['oem_odm'];
+    else if (/批发|经销|现货|wholesale|distributor/.test(inferenceSource)) enabledRoutes = ['wholesale_distribution'];
+    else if (/零售|消费者|retail|consumer/.test(inferenceSource)) enabledRoutes = ['consumer_retail'];
+  }
+  const defaultBuyers: Record<typeof allowedRoutes[number], string[]> = {
+    oem_odm: ['品牌创始人', '产品经理', '采购'],
+    wholesale_distribution: ['进口商', '经销商', '渠道采购'],
+    consumer_retail: ['终端消费者'],
+  };
+  const routeStrategies = Object.fromEntries(enabledRoutes.map(route => {
+    const source: { targetBuyerRoles: string[]; primaryCta: string } = socialInput.routeStrategies?.[route] ?? { targetBuyerRoles: defaultBuyers[route], primaryCta: '引导跳转WhatsApp以触达' };
+    return [route, { targetBuyerRoles: Array.isArray(source.targetBuyerRoles) && source.targetBuyerRoles.length ? source.targetBuyerRoles.map(text).filter(Boolean) : defaultBuyers[route], primaryCta: text(source.primaryCta) || '引导跳转WhatsApp以触达' }];
+  }));
   return {
     ...profile,
     company,
@@ -602,6 +627,7 @@ function normalizeProfile(profile: EnterpriseProfile): EnterpriseProfile {
     handoffRules,
     salesStyleProfile,
     dataGovernance,
+    socialStrategy: { enabledRoutes, routeStrategies, manuallyEditedFields: Array.isArray(socialInput.manuallyEditedFields) ? socialInput.manuallyEditedFields.map(text).filter(Boolean) : [] },
   };
 }
 
@@ -1062,6 +1088,7 @@ export function buildEnterpriseContext(profile: EnterpriseProfile): string {
   if (profile.company.name) parts.push(`公司名称：${profile.company.name}`);
   if (profile.company.industry) parts.push(`行业类目：${profile.company.industry}`);
   if (profile.company.companyType) parts.push(`企业类型：${profile.company.companyType}`);
+  if (profile.socialStrategy?.enabledRoutes?.length) parts.push(`社媒合作路线：${profile.socialStrategy.enabledRoutes.join('/')}`);
   if (profile.company.mainMarkets) parts.push(`主攻市场：${profile.company.mainMarkets}`);
   if (profile.company.primaryLanguages) parts.push(`主要业务语言：${profile.company.primaryLanguages}`);
   if (profile.company.socialPlatformExperience) parts.push(`海外平台经验：${profile.company.socialPlatformExperience}`);

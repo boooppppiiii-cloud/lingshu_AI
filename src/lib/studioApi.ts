@@ -417,6 +417,8 @@ export const studioApi = {
     duration: number;
     scriptType?: 'voiceover' | 'storyboard';
     generationMode?: 'material' | 'product' | 'clone';
+    cooperationRoute?: string;
+    voiceoverMode?: 'none' | 'ai' | 'upload';
     materialInfos?: Array<{ name: string; type: string; folder: string; duration: number; effectiveDuration?: number; role?: string; targetStart?: number; targetEnd?: number; industry?: string; shotFunction?: string; tags?: string; observations?: string[] }>;
     provider?: 'gemini' | 'qwen';
     audience?: string;

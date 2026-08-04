@@ -111,6 +111,7 @@ function companyIntro(profile: EnterpriseProfile): string {
     profile.company?.name ? `公司名称：${profile.company.name}` : '',
     profile.company?.industry ? `行业类目：${profile.company.industry}` : '',
     profile.company?.companyType ? `企业类型：${profile.company.companyType}` : '',
+    profile.socialStrategy?.enabledRoutes?.length ? `社媒合作路线：${profile.socialStrategy.enabledRoutes.join('/')}` : '',
     profile.company?.mainMarkets ? `主攻市场：${profile.company.mainMarkets}` : '',
     profile.company?.primaryLanguages ? `主要业务语言：${profile.company.primaryLanguages}` : '',
     profile.company?.description ? `公司简介：${profile.company.description}` : '',

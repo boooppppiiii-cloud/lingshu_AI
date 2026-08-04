@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion } from 'motion/react';
-import { Building2, Package, Megaphone, BookOpen, Save, CheckCircle2, Loader2, Compass, Zap, MessageSquare, RotateCcw, Plus, Upload, X, Image, Video, FileText, Copy, FileSpreadsheet, Bell, ChevronLeft, ChevronRight, Globe2, ShieldCheck, type LucideIcon } from 'lucide-react';
+import { Building2, Package, Megaphone, BookOpen, Save, CheckCircle2, Loader2, Compass, Zap, MessageSquare, RotateCcw, Plus, Upload, X, Image, Video, FileText, Copy, FileSpreadsheet, Bell, ChevronDown, ChevronLeft, ChevronRight, Globe2, ShieldCheck, type LucideIcon } from 'lucide-react';
 import { authHeader } from '../lib/auth';
 import { completeDemoStep } from '../lib/demoProgress';
 import {
@@ -119,8 +119,12 @@ interface SalesStyleProfile {
   sample_pairs?: Array<{ trigger: string; final: string; evidence?: string }>;
 }
 
+type CooperationRoute = 'oem_odm' | 'wholesale_distribution' | 'consumer_retail';
+type SocialStrategy = { enabledRoutes: CooperationRoute[]; routeStrategies: Partial<Record<CooperationRoute, { targetBuyerRoles: string[]; primaryCta: string }>>; manuallyEditedFields?: string[] };
+
 interface Profile {
   company: { name: string; industry: string; companyType?: string; mainMarkets: string; primaryLanguages?: string; socialPlatformExperience?: string; founded: string; description: string };
+  socialStrategy?: SocialStrategy;
   products: { categories: string; priceRange: string; moq: string; certifications: string; highlights: string; items?: ProductItem[] };
   brand: { tone: string; style: string; taboos: string; usp: string; preferredLanguages?: string };
   strategy?: { currentGoal?: string; focusProducts?: string; focusMarkets?: string; excludedMarkets?: string; pricingStrategy?: string; minMargin?: string; agentAutonomy?: string; aiAutonomy?: AutonomyLevel };
@@ -139,6 +143,7 @@ interface Profile {
 
 const DEFAULT: Profile = {
   company: { name: '', industry: '', companyType: '', mainMarkets: '', primaryLanguages: '', socialPlatformExperience: '', founded: '', description: '' },
+  socialStrategy: { enabledRoutes: [], routeStrategies: {}, manuallyEditedFields: [] },
   products: {
     categories: '',
     priceRange: '',
@@ -177,25 +182,31 @@ const MARKET_OPTIONS = ['中东', '东南亚', '中亚', '南亚', '东亚', '�
 const LANGUAGE_OPTIONS = ['英语', '阿拉伯语', '西班牙语', '法语', '俄语', '葡萄牙语', '德语', '日语', '韩语', '土耳其语', '印地语', '印尼语', '泰语', '越南语'];
 const CATEGORY_OPTIONS = ['服装', '家居', '饰品', '五金', '美妆个护', '玩具', '消费电子', '汽摩配件', '机械设备', '包装印刷', '食品饮料', '宠物用品'];
 const COMPANY_TYPE_OPTIONS = ['工厂', '工贸一体', '贸易商', '品牌商', '跨境电商'];
+const COOPERATION_ROUTE_OPTIONS: Array<{ value: CooperationRoute; label: string; buyers: string[] }> = [
+  { value: 'oem_odm', label: 'OEM / ODM（品牌定制与开发）', buyers: ['品牌创始人', '产品经理', '采购'] },
+  { value: 'wholesale_distribution', label: '现货批发 / 经销', buyers: ['进口商', '经销商', '渠道采购'] },
+  { value: 'consumer_retail', label: 'C 端零售', buyers: ['终端消费者'] },
+];
 const CERTIFICATION_OPTIONS = ['CE', 'FDA', 'SGS', 'RoHS', 'FCC', 'MSDS', 'ISO', 'BSCI', 'GOTS', 'OEKO-TEX'];
 const BRAND_TONE_OPTIONS = ['专业可靠', '亲切自然', '简洁直接', '高端克制', '热情主动', '务实高效'];
 const COMMUNICATION_STYLE_OPTIONS = ['专业', '轻松', '亲切', '正式'];
 const PAGE_SIZE = 5;
 const SERVICE_INTAKE_AUTO_OPEN_KEY = 'lingshu:enterprise:service-intake-auto-opened';
 
-type KnowledgeView = 'products' | 'bizRules' | 'faq' | 'company' | 'materials' | 'salesStyle' | 'advanced';
+type KnowledgeView = 'products' | 'bizRules' | 'faq' | 'company' | 'socialStrategy' | 'materials' | 'salesStyle' | 'advanced';
 type EnterpriseArea = 'facts' | 'service';
 
 function advisorInitialEnterpriseView(): KnowledgeView {
   try {
     const value = localStorage.getItem('lingshu:enterprise:initial-view') as KnowledgeView | null;
-    if (value && ['products', 'bizRules', 'faq', 'company', 'materials', 'salesStyle', 'advanced'].includes(value)) return value;
+    if (value && ['products', 'bizRules', 'faq', 'company', 'socialStrategy', 'materials', 'salesStyle', 'advanced'].includes(value)) return value;
   } catch { /* ignore */ }
   return 'company';
 }
 
 const FACT_VIEWS: Array<{ id: KnowledgeView; label: string; hint: string }> = [
   { id: 'company', label: '公司与市场', hint: '你是谁' },
+  { id: 'socialStrategy', label: '社媒策略', hint: '脚本默认值' },
   { id: 'products', label: '产品资料', hint: '你卖什么' },
   { id: 'materials', label: '素材库', hint: '内容创作' },
 ];
@@ -209,6 +220,7 @@ const SERVICE_VIEWS: Array<{ id: KnowledgeView; label: string; hint: string }> =
 
 const KNOWLEDGE_VIEW_ICONS: Record<KnowledgeView, LucideIcon> = {
   company: Globe2,
+  socialStrategy: Megaphone,
   products: Package,
   materials: Image,
   bizRules: ShieldCheck,
@@ -271,81 +283,56 @@ function Toggle({ checked, onChange, disabled }: { checked: boolean; onChange: (
   );
 }
 
-function Chip({ active, children, onClick }: { active: boolean; children: React.ReactNode; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-full border px-3 py-1.5 text-xs font-bold transition-colors ${active ? 'border-sky-200 bg-sky-50 text-sky-700' : 'border-border bg-white text-text-secondary hover:bg-surface-2'}`}
-    >
-      {children}
-    </button>
-  );
-}
-
-function OptionSelector({ value, options, onChange, multiple = true, manualPlaceholder = '手动补充' }: {
+function OptionSelector({ value, options, onChange, multiple = true, placeholder = '请选择' }: {
   value: string;
   options: string[];
   onChange: (value: string) => void;
   multiple?: boolean;
-  manualPlaceholder?: string;
+  placeholder?: string;
 }) {
   const tokens = splitTokens(value);
   const customTokens = tokens.filter(item => !options.includes(item));
-  const [manualOpen, setManualOpen] = useState(customTokens.length > 0);
-  const [manualValue, setManualValue] = useState(customTokens.join('、'));
-  const composingRef = useRef(false);
-
-  useEffect(() => {
-    if (composingRef.current) return;
-    const nextCustom = splitTokens(value).filter(item => !options.includes(item)).join('、');
-    setManualValue(nextCustom);
-    if (nextCustom) setManualOpen(true);
-  }, [options, value]);
 
   const choose = (option: string) => {
     if (!multiple) {
       onChange(option);
-      setManualValue('');
-      setManualOpen(false);
       return;
     }
     const next = tokens.includes(option) ? tokens.filter(item => item !== option) : [...tokens, option];
     onChange(joinTokens(next));
   };
 
-  const commitManual = (nextManual: string) => {
-    if (!multiple) {
-      onChange(nextManual.trim());
-      return;
-    }
-    const selectedKnown = tokens.filter(item => options.includes(item));
-    onChange(joinTokens([...selectedKnown, ...splitTokens(nextManual)]));
-  };
+  const removeCustom = (option: string) => onChange(joinTokens(tokens.filter(item => item !== option)));
+
+  if (!multiple) {
+    return (
+      <select className={inputCls} value={value} onChange={event => onChange(event.target.value)}>
+        <option value="">{placeholder}</option>
+        {options.map(option => <option key={option} value={option}>{option}</option>)}
+        {customTokens.map(option => <option key={option} value={option}>{option}（历史自定义）</option>)}
+      </select>
+    );
+  }
 
   return (
-    <div className="space-y-2">
-      <div className="flex flex-wrap gap-2">
-        {options.map(option => <Chip key={option} active={tokens.includes(option)} onClick={() => choose(option)}>{option}</Chip>)}
-        <Chip active={manualOpen} onClick={() => setManualOpen(open => !open)}>手动补充</Chip>
+    <details className="group relative">
+      <summary className={`${inputCls} flex min-h-10 cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden`}>
+        <span className={tokens.length ? 'truncate text-text-primary' : 'text-text-muted'}>{tokens.length ? tokens.join('、') : `${placeholder}（可多选）`}</span>
+        <ChevronDown size={15} className="shrink-0 text-text-muted transition-transform group-open:rotate-180" />
+      </summary>
+      <div className="absolute z-30 mt-1 max-h-64 w-full overflow-y-auto rounded-lg border border-border bg-white p-2 shadow-lg">
+        {options.map(option => (
+          <label key={option} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-xs text-text-primary hover:bg-surface-2">
+            <input type="checkbox" className="h-3.5 w-3.5 accent-emerald-600" checked={tokens.includes(option)} onChange={() => choose(option)} />
+            {option}
+          </label>
+        ))}
+        {customTokens.length > 0 && <div className="mt-1 border-t border-border pt-1">
+          <p className="px-2 py-1 text-[10px] font-bold text-text-muted">历史自定义值</p>
+          {customTokens.map(option => <button type="button" key={option} onClick={() => removeCustom(option)} className="flex w-full items-center justify-between rounded-md px-2 py-2 text-left text-xs text-text-secondary hover:bg-surface-2">{option}<X size={12} /></button>)}
+        </div>}
       </div>
-      {manualOpen && <input
-        className={inputCls}
-        value={manualValue}
-        onCompositionStart={() => { composingRef.current = true; }}
-        onCompositionEnd={event => {
-          composingRef.current = false;
-          setManualValue(event.currentTarget.value);
-          commitManual(event.currentTarget.value);
-        }}
-        onChange={event => {
-          const nextManual = event.target.value;
-          setManualValue(nextManual);
-          if (!composingRef.current) commitManual(nextManual);
-        }}
-        placeholder={manualPlaceholder}
-      />}
-    </div>
+    </details>
   );
 }
 
@@ -561,6 +548,11 @@ export default function EnterprisePage() {
           ...DEFAULT,
           ...data,
           company: { ...DEFAULT.company, ...data.company },
+          socialStrategy: {
+            ...DEFAULT.socialStrategy!,
+            ...data.socialStrategy,
+            routeStrategies: { ...DEFAULT.socialStrategy!.routeStrategies, ...data.socialStrategy?.routeStrategies },
+          },
           products: { ...DEFAULT.products, ...data.products, items: normalizeProductItems({ ...DEFAULT.products, ...data.products }) },
           brand: { ...DEFAULT.brand, ...data.brand },
           strategy: { ...DEFAULT.strategy, ...data.strategy },
@@ -1342,10 +1334,10 @@ export default function EnterprisePage() {
     <KnowledgeCard id="enterprise-language-settings" highlight={languageSettingsHighlight} icon={Globe2} title="目标市场与语言" purpose="决定 AI 说什么语言、按哪个时区建议联系时间" completed={completions.market}>
       <div className="space-y-4">
         <Field label="主要市场">
-          <OptionSelector value={profile.company.mainMarkets} options={MARKET_OPTIONS} onChange={value => set('company')('mainMarkets', value)} manualPlaceholder="补充目标国家或地区，例如：加勒比地区" />
+          <OptionSelector value={profile.company.mainMarkets} options={MARKET_OPTIONS} onChange={value => set('company')('mainMarkets', value)} placeholder="选择目标市场" />
         </Field>
         <Field label="主要语言">
-          <OptionSelector value={profile.company.primaryLanguages ?? ''} options={LANGUAGE_OPTIONS} onChange={value => set('company')('primaryLanguages', value)} manualPlaceholder="补充其他语言" />
+          <OptionSelector value={profile.company.primaryLanguages ?? ''} options={LANGUAGE_OPTIONS} onChange={value => set('company')('primaryLanguages', value)} placeholder="选择主要语言" />
         </Field>
       </div>
     </KnowledgeCard>
@@ -1358,21 +1350,58 @@ export default function EnterprisePage() {
           <input className={inputCls} value={profile.company.name} onChange={e => set('company')('name', e.target.value)} placeholder="示例贸易有限公司" />
         </Field>
         <Field label="行业类目">
-          <OptionSelector value={profile.company.industry} options={CATEGORY_OPTIONS} multiple={false} onChange={value => set('company')('industry', value)} manualPlaceholder="补充行业类目" />
+          <OptionSelector value={profile.company.industry} options={CATEGORY_OPTIONS} onChange={value => set('company')('industry', value)} placeholder="选择行业类目" />
         </Field>
         <Field label="企业类型">
-          <OptionSelector value={profile.company.companyType ?? ''} options={COMPANY_TYPE_OPTIONS} multiple={false} onChange={value => set('company')('companyType', value)} manualPlaceholder="补充企业类型" />
+          <OptionSelector value={profile.company.companyType ?? ''} options={COMPANY_TYPE_OPTIONS} multiple={false} onChange={value => set('company')('companyType', value)} placeholder="选择企业类型" />
         </Field>
         <Field label="成立年份">
           <input className={inputCls} value={profile.company.founded} onChange={e => set('company')('founded', e.target.value)} placeholder="2018" />
         </Field>
         <Field label="海外平台经验">
-          <OptionSelector value={profile.company.socialPlatformExperience ?? ''} options={['做过', '没做过', '正在准备']} multiple={false} onChange={value => set('company')('socialPlatformExperience', value)} />
+          <OptionSelector value={profile.company.socialPlatformExperience ?? ''} options={['做过', '没做过', '正在准备']} multiple={false} onChange={value => set('company')('socialPlatformExperience', value)} placeholder="选择海外平台经验" />
         </Field>
       </div>
       <Field label="公司简介">
         <textarea className={textareaCls} rows={4} value={profile.company.description} onChange={e => set('company')('description', e.target.value)} placeholder="介绍公司背景、主营品类、供应链优势、交付能力和海外服务经验。" />
       </Field>
+      <button type="button" onClick={() => setKnowledgeView('socialStrategy')} className="mt-4 flex w-full items-center justify-between rounded-xl border border-emerald-200 bg-emerald-50/60 px-4 py-3 text-left hover:bg-emerald-50">
+        <span><span className="block text-xs font-black text-emerald-900">社媒脚本策略</span><span className="mt-1 block text-[11px] text-emerald-700">已启用 {profile.socialStrategy?.enabledRoutes.length ?? 0} 条合作路线 · 管理默认买家与主 CTA</span></span>
+        <ChevronRight size={16} className="text-emerald-700" />
+      </button>
+    </KnowledgeCard>
+  );
+
+  const socialStrategySection = (
+    <KnowledgeCard icon={Megaphone} title="社媒策略" purpose="为新建社媒脚本提供路线、默认买家和主 CTA" completed={Boolean(profile.socialStrategy?.enabledRoutes.length)}>
+      <p className="mb-4 text-[11px] leading-5 text-text-muted">系统会参考企业资料预填；你修改过的内容会作为企业默认值保留。多条路线时，创作工作台会为单条视频再次确认路线。</p>
+      <div className="mb-4 rounded-xl border border-border bg-surface-2/60 p-3">
+        <p className="text-xs font-black text-text-primary">承接渠道</p>
+        <p className="mt-1 text-[11px] text-text-muted">状态仅从账号连接或官网配置同步，此处不可手动修改。</p>
+        <div className="mt-2 flex flex-wrap gap-2">{['WhatsApp', '表单', '私信', '官网'].map(channel => <span key={channel} className="rounded-full border border-slate-200 bg-white px-2 py-1 text-[10px] font-bold text-slate-500">{channel} · 未验证</span>)}</div>
+      </div>
+      <div className="space-y-3">
+        {COOPERATION_ROUTE_OPTIONS.map(option => {
+          const selected = profile.socialStrategy?.enabledRoutes.includes(option.value) ?? false;
+          const route = profile.socialStrategy?.routeStrategies[option.value];
+          return <div key={option.value} className={`rounded-lg border p-4 ${selected ? 'border-emerald-200 bg-emerald-50/40' : 'border-border bg-white'}`}>
+            <label className="flex cursor-pointer items-center gap-2 text-sm font-black text-text-primary">
+              <input type="checkbox" className="h-4 w-4 accent-emerald-600" checked={selected} onChange={event => setProfile(prev => {
+                const current = prev.socialStrategy ?? DEFAULT.socialStrategy!;
+                const enabledRoutes = event.target.checked ? [...current.enabledRoutes, option.value] : current.enabledRoutes.filter(value => value !== option.value);
+                const routeStrategies = { ...current.routeStrategies };
+                if (event.target.checked && !routeStrategies[option.value]) routeStrategies[option.value] = { targetBuyerRoles: option.buyers, primaryCta: '引导跳转WhatsApp以触达' };
+                return { ...prev, socialStrategy: { ...current, enabledRoutes, routeStrategies } };
+              })} />
+              {option.label}
+            </label>
+            {selected && <div className="mt-4 grid gap-4 md:grid-cols-2">
+              <Field label="默认买家（顺序即优先级）"><input className={inputCls} value={(route?.targetBuyerRoles ?? option.buyers).join('、')} onChange={event => setProfile(prev => ({ ...prev, socialStrategy: { ...(prev.socialStrategy ?? DEFAULT.socialStrategy!), routeStrategies: { ...(prev.socialStrategy?.routeStrategies ?? {}), [option.value]: { targetBuyerRoles: splitTokens(event.target.value), primaryCta: route?.primaryCta ?? '引导跳转WhatsApp以触达' } } } }))} /></Field>
+              <Field label="默认主 CTA"><input className={inputCls} value={route?.primaryCta ?? '引导跳转WhatsApp以触达'} onChange={event => setProfile(prev => ({ ...prev, socialStrategy: { ...(prev.socialStrategy ?? DEFAULT.socialStrategy!), routeStrategies: { ...(prev.socialStrategy?.routeStrategies ?? {}), [option.value]: { targetBuyerRoles: route?.targetBuyerRoles ?? option.buyers, primaryCta: event.target.value } } } }))} /></Field>
+            </div>}
+          </div>;
+        })}
+      </div>
     </KnowledgeCard>
   );
 
@@ -1494,7 +1523,7 @@ export default function EnterprisePage() {
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-5xl space-y-5 px-6 py-5">
           <div className="overflow-x-auto pb-0.5">
-            <div className={`grid gap-1.5 rounded-2xl border border-border bg-surface-2 p-1 shadow-sm ${enterpriseArea === 'facts' ? 'min-w-[480px] grid-cols-3' : 'min-w-[680px] grid-cols-4'}`}>
+            <div className={`grid gap-1.5 rounded-2xl border border-border bg-surface-2 p-1 shadow-sm ${enterpriseArea === 'facts' ? 'min-w-[640px] grid-cols-4' : 'min-w-[680px] grid-cols-4'}`}>
               {(enterpriseArea === 'facts' ? FACT_VIEWS : SERVICE_VIEWS).map(item => {
                 const active = knowledgeView === item.id;
                 const Icon = KNOWLEDGE_VIEW_ICONS[item.id];
@@ -1529,6 +1558,7 @@ export default function EnterprisePage() {
           </div>
 
           {knowledgeView === 'company' && <>{marketSection}{companySection}</>}
+          {knowledgeView === 'socialStrategy' && socialStrategySection}
 
           {knowledgeView === 'products' && (
           <KnowledgeCard
@@ -1543,10 +1573,10 @@ export default function EnterprisePage() {
             )}
             <div className="mb-4 grid grid-cols-2 gap-4">
               <Field label="主营品类">
-                <OptionSelector value={profile.products.categories} options={CATEGORY_OPTIONS} onChange={value => set('products')('categories', value)} manualPlaceholder="补充其他主营品类" />
+                <OptionSelector value={profile.products.categories} options={CATEGORY_OPTIONS} onChange={value => set('products')('categories', value)} placeholder="选择主营品类" />
               </Field>
               <Field label="认证资质">
-                <OptionSelector value={profile.products.certifications} options={CERTIFICATION_OPTIONS} onChange={value => set('products')('certifications', value)} manualPlaceholder="补充其他认证，用顿号分隔" />
+                <OptionSelector value={profile.products.certifications} options={CERTIFICATION_OPTIONS} onChange={value => set('products')('certifications', value)} placeholder="选择认证资质" />
               </Field>
             </div>
             <Field label="产品核心优势">
@@ -1577,7 +1607,7 @@ export default function EnterprisePage() {
                       <input className={inputCls} value={product.name} onChange={e => updateProduct(index, { name: e.target.value })} placeholder={`产品${index + 1}`} />
                     </Field>
                     <Field label="产品类目">
-                      <OptionSelector value={product.category ?? ''} options={CATEGORY_OPTIONS} multiple={false} onChange={value => updateProduct(index, { category: value })} manualPlaceholder="补充产品类目" />
+                      <OptionSelector value={product.category ?? ''} options={CATEGORY_OPTIONS} multiple={false} onChange={value => updateProduct(index, { category: value })} placeholder="选择产品类目" />
                     </Field>
                     <Field label="参考价或标签价">
                       <input className={inputCls} value={product.priceRange ?? product.retailPrice ?? product.tagPrice ?? ''} onChange={e => updateProduct(index, { priceRange: e.target.value })} placeholder="$5 - $500 USD" />
@@ -1655,6 +1685,11 @@ export default function EnterprisePage() {
               <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3">
                 <p className="text-sm font-black text-amber-900">客户询价 → 标记“等待人工报价”</p>
                 <p className="mt-1 text-xs leading-5 text-amber-800">AI 不回复价格，也不发送“稍后报价”占位消息；系统提醒销售查看数量、规格和包装要求后亲自回复。</p>
+              </div>
+              <div className="rounded-lg border border-border bg-surface-2/50 p-4">
+                <p className="text-sm font-black text-text-primary">业务资料</p>
+                <p className="mt-1 text-[11px] text-text-muted">与“产品资料 → 资质文书”同步显示，同一文件不重复上传。</p>
+                <div className="mt-3 space-y-1">{products.flatMap(product => (product.documents ?? []).map(file => ({ product: product.name || '未命名产品', file }))).map(({ product, file }, index) => <div key={`${file.name}-${index}`} className="flex items-center gap-2 rounded bg-white px-2 py-1.5 text-[11px]"><FileText size={12} className="text-text-muted" /><span className="min-w-0 flex-1 truncate">{file.name}</span><span className="text-text-muted">{product}</span></div>)}</div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <Field label="内部参考价格（不会自动发给客户）">
@@ -1905,8 +1940,8 @@ export default function EnterprisePage() {
                   <div className="grid grid-cols-2 gap-4">
                     <Field label="当前阶段目标"><input className={inputCls} value={profile.strategy?.currentGoal ?? ''} onChange={e => set('strategy')('currentGoal', e.target.value)} /></Field>
                     <Field label="本期重点产品"><input className={inputCls} value={profile.strategy?.focusProducts ?? ''} onChange={e => set('strategy')('focusProducts', e.target.value)} /></Field>
-                    <Field label="重点市场"><OptionSelector value={profile.strategy?.focusMarkets ?? ''} options={MARKET_OPTIONS} onChange={value => set('strategy')('focusMarkets', value)} manualPlaceholder="补充重点国家或地区" /></Field>
-                    <Field label="暂不经营市场"><OptionSelector value={profile.strategy?.excludedMarkets ?? ''} options={MARKET_OPTIONS} onChange={value => set('strategy')('excludedMarkets', value)} manualPlaceholder="补充暂不经营地区" /></Field>
+                    <Field label="重点市场"><OptionSelector value={profile.strategy?.focusMarkets ?? ''} options={MARKET_OPTIONS} onChange={value => set('strategy')('focusMarkets', value)} placeholder="选择重点市场" /></Field>
+                    <Field label="暂不经营市场"><OptionSelector value={profile.strategy?.excludedMarkets ?? ''} options={MARKET_OPTIONS} onChange={value => set('strategy')('excludedMarkets', value)} placeholder="选择暂不经营市场" /></Field>
                     <Field label="最低利润率"><input className={inputCls} value={profile.strategy?.minMargin ?? ''} onChange={e => set('strategy')('minMargin', e.target.value)} /></Field>
                   </div>
                   <Field label="价格策略"><textarea className={textareaCls} rows={2} value={profile.strategy?.pricingStrategy ?? ''} onChange={e => set('strategy')('pricingStrategy', e.target.value)} /></Field>
@@ -1915,9 +1950,9 @@ export default function EnterprisePage() {
                 <div className="rounded-lg border border-border bg-surface-2/40 p-4">
                   <div className="mb-3 flex items-center gap-2"><Megaphone size={14} className="text-text-secondary" /><h3 className="text-sm font-black text-text-primary">品牌调性</h3></div>
                   <div className="grid grid-cols-2 gap-4">
-                    <Field label="品牌调性关键词"><OptionSelector value={profile.brand.tone} options={BRAND_TONE_OPTIONS} onChange={value => set('brand')('tone', value)} manualPlaceholder="补充品牌调性" /></Field>
-                    <Field label="沟通风格"><OptionSelector value={profile.brand.style} options={COMMUNICATION_STYLE_OPTIONS} multiple={false} onChange={value => set('brand')('style', value)} manualPlaceholder="补充沟通风格" /></Field>
-                    <Field label="首选输出语言"><OptionSelector value={profile.brand.preferredLanguages ?? ''} options={LANGUAGE_OPTIONS} onChange={value => set('brand')('preferredLanguages', value)} manualPlaceholder="补充输出语言" /></Field>
+                    <Field label="品牌调性关键词"><OptionSelector value={profile.brand.tone} options={BRAND_TONE_OPTIONS} onChange={value => set('brand')('tone', value)} placeholder="选择品牌调性" /></Field>
+                    <Field label="沟通风格"><OptionSelector value={profile.brand.style} options={COMMUNICATION_STYLE_OPTIONS} multiple={false} onChange={value => set('brand')('style', value)} placeholder="选择沟通风格" /></Field>
+                    <Field label="首选输出语言"><OptionSelector value={profile.brand.preferredLanguages ?? ''} options={LANGUAGE_OPTIONS} onChange={value => set('brand')('preferredLanguages', value)} placeholder="选择首选输出语言" /></Field>
                     <Field label="核心卖点"><input className={inputCls} value={profile.brand.usp} onChange={e => set('brand')('usp', e.target.value)} /></Field>
                   </div>
                   <Field label="禁忌话题"><input className={inputCls} value={profile.brand.taboos} onChange={e => set('brand')('taboos', e.target.value)} /></Field>
