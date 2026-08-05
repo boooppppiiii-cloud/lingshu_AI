@@ -149,6 +149,12 @@ export async function listTenantPlatformApps(): Promise<TenantPlatformAppRecord[
   return result.items;
 }
 
+export async function deleteTenantPlatformApp(tenantId: string, platform: TenantPlatform): Promise<boolean> {
+  const app = await getTenantPlatformApp(tenantId, platform);
+  if (!app) return false;
+  return store.delete(COL, app.id);
+}
+
 export function tenantWebhookUrl(req: Request, tenantId: string, platform: TenantPlatform = 'meta'): string {
   const path = platform === 'wecom' ? 'wecom' : 'meta';
   return `${getPublicOrigin(req)}/api/webhooks/${path}/${encodeURIComponent(tenantId)}`;

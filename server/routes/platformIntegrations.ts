@@ -1,11 +1,13 @@
 import { Router } from 'express';
 import { requireAuth, type AuthLocals } from '../middleware/auth.js';
 import {
+  deleteTenantPlatformApp,
   getTenantPlatformApp,
   publicTenantPlatformApp,
   upsertTenantPlatformApp,
 } from '../lib/tenantPlatformApps.js';
 import { getPublicOrigin } from '../lib/oauthConfig.js';
+import { disconnectTenantPlatformAccounts } from '../lib/socialAccountCleanup.js';
 
 export const platformIntegrationsRouter = Router();
 
@@ -61,6 +63,30 @@ platformIntegrationsRouter.put('/oauth-config', requireAuth, async (req, res) =>
   })));
   res.setHeader('Cache-Control', 'no-store');
   res.json({ ok: true });
+});
+
+platformIntegrationsRouter.delete('/oauth-config/:platform', requireAuth, async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const platform = req.params.platform;
+  if (!['google', 'meta', 'tiktok'].includes(platform)) {
+    res.status(400).json({ error: 'invalid_oauth_platform' });
+    return;
+  }
+
+  try {
+    const typedPlatform = platform as 'google' | 'meta' | 'tiktok';
+    const disconnectedAccounts = await disconnectTenantPlatformAccounts(tenantId, typedPlatform);
+    const existing = await getTenantPlatformApp(tenantId, typedPlatform);
+    const configDeleted = await deleteTenantPlatformApp(tenantId, typedPlatform);
+    if (existing && !configDeleted) throw new Error('tenant_platform_app_delete_failed');
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ ok: true, platform: typedPlatform, disconnectedAccounts, configDeleted });
+  } catch (error) {
+    res.status(500).json({
+      error: 'oauth_config_clear_failed',
+      detail: error instanceof Error ? error.message : 'unknown_error',
+    });
+  }
 });
 
 platformIntegrationsRouter.get('/providers', (_req, res) => {

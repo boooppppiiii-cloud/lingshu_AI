@@ -106,7 +106,7 @@ for (const route of ["'/oauth-config'", "'/delivery/platform-apps'"]) {
   assert.match(adminRoutes, new RegExp(`adminRouter\\.get\\(${route}[\\s\\S]*?requireAdminUser\\(req\\)`), `${route} must require an administrator before returning credentials`);
 }
 assert.match(adminRoutes, /adminRouter\.delete\('\/oauth-config\/:platform'[\s\S]*?requireAdminUser\(req\)/, 'clearing global OAuth credentials must require an administrator');
-assert.match(adminRoutes, /disconnectAdminPlatformAccounts\(admin\.tenantId, platform\)/, 'clearing global OAuth credentials must only disconnect the current administrator tenant');
+assert.match(adminRoutes, /disconnectTenantPlatformAccounts\(admin\.tenantId, platform\)/, 'clearing global OAuth credentials must only disconnect the current administrator tenant');
 const oauthConfig = read('server/lib/oauthConfig.ts');
 assert.match(oauthConfig, /disabledPlatforms\?: OAuthPlatform\[\]/, 'cleared OAuth platforms must persist an explicit disabled state');
 assert.match(oauthConfig, /youtubeDisabled \? '' :[\s\S]*?metaDisabled \? '' :[\s\S]*?tiktokDisabled \? '' :/, 'cleared OAuth platforms must not silently reactivate from environment variables');
@@ -120,8 +120,13 @@ assert.match(socialRoutes, /getTenantAwareTikTokOAuthClient/, 'customer TikTok O
 assert.match(socialRoutes, /getTikTokClient\(tenantId\)/, 'customer TikTok OAuth must pass the authenticated tenant');
 const platformIntegrationRoutes = read('server/routes/platformIntegrations.ts');
 assert.match(platformIntegrationRoutes, /put\('\/oauth-config', requireAuth[\s\S]*?tenantId[\s\S]*?upsertTenantPlatformApp/, 'customer OAuth credentials must be authenticated and tenant scoped');
+assert.match(platformIntegrationRoutes, /delete\('\/oauth-config\/:platform', requireAuth[\s\S]*?tenantId[\s\S]*?deleteTenantPlatformApp\(tenantId, typedPlatform\)/, 'customer OAuth credential deletion must be authenticated and tenant scoped');
 assert.match(platformIntegrationRoutes, /publicTenantPlatformApp/, 'customer OAuth config responses must use the secret-safe public serializer');
 assert.match(platformIntegrationRoutes, /waConfigId:\s*text\(req\.body\?\.metaWhatsAppConfigId\)/, 'customer OAuth config must save the tenant-owned WhatsApp Embedded Signup configuration');
+const socialAccountCleanup = read('server/lib/socialAccountCleanup.ts');
+assert.match(socialAccountCleanup, /where: \{ tenantId \}/, 'platform account cleanup must only query the authenticated tenant');
+const userSocialCredentials = read('src/components/UserSocialAppCredentials.tsx');
+assert.match(userSocialCredentials, /清除配置[\s\S]*?role="dialog"[\s\S]*?确认清除/, 'integration-center credential cards must expose a confirmed clear action');
 const socialCredentialsUi = read('src/components/UserSocialAppCredentials.tsx');
 assert.match(socialCredentialsUi, /WhatsAppConnectionPanel[\s\S]*?startWhatsAppEmbeddedSignup/, 'customer integrations must expose WhatsApp Embedded Signup');
 const assistLinks = read('server/routes/assistLinks.ts');

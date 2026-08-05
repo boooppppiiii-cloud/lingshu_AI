@@ -54,6 +54,7 @@ import {
   promoteLocalTrialTenant,
 } from '../lib/localTenants.js';
 import { decryptRegistrationPassword } from '../lib/registrationCredentials.js';
+import { disconnectTenantPlatformAccounts } from '../lib/socialAccountCleanup.js';
 
 export const adminRouter = Router();
 
@@ -1053,28 +1054,6 @@ adminRouter.put('/oauth-config', async (req, res) => {
   res.json(publicOAuthConfig(req, admin.email));
 });
 
-async function disconnectAdminPlatformAccounts(tenantId: string, platform: OAuthPlatform): Promise<number> {
-  const collection = platform === 'youtube' ? 'youtube_accounts' : 'social_accounts';
-  const result = await store.list<Record<string, unknown>>(collection, {
-    where: { tenantId },
-    perPage: 200,
-  });
-  const matching = platform === 'meta'
-    ? result.items.filter(item => item.platform === 'instagram' || item.platform === 'facebook')
-    : platform === 'tiktok'
-      ? result.items.filter(item => item.platform === 'tiktok')
-      : result.items;
-  let disconnectedAccounts = 0;
-  for (const account of matching) {
-    const id = bodyText(account.id);
-    if (!id) continue;
-    const deleted = await store.delete(collection, id);
-    if (!deleted) throw new Error(`account_disconnect_failed:${collection}:${id}`);
-    disconnectedAccounts += 1;
-  }
-  return disconnectedAccounts;
-}
-
 adminRouter.delete('/oauth-config/:platform', async (req, res) => {
   const admin = await requireAdminUser(req);
   if (!admin) {
@@ -1090,7 +1069,7 @@ adminRouter.delete('/oauth-config/:platform', async (req, res) => {
   }
 
   try {
-    const disconnectedAccounts = await disconnectAdminPlatformAccounts(admin.tenantId, platform);
+    const disconnectedAccounts = await disconnectTenantPlatformAccounts(admin.tenantId, platform);
     const stored = readOAuthConfig();
     const disabledPlatforms = new Set<OAuthPlatform>(stored.disabledPlatforms ?? []);
     disabledPlatforms.add(platform);
