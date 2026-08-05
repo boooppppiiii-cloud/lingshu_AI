@@ -49,7 +49,7 @@ const diagnosisUi = read('src/components/BusinessDiagnosisModal.tsx');
 assert.match(diagnosisUi, /onClick=\{onClose\}[\s\S]*?关闭接待设置/, 'the reception guide must be closable after it is reopened from the sidebar');
 assert.match(diagnosisUi, /ui-field ui-select[\s\S]*?请选择主营品类[\s\S]*?请选择，可连续添加[\s\S]*?请选择海外平台经验/, 'guided enterprise choices must use consistent dropdown controls');
 const enterpriseUi = read('src/components/EnterprisePage.tsx');
-assert.match(enterpriseUi, /function OptionSelector[\s\S]*?<select[\s\S]*?请选择，可连续添加/, 'enterprise selectable fields must use dropdown controls');
+assert.match(enterpriseUi, /function OptionSelector[\s\S]*?<select[\s\S]*?<details[\s\S]*?type="checkbox"/, 'enterprise selectable fields must use single-select or multi-select dropdown controls');
 assert.doesNotMatch(enterpriseUi.slice(enterpriseUi.indexOf('function OptionSelector'), enterpriseUi.indexOf('function PaginationControls')), /<Chip/, 'enterprise option selectors must not fall back to chip-only selection');
 const globalStyles = read('src/index.css');
 for (const styleClass of ['.ui-field', '.ui-select', '.ui-chart-panel', '.ui-floating-panel']) {
@@ -105,6 +105,15 @@ assert.match(adminRoutes, /kind === 'tiktok'[\s\S]*?tiktok_test_passed/, 'admin 
 for (const route of ["'/oauth-config'", "'/delivery/platform-apps'"]) {
   assert.match(adminRoutes, new RegExp(`adminRouter\\.get\\(${route}[\\s\\S]*?requireAdminUser\\(req\\)`), `${route} must require an administrator before returning credentials`);
 }
+assert.match(adminRoutes, /adminRouter\.delete\('\/oauth-config\/:platform'[\s\S]*?requireAdminUser\(req\)/, 'clearing global OAuth credentials must require an administrator');
+assert.match(adminRoutes, /disconnectAdminPlatformAccounts\(admin\.tenantId, platform\)/, 'clearing global OAuth credentials must only disconnect the current administrator tenant');
+const oauthConfig = read('server/lib/oauthConfig.ts');
+assert.match(oauthConfig, /disabledPlatforms\?: OAuthPlatform\[\]/, 'cleared OAuth platforms must persist an explicit disabled state');
+assert.match(oauthConfig, /youtubeDisabled \? '' :[\s\S]*?metaDisabled \? '' :[\s\S]*?tiktokDisabled \? '' :/, 'cleared OAuth platforms must not silently reactivate from environment variables');
+const adminSocialSetup = read('src/components/AdminSocialAccountSetup.tsx');
+assert.match(adminSocialSetup, /ClearConfigButton[\s\S]*?清除配置/, 'administrator platform cards must expose a clear action');
+assert.match(adminSocialSetup, /role="dialog"[\s\S]*?确认清除/, 'clearing a platform must require an explicit second confirmation');
+assert.match(adminSocialSetup, /disconnectedAccounts[\s\S]*?配置已清除/, 'the administrator must receive a clear success result after platform cleanup');
 
 const socialRoutes = read('server/routes/social.ts');
 assert.match(socialRoutes, /getTenantAwareTikTokOAuthClient/, 'customer TikTok OAuth must resolve tenant-aware credentials');

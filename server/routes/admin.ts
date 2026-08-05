@@ -12,6 +12,7 @@ import {
   getPublicOrigin,
   readOAuthConfig,
   writeOAuthConfig,
+  type OAuthPlatform,
   type StoredOAuthConfig,
 } from '../lib/oauthConfig.js';
 import {
@@ -597,6 +598,7 @@ function publicOAuthConfig(req: Parameters<typeof oauthCallbackUrls>[0], adminEm
   return {
     admin: adminEmail,
     updatedAt: stored.updatedAt ?? null,
+    disabledPlatforms: stored.disabledPlatforms ?? [],
     callbacks: oauthCallbackUrls(req),
     values: {
       youtubeOAuthClientId: effective.youtubeOAuthClientId,
@@ -1026,6 +1028,8 @@ adminRouter.put('/oauth-config', async (req, res) => {
   res.setHeader('Cache-Control', 'no-store');
 
   const body = req.body ?? {};
+  const stored = readOAuthConfig();
+  const disabledPlatforms = new Set<OAuthPlatform>(stored.disabledPlatforms ?? []);
   const patch: Partial<StoredOAuthConfig> = {
     youtubeOAuthClientId: bodyText(body.youtubeOAuthClientId),
     metaSocialAppId: bodyText(body.metaSocialAppId),
@@ -1040,8 +1044,82 @@ adminRouter.put('/oauth-config', async (req, res) => {
   if (metaSecret) patch.metaSocialAppSecret = metaSecret;
   if (tiktokSecret) patch.tiktokClientSecret = tiktokSecret;
 
+  if (patch.youtubeOAuthClientId && youtubeSecret) disabledPlatforms.delete('youtube');
+  if (patch.metaSocialAppId && metaSecret) disabledPlatforms.delete('meta');
+  if (patch.tiktokClientKey && tiktokSecret) disabledPlatforms.delete('tiktok');
+  patch.disabledPlatforms = Array.from(disabledPlatforms);
+
   writeOAuthConfig(patch);
   res.json(publicOAuthConfig(req, admin.email));
+});
+
+async function disconnectAdminPlatformAccounts(tenantId: string, platform: OAuthPlatform): Promise<number> {
+  const collection = platform === 'youtube' ? 'youtube_accounts' : 'social_accounts';
+  const result = await store.list<Record<string, unknown>>(collection, {
+    where: { tenantId },
+    perPage: 200,
+  });
+  const matching = platform === 'meta'
+    ? result.items.filter(item => item.platform === 'instagram' || item.platform === 'facebook')
+    : platform === 'tiktok'
+      ? result.items.filter(item => item.platform === 'tiktok')
+      : result.items;
+  let disconnectedAccounts = 0;
+  for (const account of matching) {
+    const id = bodyText(account.id);
+    if (!id) continue;
+    const deleted = await store.delete(collection, id);
+    if (!deleted) throw new Error(`account_disconnect_failed:${collection}:${id}`);
+    disconnectedAccounts += 1;
+  }
+  return disconnectedAccounts;
+}
+
+adminRouter.delete('/oauth-config/:platform', async (req, res) => {
+  const admin = await requireAdminUser(req);
+  if (!admin) {
+    res.status(403).json({ error: 'admin_required' });
+    return;
+  }
+  res.setHeader('Cache-Control', 'no-store');
+
+  const platform = bodyText(req.params.platform) as OAuthPlatform;
+  if (!['youtube', 'meta', 'tiktok'].includes(platform)) {
+    res.status(400).json({ error: 'invalid_oauth_platform' });
+    return;
+  }
+
+  try {
+    const disconnectedAccounts = await disconnectAdminPlatformAccounts(admin.tenantId, platform);
+    const stored = readOAuthConfig();
+    const disabledPlatforms = new Set<OAuthPlatform>(stored.disabledPlatforms ?? []);
+    disabledPlatforms.add(platform);
+    const patch: Partial<StoredOAuthConfig> = {
+      disabledPlatforms: Array.from(disabledPlatforms),
+    };
+    if (platform === 'youtube') {
+      patch.youtubeOAuthClientId = '';
+      patch.youtubeOAuthClientSecret = '';
+    } else if (platform === 'meta') {
+      patch.metaSocialAppId = '';
+      patch.metaSocialAppSecret = '';
+    } else {
+      patch.tiktokClientKey = '';
+      patch.tiktokClientSecret = '';
+    }
+    writeOAuthConfig(patch);
+    res.json({
+      ok: true,
+      platform,
+      disconnectedAccounts,
+      config: publicOAuthConfig(req, admin.email),
+    });
+  } catch (error) {
+    res.status(500).json({
+      error: 'oauth_config_clear_failed',
+      detail: error instanceof Error ? error.message : 'unknown_error',
+    });
+  }
 });
 
 adminRouter.get('/delivery/platform-apps', async (req, res) => {

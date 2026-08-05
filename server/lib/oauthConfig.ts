@@ -6,6 +6,8 @@ import type { Request } from 'express';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const CONFIG_FILE = path.join(__dirname, '../../data/oauth-config.json');
 
+export type OAuthPlatform = 'youtube' | 'meta' | 'tiktok';
+
 export interface StoredOAuthConfig {
   youtubeOAuthClientId?: string;
   youtubeOAuthClientSecret?: string;
@@ -13,6 +15,7 @@ export interface StoredOAuthConfig {
   metaSocialAppSecret?: string;
   tiktokClientKey?: string;
   tiktokClientSecret?: string;
+  disabledPlatforms?: OAuthPlatform[];
   advancedManualConnectEnabled?: boolean;
   updatedAt?: string;
 }
@@ -33,6 +36,10 @@ function text(value: unknown): string {
 
 function envText(key: string): string {
   return text(process.env[key]);
+}
+
+function platformDisabled(config: StoredOAuthConfig, platform: OAuthPlatform): boolean {
+  return Array.isArray(config.disabledPlatforms) && config.disabledPlatforms.includes(platform);
 }
 
 function readJson<T>(file: string, fallback: T): T {
@@ -66,13 +73,16 @@ export function writeOAuthConfig(patch: Partial<StoredOAuthConfig>): StoredOAuth
 
 export function effectiveOAuthConfig(): EffectiveOAuthConfig {
   const stored = readOAuthConfig();
+  const youtubeDisabled = platformDisabled(stored, 'youtube');
+  const metaDisabled = platformDisabled(stored, 'meta');
+  const tiktokDisabled = platformDisabled(stored, 'tiktok');
   return {
-    youtubeOAuthClientId: text(stored.youtubeOAuthClientId) || envText('YOUTUBE_OAUTH_CLIENT_ID'),
-    youtubeOAuthClientSecret: text(stored.youtubeOAuthClientSecret) || envText('YOUTUBE_OAUTH_CLIENT_SECRET'),
-    metaSocialAppId: text(stored.metaSocialAppId) || envText('META_SOCIAL_APP_ID') || envText('WHATSAPP_EMBEDDED_SIGNUP_APP_ID'),
-    metaSocialAppSecret: text(stored.metaSocialAppSecret) || envText('META_SOCIAL_APP_SECRET') || envText('WHATSAPP_EMBEDDED_SIGNUP_APP_SECRET'),
-    tiktokClientKey: text(stored.tiktokClientKey) || envText('TIKTOK_CLIENT_KEY'),
-    tiktokClientSecret: text(stored.tiktokClientSecret) || envText('TIKTOK_CLIENT_SECRET'),
+    youtubeOAuthClientId: youtubeDisabled ? '' : text(stored.youtubeOAuthClientId) || envText('YOUTUBE_OAUTH_CLIENT_ID'),
+    youtubeOAuthClientSecret: youtubeDisabled ? '' : text(stored.youtubeOAuthClientSecret) || envText('YOUTUBE_OAUTH_CLIENT_SECRET'),
+    metaSocialAppId: metaDisabled ? '' : text(stored.metaSocialAppId) || envText('META_SOCIAL_APP_ID') || envText('WHATSAPP_EMBEDDED_SIGNUP_APP_ID'),
+    metaSocialAppSecret: metaDisabled ? '' : text(stored.metaSocialAppSecret) || envText('META_SOCIAL_APP_SECRET') || envText('WHATSAPP_EMBEDDED_SIGNUP_APP_SECRET'),
+    tiktokClientKey: tiktokDisabled ? '' : text(stored.tiktokClientKey) || envText('TIKTOK_CLIENT_KEY'),
+    tiktokClientSecret: tiktokDisabled ? '' : text(stored.tiktokClientSecret) || envText('TIKTOK_CLIENT_SECRET'),
     advancedManualConnectEnabled: stored.advancedManualConnectEnabled ?? envText('ADVANCED_MANUAL_CONNECT_ENABLED') === 'true',
   };
 }
