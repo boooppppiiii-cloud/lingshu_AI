@@ -50,6 +50,7 @@
     "test:knowledge-policy": "tsx server/knowledge/retrieve.test.ts",
     "test:strategy-policy": "tsx server/knowledge/strategyRetrieve.test.ts",
     "test:script-strategy": "tsx server/strategy/scriptBrief.test.ts",
+    "test:studio-script": "tsx server/routes/studioScriptNormalization.test.ts",
     "test:tenant-isolation": "tsx server/security/tenantIsolation.test.ts",
     "test:scheduled-publishing": "tsx server/publishing/scheduledPublisher.test.ts",
     "test:pb-admin": "tsx server/storage/pb.test.ts",

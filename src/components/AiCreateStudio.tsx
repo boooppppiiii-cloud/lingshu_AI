@@ -4482,9 +4482,9 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     if (productScriptAbortRef.current) return;
     const controller = new AbortController();
     productScriptAbortRef.current = controller;
-    const hardTimeout = window.setTimeout(() => controller.abort(), 30_000);
+    const hardTimeout = window.setTimeout(() => controller.abort(), 120_000);
     setModeActionLoading(true);
-    setModeActionStatus('正在生成产品脚本，最长等待 30 秒…');
+    setModeActionStatus('正在生成产品脚本，最长等待 120 秒…');
     setModeNotice('');
     try {
       const product = activeProductInfo.trim();

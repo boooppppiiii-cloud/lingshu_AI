@@ -687,7 +687,7 @@ function hasUnnaturalVoiceover(script: string): boolean {
     });
 }
 
-function storyboardSpeechIssues(script: string): string[] {
+export function storyboardSpeechIssues(script: string): string[] {
   const issues: string[] = [];
   const blocks = String(script || '').split(/(?=\[\s*\d+(?:\.\d+)?\s*(?:s|秒)?\s*[-–]\s*\d+(?:\.\d+)?\s*(?:s|秒)?\s*\])/i);
   for (const block of blocks) {
@@ -711,25 +711,37 @@ function storyboardSpeechIssues(script: string): string[] {
   return issues;
 }
 
-function fitSpeechToShot(value: string, duration: number): string {
+export function fitSpeechToShot(value: string, duration: number): string {
   const text = String(value || '').replace(/[“”"]/g, '').replace(/\s+/g, ' ').trim();
   if (!text || text === '无') return '无';
   const hasCjk = /[\u3400-\u9fff]/.test(text);
   if (!hasCjk) {
     const maxWords = Math.max(1, Math.floor(Math.max(0.5, duration - 0.6) * 2.3));
-    return text.split(/\s+/).slice(0, maxWords).join(' ');
+    const words = text.split(/\s+/);
+    if (words.length <= maxWords) return text;
+    const complete = words.slice(0, maxWords).join(' ').match(/^(.+[.!?])(?:\s|$)/)?.[1]?.trim();
+    return complete || text;
   }
   const maxChars = Math.max(2, Math.floor(Math.max(0.5, duration - 0.6) * 4));
   const chars = Array.from(text);
   if (chars.filter(char => !/[\s，。！？、；：,.!?;:“”"'（）()]/.test(char)).length <= maxChars) return text;
   let count = 0;
   let result = '';
+  let lastComplete = '';
   for (const char of chars) {
     if (!/[\s，。！？、；：,.!?;:“”"'（）()]/.test(char)) count += 1;
     if (count > maxChars) break;
     result += char;
+    if (/[。！？!?]/.test(char)) lastComplete = result.trim();
   }
-  return result.replace(/[，、；：,.!?！？。]+$/g, '').trim() || '无';
+  return lastComplete || text;
+}
+
+export function ctaSemanticallySatisfied(candidate: string, primaryCta: string): boolean {
+  return !primaryCta
+    || candidate.includes(primaryCta)
+    || (/whatsapp/i.test(primaryCta)
+      && /whatsapp|\bwa\b|\bdm\b|direct message|message (?:us|me)|私信|联系/i.test(candidate));
 }
 
 /** Keep an otherwise valid strategy script renderable even after a rewrite pass. */
@@ -740,9 +752,9 @@ function fitStoryboardSpeech(script: string): string {
   );
 }
 
-function syncStoryboardSubtitles(script: string): string {
-  return String(script || '').split(/(?=^\[[^\]\r\n]+\][ \t]*$)/m).map(block => {
-    if (!/^\[[^\]]+\]/.test(block.trim())) return block;
+export function syncStoryboardSubtitles(script: string): string {
+  return String(script || '').split(/(?=^[ \t]*\[\s*\d+(?:\.\d+)?\s*(?:s|秒)?\s*[-–—]\s*\d+(?:\.\d+)?\s*(?:s|秒)?\s*\][ \t]*$)/m).map(block => {
+    if (!/^\s*\[\s*\d+(?:\.\d+)?\s*(?:s|秒)?\s*[-–—]\s*\d+(?:\.\d+)?\s*(?:s|秒)?\s*\]/.test(block)) return block;
     const voice = block.match(/^台词[：:]\s*(.+)$/m)?.[1]?.trim() || '';
     if (!voice || /^(无|none)$/i.test(voice)) return block;
     if (/^字幕[：:]/m.test(block)) return block.replace(/^字幕[：:].*$/m, `字幕：${voice}`);
@@ -750,7 +762,7 @@ function syncStoryboardSubtitles(script: string): string {
   }).join('');
 }
 
-function normalizeStoryboardFieldLines(script: string): string {
+export function normalizeStoryboardFieldLines(script: string): string {
   const labels = '素材|环境|景别|运镜|构图|镜头功能|画面|配乐|台词|字幕';
   return String(script || '')
     .replace(/(\[[^\]\r\n]+\])[ \t]+(?=(?:素材|环境|景别|运镜|构图|镜头功能|画面|配乐|台词|字幕)[：:])/g, '$1\n')
@@ -760,9 +772,9 @@ function normalizeStoryboardFieldLines(script: string): string {
 
 function duplicateStoryboardFieldIssues(script: string): string[] {
   const required = ['素材', '环境', '景别', '运镜', '构图', '镜头功能', '画面', '配乐', '台词', '字幕'];
-  return String(script || '').split(/(?=^\[[^\]\r\n]+\][ \t]*$)/m).flatMap(block => {
-    if (!/^\[[^\]]+\]/.test(block.trim())) return [];
-    const range = block.match(/^\[[^\]]+\]/)?.[0] || '分镜';
+  return String(script || '').split(/(?=^[ \t]*\[\s*\d+(?:\.\d+)?\s*(?:s|秒)?\s*[-–—]\s*\d+(?:\.\d+)?\s*(?:s|秒)?\s*\][ \t]*$)/m).flatMap(block => {
+    if (!/^\s*\[\s*\d+(?:\.\d+)?\s*(?:s|秒)?\s*[-–—]\s*\d+(?:\.\d+)?/.test(block)) return [];
+    const range = block.match(/^\s*(\[[^\]]+\])/)?.[1] || '分镜';
     return required.flatMap(field => {
       const count = (block.match(new RegExp(`^${field}[：:]`, 'gm')) || []).length;
       return count > 1 ? [`${range} 重复输出“${field}”字段`] : [];
@@ -771,9 +783,9 @@ function duplicateStoryboardFieldIssues(script: string): string[] {
 }
 
 function subtitleVoiceMismatchIssues(script: string): string[] {
-  return String(script || '').split(/(?=^\[[^\]\r\n]+\][ \t]*$)/m).flatMap(block => {
-    if (!/^\[[^\]]+\]/.test(block.trim())) return [];
-    const range = block.match(/^\[[^\]]+\]/)?.[0] || '分镜';
+  return String(script || '').split(/(?=^[ \t]*\[\s*\d+(?:\.\d+)?\s*(?:s|秒)?\s*[-–—]\s*\d+(?:\.\d+)?\s*(?:s|秒)?\s*\][ \t]*$)/m).flatMap(block => {
+    if (!/^\s*\[\s*\d+(?:\.\d+)?\s*(?:s|秒)?\s*[-–—]\s*\d+(?:\.\d+)?/.test(block)) return [];
+    const range = block.match(/^\s*(\[[^\]]+\])/)?.[1] || '分镜';
     const voice = block.match(/^台词[：:]\s*(.+)$/m)?.[1]?.trim() || '';
     const caption = block.match(/^字幕[：:]\s*(.+)$/m)?.[1]?.trim() || '';
     if (!voice || /^(无|none)$/i.test(voice)) return [];
@@ -1959,9 +1971,7 @@ Requirements:
       if (/(?:马上|立即|免费|可)?寄样|寄送样品|免费样品/i.test(candidate)) {
         issues.push('资料未支持的寄样或样品政策承诺');
       }
-      const ctaSatisfied = !primaryCta
-        || candidate.includes(primaryCta)
-        || (/whatsapp/i.test(primaryCta) && /whatsapp|\bwa\b|\bdm\b|direct message|message (?:us|me)|私信|联系/i.test(candidate));
+      const ctaSatisfied = ctaSemanticallySatisfied(candidate, primaryCta);
       if (!ctaSatisfied) {
         issues.push(`未使用本条唯一主 CTA：${primaryCta}`);
       }
@@ -2090,7 +2100,11 @@ ${script}`, { backend: providerOpt, systemPrompt: await enterpriseCtx() || undef
     }
     if (!isStructuredLockedProduct) script = normalizeGeneratedScript(script);
     if (generationMode === 'clone') {
-      script = syncStoryboardSubtitles(fitStoryboardSpeech(script));
+      // Keep model-authored sentences intact. Mechanical character truncation
+      // produces fragments that can pass duration checks while being unusable.
+      // The speech validator below must reject an overlong clone and ask for a
+      // semantic rewrite instead.
+      script = syncStoryboardSubtitles(script);
       // Competitor identifiers are never valid output facts. Remove the small
       // set extracted from the reference after the model repair passes, while
       // keeping the selected product name enforced separately below.

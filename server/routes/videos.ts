@@ -2072,6 +2072,49 @@ videosRouter.post('/:id/refinement-sync', async (req, res) => {
   res.json({ ok: true, id: req.params.id, status: 'ready', syncedAt });
 });
 
+videosRouter.post('/:id/analysis-pause', async (req, res) => {
+  const { tenantId, userId } = res.locals as AuthLocals;
+  const record = await store.getById<Record<string, unknown>>(COL, req.params.id);
+  if (!record || (record.tenantId !== tenantId && !await requireAdminUser(req))) {
+    res.status(404).json({ error: 'Video record not found' });
+    return;
+  }
+  const previous = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
+  const geminiStatus = String(previous.geminiStatus || '');
+  const downloadStatus = String(previous.downloadStatus || '');
+  const videoFetchStatus = String(previous.videoFetchStatus || '');
+  const activeStatuses = new Set([
+    'queued', 'analyzing', 'waiting_for_video', 'downloading', 'download_retrying',
+    'analysis_retryable', 'ops_queued', 'ops_processing',
+  ]);
+  const isRunning = Boolean(previous.requestedAnalysisMode)
+    || activeStatuses.has(geminiStatus)
+    || activeStatuses.has(downloadStatus)
+    || activeStatuses.has(videoFetchStatus);
+  if (!isRunning) {
+    res.status(409).json({ error: '当前视频不在分析中' });
+    return;
+  }
+  const pausedAt = new Date().toISOString();
+  // Rotating the run id makes every in-flight completion stale. Expensive
+  // provider calls may finish remotely, but their result can no longer
+  // overwrite this durable paused state.
+  await store.update(COL, req.params.id, {
+    aiAnalysis: JSON.stringify({
+      ...previous,
+      analysisRunId: randomUUID(),
+      requestedAnalysisMode: undefined,
+      geminiStatus: 'paused',
+      downloadStatus: activeStatuses.has(downloadStatus) ? 'paused' : previous.downloadStatus,
+      videoFetchStatus: activeStatuses.has(videoFetchStatus) ? 'paused' : previous.videoFetchStatus,
+      analysisPausedAt: pausedAt,
+      analysisPausedBy: userId,
+      analysisError: undefined,
+    }),
+  });
+  res.json({ ok: true, id: req.params.id, status: 'paused', pausedAt });
+});
+
 // ─── PATCH /videos/:id/reanalyze ─────────────────────────────────────────────
 videosRouter.patch('/:id/reanalyze', async (req, res) => {
   const { tenantId, userId } = res.locals as AuthLocals;
@@ -2110,6 +2153,8 @@ videosRouter.patch('/:id/reanalyze', async (req, res) => {
         manualRequiredReason: undefined,
         analysisError: undefined,
         downloadError: undefined,
+        analysisPausedAt: undefined,
+        analysisPausedBy: undefined,
         exactPromotedFromExisting: true,
         exactAnalyzedAt: new Date().toISOString(),
       }),
@@ -2123,7 +2168,7 @@ videosRouter.patch('/:id/reanalyze', async (req, res) => {
       res.status(400).json({ error: 'No video file or public sourceUrl attached to this record' });
       return;
     }
-    const queuedRecord = { ...record, aiAnalysis: JSON.stringify({ ...previous, requestedAnalysisMode: analysisMode, analysisRunId, analysisRunMode: analysisMode }) };
+    const queuedRecord = { ...record, aiAnalysis: JSON.stringify({ ...previous, requestedAnalysisMode: analysisMode, analysisRunId, analysisRunMode: analysisMode, analysisPausedAt: undefined, analysisPausedBy: undefined, analysisError: undefined }) };
     await store.update(COL, req.params.id, { aiAnalysis: queuedRecord.aiAnalysis });
     await queueAnalyzeSource(queuedRecord);
     res.json({ status: 'pending' });
@@ -2132,7 +2177,7 @@ videosRouter.patch('/:id/reanalyze', async (req, res) => {
 
   await store.update(COL, req.params.id, {
     status: 'pending',
-    aiAnalysis: JSON.stringify({ ...previous, requestedAnalysisMode: analysisMode, analysisRunId, analysisRunMode: analysisMode, analysisError: undefined, reanalyzeQueuedAt: new Date().toISOString() }),
+    aiAnalysis: JSON.stringify({ ...previous, requestedAnalysisMode: analysisMode, analysisRunId, analysisRunMode: analysisMode, analysisError: undefined, analysisPausedAt: undefined, analysisPausedBy: undefined, reanalyzeQueuedAt: new Date().toISOString() }),
   });
   const localPath = path.join(MEDIA_DIR, fileId);
   if (fs.existsSync(localPath)) {
@@ -2779,6 +2824,7 @@ function shouldQueueVideoAnalysis(record: Record<string, unknown>): boolean {
   const sourceUrl = String(record.sourceUrl || '').trim();
   if (!/^https?:\/\//i.test(sourceUrl)) return false;
   const analysis = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
+  if (analysis.analysisPausedAt || analysis.geminiStatus === 'paused') return false;
   const status = String(analysis.downloadStatus || '');
   const videoFetchStatus = String(analysis.videoFetchStatus || '');
   const geminiStatus = String(analysis.geminiStatus || '');
@@ -7632,6 +7678,31 @@ export async function getVideoPipelineStats(tenantId?: string): Promise<Record<s
     .filter((item): item is NonNullable<typeof item> => Boolean(item))
     .sort((a, b) => Date.parse(b.syncedAt) - Date.parse(a.syncedAt))
     .slice(0, 50);
+  const analysisItems = visibleRecords.slice(0, 100).map(record => {
+    const analysis = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
+    const gemini = String(analysis.geminiStatus || '');
+    const fetchStatus = String(analysis.downloadStatus || analysis.videoFetchStatus || '');
+    const paused = Boolean(analysis.analysisPausedAt) || gemini === 'paused';
+    const failed = String(record.status || '') === 'failed'
+      || Boolean(analysis.analysisError || analysis.videoLevelFailureStatus)
+      || ['video_failed', 'analysis_retryable', 'ops_failed', 'url_failed', 'unavailable'].includes(gemini)
+      || ['ops_failed', 'url_failed', 'unavailable'].includes(fetchStatus);
+    const analyzing = Boolean(analysis.requestedAnalysisMode)
+      || ['queued', 'analyzing', 'waiting_for_video', 'downloading', 'download_retrying'].includes(gemini)
+      || ['queued', 'downloading', 'download_retrying', 'ops_queued', 'ops_processing'].includes(fetchStatus);
+    const itemStatus = paused ? 'paused' : failed ? 'failed' : analyzing ? 'analyzing' : 'analyzed';
+    return {
+      id: String(record.id || ''),
+      title: String(record.title || '未命名视频'),
+      platform: String(record.platform || 'unknown'),
+      thumbnailUrl: recordThumbnailUrl(String(record.id || '')),
+      duration: Number(record.duration || 0),
+      status: itemStatus,
+      analysisMode: String(analysis.requestedAnalysisMode || analysis.analysisMode || 'strategy'),
+      updatedAt: String(record.updated || record.crawledAt || ''),
+      error: failed ? String(analysis.analysisError || analysis.videoLevelFailureStatus || '视频分析失败') : '',
+    };
+  });
 
   return {
     updatedAt: new Date().toISOString(),
@@ -7657,6 +7728,7 @@ export async function getVideoPipelineStats(tenantId?: string): Promise<Record<s
       pendingRecords: statusCounts.pending || 0,
       analyzedRecords: statusCounts.analyzed || 0,
       failedRecords: statusCounts.failed || 0,
+      items: analysisItems,
       refinementItems,
     },
   };

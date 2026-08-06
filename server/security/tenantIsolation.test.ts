@@ -49,7 +49,7 @@ const diagnosisUi = read('src/components/BusinessDiagnosisModal.tsx');
 assert.match(diagnosisUi, /onClick=\{onClose\}[\s\S]*?关闭接待设置/, 'the reception guide must be closable after it is reopened from the sidebar');
 assert.match(diagnosisUi, /ui-field ui-select[\s\S]*?请选择主营品类[\s\S]*?请选择，可连续添加[\s\S]*?请选择海外平台经验/, 'guided enterprise choices must use consistent dropdown controls');
 const enterpriseUi = read('src/components/EnterprisePage.tsx');
-assert.match(enterpriseUi, /function OptionSelector[\s\S]*?<select[\s\S]*?<details[\s\S]*?type="checkbox"/, 'enterprise selectable fields must use single-select or multi-select dropdown controls');
+assert.match(enterpriseUi, /function OptionSelector[\s\S]*?<select[\s\S]*?aria-expanded=\{open\}[\s\S]*?type="checkbox"/, 'enterprise selectable fields must use accessible single-select or multi-select dropdown controls');
 assert.doesNotMatch(enterpriseUi.slice(enterpriseUi.indexOf('function OptionSelector'), enterpriseUi.indexOf('function PaginationControls')), /<Chip/, 'enterprise option selectors must not fall back to chip-only selection');
 const globalStyles = read('src/index.css');
 for (const styleClass of ['.ui-field', '.ui-select', '.ui-chart-panel', '.ui-floating-panel']) {

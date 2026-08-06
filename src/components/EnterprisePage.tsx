@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useId, useRef } from 'react';
 import { motion } from 'motion/react';
 import { Building2, Package, Megaphone, BookOpen, Save, CheckCircle2, Loader2, Compass, Zap, MessageSquare, RotateCcw, Plus, Upload, X, Image, Video, FileText, Copy, FileSpreadsheet, Bell, ChevronDown, ChevronLeft, ChevronRight, Globe2, ShieldCheck, type LucideIcon } from 'lucide-react';
 import { authHeader } from '../lib/auth';
@@ -290,8 +290,13 @@ function OptionSelector({ value, options, onChange, multiple = true, placeholder
   multiple?: boolean;
   placeholder?: string;
 }) {
+  const selectorId = useId();
+  const menuId = `${selectorId}-menu`;
+  const rootRef = useRef<HTMLDivElement>(null);
+  const [open, setOpen] = useState(false);
   const tokens = splitTokens(value);
   const customTokens = tokens.filter(item => !options.includes(item));
+  const toggleOpen = () => setOpen(current => !current);
 
   const choose = (option: string) => {
     if (!multiple) {
@@ -304,6 +309,17 @@ function OptionSelector({ value, options, onChange, multiple = true, placeholder
 
   const removeCustom = (option: string) => onChange(joinTokens(tokens.filter(item => item !== option)));
 
+  useEffect(() => {
+    if (!multiple) return;
+    const closeOnOutsideClick = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', closeOnOutsideClick);
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsideClick);
+    };
+  }, [multiple]);
+
   if (!multiple) {
     return (
       <select className={inputCls} value={value} onChange={event => onChange(event.target.value)}>
@@ -315,12 +331,27 @@ function OptionSelector({ value, options, onChange, multiple = true, placeholder
   }
 
   return (
-    <details name="enterprise-option-selector" className="group relative">
-      <summary className={`${inputCls} flex min-h-10 cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden`}>
+    <div ref={rootRef} className="group relative">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-controls={menuId}
+        onPointerDown={toggleOpen}
+        onClick={event => {
+          if (event.detail === 0) toggleOpen();
+        }}
+        onKeyDown={event => {
+          if (event.key === 'Escape') {
+            setOpen(false);
+            event.currentTarget.focus();
+          }
+        }}
+        className={`${inputCls} flex min-h-10 w-full cursor-pointer items-center justify-between gap-3 text-left`}
+      >
         <span className={tokens.length ? 'truncate text-text-primary' : 'text-text-muted'}>{tokens.length ? tokens.join('、') : `${placeholder}（可多选）`}</span>
-        <ChevronDown size={15} className="shrink-0 text-text-muted transition-transform group-open:rotate-180" />
-      </summary>
-      <div className="absolute z-30 mt-1 max-h-64 w-full overflow-y-auto rounded-lg border border-border bg-white p-2 shadow-lg">
+        <ChevronDown size={15} className={`shrink-0 text-text-muted transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && <div id={menuId} className="mt-1 max-h-64 w-full overflow-y-auto rounded-lg border border-border bg-white p-2 shadow-lg">
         {options.map(option => (
           <label key={option} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-xs text-text-primary hover:bg-surface-2">
             <input type="checkbox" aria-label={option} className="h-3.5 w-3.5 accent-emerald-600" checked={tokens.includes(option)} onChange={() => choose(option)} />
@@ -331,8 +362,8 @@ function OptionSelector({ value, options, onChange, multiple = true, placeholder
           <p className="px-2 py-1 text-[10px] font-bold text-text-muted">历史自定义值</p>
           {customTokens.map(option => <button type="button" key={option} onClick={() => removeCustom(option)} className="flex w-full items-center justify-between rounded-md px-2 py-2 text-left text-xs text-text-secondary hover:bg-surface-2">{option}<X size={12} /></button>)}
         </div>}
-      </div>
-    </details>
+      </div>}
+    </div>
   );
 }
 
@@ -488,6 +519,7 @@ export default function EnterprisePage() {
   const [, setSaved] = useState(false);
   const [saveError, setSaveError] = useState('');
   const [loading, setLoading] = useState(true);
+  const [profileLoaded, setProfileLoaded] = useState(false);
   const [apiInfo, setApiInfo] = useState<ProductApiInfo | null>(null);
   const [apiStatus, setApiStatus] = useState<ProductApiStatus>({ count: 0 });
   const [orderImporting, setOrderImporting] = useState(false);
@@ -518,7 +550,7 @@ export default function EnterprisePage() {
   const [styleDistilling, setStyleDistilling] = useState(false);
   const [styleMessage, setStyleMessage] = useState('');
   const persistedProfileRef = useRef('');
-  const hasUnsavedChanges = !loading && persistedProfileRef.current !== JSON.stringify(profile);
+  const hasUnsavedChanges = profileLoaded && !loading && persistedProfileRef.current !== JSON.stringify(profile);
 
   useEffect(() => {
     if (window.sessionStorage.getItem('lingshu:enterprise-focus') !== 'language-settings') return;
@@ -538,7 +570,7 @@ export default function EnterprisePage() {
 
   useEffect(() => {
     Promise.all([
-      fetch('/api/overseas/enterprise/profile', { headers: authHeader() }).then(r => r.ok ? r.json() : Promise.reject(new Error(`profile_${r.status}`))).catch(() => ({})),
+      fetch('/api/overseas/enterprise/profile', { headers: authHeader() }).then(r => r.ok ? r.json() : Promise.reject(new Error(`企业资料加载失败（${r.status}）`))),
       fetch('/api/overseas/enterprise/product-api', { headers: authHeader() }).then(r => r.json()).catch(() => null),
       fetch('/api/overseas/enterprise/product-api/status', { headers: authHeader() }).then(r => r.json()).catch(() => ({ count: 0 })),
       fetch('/api/overseas/enterprise/faq/packs', { headers: authHeader() }).then(r => r.json()).catch(() => ({ packs: [], recommendedIndustry: 'general' })),
@@ -601,6 +633,8 @@ export default function EnterprisePage() {
         };
         persistedProfileRef.current = JSON.stringify(next);
         setProfile(next);
+        setProfileLoaded(true);
+        setSaveError('');
         if (productApi) setApiInfo(productApi);
         setApiStatus(productApiStatus);
         const packs = Array.isArray(packData.packs) ? packData.packs : [];
@@ -608,7 +642,10 @@ export default function EnterprisePage() {
         setRecommendedPackIndustry(packData.recommendedIndustry || 'general');
         setOpenPackId(packs.find(pack => pack.industry === packData.recommendedIndustry)?.id || packs[0]?.id || '');
       })
-      .catch(() => {})
+      .catch(error => {
+        setProfileLoaded(false);
+        setSaveError(error instanceof Error ? error.message : '企业资料加载失败，请刷新后重试');
+      })
       .finally(() => setLoading(false));
   }, []);
 
@@ -1028,6 +1065,10 @@ export default function EnterprisePage() {
   };
 
   const handleSave = async () => {
+    if (!profileLoaded) {
+      setSaveError('企业资料尚未成功加载，请刷新后重试');
+      return;
+    }
     setSaving(true);
     setSaved(false);
     setSaveError('');

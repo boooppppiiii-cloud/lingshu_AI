@@ -22,6 +22,18 @@ interface ScheduledTask {
   createdAt: string;
 }
 
+interface VideoAnalysisItem {
+  id: string;
+  title: string;
+  platform: string;
+  thumbnailUrl?: string;
+  duration?: number;
+  status: 'analyzing' | 'analyzed' | 'failed' | 'paused';
+  analysisMode?: string;
+  updatedAt?: string;
+  error?: string;
+}
+
 interface VideoStatsPayload {
   tasks?: ScheduledTask[];
   stats?: {
@@ -48,6 +60,7 @@ interface VideoStatsPayload {
       pendingRecords?: number;
       analyzedRecords?: number;
       failedRecords?: number;
+      items?: VideoAnalysisItem[];
       refinementItems?: Array<{
         id: string;
         title: string;
@@ -264,6 +277,9 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
   const [exportNotice, setExportNotice] = useState<{ taskId: string; message: string; error: boolean } | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
   const [videoStats, setVideoStats] = useState<VideoStatsPayload | null>(null);
+  const [analysisQueueOpen, setAnalysisQueueOpen] = useState(false);
+  const [analysisActionId, setAnalysisActionId] = useState<string | null>(null);
+  const [analysisActionError, setAnalysisActionError] = useState('');
   const [businessDynamics, setBusinessDynamics] = useState<BusinessDynamicsPayload | null>(null);
   const [businessDynamicsLoading, setBusinessDynamicsLoading] = useState(true);
   const [businessDynamicsError, setBusinessDynamicsError] = useState('');
@@ -323,6 +339,32 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
       setVideoStats(await r.json());
     } catch {
       // Keep the previous snapshot visible during backend hot reloads.
+    }
+  }
+
+  async function updateVideoAnalysis(item: VideoAnalysisItem, action: 'pause' | 'reanalyze') {
+    setAnalysisActionId(item.id);
+    setAnalysisActionError('');
+    try {
+      const response = await fetch(
+        action === 'pause'
+          ? `/api/overseas/videos/${item.id}/analysis-pause`
+          : `/api/overseas/videos/${item.id}/reanalyze`,
+        {
+          method: action === 'pause' ? 'POST' : 'PATCH',
+          headers: { 'Content-Type': 'application/json', ...authHeader() },
+          body: action === 'reanalyze'
+            ? JSON.stringify({ analysisMode: item.analysisMode === 'exact' ? 'exact' : 'strategy' })
+            : JSON.stringify({}),
+        },
+      );
+      const payload = await response.json().catch(() => ({})) as { error?: string };
+      if (!response.ok) throw new Error(payload.error || (action === 'pause' ? '暂停分析失败' : '重新分析失败'));
+      await fetchVideoStats();
+    } catch (error) {
+      setAnalysisActionError(error instanceof Error ? error.message : '操作失败');
+    } finally {
+      setAnalysisActionId(null);
     }
   }
 
@@ -515,6 +557,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
     { label: '失败素材', value: analysisQueue.failedRecords ?? 0, desc: '需要重试或排查源文件' },
   ];
   const analysisStatusEntries = Object.entries(analysisQueue.byStatus ?? {});
+  const analysisItems = analysisQueue.items ?? [];
   const refinementItems = analysisQueue.refinementItems ?? [];
   const crawlTasks = (videoStats?.tasks ?? tasks).filter(t => ['video_keyword_crawl', 'image_post_crawl', 'competitor_account_crawl'].includes(t.taskType));
   const showTaskList = activeGroup !== 'social' || socialTaskTab === 'crawler';
@@ -1220,13 +1263,22 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
                 </div>
 
                 <section className="rounded-xl border border-gray-200 bg-white p-4">
-                  <div className="flex items-center justify-between mb-3">
+                  <button
+                    type="button"
+                    aria-expanded={analysisQueueOpen}
+                    aria-controls="video-analysis-queue-list"
+                    onClick={() => setAnalysisQueueOpen(open => !open)}
+                    className="mb-3 flex w-full items-center justify-between rounded-lg text-left focus:outline-none focus-visible:ring-2 focus-visible:ring-green-500"
+                  >
                     <div>
-                      <p className="text-sm font-semibold text-gray-900">分析队列</p>
-                      <p className="text-xs text-gray-500 mt-0.5">展示已入库视频进入 Gemini 分析后的处理状态。</p>
+                      <p className="text-sm font-semibold text-gray-900">视频分析队列</p>
+                      <p className="text-xs text-gray-500 mt-0.5">点击展开，查看每条视频的分析状态与操作。</p>
                     </div>
-                    <span className="text-xs text-gray-400">自动刷新 5 秒</span>
-                  </div>
+                    <span className="flex items-center gap-2 text-xs text-gray-400">
+                      {analysisItems.length} 条 · 自动刷新 5 秒
+                      <ChevronDown size={16} className={`transition-transform ${analysisQueueOpen ? 'rotate-180' : ''}`} />
+                    </span>
+                  </button>
                   <div className="grid grid-cols-4 gap-3">
                     {analysisStatusRows.map(row => (
                       <div key={row.label} className="rounded-xl border border-gray-100 bg-gray-50/70 p-3">
@@ -1248,6 +1300,78 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
                       )}
                     </div>
                   </div>
+                  <AnimatePresence initial={false}>
+                    {analysisQueueOpen && (
+                      <motion.div
+                        id="video-analysis-queue-list"
+                        initial={{ height: 0, opacity: 0 }}
+                        animate={{ height: 'auto', opacity: 1 }}
+                        exit={{ height: 0, opacity: 0 }}
+                        className="overflow-hidden"
+                      >
+                        <div className="mt-3 max-h-[520px] space-y-2 overflow-y-auto border-t border-gray-100 pt-3">
+                          {analysisActionError && (
+                            <div role="status" className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-xs text-red-600">
+                              {analysisActionError}
+                            </div>
+                          )}
+                          {analysisItems.length === 0 ? (
+                            <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/60 py-8 text-center text-xs text-gray-400">
+                              暂无视频分析记录
+                            </div>
+                          ) : analysisItems.map(item => {
+                            const statusMeta = item.status === 'analyzing'
+                              ? { label: '分析中', style: 'bg-blue-50 text-blue-700' }
+                              : item.status === 'analyzed'
+                                ? { label: '已分析', style: 'bg-green-50 text-green-700' }
+                                : item.status === 'failed'
+                                  ? { label: '分析失败', style: 'bg-red-50 text-red-700' }
+                                  : { label: '已暂停', style: 'bg-amber-50 text-amber-700' };
+                            const actionPending = analysisActionId === item.id;
+                            return (
+                              <article key={item.id} data-testid={`video-analysis-row-${item.id}`} className="flex items-center gap-3 rounded-xl border border-gray-100 bg-gray-50/60 p-3">
+                                {item.thumbnailUrl ? (
+                                  <img src={item.thumbnailUrl} alt={`${item.title} 缩略图`} className="h-14 w-24 flex-shrink-0 rounded-lg bg-gray-100 object-cover" />
+                                ) : (
+                                  <div className="flex h-14 w-24 flex-shrink-0 items-center justify-center rounded-lg bg-gray-100 text-gray-300"><Play size={18} /></div>
+                                )}
+                                <div className="min-w-0 flex-1">
+                                  <p className="truncate text-xs font-semibold text-gray-900" title={item.title}>{item.title}</p>
+                                  <p className="mt-1 text-[11px] text-gray-500">{item.platform.toUpperCase()} · {item.analysisMode === 'exact' ? '精确分析' : '策略分析'} · {item.duration ? `${Math.round(item.duration)} 秒` : '时长未知'}</p>
+                                  {item.error && <p className="mt-1 truncate text-[11px] text-red-500" title={item.error}>{item.error}</p>}
+                                </div>
+                                <span className={`flex-shrink-0 rounded-full px-2.5 py-1 text-[11px] font-medium ${statusMeta.style}`}>{statusMeta.label}</span>
+                                <div className="flex flex-shrink-0 items-center gap-2">
+                                  {item.status === 'analyzing' && (
+                                    <button
+                                      type="button"
+                                      aria-label={`暂停分析 ${item.title}`}
+                                      disabled={actionPending}
+                                      onClick={() => void updateVideoAnalysis(item, 'pause')}
+                                      className="rounded-lg border border-gray-200 bg-white px-2.5 py-1.5 text-[11px] text-gray-600 hover:bg-gray-50 disabled:opacity-50"
+                                    >
+                                      {actionPending ? '处理中…' : '暂停分析'}
+                                    </button>
+                                  )}
+                                  {item.status !== 'analyzing' && (
+                                    <button
+                                      type="button"
+                                      aria-label={`重新分析 ${item.title}`}
+                                      disabled={actionPending}
+                                      onClick={() => void updateVideoAnalysis(item, 'reanalyze')}
+                                      className="rounded-lg border border-green-200 bg-white px-2.5 py-1.5 text-[11px] text-green-700 hover:bg-green-50 disabled:opacity-50"
+                                    >
+                                      {actionPending ? '提交中…' : '重新分析'}
+                                    </button>
+                                  )}
+                                </div>
+                              </article>
+                            );
+                          })}
+                        </div>
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </section>
                 <section className="rounded-xl border border-gray-200 bg-white p-4">
                   <div className="flex items-center justify-between mb-3">
