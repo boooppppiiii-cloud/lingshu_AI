@@ -4428,7 +4428,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
             videoTheme: videoThemePayload,
           },
           '',
-        ), 45_000, '后端模型生成超过 45 秒。');
+        ), 120_000, '后端模型生成超过 120 秒。');
         if (response.source && response.source !== 'ai') throw new Error(response.error || response.fallbackReason || 'AI脚本未通过检查，未生成兜底稿。');
         nextScript = sanitizeStoryboardScript(response.script || '', activeProductInfo, activeProductLabel).trim();
         if (!nextScript) throw new Error(response.error

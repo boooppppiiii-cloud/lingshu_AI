@@ -579,7 +579,7 @@ function ensureSelectedProductNamesInScript(script: string, productInfo: string)
   let next = String(script || '');
   for (const name of names) {
     if (!name || normalizeProductIdentity(next).includes(normalizeProductIdentity(name))) continue;
-    const blocks = next.split(/(?=^\[[^\]\r\n]+\]\s*$)/m);
+    const blocks = next.split(/(?=^\[[^\]\r\n]+\][ \t]*$)/m);
     const targetIndex = blocks.findIndex((block, index) => index > 0 && /^\[[^\]]+\]/.test(block));
     const fallbackIndex = blocks.findIndex(block => /^\[[^\]]+\]/.test(block));
     const index = targetIndex >= 0 ? targetIndex : fallbackIndex;
@@ -741,17 +741,26 @@ function fitStoryboardSpeech(script: string): string {
 }
 
 function syncStoryboardSubtitles(script: string): string {
-  return String(script || '').split(/(?=^\[[^\]\r\n]+\]\s*$)/m).map(block => {
+  return String(script || '').split(/(?=^\[[^\]\r\n]+\][ \t]*$)/m).map(block => {
     if (!/^\[[^\]]+\]/.test(block.trim())) return block;
     const voice = block.match(/^台词[：:]\s*(.+)$/m)?.[1]?.trim() || '';
     if (!voice || /^(无|none)$/i.test(voice)) return block;
-    return block.replace(/^字幕[：:].*$/m, `字幕：${voice}`);
+    if (/^字幕[：:]/m.test(block)) return block.replace(/^字幕[：:].*$/m, `字幕：${voice}`);
+    return block.replace(/^(台词[：:].*)$/m, `$1\n字幕：${voice}`);
   }).join('');
+}
+
+function normalizeStoryboardFieldLines(script: string): string {
+  const labels = '素材|环境|景别|运镜|构图|镜头功能|画面|配乐|台词|字幕';
+  return String(script || '')
+    .replace(/(\[[^\]\r\n]+\])[ \t]+(?=(?:素材|环境|景别|运镜|构图|镜头功能|画面|配乐|台词|字幕)[：:])/g, '$1\n')
+    .replace(new RegExp(`[ \\t]+(?=(?:${labels})[：:])`, 'g'), '\n')
+    .trim();
 }
 
 function duplicateStoryboardFieldIssues(script: string): string[] {
   const required = ['素材', '环境', '景别', '运镜', '构图', '镜头功能', '画面', '配乐', '台词', '字幕'];
-  return String(script || '').split(/(?=^\[[^\]\r\n]+\]\s*$)/m).flatMap(block => {
+  return String(script || '').split(/(?=^\[[^\]\r\n]+\][ \t]*$)/m).flatMap(block => {
     if (!/^\[[^\]]+\]/.test(block.trim())) return [];
     const range = block.match(/^\[[^\]]+\]/)?.[0] || '分镜';
     return required.flatMap(field => {
@@ -762,7 +771,7 @@ function duplicateStoryboardFieldIssues(script: string): string[] {
 }
 
 function subtitleVoiceMismatchIssues(script: string): string[] {
-  return String(script || '').split(/(?=^\[[^\]\r\n]+\]\s*$)/m).flatMap(block => {
+  return String(script || '').split(/(?=^\[[^\]\r\n]+\][ \t]*$)/m).flatMap(block => {
     if (!/^\[[^\]]+\]/.test(block.trim())) return [];
     const range = block.match(/^\[[^\]]+\]/)?.[0] || '分镜';
     const voice = block.match(/^台词[：:]\s*(.+)$/m)?.[1]?.trim() || '';
@@ -774,7 +783,7 @@ function subtitleVoiceMismatchIssues(script: string): string[] {
 }
 
 function retimeStoryboardFromVoice(script: string): string {
-  const blocks = String(script || '').split(/(?=^\[[^\]\r\n]+\]\s*$)/m);
+  const blocks = String(script || '').split(/(?=^\[[^\]\r\n]+\][ \t]*$)/m);
   let cursor = 0;
   return blocks.map(block => {
     if (!/^\[[^\]]+\]/.test(block.trim())) return block;
@@ -803,7 +812,7 @@ function retimeStoryboardFromVoice(script: string): string {
 function applyLockedVoicePlan(script: string, lines: string[]): string {
   if (!lines.length) return script;
   let cursor = 0;
-  return String(script || '').split(/(?=^\[[^\]\r\n]+\]\s*$)/m).map(block => {
+  return String(script || '').split(/(?=^\[[^\]\r\n]+\][ \t]*$)/m).map(block => {
     if (!/^\[[^\]]+\]/.test(block.trim()) || cursor >= lines.length) return block;
     const line = lines[cursor++]!;
     let next = block.replace(/^台词[：:].*$/m, `台词：${line}`);
@@ -975,11 +984,7 @@ function defaultLipBalmScenes(route: CooperationRoute, theme: string, productNam
 }
 
 function repairMaterialScript(script: string, productInfo: string, materialsText: string): string {
-  let repaired = String(script || '');
-  repaired = repaired.replace(
-    /(\[\s*(\d+(?:\.\d+)?)\s*(?:s|秒)?\s*[-–]\s*(\d+(?:\.\d+)?)\s*(?:s|秒)?\s*\][\s\S]*?)(人物说|台词|Voiceover|VO|口播)(\s*[：:]\s*[“"]?)([^\n”"]+)([”"]?)/gi,
-    (full, prefix, start, end, label, separator, voice, quote) => `${prefix}${label}${separator}${fitSpeechToShot(voice, Math.max(0.5, Number(end) - Number(start)))}${quote}`,
-  );
+  let repaired = normalizeStoryboardFieldLines(script);
   const unsupportedNumbers = Array.from(repaired.matchAll(/\d+(?:\.\d+)?\s*(?:瓶|ml|ML|毫升|kg|KG|g|克|斤|cm|厘米|mm|毫米|天|day|days|Days|秒|%|个|pcs|件|箱|元|美元)/g))
     .map(match => match[0])
     .filter(claim => !productSupportsNumericClaim(claim, productInfo));
@@ -1605,7 +1610,7 @@ studioRouter.post('/script', async (req, res) => {
 - 禁用表达：${themeConstraint.prohibitedPatterns.join('；')}
 - 主题叙事要求：${themeDirectives[videoThemeId] || themeDirectives.buyer_pain}
 - ${voiceoverDirective}
-- 痛点必须由后续证据回应，不能只出现在第一句；结尾只能使用上面的唯一主 CTA，主题不得改写它。
+- 痛点必须由后续证据回应，不能只出现在第一句；结尾只能使用上面的唯一主 CTA。若 CTA 与目标输出语言不同，必须按目标语言自然翻译其动作语义，禁止把“引导跳转、以触达”等后台配置措辞直接念给观众。
 
 ${strategyPlanRules}`;
   const humanVoiceRules = `真人表达规则（仅作用于台词、口播和字幕，不改变时间轴及机器字段）：
@@ -1935,11 +1940,12 @@ Requirements:
     // The repair prompt deliberately contains the rejected draft and the fact source,
     // but none of the large creative-policy context that tends to distract it.
     const normalizeGeneratedScript = (value: string) => {
-      let normalized = normalizeScriptTimestamps(ensureSelectedProductNamesInScript(enforceProductNameInScript(stripScriptAnalysisSummary(value), productInfo), productInfo));
+      let normalized = normalizeStoryboardFieldLines(normalizeScriptTimestamps(ensureSelectedProductNamesInScript(enforceProductNameInScript(stripScriptAnalysisSummary(value), productInfo), productInfo)));
       if (generationMode === 'product' && voiceoverMode !== 'none') {
         normalized = retimeStoryboardFromVoice(lockedVisualScenes.length ? normalized : applyLockedVoicePlan(normalized, lockedVoiceLines));
       }
       if (generationMode === 'material') normalized = repairMaterialScript(normalized, productInfo, structuredMaterials);
+      if (voiceoverMode !== 'none') normalized = syncStoryboardSubtitles(normalized);
       return normalized;
     };
     const strictCommercialPolicyIssues = (candidate: string): string[] => {
@@ -1955,7 +1961,7 @@ Requirements:
       }
       const ctaSatisfied = !primaryCta
         || candidate.includes(primaryCta)
-        || (/whatsapp/i.test(primaryCta) && /whatsapp|\bwa\b|私信|联系/i.test(candidate));
+        || (/whatsapp/i.test(primaryCta) && /whatsapp|\bwa\b|\bdm\b|direct message|message (?:us|me)|私信|联系/i.test(candidate));
       if (!ctaSatisfied) {
         issues.push(`未使用本条唯一主 CTA：${primaryCta}`);
       }
@@ -1971,7 +1977,7 @@ Requirements:
       // This is a quality gate, not a fact gate. It catches the common failure
       // where a model obeys the storyboard schema but opens with a product name
       // instead of the selected buyer's decision problem.
-      const firstScene = String(candidate || '').split(/(?=^\[[^\]\r\n]+\]\s*$)/m).find(block => /^\[[^\]]+\]/.test(block.trim())) || '';
+      const firstScene = String(candidate || '').split(/(?=^\[[^\]\r\n]+\][ \t]*$)/m).find(block => /^\[[^\]]+\]/.test(block.trim())) || '';
       const firstVoice = (firstScene.match(/^台词[：:]\s*(.+)$/m)?.[1] || '').trim();
       const firstCaption = (firstScene.match(/^字幕[：:]\s*(.+)$/m)?.[1] || '').trim();
       const firstVisual = (firstScene.match(/^画面[：:]\s*(.+)$/m)?.[1] || '').trim();
@@ -2009,7 +2015,7 @@ Requirements:
         issues.push('分镜功能重复，未形成钩子、问题、证据、决策和 CTA 的推进');
       }
       if (['product_proof', 'use_case'].includes(videoThemeId) || strategyRoute === 'consumer_retail') {
-        const scenes = String(candidate || '').split(/(?=^\[[^\]\r\n]+\]\s*$)/m).filter(block => /^\[[^\]]+\]/.test(block));
+        const scenes = String(candidate || '').split(/(?=^\[[^\]\r\n]+\][ \t]*$)/m).filter(block => /^\[[^\]]+\]/.test(block));
         const productScenes = scenes.filter(scene => /膏体|旋出|旋回|唇部|手背|化妆包|涂抹/.test(scene)).length;
         const packagingScenes = scenes.filter(scene => /标签|外盒|包装|牛皮纸|白管/.test(scene)).length;
         if (scenes.length >= 3 && (productScenes < Math.ceil(scenes.length * 2 / 3) || packagingScenes > 1)) {
@@ -2046,6 +2052,10 @@ Requirements:
         : scriptType === 'storyboard'
           ? '必须保留原有对标时间段、镜头数量和字段，不得重排镜头。'
           : '必须保留原有三个区块和时长标签。';
+    // Apply deterministic normalization before asking the model to repair the
+    // draft. Subtitle/voice equality is mechanical and should not trigger up
+    // to three extra LLM calls (or push the UI past its request timeout).
+    script = normalizeGeneratedScript(script);
     for (let repairAttempt = 0; !isStructuredLockedProduct && repairAttempt < 3; repairAttempt += 1) {
       const issues = repairableIssues(script);
       if (!issues.length) break;
@@ -2067,7 +2077,7 @@ ${strategyPlanRules}
 - 禁止截断台词。超过镜头时必须重新安排该段时间戳或改写成语义完整的短句；不能以破折号、省略号或未完成短语收尾。
 - 每个分镜每个字段只能出现一次，尤其只能有一行“台词”和一行“字幕”；把 CTA 融入最后一段唯一的台词或字幕，不得另起重复字段。
 - 每个选定产品名称只需逐字出现在一段“字幕”或“画面”字段中；产品名称本身是已核实事实，不得缩写、改名或省略，也不要在多段重复粘贴。
-- 结尾只能逐字使用本条唯一主 CTA「${primaryCta || '无'}」；不得增加寄样、免费样品、报价、交期或其它行动承诺。
+- 结尾只能保留与本条唯一主 CTA「${primaryCta || '无'}」语义一致的一个动作，并按目标语言自然表达；不得增加寄样、免费样品、报价、交期或其它行动承诺。
 - 当前产品资料只支持“无品牌瓶器、标签和外盒样品”这一组事实。画面只能建议拍摄容器摆放、空白标签/外盒组合与手部排布；不得虚构瓶内液体、厚薄、毛边、回弹、色差、密封、耐用、测试结果、PDF资料或邮件界面。
 - 如果问题涉及首段钩子，必须把首段台词或字幕改为“目标买家 + 一个具体判断问题/反差”；禁止以产品名称、企业介绍或卖点罗列开场。首段不能只说“这是/我们有/产品名”。
 - 若声音策略为 AI 口播，至少在两个不同镜头写自然短台词；不得将口播全部写成“无”。
@@ -2121,7 +2131,7 @@ ${script}`, { backend: providerOpt, systemPrompt: await enterpriseCtx() || undef
     const duplicateStoryboardFields = isStructuredLockedProduct ? [] : duplicateStoryboardFieldIssues(script);
     const subtitleVoiceIssues = isStructuredLockedProduct ? [] : subtitleVoiceMismatchIssues(script);
     const productStoryboardFields = ['环境', '景别', '运镜', '构图', '镜头功能', '画面', '配乐', '台词', '字幕'];
-    const productStoryboardBlocks = script.split(/(?=^\[[^\]\r\n]+\]\s*$)/m).filter(block => /^\[[^\]]+\]/.test(block.trim()));
+    const productStoryboardBlocks = script.split(/(?=^\[[^\]\r\n]+\][ \t]*$)/m).filter(block => /^\[[^\]]+\]/.test(block.trim()));
     const incompleteProductStoryboard = generationMode === 'product' && !isStructuredLockedProduct
       && (productStoryboardBlocks.length !== productSceneCount
         || productStoryboardBlocks.some(block => productStoryboardFields.some(field => !new RegExp(`^${field}[：:]`, 'm').test(block))));

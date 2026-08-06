@@ -315,7 +315,7 @@ function OptionSelector({ value, options, onChange, multiple = true, placeholder
   }
 
   return (
-    <details className="group relative">
+    <details name="enterprise-option-selector" className="group relative">
       <summary className={`${inputCls} flex min-h-10 cursor-pointer list-none items-center justify-between gap-3 [&::-webkit-details-marker]:hidden`}>
         <span className={tokens.length ? 'truncate text-text-primary' : 'text-text-muted'}>{tokens.length ? tokens.join('、') : `${placeholder}（可多选）`}</span>
         <ChevronDown size={15} className="shrink-0 text-text-muted transition-transform group-open:rotate-180" />
@@ -323,7 +323,7 @@ function OptionSelector({ value, options, onChange, multiple = true, placeholder
       <div className="absolute z-30 mt-1 max-h-64 w-full overflow-y-auto rounded-lg border border-border bg-white p-2 shadow-lg">
         {options.map(option => (
           <label key={option} className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-2 text-xs text-text-primary hover:bg-surface-2">
-            <input type="checkbox" className="h-3.5 w-3.5 accent-emerald-600" checked={tokens.includes(option)} onChange={() => choose(option)} />
+            <input type="checkbox" aria-label={option} className="h-3.5 w-3.5 accent-emerald-600" checked={tokens.includes(option)} onChange={() => choose(option)} />
             {option}
           </label>
         ))}
