@@ -144,6 +144,7 @@ interface VideoAnalysisPayload {
   dateTo?: string;
   materialUrl?: string;
   materialPoster?: string;
+  materialId?: string;
   downloadStatus?: string;
   videoFetchStatus?: string;
   geminiStatus?: string;
@@ -2612,6 +2613,20 @@ interface CrawlerRecord {
   canManage?: boolean;
 }
 
+export function parseExactAnalysisResponse(raw: string, status: number): { error?: string; status?: string; reused?: boolean; id?: string } {
+  try {
+    const parsed = JSON.parse(raw) as { error?: unknown; status?: unknown; reused?: unknown; id?: unknown };
+    return {
+      error: typeof parsed.error === 'string' ? parsed.error : undefined,
+      status: typeof parsed.status === 'string' ? parsed.status : undefined,
+      reused: typeof parsed.reused === 'boolean' ? parsed.reused : undefined,
+      id: typeof parsed.id === 'string' ? parsed.id : undefined,
+    };
+  } catch {
+    return { error: `全片精确分析接口返回异常（HTTP ${status}）` };
+  }
+}
+
 function parseRecordTags(tags?: string): string[] {
   if (!tags) return [];
   try {
@@ -3047,11 +3062,13 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   const pinnedMaterialVideos = useMemo<TrendVideo[]>(() => localMaterials
     .filter(material => material.pinned && material.type === 'video' && material.segmentAnalysisStatus === 'completed' && material.segments?.length)
     .map(material => {
+      const persistedAnalysis = crawledVideos.find(video => video.aiAnalysis?.materialId === material.id);
       const platform: TrendVideo['platform'] = /facebook/i.test(material.name) ? 'facebook'
         : /youtube/i.test(material.name) ? 'youtube' : /instagram/i.test(material.name) ? 'instagram' : 'tiktok';
       const title = material.name.replace(/^爆款[·・][^·・]+[·・]/, '').replace(/\.[a-z0-9]+$/i, '');
       return {
         id: `material-${material.id}`,
+        recordId: persistedAnalysis?.recordId,
         platform,
         title,
         thumbnail: material.poster || material.segments?.[0]?.poster || '',
@@ -3060,10 +3077,10 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
         views: '本地素材',
         trend: 'hot',
         videoUrl: material.url,
-        status: 'analyzed',
+        status: persistedAnalysis?.status || 'analyzed',
         crawledAt: material.createdAt,
         contentFormat: 'video',
-        aiAnalysis: {
+        aiAnalysis: persistedAnalysis?.aiAnalysis || {
           source: 'material_segment_analysis',
           materialUrl: material.url,
           materialPoster: material.poster,
@@ -3095,7 +3112,7 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
           },
         },
       };
-    }), [localMaterials]);
+    }), [localMaterials, crawledVideos]);
   const enterMaterialSmartGeneration = (material: Material) => {
     const platform: TrendVideo['platform'] = /facebook/i.test(material.name) ? 'facebook'
       : /youtube/i.test(material.name) ? 'youtube' : /instagram/i.test(material.name) ? 'instagram' : 'tiktok';
@@ -3456,16 +3473,25 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
   };
 
   const requestExactFullAnalysis = async (video: TrendVideo) => {
-    if (!video.recordId || analyzingVideoIds.includes(video.id)) return;
+    if (analyzingVideoIds.includes(video.id)) return;
+    const materialId = video.id.startsWith('material-') ? video.id.slice('material-'.length) : '';
+    if (!video.recordId && !materialId) {
+      setMaterialMessage('当前视频缺少可分析的入库记录或素材文件');
+      return;
+    }
     setAnalyzingVideoIds(ids => [...ids, video.id]);
     setMaterialMessage(`已提交全片精确分析：${video.title}`);
     try {
-      const response = await fetch(`/api/overseas/videos/${video.recordId}/reanalyze`, {
-        method: 'PATCH',
+      const response = await fetch(video.recordId
+        ? `/api/overseas/videos/${video.recordId}/reanalyze`
+        : '/api/overseas/videos/material-exact-analysis', {
+        method: video.recordId ? 'PATCH' : 'POST',
         headers: { 'Content-Type': 'application/json', ...authHeader() },
-        body: JSON.stringify({ analysisMode: 'exact' }),
+        body: JSON.stringify(video.recordId
+          ? { analysisMode: 'exact' }
+          : { materialId, title: video.title, platform: video.platform, duration: video.duration }),
       });
-      const data = await response.json().catch(() => ({})) as { error?: string; status?: string; reused?: boolean };
+      const data = parseExactAnalysisResponse(await response.text(), response.status);
       if (!response.ok) throw new Error(data.error || '全片精确分析提交失败');
       if (data.status === 'analyzed') {
         const markCompleted = (item: TrendVideo): TrendVideo => ({
@@ -3480,11 +3506,50 @@ export default function InspirationDashboard({ onScriptPanelOpen, onScriptPanelC
       }
       const markQueued = (item: TrendVideo): TrendVideo => ({
         ...item,
+        recordId: data.id || item.recordId,
         status: 'pending',
-        aiAnalysis: { ...(item.aiAnalysis || {}), requestedAnalysisMode: 'exact' },
+        aiAnalysis: {
+          ...(item.aiAnalysis || {}),
+          requestedAnalysisMode: 'exact',
+          geminiStatus: 'queued',
+          analysisError: undefined,
+          videoLevelFailureStatus: undefined,
+        },
       });
       setCrawledVideos(items => items.map(item => item.id === video.id ? markQueued(item) : item));
       setSelectedVideo(item => item?.id === video.id ? markQueued(item) : item);
+      const recordId = data.id || video.recordId;
+      if (recordId) {
+        void (async () => {
+          for (let attempt = 0; attempt < 90; attempt += 1) {
+            await new Promise(resolve => window.setTimeout(resolve, 2000));
+            try {
+              const latestResponse = await fetch(`/api/overseas/videos/${recordId}`, { headers: authHeader() });
+              if (!latestResponse.ok) continue;
+              const latest = await latestResponse.json() as CrawlerRecord;
+              let latestAnalysis: VideoAnalysisPayload = {};
+              try { latestAnalysis = JSON.parse(latest.aiAnalysis || '{}') as VideoAnalysisPayload; } catch {}
+              const applyLatest = (item: TrendVideo): TrendVideo => item.id !== video.id ? item : {
+                ...item,
+                recordId,
+                status: latest.status || item.status,
+                aiAnalysis: { ...(item.aiAnalysis || {}), ...latestAnalysis },
+              };
+              setCrawledVideos(items => items.map(applyLatest));
+              setSelectedVideo(item => item ? applyLatest(item) : item);
+              if (!latestAnalysis.requestedAnalysisMode) {
+                setMaterialMessage(latestAnalysis.analysisError
+                  ? `全片精确分析失败：${latestAnalysis.analysisError}`
+                  : '全片精确分析已完成。');
+                window.setTimeout(() => setMaterialMessage(''), 3500);
+                break;
+              }
+            } catch {
+              // A transient backend reload should not lose the visible queued state.
+            }
+          }
+        })();
+      }
     } catch (error) {
       const message = error instanceof Error ? error.message : '全片精确分析提交失败';
       const markFailed = (item: TrendVideo): TrendVideo => ({

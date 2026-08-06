@@ -31,8 +31,12 @@ const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 function pendingClaimLocations(script: string, productInfo: string): string[] {
   const source = productInfo.toLowerCase();
   return script.split('\n').map(line => line.trim()).filter(line => {
-    if (!line || !/(MOQ|起订|交期|天|认证|CE|FDA|SGS|价格|\$|客户|案例|销量|保证|guarantee)/i.test(line)) return false;
-    const facts = line.match(/(?:MOQ|起订|交期|认证|CE|FDA|SGS|价格|\$|客户案例|销量|保证)[^，。；\n]*/ig) || [];
+    // English certification abbreviations must be whole tokens. Substring
+    // matching `CE` used to flag harmless prose such as "Selected ..." as an
+    // unsupported certification claim.
+    const hasRiskTerm = /(?:起订|交期|\d+\s*天|认证|价格|\$|客户|案例|销量|保证)|\b(?:MOQ|CE|FDA|SGS|guarantee)\b/i.test(line);
+    if (!line || !hasRiskTerm) return false;
+    const facts = line.match(/(?:(?:起订|交期|认证|价格|\$|客户案例|销量|保证)|\b(?:MOQ|CE|FDA|SGS|guarantee)\b)[^，。；\n]*/ig) || [];
     return facts.some(fact => !source.includes(fact.toLowerCase()));
   }).slice(0, 4);
 }
@@ -2220,8 +2224,15 @@ function humanizeVoiceLine(value: string): string {
   let text = cleanVoiceoverLine(value);
   const compacted = text.replace(/\s+/g, ' ').trim();
   const terms = techTermCount(compacted);
-  const tooDense = terms >= 3 || compacted.length > 58;
+  const hasCjk = /[\u3400-\u9fff]/.test(compacted);
+  const tooDense = terms >= 3 || (hasCjk
+    ? Array.from(compacted.replace(/\s/g, '')).length > 58
+    : compacted.split(/\s+/).filter(Boolean).length > 20);
   if (!tooDense) return compacted;
+  // The deterministic Chinese rewrites below are not translations and must
+  // never replace or truncate an English sentence. Let the backend duration
+  // validator request a semantic rewrite when an English line is too long.
+  if (!hasCjk) return compacted;
 
   if (/客户问.*价格|问了.*价格|报价|价格/i.test(compacted) && /认证|CE|RoHS|UKCA|ETL|IES|IP\d+/i.test(compacted)) {
     return '客户问完价格，真正担心的是资料能不能一次给齐。先看这个真实效果。';
@@ -2343,6 +2354,10 @@ function compactComparable(value: string): string {
     .toLowerCase();
 }
 
+function isExplicitNoVoiceMarker(value: string): boolean {
+  return /^(?:无|none|no\s+voiceover)$/i.test(cleanVoiceoverLine(value).replace(/[。.!！]$/, '').trim());
+}
+
 function enforceScriptProduct(value: string, productInfo: string, strictProductName?: string): string {
   const productName = compact(strictProductName) || selectedProductLabel(productInfo);
   let next = stripCloneAnalysisSummary(value);
@@ -2356,12 +2371,13 @@ function enforceScriptProduct(value: string, productInfo: string, strictProductN
   return next;
 }
 
-function sanitizeStoryboardScript(value: string, productInfo: string, strictProductName?: string): string {
+export function sanitizeStoryboardScript(value: string, productInfo: string, strictProductName?: string): string {
   const enforced = enforceScriptProduct(value, productInfo, strictProductName);
   const lines = enforced.split('\n');
   const out: string[] = [];
   let lastVoiceKey = '';
   let currentVoice = '';
+  let currentOriginalVoiceKey = '';
 
   for (const raw of lines) {
     let line = raw.trimEnd();
@@ -2372,9 +2388,20 @@ function sanitizeStoryboardScript(value: string, productInfo: string, strictProd
       .replace(/[；;，,]?\s*行业\/品类\/产品必须替换为[^。\n]*?(?:。|$)/g, '')
       .trimEnd();
     if (!line.trim()) continue;
+    if (/^\s*(?:\[\s*\d+(?:\.\d+)?\s*(?:s|秒)?\s*[-–—]\s*\d+(?:\.\d+)?|Scene\s+\d+\s*\()/i.test(line)) {
+      currentVoice = '';
+      currentOriginalVoiceKey = '';
+    }
     const voiceMatch = line.match(/^(\s*(?:人物说|台词|Voiceover|VO|口播)\s*[：:]\s*)(.+)$/i);
     if (voiceMatch) {
       const prefix = voiceMatch[1] || '';
+      const originalVoice = cleanVoiceoverLine(voiceMatch[2] || '');
+      currentOriginalVoiceKey = compactComparable(originalVoice);
+      if (isExplicitNoVoiceMarker(originalVoice)) {
+        currentVoice = originalVoice;
+        out.push(`${prefix}${originalVoice}`);
+        continue;
+      }
       const voice = humanizeVoiceLine(voiceMatch[2] || '');
       const key = compactComparable(voice);
       if (!voice || (key && key === lastVoiceKey)) continue;
@@ -2389,10 +2416,15 @@ function sanitizeStoryboardScript(value: string, productInfo: string, strictProd
       const subtitle = cleanVoiceoverLine(subtitleMatch[2] || '');
       const subtitleKey = compactComparable(subtitle);
       const voiceKey = compactComparable(currentVoice);
-      if (!subtitle || (voiceKey && (subtitleKey === voiceKey || voiceKey.includes(subtitleKey) || subtitleKey.includes(voiceKey)))) {
-        continue;
-      }
-      out.push(`${subtitleMatch[1]}${subtitle}`);
+      if (!subtitle) continue;
+      // A subtitle mirroring narration is required storyboard structure, not
+      // duplicate prose. Preserve the field and keep it synchronized if the
+      // narration was humanized above.
+      const mirrorsVoice = Boolean(voiceKey && (subtitleKey === voiceKey || voiceKey.includes(subtitleKey) || subtitleKey.includes(voiceKey)))
+        || Boolean(currentOriginalVoiceKey && (subtitleKey === currentOriginalVoiceKey
+          || currentOriginalVoiceKey.includes(subtitleKey)
+          || subtitleKey.includes(currentOriginalVoiceKey)));
+      out.push(`${subtitleMatch[1]}${mirrorsVoice ? currentVoice : subtitle}`);
       continue;
     }
 
@@ -3224,12 +3256,17 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
           profile.products?.priceRange,
           profile.products?.moq,
         ].filter(Boolean).join('；'));
-        setAudience(prev => prev || [
-          profile.socialStrategy?.routeStrategies?.[profile.socialStrategy.enabledRoutes?.[0] || '']?.targetBuyerRoles?.[0],
-          profile.customers?.targetProfiles,
-          profile.strategy?.focusMarkets || profile.company?.mainMarkets,
-        ].filter(Boolean).join('；'));
         const inheritedRoute = profile.socialStrategy?.enabledRoutes?.[0] || '';
+        const fallbackBuyerByRoute: Record<string, string> = {
+          oem_odm: '品牌创始人、产品经理或采购',
+          wholesale_distribution: '进口商、经销商或渠道采购',
+          consumer_retail: '终端消费者',
+        };
+        setAudience(prev => prev || [
+          profile.socialStrategy?.routeStrategies?.[inheritedRoute]?.targetBuyerRoles?.[0],
+          profile.customers?.targetProfiles,
+          fallbackBuyerByRoute[inheritedRoute || 'oem_odm'],
+        ].filter(Boolean).join('；'));
         const inheritedCta = profile.socialStrategy?.routeStrategies?.[inheritedRoute]?.primaryCta;
         setCooperationRoute(current => current || inheritedRoute);
         setAvailableCooperationRoutes(profile.socialStrategy?.enabledRoutes || []);

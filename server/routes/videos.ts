@@ -19,6 +19,7 @@ import { isDemoMode } from '../lib/demo.js';
 import { recordVideoAdminAlert, updateVideoAdminAlertByRecordId } from '../lib/videoAdminAlerts.js';
 import { requireAdminUser } from '../lib/demoAccounts.js';
 import { ASSET_SESSION_COOKIE, cookieValue, signAssetUrl } from '../lib/assetAccess.js';
+import { fetchCloudMaterial, getCloudMaterialRecord } from '../lib/cloudMaterials.js';
 
 export const videosRouter = Router();
 videosRouter.use(requireAuth);
@@ -135,8 +136,20 @@ interface Material {
   file: string;
   url: string;
   poster?: string;
+  objectKey?: string;
+  tenantId?: string;
   scope: 'shared' | 'own';
   createdAt: string;
+}
+
+function isVisibleVideoPipelineRecord(record: Record<string, unknown>): boolean {
+  const analysis = videoAnalysisOf(record);
+  return Boolean(analysis.requestedAnalysisMode)
+    || Boolean(analysis.materialId && (
+      analysis.analysisError
+      || analysis.videoLevelFailureStatus
+      || ['queued', 'analyzing', 'waiting_for_video', 'analysis_retryable', 'video_failed'].includes(String(analysis.geminiStatus || ''))
+    ));
 }
 
 interface CrawlerOpsTask {
@@ -1873,7 +1886,7 @@ videosRouter.get('/:id', async (req, res) => {
     return;
   }
 
-  if (await isTestTenantId(tenantId) && !isPublicTestTenantVideo(record)) {
+  if (await isTestTenantId(tenantId) && !isPublicTestTenantVideo(record) && !isVisibleVideoPipelineRecord(record)) {
     res.status(404).json({ error: 'Not found' });
     return;
   }
@@ -1938,7 +1951,15 @@ async function generateThumbnailFromStoredVideo(record: Record<string, unknown>)
   const analysis = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
   const videoKey = String(analysis.videoObjectKey || '');
   const filename = String(record.videoFileId || '');
-  const video = videoKey ? await r2Download(videoKey) : (filename ? await fetchFile(COL, recordId, filename) : null);
+  let video: Awaited<ReturnType<typeof r2Download>> | null = null;
+  try {
+    video = videoKey ? await r2Download(videoKey) : (filename ? await fetchFile(COL, recordId, filename) : null);
+  } catch (error) {
+    // A stale object key must result in a missing thumbnail, not an unhandled
+    // rejection that takes down the local API while the queue is rendering.
+    console.warn('[videos] thumbnail source unavailable:', error instanceof Error ? error.message : error);
+    return null;
+  }
   if (!video?.buf.length) return null;
 
   if (!fs.existsSync(ANALYSIS_DIR)) fs.mkdirSync(ANALYSIS_DIR, { recursive: true });
@@ -2113,6 +2134,140 @@ videosRouter.post('/:id/analysis-pause', async (req, res) => {
     }),
   });
   res.json({ ok: true, id: req.params.id, status: 'paused', pausedAt });
+});
+
+// Pinned studio materials are not trend_videos records, so the regular
+// /:id/reanalyze route cannot queue them. Create a tenant-scoped pipeline record
+// first, then analyze the original material while exposing every state through
+// the same scheduler stats used by crawled videos.
+videosRouter.post('/material-exact-analysis', async (req, res) => {
+  const { tenantId } = res.locals as AuthLocals;
+  const materialId = String(req.body?.materialId || '').trim();
+  const rawMaterialId = materialId.replace(/^pb-/, '');
+  const title = String(req.body?.title || '置顶素材').trim().slice(0, 200);
+  const platform = (['tiktok', 'instagram', 'youtube', 'facebook'].includes(String(req.body?.platform))
+    ? req.body.platform : 'tiktok') as Platform;
+  const duration = Math.max(0, Number(req.body?.duration || 0));
+  if (!materialId) { res.status(400).json({ error: 'materialId is required' }); return; }
+
+  let material: Material | null = null;
+  let cloudRecord: Record<string, unknown> | null = null;
+  if (materialId.startsWith('pb-')) {
+    cloudRecord = await getCloudMaterialRecord(rawMaterialId);
+    const scope = String(cloudRecord?.scope || 'own');
+    if (!cloudRecord || (scope !== 'shared' && String(cloudRecord.tenantId || '') !== tenantId)) {
+      res.status(404).json({ error: 'Material not found' });
+      return;
+    }
+    material = {
+      id: materialId,
+      name: String(cloudRecord.title || cloudRecord.sourceName || title),
+      folder: String(cloudRecord.folder || 'upload'),
+      type: 'video',
+      duration: Number(cloudRecord.duration || duration),
+      size: humanSize(Number(cloudRecord.sizeBytes || 0)),
+      file: String(cloudRecord.videoFile || ''),
+      url: `/api/overseas/studio/materials/pb/${rawMaterialId}/media`,
+      poster: `/api/overseas/studio/materials/pb/${rawMaterialId}/poster`,
+      scope: scope === 'shared' ? 'shared' : 'own',
+      tenantId: String(cloudRecord.tenantId || ''),
+      createdAt: String(cloudRecord.created || new Date().toISOString()),
+    };
+  } else {
+    material = loadMaterials().find(item => item.id === materialId
+      && (item.scope === 'shared' || item.tenantId === tenantId)) || null;
+    if (!material) { res.status(404).json({ error: 'Material not found' }); return; }
+  }
+  if (material.type !== 'video') { res.status(400).json({ error: 'Only video materials can be analyzed' }); return; }
+
+  const existingPage = await store.list<Record<string, unknown>>(COL, { where: { tenantId }, page: 1, perPage: 500 });
+  const existing = existingPage.items.find(item => {
+    const analysis = parseJsonRecord<Record<string, unknown>>(item.aiAnalysis, {});
+    return String(analysis.materialId || '') === materialId;
+  });
+  const analysisRunId = randomUUID();
+  const queuedAt = new Date().toISOString();
+  const queueAnalysis = {
+    ...(existing ? parseJsonRecord<Record<string, unknown>>(existing.aiAnalysis, {}) : {}),
+    materialId,
+    materialUrl: material.url,
+    materialPoster: material.poster,
+    analysisSource: 'studio-material-exact',
+    analysisRunId,
+    analysisRunMode: 'exact',
+    requestedAnalysisMode: 'exact',
+    analysisMode: 'strategy',
+    analysisQuality: 'segment_grounded',
+    geminiStatus: 'queued',
+    downloadStatus: 'analyzing',
+    videoFetchStatus: 'fetched',
+    analysisQueuedAt: queuedAt,
+    reanalyzeQueuedAt: queuedAt,
+    analysisError: undefined,
+    videoLevelFailureStatus: undefined,
+    userVisible: true,
+  };
+  let record: Record<string, unknown> | null = existing || null;
+  if (existing) {
+    await store.update(COL, String(existing.id), { status: 'pending' as VideoStatus, aiAnalysis: JSON.stringify(queueAnalysis) });
+  } else {
+    record = await store.create(COL, {
+      tenantId,
+      contentFormat: 'video',
+      platform,
+      title: title || material.name,
+      thumbnailUrl: material.poster || '',
+      videoFileId: '',
+      duration: material.duration || duration,
+      sourceUrl: '',
+      tags: JSON.stringify(['置顶素材', '全片精确分析']),
+      aiAnalysis: JSON.stringify(queueAnalysis),
+      status: 'pending' as VideoStatus,
+      crawledAt: queuedAt,
+    });
+  }
+  const recordId = String(record?.id || existing?.id || '');
+  if (!recordId) { res.status(500).json({ error: 'Failed to create analysis task' }); return; }
+
+  void (async () => {
+    fs.mkdirSync(ANALYSIS_DIR, { recursive: true });
+    const tempPath = path.join(ANALYSIS_DIR, `studio-material-${recordId}-${analysisRunId}.mp4`);
+    try {
+      if (materialId.startsWith('pb-')) {
+        const response = await fetchCloudMaterial(rawMaterialId, 'videoFile');
+        if (!response?.ok) throw new Error('云端素材文件不可读');
+        fs.writeFileSync(tempPath, Buffer.from(await response.arrayBuffer()));
+      } else if (material!.objectKey) {
+        const downloaded = await r2Download(material!.objectKey);
+        if (!downloaded?.buf.length) throw new Error('COS 素材文件不可读');
+        fs.writeFileSync(tempPath, downloaded.buf);
+      } else {
+        const localPath = path.join(MEDIA_DIR, material!.file);
+        if (!fs.existsSync(localPath)) throw new Error('本地素材文件不存在');
+        fs.copyFileSync(localPath, tempPath);
+      }
+      await analyzeDownloadedMaterial(recordId, tempPath, material!, 'exact', analysisRunId);
+    } catch (error) {
+      const latest = await store.getById<Record<string, unknown>>(COL, recordId);
+      const previous = parseJsonRecord<Record<string, unknown>>(latest?.aiAnalysis, {});
+      if (String(previous.analysisRunId || '') === analysisRunId) {
+        await store.update(COL, recordId, {
+          status: 'failed' as VideoStatus,
+          aiAnalysis: JSON.stringify({
+            ...previous,
+            requestedAnalysisMode: undefined,
+            geminiStatus: 'video_failed',
+            analysisError: compactVideoPipelineError(error instanceof Error ? error.message : String(error)),
+            videoLevelFailureStatus: '全片精确分析失败，可重试',
+          }),
+        });
+      }
+    } finally {
+      try { fs.unlinkSync(tempPath); } catch { /* best effort */ }
+    }
+  })();
+
+  res.status(202).json({ status: 'pending', id: recordId, queuedAt });
 });
 
 // ─── PATCH /videos/:id/reanalyze ─────────────────────────────────────────────
@@ -7617,7 +7772,15 @@ export async function getVideoPipelineStats(tenantId?: string): Promise<Record<s
   }
 
   const visibleRecords = tenantId && await isTestTenantId(tenantId)
-    ? records.filter(isPublicTestTenantVideo)
+    ? records.filter(record => isPublicTestTenantVideo(record) || isVisibleVideoPipelineRecord(record))
+    : records;
+  const analysisQueueRecords = tenantId && await isTestTenantId(tenantId)
+    ? records.filter(record => {
+        if (isPublicTestTenantVideo(record) || isVisibleVideoPipelineRecord(record)) return true;
+        const analysis = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
+        return Boolean(analysis.requestedAnalysisMode || analysis.analysisPausedAt)
+          || ['queued', 'analyzing', 'paused', 'waiting_for_video'].includes(String(analysis.geminiStatus || ''));
+      })
     : records;
   const now = Date.now();
   const today = new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -7678,7 +7841,7 @@ export async function getVideoPipelineStats(tenantId?: string): Promise<Record<s
     .filter((item): item is NonNullable<typeof item> => Boolean(item))
     .sort((a, b) => Date.parse(b.syncedAt) - Date.parse(a.syncedAt))
     .slice(0, 50);
-  const analysisItems = visibleRecords.slice(0, 100).map(record => {
+  const analysisItems = analysisQueueRecords.slice(0, 100).map(record => {
     const analysis = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
     const gemini = String(analysis.geminiStatus || '');
     const fetchStatus = String(analysis.downloadStatus || analysis.videoFetchStatus || '');

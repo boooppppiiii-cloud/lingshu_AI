@@ -25,8 +25,14 @@ import type { PublishDeliveryMode } from './publishing/schedulePolicy';
 import type { ConversationContext, Page, RestoreSignal, KickoffSignal, AgentAction } from '../App';
 import { authHeader } from '../lib/auth';
 import { SocialPlatformIcon } from './SocialPlatformIcon';
+import {
+  resolveInitialTrafficViewMode,
+  resolveNavigationEventViewMode,
+  resolveSignalViewMode,
+  type TrafficViewMode,
+} from './trafficViewMode';
 
-type ViewMode = 'materials' | 'create' | 'publish' | 'accounts';
+type ViewMode = TrafficViewMode;
 type PublishPlatform = 'youtube' | 'tiktok' | 'instagram' | 'facebook';
 
 type PublishDraftItem = {
@@ -246,22 +252,29 @@ export default function TrafficPage({
 }: Props) {
   const [viewMode, setViewMode] = useState<ViewMode>(() => {
     try {
-      const initialView = localStorage.getItem('lingshu:traffic:initial-view') as ViewMode | null;
+      const initialView = localStorage.getItem('lingshu:traffic:initial-view');
+      const persistedView = localStorage.getItem('lingshu:traffic:view-mode');
       localStorage.removeItem('lingshu:traffic:initial-view');
-      if (initialView && ['materials', 'create', 'publish', 'accounts'].includes(initialView)) return initialView;
+      return resolveInitialTrafficViewMode(initialView, persistedView);
     } catch { /* ignore */ }
     return 'materials';
   });
   const [publishDraft, setPublishDraft] = useState<PublishDraft | null>(null);
 
   useEffect(() => {
-    if (restore || kickoff) setViewMode('materials');
+    try { localStorage.setItem('lingshu:traffic:view-mode', viewMode); } catch { /* ignore */ }
+  }, [viewMode]);
+
+  useEffect(() => {
+    if (restore || kickoff) setViewMode(current => resolveSignalViewMode(current, true));
   }, [restore?.key, kickoff?.key]);
 
   useEffect(() => {
     const handler = (event: Event) => {
       const detail = (event as CustomEvent<{ page?: Page; view?: ViewMode }>).detail;
-      if (detail?.page === 'traffic' && detail.view) setViewMode(detail.view);
+      if (detail?.page === 'traffic' && detail.view) {
+        setViewMode(current => resolveNavigationEventViewMode(current, detail.view!));
+      }
     };
     window.addEventListener('lingshu:navigate', handler);
     return () => window.removeEventListener('lingshu:navigate', handler);

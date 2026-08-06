@@ -496,9 +496,18 @@ function referenceIndustryLeakTerms(referenceText: string, productInfo: string):
 }
 
 function productSupportsNumericClaim(claim: string, productInfo: string): boolean {
-  const source = String(productInfo).normalize('NFKC');
-  if (source.toLowerCase().includes(String(claim).normalize('NFKC').toLowerCase())) return true;
-  const parsed = String(claim).match(/(\d+(?:\.\d+)?)\s*(瓶|ml|毫升|kg|g|克|斤|cm|厘米|mm|毫米|天|day|days|秒|%|个|pcs|件|箱|元|美元)/i);
+  // Product fields can contain non-breaking or zero-width separators copied
+  // from rich text. They render as `50g` in the UI but previously prevented
+  // the closed-world checker from finding the same `50g` claim.
+  const normalizeNumericEvidence = (value: string) => String(value)
+    .normalize('NFKC')
+    .replace(/[\u200B-\u200D\u2060\uFEFF]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const source = normalizeNumericEvidence(productInfo);
+  const normalizedClaim = normalizeNumericEvidence(claim);
+  if (source.toLowerCase().includes(normalizedClaim.toLowerCase())) return true;
+  const parsed = normalizedClaim.match(/(\d+(?:\.\d+)?)\s*(瓶|ml|毫升|kg|g|克|斤|cm|厘米|mm|毫米|天|day|days|秒|%|个|pcs|件|箱|元|美元)/i);
   if (!parsed) return false;
   const value = parsed[1];
   const unit = parsed[2].toLowerCase();
@@ -533,6 +542,30 @@ function productSupportsNumericClaim(claim: string, productInfo: string): boolea
     return new RegExp(`(?:起订量|MOQ)[^\\n]{0,30}\\b${value}\\b`, 'i').test(source);
   }
   return false;
+}
+
+export function unsupportedNumericClaims(candidate: string, productInfo: string): string[] {
+  const pattern = /\d+(?:\.\d+)?\s*(?:瓶|ml|ML|毫升|kg|KG|g|克|斤|cm|厘米|mm|毫米|天|day|days|Days|%|个|pcs|件|箱|元|美元)/g;
+  return [...new Set(Array.from(candidate.matchAll(pattern))
+    .filter(match => {
+      const claim = match[0];
+      if (productSupportsNumericClaim(claim, productInfo)) return false;
+      const start = candidate.lastIndexOf('\n', match.index ?? 0) + 1;
+      const end = candidate.indexOf('\n', match.index ?? 0);
+      const line = candidate.slice(start, end < 0 ? candidate.length : end).trim();
+      if (/%$/.test(claim)) {
+        return !/^(?:运镜|构图|环境|景别)[：:]/.test(line);
+      }
+      if (/(?:个|件|瓶)$/.test(claim) && /^(?:运镜|构图|环境|景别|画面)[：:]/.test(line)) return false;
+      if (!/(?:cm|厘米|mm|毫米)$/i.test(claim)) return true;
+      // Distances used to stage a shot are production directions, not product
+      // specifications. Keep numeric claims in speech/captions and explicit
+      // size/dimension statements subject to the closed-world fact gate.
+      return /^(?:台词|字幕)[：:]/.test(line)
+        || /(?:尺寸|规格|直径|高度|宽度|长度|厚度|容量)[^\n]*\d/i.test(line)
+        || !/^(?:运镜|画面|构图|环境|景别)[：:]/.test(line);
+    })
+    .map(match => match[0]))];
 }
 
 function stripScriptAnalysisSummary(text: string): string {
@@ -574,20 +607,19 @@ function enforceProductNameInScript(script: string, productInfo: string): string
     .replace(/\bthis product\b/gi, productName);
 }
 
-function ensureSelectedProductNamesInScript(script: string, productInfo: string): string {
+export function ensureSelectedProductNamesInScript(script: string, productInfo: string): string {
   const names = selectedProductNames(productInfo);
   let next = String(script || '');
   for (const name of names) {
     if (!name || normalizeProductIdentity(next).includes(normalizeProductIdentity(name))) continue;
     const blocks = next.split(/(?=^\[[^\]\r\n]+\][ \t]*$)/m);
-    const targetIndex = blocks.findIndex((block, index) => index > 0 && /^\[[^\]]+\]/.test(block));
-    const fallbackIndex = blocks.findIndex(block => /^\[[^\]]+\]/.test(block));
-    const index = targetIndex >= 0 ? targetIndex : fallbackIndex;
+    const index = blocks.findIndex(block => /^\[[^\]]+\]/.test(block) && /^画面[：:]/m.test(block));
     if (index < 0) continue;
-    if (/^字幕[：:]/m.test(blocks[index]!)) {
-      blocks[index] = blocks[index]!.replace(/^(字幕[：:]\s*)([^\n]*)/m, (_line, prefix, caption) => `${prefix}${caption ? `${caption}｜` : ''}${name}`);
-      next = blocks.join('');
-    }
+    // Put identity in a visual direction, not the subtitle. Subtitles are
+    // mechanically synchronized from voiceover later and would otherwise
+    // erase the injected product names again.
+    blocks[index] = blocks[index]!.replace(/^(画面[：:]\s*)([^\n]*)/m, (_line, prefix, visual) => `${prefix}${visual ? `${visual}；` : ''}展示 ${name}`);
+    next = blocks.join('');
   }
   return next;
 }
@@ -683,7 +715,10 @@ function hasUnnaturalVoiceover(script: string): boolean {
       const match = line.match(/(?:台词|人物说|Voiceover|VO|口播)\s*[：:]\s*(.+)$/i);
       if (!match?.[1]) return false;
       const text = match[1].replace(/\s+/g, ' ').trim();
-      return techTermCount(text) >= 3 || text.length > 72 || /CE[、,，\s]+RoHS[、,，\s]+UKCA/i.test(text);
+      const tooLong = /[\u3400-\u9fff]/.test(text)
+        ? Array.from(text.replace(/\s/g, '')).length > 72
+        : text.split(/\s+/).filter(Boolean).length > 20;
+      return techTermCount(text) >= 3 || tooLong || /CE[、,，\s]+RoHS[、,，\s]+UKCA/i.test(text);
     });
 }
 
@@ -699,11 +734,11 @@ export function storyboardSpeechIssues(script: string): string[] {
       issues.push(`${range[0]} 时间段无效`);
       continue;
     }
-    const cjkChars = Array.from(voice.replace(/[\s，。！？、；：,.!?;:“”"'（）()]/g, '')).length;
-    const wordCount = voice.split(/\s+/).filter(Boolean).length;
-    const estimated = /[\u3400-\u9fff]/.test(voice)
-      ? cjkChars / 4.5 + 0.6
-      : wordCount / 2.5 + 0.5;
+    const cjkChars = Array.from(voice).filter(char => /[\u3400-\u9fff]/.test(char)).length;
+    const latinWords = voice.replace(/[\u3400-\u9fff]/g, ' ').match(/[A-Za-z0-9]+(?:['’-][A-Za-z0-9]+)*/g)?.length || 0;
+    const estimated = cjkChars > 0
+      ? cjkChars / 4.5 + latinWords / 2.5 + 0.6
+      : latinWords / 2.5 + 0.5;
     if (estimated > duration + 0.35) {
       issues.push(`${range[0]} 口播预计${estimated.toFixed(1)}秒，超过镜头${duration.toFixed(1)}秒`);
     }
@@ -716,15 +751,31 @@ export function fitSpeechToShot(value: string, duration: number): string {
   if (!text || text === '无') return '无';
   const hasCjk = /[\u3400-\u9fff]/.test(text);
   if (!hasCjk) {
-    const maxWords = Math.max(1, Math.floor(Math.max(0.5, duration - 0.6) * 2.3));
+    const maxWords = Math.max(1, Math.floor(Math.max(0.5, duration - 0.15) * 2.5));
     const words = text.split(/\s+/);
     if (words.length <= maxWords) return text;
     const complete = words.slice(0, maxWords).join(' ').match(/^(.+[.!?])(?:\s|$)/)?.[1]?.trim();
-    return complete || text;
+    if (complete) return complete;
+    const estimated = words.length / 2.5 + 0.5;
+    if (estimated <= duration + 1.5) {
+      const terminal = /[.!?]$/.test(text) ? text.slice(-1) : '';
+      const candidates = [
+        text.replace(/[.!?]$/, '').replace(/^(?:brand (?:founder|owner)|product manager|procurement|buyer|importer|distributor)[,:]\s*/i, '').replace(/\b(?:really|clearly|simply|carefully|directly|actually|currently|now|first|just|please)\b[,.]?\s*/gi, ''),
+        text.replace(/[.!?]$/, '').replace(/^(?:brand (?:founder|owner)|product manager|procurement|buyer|importer|distributor)[,:]\s*/i, ''),
+        text.replace(/[.!?]$/, '').replace(/\b(?:really|clearly|simply|carefully|directly|actually|currently|now|first|just|please)\b[,.]?\s*/gi, ''),
+        text.replace(/[.!?]$/, '').replace(/\bhow can you\b/gi, 'how do you').replace(/\bdo you want to\b/gi, 'want to'),
+      ].map(candidate => candidate.replace(/\s+/g, ' ').replace(/^[,:]\s*|\s*[,:]$/g, '').trim());
+      for (const candidate of candidates) {
+        if (candidate && candidate.split(/\s+/).length <= maxWords) return `${candidate}${terminal || (/^(?:how|why|which|what|can|do|is|are|should|would)\b/i.test(candidate) ? '?' : '.')}`;
+      }
+    }
+    return text;
   }
   const maxChars = Math.max(2, Math.floor(Math.max(0.5, duration - 0.6) * 4));
   const chars = Array.from(text);
-  if (chars.filter(char => !/[\s，。！？、；：,.!?;:“”"'（）()]/.test(char)).length <= maxChars) return text;
+  const spokenCharCount = (candidate: string) => Array.from(candidate).filter(char => !/[\s，。！？、；：,.!?;:“”"'（）()]/.test(char)).length;
+  const originalChars = spokenCharCount(text);
+  if (originalChars <= maxChars) return text;
   let count = 0;
   let result = '';
   let lastComplete = '';
@@ -734,7 +785,29 @@ export function fitSpeechToShot(value: string, duration: number): string {
     result += char;
     if (/[。！？!?]/.test(char)) lastComplete = result.trim();
   }
-  return lastComplete || text;
+  if (lastComplete) return lastComplete;
+
+  // A small timing miss should not reject the whole material storyboard. For
+  // a single Chinese sentence, remove only discourse fillers and redundant
+  // modifiers, then keep the original terminal punctuation. This is semantic
+  // compaction rather than character slicing, so it cannot create a fragment.
+  const estimated = originalChars / 4.5 + 0.6;
+  if (estimated <= duration + 1.5) {
+    const terminal = /[。！？!?]$/.test(text) ? text.slice(-1) : '';
+    let compact = text.replace(/[。！？!?]$/, '')
+      .replace(/^(?:各位)?(?:品牌方|品牌创始人|产品经理|采购|买家)[，,：:]\s*/, '')
+      .replace(/你是否正在/g, '是否')
+      .replace(/我们(?:先|来)?(?:一起)?看看/g, '看看')
+      .replace(/是否能够/g, '能否')
+      .replace(/如何才能/g, '如何')
+      .replace(/(?:到底|真正|具体|现在|首先|其实|本次|当前|这款)/g, '')
+      .replace(/可以帮助/g, '能')
+      .replace(/[，,]{2,}/g, '，')
+      .replace(/^[，,：:]|[，,：:]$/g, '')
+      .trim();
+    if (compact && spokenCharCount(compact) <= maxChars) return `${compact}${terminal || (/^(?:怎么|如何|是否|能否|哪|什么|为什么)/.test(compact) ? '？' : '。')}`;
+  }
+  return text;
 }
 
 export function ctaSemanticallySatisfied(candidate: string, primaryCta: string): boolean {
@@ -745,7 +818,7 @@ export function ctaSemanticallySatisfied(candidate: string, primaryCta: string):
 }
 
 /** Keep an otherwise valid strategy script renderable even after a rewrite pass. */
-function fitStoryboardSpeech(script: string): string {
+export function fitStoryboardSpeech(script: string): string {
   return String(script || '').replace(
     /(\[\s*(\d+(?:\.\d+)?)\s*(?:s|秒)?\s*[-–]\s*(\d+(?:\.\d+)?)\s*(?:s|秒)?\s*\][\s\S]*?)(人物说|台词|Voiceover|VO|口播)(\s*[：:]\s*[“"]?)([^\n”"]+)([”"]?)/gi,
     (_full, prefix, start, end, label, separator, voice, quote) => `${prefix}${label}${separator}${fitSpeechToShot(voice, Math.max(0.5, Number(end) - Number(start)))}${quote}`,
@@ -765,9 +838,58 @@ export function syncStoryboardSubtitles(script: string): string {
 export function normalizeStoryboardFieldLines(script: string): string {
   const labels = '素材|环境|景别|运镜|构图|镜头功能|画面|配乐|台词|字幕';
   return String(script || '')
+    .replace(/^[ \t]*(?:[-*•][ \t]+|\d+[.)][ \t]+)?(?=\[\s*\d+(?:\.\d+)?\s*(?:s|秒)?\s*[-–—]\s*\d+(?:\.\d+)?\s*(?:s|秒)?\s*\][ \t]*$)/gm, '')
     .replace(/(\[[^\]\r\n]+\])[ \t]+(?=(?:素材|环境|景别|运镜|构图|镜头功能|画面|配乐|台词|字幕)[：:])/g, '$1\n')
     .replace(new RegExp(`[ \\t]+(?=(?:${labels})[：:])`, 'g'), '\n')
     .trim();
+}
+
+export function dedupeStoryboardFieldLines(script: string): string {
+  const fields = new Set(['素材', '环境', '景别', '运镜', '构图', '镜头功能', '画面', '配乐', '台词', '字幕']);
+  return String(script || '').split(/(?=^[ \t]*\[\s*\d+(?:\.\d+)?\s*(?:s|秒)?\s*[-–—]\s*\d+(?:\.\d+)?\s*(?:s|秒)?\s*\][ \t]*$)/m).map(block => {
+    if (!/^\s*\[\s*\d+(?:\.\d+)?\s*(?:s|秒)?\s*[-–—]/.test(block)) return block;
+    const seen = new Set<string>();
+    return block.split('\n').filter(line => {
+      const field = line.match(/^\s*([^：:\n]+)[：:]/)?.[1]?.trim() || '';
+      if (!fields.has(field)) return true;
+      if (seen.has(field)) return false;
+      seen.add(field);
+      return true;
+    }).join('\n');
+  }).join('');
+}
+
+export function restoreProductStoryboardBoundaries(script: string): string {
+  const scenes: string[][] = [];
+  let current: string[] = [];
+  const flush = () => {
+    if (current.some(line => /^(?:环境|景别|运镜|构图|镜头功能|画面|配乐|台词|字幕)[：:]/.test(line))) scenes.push(current);
+    current = [];
+  };
+  for (const rawLine of normalizeStoryboardFieldLines(script).split('\n')) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (/^\[[^\]]+\]$/.test(line)) {
+      flush();
+      continue;
+    }
+    if (/^环境[：:]/.test(line) && current.some(item => /^环境[：:]/.test(item))) flush();
+    current.push(line);
+  }
+  flush();
+  if (scenes.length < 2) return normalizeStoryboardFieldLines(script);
+  let cursor = 0;
+  return scenes.map(lines => {
+    const voice = lines.find(line => /^台词[：:]/.test(line))?.replace(/^台词[：:]\s*/, '').trim() || '';
+    const cjk = Array.from(voice.replace(/[\s，。！？、；：,.!?;:“”"'（）()]/g, '')).length;
+    const words = voice.split(/\s+/).filter(Boolean).length;
+    const spoken = /[\u3400-\u9fff]/.test(voice) ? cjk / 4.5 + 0.6 : words / 2.5 + 0.5;
+    const duration = Math.max(2.4, +(spoken + 0.35).toFixed(1));
+    const end = +(cursor + duration).toFixed(1);
+    const output = `[${cursor}-${end}s]\n${lines.join('\n')}`;
+    cursor = end;
+    return output;
+  }).join('\n');
 }
 
 function duplicateStoryboardFieldIssues(script: string): string[] {
@@ -854,6 +976,128 @@ function parseLockedVoicePlan(raw: string, expectedCount: number): string[] {
 }
 
 type LockedStoryboardScene = { environment: string; shot: string; camera: string; composition: string; purpose: string; visual: string; music: string };
+export function isPackagingOnlyProductInfo(productInfo: string): boolean {
+  const text = String(productInfo || '').toLowerCase();
+  const hasPackagingIdentity = /滴管瓶|泵霜瓶|真空泵(?:霜)?瓶|包装(?:展示|容器)?|瓶器|空瓶|包材|容器|dropper bottle|airless (?:pump )?jar|empty (?:bottle|jar)|packaging|container/.test(text);
+  const hasFinishedBeautyProduct = /膏体|质地|配方|精华液本体|面霜本体|润唇膏|上唇|涂抹|试涂|formula|texture|lip balm|apply to (?:skin|lips)/.test(text);
+  return hasPackagingIdentity && !hasFinishedBeautyProduct;
+}
+
+export function productVoicePlanSupportsTheme(lines: string[], theme: ContentTheme): boolean {
+  const opening = String(lines[0] || '');
+  const patterns: Record<ContentTheme, RegExp> = {
+    buyer_pain: /担心|难|问题|选择|判断|拖慢|concern|risk|problem|choice|decision|slowing/i,
+    product_proof: /目录|实物|细节|核实|验证|确认|catalog|physical|detail|verify|check|confirm|proof/i,
+    use_case: /场景|陈列|使用|适用|适合|适配|scene|display|use|fit|suit/i,
+    supplier_capability: /供应|交付|质检|生产|执行|supply|delivery|quality|production|execution/i,
+    customization: /定制|标签|外盒|包装触点|custom|label|carton|packaging touchpoint/i,
+    comparison: /比较|对比|两种|怎么选|compare|comparison|two .*options|choose between/i,
+    customer_case: /案例|客户|合作过程|case|customer|collaboration process/i,
+    trend: /趋势|信号|来源|trend|signal|sourced/i,
+    talking_head: /我|回答|讲解|let me|answer|explain/i,
+  };
+  return patterns[theme].test(opening);
+}
+
+export function openingMatchesCooperationRoute(opening: string, route: CooperationRoute): boolean {
+  const patterns: Record<CooperationRoute, RegExp> = {
+    oem_odm: /品牌方|品牌创始人|产品经理|采购|\bbrand(?:s)?\b|brand founder|product manager|procurement|sourcing manager/i,
+    wholesale_distribution: /进口商|经销商|渠道采购|importer|distributor|channel buyer/i,
+    consumer_retail: /你|消费者|用户|customer|consumer/i,
+  };
+  return patterns[route].test(opening);
+}
+
+function safeProductVoicePlan(theme: ContentTheme, productInfo: string, cta: string, language: string): string[] {
+  const names = selectedProductNames(productInfo);
+  const first = names[0] || 'the selected product';
+  const second = names[1] || first;
+  if (language === 'zh') {
+    const hooks: Record<ContentTheme, string> = {
+      buyer_pain: '品牌方，包装难选吗？', product_proof: '品牌方，细节真实吗？', use_case: '品牌方，包装适用吗？',
+      supplier_capability: '品牌方，供应稳吗？', customization: '品牌方，哪里能定制？', comparison: '品牌方，两款怎么选？',
+      customer_case: '品牌方，案例可靠吗？', trend: '品牌方，趋势可信吗？', talking_head: '品牌方，我来讲包装。',
+    };
+    return [hooks[theme], `${first}是本次已选包装。`, `${second}是另一款已选包装。`, cta || '请通过WhatsApp索取已确认产品资料。'];
+  }
+  const hooks: Record<ContentTheme, string> = {
+    buyer_pain: 'Brand founders, is packaging choice difficult?', product_proof: 'Brand founders, verify visible packaging details.', use_case: 'Brand founders, which packaging fits?',
+    supplier_capability: 'Brand founders, verify packaging supply.', customization: 'Brand founders, which touchpoints customize?', comparison: 'Brand founders, compare visible packaging.',
+    customer_case: 'Brand founders, review the customer case.', trend: 'Brand founders, review this sourced signal.', talking_head: 'I explain packaging for brand founders.',
+  };
+  return [hooks[theme], `${first} is one selected packaging option.`, `${second} is the second selected packaging option.`, 'Message us on WhatsApp for verified product details.'];
+}
+
+export function applySafeStoryboardSpeechFallback(
+  script: string,
+  productInfo: string,
+  theme: ContentTheme,
+  primaryCta: string,
+  language: string,
+): string {
+  const blocks = String(script || '').split(/(?=^[ \t]*\[\s*\d+(?:\.\d+)?\s*(?:s|秒)?\s*[-–—]\s*\d+(?:\.\d+)?\s*(?:s|秒)?\s*\][ \t]*$)/m);
+  const sceneIndexes = blocks.map((block, index) => /^\s*\[\s*\d/.test(block) ? index : -1).filter(index => index >= 0);
+  if (!sceneIndexes.length) return script;
+  const safePlan = safeProductVoicePlan(theme, productInfo, primaryCta, language);
+  const cta = /whatsapp/i.test(primaryCta)
+    ? (language === 'zh' ? '请用WhatsApp联系。' : 'Message us on WhatsApp.')
+    : primaryCta || (language === 'zh' ? '请联系我们了解已核实资料。' : 'Message us for verified details.');
+  const middleCount = Math.max(0, sceneIndexes.length - 2);
+  const middleLines = Array.from({ length: middleCount }, (_, index) => {
+    if (index % 2 === 0) return language === 'zh' ? '查看包装。' : 'Review the visible packaging.';
+    return language === 'zh' ? '对比结构。' : 'Compare the visible structures.';
+  });
+  const lines = [safePlan[0]!, ...middleLines, cta];
+  for (let position = 0; position < sceneIndexes.length; position += 1) {
+    const index = sceneIndexes[position]!;
+    const range = blocks[index]!.match(/^\s*\[\s*(\d+(?:\.\d+)?)\s*(?:s|秒)?\s*[-–—]\s*(\d+(?:\.\d+)?)/);
+    const duration = range ? Math.max(0.5, Number(range[2]) - Number(range[1])) : 4;
+    const plannedVoice = lines[position] || cta;
+    let voice = fitSpeechToShot(plannedVoice, duration);
+    let block = blocks[index]!;
+    if (/^台词[：:]/m.test(block)) block = block.replace(/^台词[：:].*$/m, `台词：${voice}`);
+    else block = `${block.replace(/\s+$/, '')}\n台词：${voice}\n`;
+    if (/^字幕[：:]/m.test(block)) block = block.replace(/^字幕[：:].*$/m, `字幕：${voice}`);
+    else block = block.replace(/^(台词[：:].*)$/m, `$1\n字幕：${voice}`);
+    if (storyboardSpeechIssues(block).length > 0) {
+      voice = position === 0
+        ? (language === 'zh' ? '品牌方，怎么选？' : 'Brand founders, how to choose?')
+        : position === sceneIndexes.length - 1
+          ? (language === 'zh' ? '请用WhatsApp联系。' : 'Message us on WhatsApp.')
+          : (language === 'zh' ? (position % 2 ? '查看包装。' : '对比结构。') : 'Review visible packaging.');
+      block = block.replace(/^台词[：:].*$/m, `台词：${voice}`).replace(/^字幕[：:].*$/m, `字幕：${voice}`);
+    }
+    blocks[index] = block;
+  }
+  return blocks.join('');
+}
+
+export function clearStoryboardSpeech(script: string): string {
+  const blocks = String(script || '').split(/(?=^[ \t]*\[\s*\d+(?:\.\d+)?\s*(?:s|秒)?\s*[-–—]\s*\d+(?:\.\d+)?\s*(?:s|秒)?\s*\][ \t]*$)/m);
+  return blocks.map(block => {
+    if (!/^\s*\[\s*\d/.test(block)) return block;
+    let next = block;
+    if (/^[ \t]*台词[：:]/m.test(next)) next = next.replace(/^[ \t]*台词[：:].*$/m, '台词：无');
+    else next = `${next.replace(/\s+$/, '')}\n台词：无\n`;
+    if (/^[ \t]*字幕[：:]/m.test(next)) next = next.replace(/^[ \t]*字幕[：:].*$/m, '字幕：无');
+    else next = next.replace(/^(台词[：:]无)$/m, '$1\n字幕：无');
+    return next;
+  }).join('');
+}
+
+function safeProductScenes(productInfo: string, count: number): LockedStoryboardScene[] {
+  const names = selectedProductNames(productInfo);
+  return Array.from({ length: count }, (_, index) => {
+    const nameIndex = index <= 1 ? 0 : Math.min(1, Math.max(0, names.length - 1));
+    return ({
+    environment: 'Clean studio table with neutral background', shot: index === 0 ? '中近景' : index === count - 1 ? '全景' : '特写',
+    camera: index % 2 ? '固定镜头' : '缓慢推进', composition: 'Selected empty packaging centered with an unobstructed silhouette',
+    purpose: index === 0 ? '主题钩子' : index === count - 1 ? 'CTA' : '产品证据',
+    visual: `Display empty ${names[nameIndex] || 'selected product'} packaging only; no contents, results, or unverified overlays`,
+    music: index === count - 1 ? 'Soft message chime' : 'Light neutral rhythm',
+    });
+  });
+}
 function parseLockedStoryboardScenes(raw: string, expectedCount: number): LockedStoryboardScene[] {
   try {
     const parsed = JSON.parse(String(raw).replace(/```json|```/gi, '').trim()) as { scenes?: unknown };
@@ -872,7 +1116,9 @@ function serializeLockedStoryboard(scenes: LockedStoryboardScene[], lines: strin
   return scenes.map((scene, index) => {
     const voice = lines[index] || '';
     const chars = Array.from(voice.replace(/[\s，。！？、；：,.!?;:“”"'（）()]/g, '')).length;
-    const duration = Math.max(2.4, +(chars / 4.5 + 0.95).toFixed(1));
+    const words = voice.split(/\s+/).filter(Boolean).length;
+    const spoken = /[\u3400-\u9fff]/.test(voice) ? chars / 4.5 : words / 2.5;
+    const duration = Math.max(2.4, +(spoken + 0.95).toFixed(1));
     const end = +(cursor + duration).toFixed(1);
     const block = `[${cursor}-${end}s]\n环境：${scene.environment}\n景别：${scene.shot}\n运镜：${scene.camera}\n构图：${scene.composition}\n镜头功能：${scene.purpose}\n画面：${scene.visual}\n配乐：${scene.music}\n台词：${voice}\n字幕：${voice}`;
     cursor = end;
@@ -995,8 +1241,8 @@ function defaultLipBalmScenes(route: CooperationRoute, theme: string, productNam
   ];
 }
 
-function repairMaterialScript(script: string, productInfo: string, materialsText: string): string {
-  let repaired = normalizeStoryboardFieldLines(script);
+export function repairMaterialScript(script: string, productInfo: string, materialsText: string): string {
+  let repaired = dedupeStoryboardFieldLines(normalizeStoryboardFieldLines(script));
   const unsupportedNumbers = Array.from(repaired.matchAll(/\d+(?:\.\d+)?\s*(?:瓶|ml|ML|毫升|kg|KG|g|克|斤|cm|厘米|mm|毫米|天|day|days|Days|秒|%|个|pcs|件|箱|元|美元)/g))
     .map(match => match[0])
     .filter(claim => !productSupportsNumericClaim(claim, productInfo));
@@ -1011,7 +1257,8 @@ function repairMaterialScript(script: string, productInfo: string, materialsText
   for (const [pattern, terms, neutral] of unsupportedEffects) {
     if (!terms.some(term => evidence.includes(term.toLowerCase()))) repaired = repaired.replace(pattern, neutral);
   }
-  return repaired.replace(/[：:]\s*([，。；,.!?！？])+/g, '：无').replace(/[ ]{2,}/g, ' ').trim();
+  repaired = repaired.replace(/[：:]\s*([，。；,.!?！？])+/g, '：无').replace(/[ ]{2,}/g, ' ').trim();
+  return fitStoryboardSpeech(repaired);
 }
 
 function materialGroundingIssues(script: string, productInfo: string, materialsText: string): string[] {
@@ -1681,7 +1928,7 @@ ${strategyPlanRules}`;
     : '';
 
   const productDuration = Math.max(10, Number(duration) || 20);
-  const productSceneCount = productDuration <= 15 ? 4 : productDuration <= 30 ? 6 : productDuration <= 45 ? 7 : 9;
+  const productSceneCount = productDuration <= 30 ? 4 : productDuration <= 45 ? 6 : 8;
   const productBoundaries = Array.from({ length: productSceneCount + 1 }, (_, index) => +(productDuration * index / productSceneCount).toFixed(1));
   const productTimeline = productBoundaries.slice(0, -1).map((start, index) => {
     const end = productBoundaries[index + 1];
@@ -1777,31 +2024,42 @@ ${normalizedMaterialInfos.map((info, index) => {
   // Those are locked by the server before the visual director sees them.
   const generatedVoiceLines = generationMode === 'product' && voiceoverMode !== 'none' && !/润唇膏|lip balm/i.test(product)
     ? parseLockedVoicePlan(await callLLM(`你是外贸美妆短视频口播编导。只输出 JSON：{"lines":["...", "...", "...", "..."]}。
-为${strategyRoute === 'oem_odm' ? 'OEM品牌创始人' : strategyRoute === 'wholesale_distribution' ? '进口商/经销商' : '终端消费者'}写${productSceneCount}句完整自然中文口播。
-主题：${videoThemeTitle}。每句只说一个意思：钩子、问题、产品本体证据、唯一CTA依次完成。字幕将逐字复制口播，所以不要写标题式短语。
-美妆产品本体优先：至少两句必须围绕膏体、旋出旋回、试涂、上唇或随身使用；包装最多一句，且仅当主题为定制能力时使用。
+为${strategyRoute === 'oem_odm' ? 'OEM品牌创始人' : strategyRoute === 'wholesale_distribution' ? '进口商/经销商' : '终端消费者'}用${lang}写${productSceneCount}句完整自然口播。
+主题：${videoThemeTitle}。每句只说一个意思：买家角色+主题问题、产品A证据、产品B证据、唯一CTA依次完成。英语每句最多12词，中文每句最多18字；不得用逗号拼接多个主张。第一句必须明确说出${strategyRoute === 'oem_odm' ? 'brand founder、product manager 或 procurement' : strategyRoute === 'wholesale_distribution' ? 'importer 或 distributor' : 'consumer'}中的一个角色。字幕将逐字复制口播，所以不要写标题式短语。
+至少两句必须围绕产品资料明确提供的产品身份、结构、规格、包装或定制触点；不得补写资料没有提供的内装物、使用动作、功效、测试结果或客户体验。
 唯一可用事实：${product}
 唯一CTA：${primaryCta || '私信了解产品资料'}
 禁止功效、认证、价格、MOQ、交期、销量、趋势和包装外的臆测。`, { backend: providerOpt, systemPrompt: await enterpriseCtx() || undefined }), productSceneCount)
     : [];
-  const lockedVoiceLines = generatedVoiceLines.length === productSceneCount
+  const safeProductVoiceLines = generationMode === 'product' && voiceoverMode !== 'none'
+    ? safeProductVoicePlan(videoThemeId as ContentTheme, product, primaryCta, language).slice(0, productSceneCount)
+    : [];
+  const generatedVoiceLinesMatchTheme = generatedVoiceLines.length === productSceneCount
+    && productVoicePlanSupportsTheme(generatedVoiceLines, videoThemeId as ContentTheme);
+  const lockedVoiceLines = generatedVoiceLinesMatchTheme
     ? generatedVoiceLines
     : generationMode === 'product' && voiceoverMode !== 'none' && /润唇膏|lip balm/i.test(product)
       ? lipBalmFallbackVoicePlan(strategyRoute, videoThemeId, primaryCta || '私信了解产品资料', productSceneCount)
-      : generatedVoiceLines;
+      : generationMode === 'product' && voiceoverMode !== 'none'
+        ? safeProductVoiceLines
+        : generatedVoiceLines;
   const lockedNarrationRules = lockedVoiceLines.length
     ? `\n已锁定口播（不得改写、不得截断、不得新增；每段字幕必须逐字复制同一行）：\n${lockedVoiceLines.map((line, index) => `${index + 1}. ${line}`).join('\n')}\n时间戳由后端按这些完整口播自动计算；只为每段补画面、环境、景别、运镜、构图、镜头功能和配乐。`
     : '';
   const generatedVisualScenes = lockedVoiceLines.length && !/润唇膏|lip balm/i.test(product)
     ? parseLockedStoryboardScenes(await callLLM(`只输出JSON：{"scenes":[{"environment":"","shot":"","camera":"","composition":"","purpose":"","visual":"","music":""}]}。
-为以下已锁定口播各写一个可拍美妆短视频镜头。不得输出台词、字幕、时间戳、包装外的新事实。产品本体优先；除定制主题外包装最多一个镜头。
+为以下已锁定口播各写一个可拍产品短视频镜头。不得输出台词、字幕、时间戳或产品资料外的新事实。若资料只提供容器或包装信息，画面只能展示空容器、标签、外盒、颜色或结构，不得自行添加内装物和使用效果。
 产品资料：${product}
 主题：${videoThemeTitle}
 锁定口播：${lockedVoiceLines.map((line, index) => `${index + 1}. ${line}`).join('\n')}`, { backend: providerOpt, systemPrompt: await enterpriseCtx() || undefined }), productSceneCount)
     : [];
   const lockedVisualScenes = /润唇膏|lip balm/i.test(product) && lockedVoiceLines.length === productSceneCount
     ? defaultLipBalmScenes(strategyRoute, videoThemeId, selectedProductNames(product)[0] || '', productSceneCount)
-    : generatedVisualScenes;
+    : generatedVisualScenes.length === productSceneCount
+      ? generatedVisualScenes
+      : generationMode === 'product' && lockedVoiceLines.length === productSceneCount
+        ? safeProductScenes(product, productSceneCount)
+        : generatedVisualScenes;
 
   const prompt = generationMode === 'material'
     ? `${materialScriptRules}
@@ -1942,7 +2200,7 @@ Requirements:
       && lockedVisualScenes.length === productSceneCount
       && lockedVoiceLines.length === productSceneCount;
     let script = isStructuredLockedProduct
-      ? serializeLockedStoryboard(lockedVisualScenes, lockedVoiceLines)
+      ? ensureSelectedProductNamesInScript(serializeLockedStoryboard(lockedVisualScenes, lockedVoiceLines), productInfo)
       : normalizeScriptTimestamps(enforceProductNameInScript(stripScriptAnalysisSummary(text), productInfo));
     if (generationMode === 'material') script = repairMaterialScript(script, productInfo, structuredMaterials);
 
@@ -1953,8 +2211,9 @@ Requirements:
     // but none of the large creative-policy context that tends to distract it.
     const normalizeGeneratedScript = (value: string) => {
       let normalized = normalizeStoryboardFieldLines(normalizeScriptTimestamps(ensureSelectedProductNamesInScript(enforceProductNameInScript(stripScriptAnalysisSummary(value), productInfo), productInfo)));
-      if (generationMode === 'product' && voiceoverMode !== 'none') {
-        normalized = retimeStoryboardFromVoice(lockedVisualScenes.length ? normalized : applyLockedVoicePlan(normalized, lockedVoiceLines));
+      if (generationMode === 'product') {
+        if (voiceoverMode !== 'none' && !lockedVisualScenes.length) normalized = applyLockedVoicePlan(normalized, lockedVoiceLines);
+        normalized = restoreProductStoryboardBoundaries(normalized);
       }
       if (generationMode === 'material') normalized = repairMaterialScript(normalized, productInfo, structuredMaterials);
       if (voiceoverMode !== 'none') normalized = syncStoryboardSubtitles(normalized);
@@ -1997,34 +2256,29 @@ Requirements:
         const normalized = normalizeProductIdentity(name);
         return normalized && normalizeProductIdentity(firstVoice).startsWith(normalized);
       });
-      if (generationMode !== 'clone' && (productNameOpening || !/[？?]|怎么|如何|为什么|别只|先别|看不出|难以|担心|选择|确认|判断|采购|品牌方|经销|进口/.test(opening))) {
+      if (generationMode !== 'clone' && (productNameOpening || !/[？?]|怎么|如何|为什么|别只|先别|看不出|难以|担心|选择|确认|判断|采购|品牌方|经销|进口|\b(?:how|why|which|what|buyer|brand|procurement|sourcing|choose|decide|verify|concern|risk|problem)\b/i.test(opening))) {
         issues.push('首段没有先给目标买家的具体决策问题或判断反差，仍像产品自我介绍');
       }
       const themeOpeningPatterns: Partial<Record<ContentTheme, RegExp>> = {
-        buyer_pain: /采购|品牌方|品牌创始人|买家|经销|进口|担心|难以|问题|选择|判断/,
-        product_proof: /目录|实物|细节|怎么|如何|看不出|判断|确认/,
-        customization: /品牌方|包装|打样|标签|外盒|确认|适配/,
-        comparison: /怎么选|如何选|区别|差异|选择|对比/,
-        supplier_capability: /供应|交付|质检|生产|补货|确认|风险/,
-        talking_head: /我|我们|你|采购|品牌方|问题|为什么|怎么/,
+        buyer_pain: /采购|品牌方|品牌创始人|买家|经销|进口|担心|难以|问题|选择|判断|\b(?:buyer|brand|procurement|sourcing|concern|risk|problem|choose|decision)\b/i,
+        product_proof: /目录|实物|细节|怎么|如何|看不出|判断|确认|\b(?:catalog|physical|detail|verify|check|judge|confirm|proof)\b/i,
+        customization: /品牌方|包装|打样|标签|外盒|确认|适配|\b(?:brand|packaging|sample|prototype|label|carton|confirm|fit|custom)\b/i,
+        comparison: /怎么选|如何选|区别|差异|选择|对比|\b(?:choose|choice|difference|compare|comparison|versus|vs)\b/i,
+        supplier_capability: /供应|交付|质检|生产|补货|确认|风险|\b(?:supply|delivery|quality|inspection|production|fulfillment|risk|verify)\b/i,
+        talking_head: /我|我们|你|采购|品牌方|问题|为什么|怎么|\b(?:I|we|you|buyer|brand|procurement|question|why|how)\b/i,
       };
       const expected = themeOpeningPatterns[videoThemeId as ContentTheme];
       if (generationMode !== 'clone' && expected && !expected.test(opening)) {
         issues.push(`首段没有执行“${videoThemeTitle}”主题的钩子公式`);
       }
-      const routeAudiencePattern: Record<CooperationRoute, RegExp> = {
-        oem_odm: /品牌方|品牌创始人|产品经理|采购|brand founder|product manager|procurement/i,
-        wholesale_distribution: /进口商|经销商|渠道采购|importer|distributor|channel buyer/i,
-        consumer_retail: /你|消费者|用户|customer|consumer/i,
-      };
-      if (generationMode !== 'clone' && !routeAudiencePattern[strategyRoute].test(opening)) {
+      if (generationMode !== 'clone' && !openingMatchesCooperationRoute(opening, strategyRoute)) {
         issues.push('首段没有点名当前合作路线对应的目标买家');
       }
       const functions = Array.from(String(candidate || '').matchAll(/^镜头功能[：:]\s*(.+)$/gm)).map(match => match[1]!.trim());
       if (functions.length > 2 && new Set(functions).size < Math.min(3, functions.length)) {
         issues.push('分镜功能重复，未形成钩子、问题、证据、决策和 CTA 的推进');
       }
-      if (['product_proof', 'use_case'].includes(videoThemeId) || strategyRoute === 'consumer_retail') {
+      if (!isPackagingOnlyProductInfo(productInfo) && (['product_proof', 'use_case'].includes(videoThemeId) || strategyRoute === 'consumer_retail')) {
         const scenes = String(candidate || '').split(/(?=^\[[^\]\r\n]+\][ \t]*$)/m).filter(block => /^\[[^\]]+\]/.test(block));
         const productScenes = scenes.filter(scene => /膏体|旋出|旋回|唇部|手背|化妆包|涂抹/.test(scene)).length;
         const packagingScenes = scenes.filter(scene => /标签|外盒|包装|牛皮纸|白管/.test(scene)).length;
@@ -2035,9 +2289,7 @@ Requirements:
       return issues;
     };
     const repairableIssues = (candidate: string): string[] => {
-      const unsupported = Array.from(candidate.matchAll(/\d+(?:\.\d+)?\s*(?:瓶|ml|ML|毫升|kg|KG|g|克|斤|cm|厘米|mm|毫米|天|day|days|Days|%|个|pcs|件|箱|元|美元)/g))
-        .map(match => match[0])
-        .filter(claim => !productSupportsNumericClaim(claim, productInfo));
+      const unsupported = unsupportedNumericClaims(candidate, productInfo);
       const issues = unsupported.length ? [`资料外数字：${unsupported.join('、')}`] : [];
       if (/不破|不裂|纹丝不动|吹不烂|保证|最快|最低价|全网|no tear|won'?t tear|never breaks?|unbreakable/i.test(candidate)) {
         issues.push('绝对化或不可验证承诺');
@@ -2100,11 +2352,6 @@ ${script}`, { backend: providerOpt, systemPrompt: await enterpriseCtx() || undef
     }
     if (!isStructuredLockedProduct) script = normalizeGeneratedScript(script);
     if (generationMode === 'clone') {
-      // Keep model-authored sentences intact. Mechanical character truncation
-      // produces fragments that can pass duration checks while being unusable.
-      // The speech validator below must reject an overlong clone and ask for a
-      // semantic rewrite instead.
-      script = syncStoryboardSubtitles(script);
       // Competitor identifiers are never valid output facts. Remove the small
       // set extracted from the reference after the model repair passes, while
       // keeping the selected product name enforced separately below.
@@ -2114,12 +2361,30 @@ ${script}`, { backend: providerOpt, systemPrompt: await enterpriseCtx() || undef
       script = script
         .replace(/零残留|无挂壁|无气泡|零瑕疵|零缺陷|完全密封|绝不漏|永不漏|无划痕|无毛边|无色差|回弹(?:顺畅|稳)|厚度差异|结构真实性/gi, '可见细节')
         .replace(/资料齐全|随时可用|可追溯(?:的)?规格|真实材质(?:与)?结构|可信对比源/gi, '');
+      // Repair only small timing misses with the same semantic compaction used
+      // by material storyboards. fitSpeechToShot returns severe overflows
+      // unchanged, so the validator below still rejects them instead of
+      // producing mechanically truncated fragments.
+      script = syncStoryboardSubtitles(fitStoryboardSpeech(script));
     }
+    if (generationMode === 'clone' && voiceoverMode === 'none') {
+      script = clearStoryboardSpeech(script);
+    } else if (voiceoverMode !== 'none'
+      && ['material', 'clone'].includes(generationMode)
+      && (storyboardSpeechIssues(script).length > 0
+        || strategyExecutionIssues(script).some(issue => /^首段/.test(issue)))) {
+      script = syncStoryboardSubtitles(applySafeStoryboardSpeechFallback(
+        script,
+        productInfo,
+        videoThemeId as ContentTheme,
+        primaryCta,
+        language,
+      ));
+    }
+    script = ensureSelectedProductNamesInScript(script, productInfo);
     const selectedNames = selectedProductNames(productInfo);
     // “秒”及时间戳是视频制作参数，不是产品主张，不能触发“资料外数字”风险。
-    const unsupportedNumberClaims = Array.from(script.matchAll(/\d+(?:\.\d+)?\s*(?:瓶|ml|ML|毫升|kg|KG|g|克|斤|cm|厘米|mm|毫米|天|day|days|Days|%|个|pcs|件|箱|元|美元)/g))
-      .map(match => match[0])
-      .filter(claim => !productSupportsNumericClaim(claim, productInfo));
+    const unsupportedNumberClaims = unsupportedNumericClaims(script, productInfo);
     const missingProduct = !String(productInfo || '').trim();
     const normalizedScriptIdentity = normalizeProductIdentity(script);
     const missingSelectedProduct = selectedNames.length > 0
@@ -2147,7 +2412,7 @@ ${script}`, { backend: providerOpt, systemPrompt: await enterpriseCtx() || undef
     const productStoryboardFields = ['环境', '景别', '运镜', '构图', '镜头功能', '画面', '配乐', '台词', '字幕'];
     const productStoryboardBlocks = script.split(/(?=^\[[^\]\r\n]+\][ \t]*$)/m).filter(block => /^\[[^\]]+\]/.test(block.trim()));
     const incompleteProductStoryboard = generationMode === 'product' && !isStructuredLockedProduct
-      && (productStoryboardBlocks.length !== productSceneCount
+      && (productStoryboardBlocks.length < 3
         || productStoryboardBlocks.some(block => productStoryboardFields.some(field => !new RegExp(`^${field}[：:]`, 'm').test(block))));
     const unsafeScript = missingProduct
       || missingSelectedProduct
@@ -2178,7 +2443,7 @@ ${script}`, { backend: providerOpt, systemPrompt: await enterpriseCtx() || undef
       missingSelectedProduct ? `脚本未完整覆盖选定产品名称：${selectedNames.join('、')}` : '',
       unsupportedNumberClaims.length ? `出现产品资料未提供的数字：${unsupportedNumberClaims.join('、')}` : '',
       incompleteCloneStoryboard ? '爆款分镜缺少环境、景别、运镜、构图、配乐或台词字段' : '',
-      incompleteProductStoryboard ? `产品分镜必须为${productSceneCount}段，且每段完整包含环境、景别、运镜、构图、镜头功能、画面、配乐、台词和字幕` : '',
+      incompleteProductStoryboard ? '产品分镜至少需要3段，且每段完整包含环境、景别、运镜、构图、镜头功能、画面、配乐、台词和字幕' : '',
       genericCloneStoryboard ? '爆款分镜包含不可执行的泛化镜头描述' : '',
       hasUnnaturalVoiceover(script) ? '口播过长或堆叠过多技术名词' : '',
       invalidProductScript ? '产品模式把制作指令写进了人物口播' : '',

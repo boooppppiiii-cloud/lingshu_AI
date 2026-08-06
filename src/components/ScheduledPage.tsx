@@ -256,8 +256,13 @@ function normalizeCrawlerLimit(value: string): string {
 export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) {
   const [tasks, setTasks] = useState<ScheduledTask[]>([]);
   const [loading, setLoading] = useState(true);
-  const [activeGroup, setActiveGroup] = useState<AgentTaskGroup>('conversion');
-  const [socialTaskTab, setSocialTaskTab] = useState<SocialTaskTab>('crawler');
+  const [activeGroup, setActiveGroup] = useState<AgentTaskGroup>(() => {
+    const saved = window.sessionStorage.getItem('scheduled.activeGroup');
+    return saved === 'social' || saved === 'customer' || saved === 'conversion' ? saved : 'conversion';
+  });
+  const [socialTaskTab, setSocialTaskTab] = useState<SocialTaskTab>(() => (
+    window.sessionStorage.getItem('scheduled.socialTaskTab') === 'analysis' ? 'analysis' : 'crawler'
+  ));
   const [showAdd, setShowAdd] = useState(false);
   const [selectedTemplateIds, setSelectedTemplateIds] = useState<string[]>([]);
   const [scheduleOpen, setScheduleOpen] = useState(false);
@@ -277,7 +282,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
   const [exportNotice, setExportNotice] = useState<{ taskId: string; message: string; error: boolean } | null>(null);
   const [runningId, setRunningId] = useState<string | null>(null);
   const [videoStats, setVideoStats] = useState<VideoStatsPayload | null>(null);
-  const [analysisQueueOpen, setAnalysisQueueOpen] = useState(false);
+  const [analysisQueueOpen, setAnalysisQueueOpen] = useState(() => window.sessionStorage.getItem('scheduled.analysisQueueOpen') === 'true');
   const [analysisActionId, setAnalysisActionId] = useState<string | null>(null);
   const [analysisActionError, setAnalysisActionError] = useState('');
   const [businessDynamics, setBusinessDynamics] = useState<BusinessDynamicsPayload | null>(null);
@@ -302,6 +307,12 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
     }, 5000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    window.sessionStorage.setItem('scheduled.activeGroup', activeGroup);
+    window.sessionStorage.setItem('scheduled.socialTaskTab', socialTaskTab);
+    window.sessionStorage.setItem('scheduled.analysisQueueOpen', String(analysisQueueOpen));
+  }, [activeGroup, socialTaskTab, analysisQueueOpen]);
 
   useEffect(() => {
     if (didAutoOpenDemoTask.current) return;
