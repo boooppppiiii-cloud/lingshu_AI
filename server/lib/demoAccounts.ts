@@ -20,7 +20,14 @@ export interface DemoAccountRegistryEntry {
   rotatedAt?: string | null;
   rotationPassword?: string | null;
   guidePending?: boolean;
+  guideResetAt?: string | null;
   status?: 'available' | 'trialing' | 'expired' | 'customer' | 'admin';
+}
+
+export interface AccountGuideState {
+  pending: boolean;
+  scope: string;
+  resetAt: string | null;
 }
 
 type DemoAccountRegistry = Record<string, DemoAccountRegistryEntry>;
@@ -121,6 +128,33 @@ export function upsertDemoAccountRegistry(email: string, patch: Partial<DemoAcco
   return next;
 }
 
+export function accountGuideStateFromEntry(
+  entry: DemoAccountRegistryEntry | undefined,
+  baseScope: string,
+): AccountGuideState {
+  const resetAt = entry?.guideResetAt || null;
+  return {
+    pending: entry?.guidePending === true,
+    scope: resetAt ? `${baseScope}:reset:${resetAt}` : baseScope,
+    resetAt,
+  };
+}
+
+export function accountGuideState(email: string, baseScope: string): AccountGuideState {
+  return accountGuideStateFromEntry(readDemoAccountRegistry()[norm(email)], baseScope);
+}
+
+export function resetAccountGuide(
+  email: string,
+  identity: Pick<DemoAccountRegistryEntry, 'userId' | 'tenantId' | 'status'> = {},
+): DemoAccountRegistryEntry {
+  return upsertDemoAccountRegistry(email, {
+    ...identity,
+    guidePending: true,
+    guideResetAt: new Date().toISOString(),
+  });
+}
+
 export function isTrialAccount(subscription: { status?: string; plan?: string | null } | null | undefined): boolean {
   return subscription?.status === 'trialing' || String(subscription?.plan ?? '').toLowerCase() === 'trial';
 }
@@ -133,12 +167,17 @@ export async function activateTrialAccount(email: string, userId: string, tenant
   const registryEntry = readDemoAccountRegistry()[norm(email)];
   const activatedNow = !currentExpiresAt && !registryEntry?.activatedAt;
   const expiresAt = currentExpiresAt || registryEntry?.expiresAt || trialExpiresAt();
+  const activatedAt = registryEntry?.activatedAt || new Date().toISOString();
   upsertDemoAccountRegistry(email, {
     userId,
     tenantId,
-    activatedAt: registryEntry?.activatedAt || new Date().toISOString(),
+    activatedAt,
     expiresAt,
     status: 'trialing',
+    ...(activatedNow ? {
+      guidePending: true,
+      guideResetAt: activatedAt,
+    } : {}),
   });
   await pbPatch('tenants', tenantId, {
     subscriptionStatus: 'trialing',

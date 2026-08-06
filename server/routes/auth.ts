@@ -8,6 +8,7 @@ import { auth } from '../storage/index.js';
 import { getTenantSubscription } from '../middleware/subscription.js';
 import { buildDemoStatus, isExpired } from '../lib/demo.js';
 import {
+  accountGuideState,
   activateTrialAccount,
   consumeDemoGuide,
   isAdminEmail,
@@ -468,9 +469,19 @@ authRouter.post('/login', async (req, res) => {
     const fallback = localLogin(email, password);
     if (!fallback) { res.status(401).json({ error: '邮箱或密码错误' }); return; }
     const subscription = await getTenantSubscription(String(fallback.record.tenantId || ''));
-    const demo = fallback.accountType === 'trial'
+    const fallbackEmail = String(fallback.record.email ?? email).trim().toLowerCase();
+    const fallbackGuide = accountGuideState(
+      fallbackEmail,
+      fallback.expiresAt ? `${fallback.record.id}:${fallback.expiresAt}` : fallback.record.id,
+    );
+    const demoStatus = fallback.accountType === 'trial' || fallbackGuide.pending
       ? await buildDemoStatus(req, fallback.record.tenantId, fallback.expiresAt, fallback.record.id)
       : undefined;
+    const demo = demoStatus ? {
+      ...demoStatus,
+      guideTrigger: fallbackGuide.pending,
+      guideScope: fallbackGuide.scope,
+    } : undefined;
     res.json({
       token: fallback.token,
       user: publicUser(fallback.record),
@@ -514,14 +525,15 @@ authRouter.post('/login', async (req, res) => {
     tenant = await pbGet('tenants', login.record.tenantId);
     subscription = { status: 'trialing', plan: 'trial', expiresAt: activated.expiresAt };
     const demoStatus = await buildDemoStatus(req, login.record.tenantId, activated.expiresAt, login.record.id);
+    const guide = accountGuideState(loginEmail, `${login.record.id}:${activated.expiresAt}`);
     res.json({
       token: login.token,
       user: publicUser(login.record),
       tenant: publicTenant(tenant),
       demo: {
         ...demoStatus,
-        guideTrigger: activated.activatedNow,
-        guideScope: `${login.record.id}:${activated.expiresAt}`,
+        guideTrigger: activated.activatedNow || guide.pending,
+        guideScope: guide.scope,
       },
     });
     return;
@@ -532,14 +544,18 @@ authRouter.post('/login', async (req, res) => {
     return;
   }
   const demoStatus = await buildDemoStatus(req, login.record.tenantId, subscription?.expiresAt, login.record.id);
+  const guide = accountGuideState(
+    loginEmail,
+    subscription?.expiresAt ? `${login.record.id}:${subscription.expiresAt}` : login.record.id,
+  );
   res.json({
     token: login.token,
     user: publicUser(login.record),
     tenant: publicTenant(tenant),
     demo: {
       ...demoStatus,
-      guideTrigger: false,
-      guideScope: subscription?.expiresAt ? `${login.record.id}:${subscription.expiresAt}` : undefined,
+      guideTrigger: guide.pending,
+      guideScope: guide.scope,
     },
   });
 });
@@ -554,9 +570,18 @@ authRouter.get('/me', async (req, res) => {
       res.status(402).json({ error: '试用账号已到期，请联系管理员获取其他备用账号。' });
       return;
     }
-    const demo = subscription.status === 'trialing' || subscription.plan === 'trial'
+    const localGuide = accountGuideState(
+      local.email || '',
+      subscription.expiresAt ? `${local.userId}:${subscription.expiresAt}` : local.userId,
+    );
+    const demoStatus = subscription.status === 'trialing' || subscription.plan === 'trial' || localGuide.pending
       ? await buildDemoStatus(req, local.tenantId, subscription.expiresAt, local.userId)
       : undefined;
+    const demo = demoStatus ? {
+      ...demoStatus,
+      guideTrigger: localGuide.pending,
+      guideScope: localGuide.scope,
+    } : undefined;
     const storedTenant = getLocalTenant(local.tenantId);
     res.json({
       user: { id: local.userId, email: local.email || '', name, tenantId: local.tenantId },
@@ -605,14 +630,19 @@ authRouter.get('/me', async (req, res) => {
     return;
   }
   const demo = await buildDemoStatus(req, id.tenantId, subscription.expiresAt, id.userId);
+  const userEmail = String(user?.email ?? '').trim().toLowerCase();
+  const guide = accountGuideState(
+    userEmail,
+    subscription.expiresAt ? `${id.userId}:${subscription.expiresAt}` : id.userId,
+  );
   res.json({
     user: user ? publicUser(user as unknown as PbUser) : { id: id.userId, email: '', name: '', tenantId: id.tenantId },
     tenant: publicTenant(tenant),
     subscription,
     demo: {
       ...demo,
-      guideTrigger: false,
-      guideScope: subscription.expiresAt ? `${id.userId}:${subscription.expiresAt}` : undefined,
+      guideTrigger: guide.pending,
+      guideScope: guide.scope,
     },
   });
 });
@@ -721,8 +751,9 @@ authRouter.delete('/employees/:employeeId', async (req, res) => {
 authRouter.post('/guide-seen', async (req, res) => {
   const id = await auth.verifyToken(req.headers.authorization);
   if (!id) { res.status(401).json({ error: 'Unauthorized' }); return; }
-  const user = await pbGet('users', id.userId);
-  const email = String(user?.email ?? '').trim().toLowerCase();
+  const local = parseLocalToken(req.headers.authorization);
+  const user = local ? null : await pbGet('users', id.userId);
+  const email = String(local?.email ?? user?.email ?? '').trim().toLowerCase();
   if (email) consumeDemoGuide(email);
   res.json({ ok: true });
 });

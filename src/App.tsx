@@ -201,6 +201,7 @@ export default function App() {
       if (localStorage.getItem(BUSINESS_DIAGNOSIS_SEEN_KEY) === scope) return;
     } catch { /* ignore */ }
     setBusinessDiagnosisOpen(true);
+    void authApi.guideSeen();
   };
   const closeBusinessDiagnosis = () => {
     if (session) {
