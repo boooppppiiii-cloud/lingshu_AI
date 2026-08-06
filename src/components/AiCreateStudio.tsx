@@ -1711,7 +1711,7 @@ function hasIncompleteReferenceAnalysis(kickoff: VideoKickoff | null): boolean {
     return range.end - range.start > 5.5
       || Boolean(next && next.start - range.end > 0.75)
       || Boolean(next && range.end - next.start > 0.75);
-  }) || details.some(item => item.needsReview || Number(item.confidence ?? 1) < 0.5 || /分析超时|待人工复核|缺少真实片段/.test(`${item.note || ''} ${item.visual || ''}`));
+  }) || details.some(item => /分析超时|缺少真实片段/.test(`${item.note || ''} ${item.visual || ''}`));
 }
 
 type MigrationMode = 'fidelity' | 'structure' | 'mechanism';
@@ -4429,7 +4429,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
           },
           '',
         ), 45_000, '后端模型生成超过 45 秒。');
-        if (response.source && response.source !== 'ai') throw new Error(response.fallbackReason || 'AI脚本未通过检查，未生成兜底稿。');
+        if (response.source && response.source !== 'ai') throw new Error(response.error || response.fallbackReason || 'AI脚本未通过检查，未生成兜底稿。');
         nextScript = sanitizeStoryboardScript(response.script || '', activeProductInfo, activeProductLabel).trim();
         if (!nextScript) throw new Error(response.error
           ? `脚本服务连接失败：${response.error}`
@@ -4516,7 +4516,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
           '',
           { signal: controller.signal },
         );
-        if (response.source && response.source !== 'ai') throw new Error(response.fallbackReason || 'AI脚本未通过检查，未生成兜底稿。');
+        if (response.source && response.source !== 'ai') throw new Error(response.error || response.fallbackReason || 'AI脚本未通过检查，未生成兜底稿。');
         nextScript = sanitizeStoryboardScript(response.script || '', product, activeProductLabel).trim();
         if (!nextScript) throw new Error(response.error
           ? `脚本服务连接失败：${response.error}`
@@ -4601,7 +4601,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     }
     if (hasIncompleteReferenceAnalysis(videoKickoff)) {
       const analyzedUntil = referenceAnalysisEnd(videoKickoff);
-      setModeNotice(`已停止生成：当前逐镜分析未达到时间线质量标准（至少每 5 秒 1 段、单段不超过 5.5 秒、无明显缺口/重叠，且不能含超时或待复核片段；当前覆盖到 ${analyzedUntil.toFixed(1)} 秒）。请返回灵感大屏完成全片精确分析后再生成脚本。`);
+      setModeNotice(`已停止生成：当前逐镜分析未达到时间线质量标准（至少每 5 秒 1 段、单段不超过 5.5 秒、无明显缺口/重叠，且不能含超时片段；当前覆盖到 ${analyzedUntil.toFixed(1)} 秒）。请返回灵感大屏完成全片精确分析后再生成脚本。`);
       return;
     }
     const cloneProductInfo = activeProductInfo.trim()
@@ -4630,7 +4630,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         ];
         const existingCloneCount = modeScripts.filter(item => item.mode === 'clone').length;
         const variantSeed = existingCloneCount + index;
-        setModeActionStatus(`真实生成中 ${index + 1}/${targetCodes.length}，通常 10-30 秒，最多等待 45 秒…`);
+        setModeActionStatus(`真实生成中 ${index + 1}/${targetCodes.length}，通常 20-90 秒，高峰期最多等待 300 秒…`);
         let generatedScript = '';
         const response = await withTimeout(studioApi.script(
             {
@@ -4655,8 +4655,8 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
               variantSeed,
             },
             '',
-        ), 45_000, '后端模型生成超过 45 秒，请稍后重试。');
-        if (response.source && response.source !== 'ai') throw new Error(response.fallbackReason || 'AI脚本未通过检查，未生成兜底稿。');
+        ), 300_000, '后端模型生成超过 300 秒，请稍后重试。');
+        if (response.source && response.source !== 'ai') throw new Error(response.error || response.fallbackReason || 'AI脚本未通过检查，未生成兜底稿。');
         const normalized = ensureDistinctCloneStoryboard({
           script: response.script || '',
           kickoff: cloneReference,

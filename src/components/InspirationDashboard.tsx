@@ -364,7 +364,7 @@ function exactAnalysisQuality(video: TrendVideo): AnalysisQualityGate {
   if (payload?.analysisMode !== 'exact') return { ready: false, reason: '当前仅有策略级分析，需先完成全片精确分析', requiredFrames, actualFrames: valid.length };
   if (payload.videoLevelFailureStatus || payload.analysisError) return { ready: false, reason: '精确分析未完成或已失败，请重试', requiredFrames, actualFrames: valid.length };
   if (valid.length < requiredFrames) return { ready: false, reason: `分镜密度不足：需至少 ${requiredFrames} 段，当前 ${valid.length} 段`, requiredFrames, actualFrames: valid.length };
-  if (valid.some(({ item }) => isUnusableAnalysisText(item.visual) || Number(item.confidence ?? 1) < 0.5)) return { ready: false, reason: '存在低置信度或不可用分镜，请重试精确分析', requiredFrames, actualFrames: valid.length };
+  if (valid.some(({ item }) => isUnusableAnalysisText(item.visual))) return { ready: false, reason: '存在不可用分镜，请重试精确分析', requiredFrames, actualFrames: valid.length };
   const ordered = [...valid].sort((a, b) => a.start! - b.start!);
   if (ordered.some(item => item.end! - item.start! > 5.5)) return { ready: false, reason: '存在超过 5.5 秒的粗分镜，无法可靠按时间戳匹配', requiredFrames, actualFrames: valid.length };
   if (ordered[0]!.start! > 0.75 || ordered.some((item, index) => index > 0 && Math.abs(item.start! - ordered[index - 1]!.end!) > 0.75)) {
@@ -1851,7 +1851,6 @@ function AnalysisPanel({ video, onGenerateScript, onRetry, onExactAnalysis, acti
           </div>
           {actionNotice && <p role="status" aria-live="polite" className="mt-2 rounded-lg border border-accent/20 bg-white px-2.5 py-2 text-[10px] font-semibold leading-relaxed text-text-secondary">{actionNotice}</p>}
           {video.aiAnalysis?.videoLevelFailureStatus && !video.aiAnalysis?.requestedAnalysisMode && <p role="status" aria-live="polite" className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[10px] font-semibold leading-relaxed text-amber-700">全片精确分析未完成，已保留原分析。可稍后重试，或换用可直接下载的公开素材。</p>}
-          {videoGenerationBlocked && <p role="status" aria-live="polite" className="mt-2 rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-2 text-[10px] font-semibold leading-relaxed text-amber-700">暂不能生成脚本或进入素材匹配：{analysisQuality.reason}。</p>}
         </div>}
         {video.contentFormat === 'image' && !hasTrustedImageAnalysis && <button type="button" onClick={() => void reanalyzeImage()} disabled={reanalyzingImage} className="mb-2 flex w-full items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-emerald-50 py-2 text-xs font-black text-emerald-700 disabled:opacity-50">{reanalyzingImage ? <Loader2 size={13} className="animate-spin"/> : <Images size={13}/>}重新分析完整轮播</button>}
         {analysisSaveNotice && video.contentFormat === 'image' && <p className="mb-2 text-center text-[10px] text-red-500">{analysisSaveNotice}</p>}
@@ -1926,6 +1925,7 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onExactAnalysis,
   const [videoResult, setVideoResult] = useState<GeneratedVideo | null>(null);
   const [videoVersions, setVideoVersions] = useState<VideoGenerationVersion[]>([]);
   const [videoError, setVideoError] = useState('');
+  const [refinementSyncError, setRefinementSyncError] = useState('');
   useDismissibleLayer(showLangDropdown, languageDropdownRef, () => setShowLangDropdown(false));
   const [expanded, setExpanded] = useState(false);
   const [seedanceVideoLocked, setSeedanceVideoLocked] = useState(true);
@@ -2094,8 +2094,27 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onExactAnalysis,
     onEnterWorkflow?.({ source: 'seedance_video', script: result, video, scriptType, language, productInfo, generatedVideo: videoResult });
   };
 
-  const enterQuickCutFromAnalysis = (confirmedAnalysis?: ScriptAnalysis) => {
+  const enterQuickCutFromAnalysis = async (confirmedAnalysis?: ScriptAnalysis) => {
     const realAnalysis = confirmedAnalysis || getAnalysis(video);
+    setRefinementSyncError('');
+    if (video.contentFormat !== 'image') {
+      if (!video.recordId) {
+        setRefinementSyncError('当前视频缺少入库记录，无法同步到定时任务的视频分析页面。');
+        return;
+      }
+      try {
+        const response = await fetch(`/api/overseas/videos/${video.recordId}/refinement-sync`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeader() },
+          body: JSON.stringify({ source: 'inspiration_analysis' }),
+        });
+        const payload = await response.json().catch(() => ({})) as { error?: string };
+        if (!response.ok) throw new Error(payload.error || '精修视频同步失败');
+      } catch (error) {
+        setRefinementSyncError(error instanceof Error ? error.message : '精修视频同步失败');
+        return;
+      }
+    }
     onEnterWorkflow?.({
       source: video.contentFormat === 'image' ? 'inspiration_image_post' : 'inspiration_analysis',
       video,
@@ -2165,7 +2184,7 @@ function ScriptPanel({ video, activePanelTab, onClose, onRetry, onExactAnalysis,
         {activeTab === 'analysis' ? (
           <motion.div key="analysis" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             className="flex flex-col flex-1 min-h-0 overflow-hidden">
-            <AnalysisPanel key={video.id} video={video} onGenerateScript={enterQuickCutFromAnalysis} onRetry={onRetry} onExactAnalysis={onExactAnalysis} actionNotice={actionNotice} specialRecommendation={specialRecommendation} />
+            <AnalysisPanel key={video.id} video={video} onGenerateScript={enterQuickCutFromAnalysis} onRetry={onRetry} onExactAnalysis={onExactAnalysis} actionNotice={refinementSyncError || actionNotice} specialRecommendation={specialRecommendation} />
           </motion.div>
         ) : (
           <motion.div key="generate" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}

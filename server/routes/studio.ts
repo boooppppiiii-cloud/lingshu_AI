@@ -135,8 +135,11 @@ function referenceTimelineQuality(referenceAnalysis: unknown, requestedDuration:
   }
   const minShots = duration > 0 ? Math.ceil(duration / 5) : 1;
   if (ranges.length < minShots) issues.push(`分镜密度不足（${ranges.length} 段，至少需要 ${minShots} 段）`);
-  if (/人工复核[：:]\s*是|needsReview["']?\s*[：:]\s*true|分析超时|待人工复核|缺少真实片段/.test(raw)) {
-    issues.push('分析包含超时、降级或待人工复核片段');
+  // A review flag records honest uncertainty about names, prices, handedness
+  // or ASR and does not make the visual timeline incomplete. Only genuine
+  // timeout/missing-evidence placeholders should block storyboard generation.
+  if (/分析超时|缺少真实片段/.test(raw)) {
+    issues.push('分析包含超时或缺少真实片段');
   }
   return { valid: issues.length === 0, issues: [...new Set(issues)], ranges, duration };
 }
@@ -467,7 +470,7 @@ function referenceForbiddenTerms(input: {
   }
   return Array.from(terms)
     .map(term => term.replace(/^#/, '').trim())
-    .filter(term => term.length >= 3 && !/^(TikTok|Instagram|Facebook|YouTube|Video|Official|Factory|Product)$/i.test(term))
+    .filter(term => term.length >= 3 && !/^(TikTok|Instagram|Facebook|YouTube|Video|Official|Factory|Product|Free|Mini|This|Summer|Brighter|Skin|Days)$/i.test(term))
     .slice(0, 24);
 }
 
@@ -735,6 +738,15 @@ function fitStoryboardSpeech(script: string): string {
     /(\[\s*(\d+(?:\.\d+)?)\s*(?:s|秒)?\s*[-–]\s*(\d+(?:\.\d+)?)\s*(?:s|秒)?\s*\][\s\S]*?)(人物说|台词|Voiceover|VO|口播)(\s*[：:]\s*[“"]?)([^\n”"]+)([”"]?)/gi,
     (_full, prefix, start, end, label, separator, voice, quote) => `${prefix}${label}${separator}${fitSpeechToShot(voice, Math.max(0.5, Number(end) - Number(start)))}${quote}`,
   );
+}
+
+function syncStoryboardSubtitles(script: string): string {
+  return String(script || '').split(/(?=^\[[^\]\r\n]+\]\s*$)/m).map(block => {
+    if (!/^\[[^\]]+\]/.test(block.trim())) return block;
+    const voice = block.match(/^台词[：:]\s*(.+)$/m)?.[1]?.trim() || '';
+    if (!voice || /^(无|none)$/i.test(voice)) return block;
+    return block.replace(/^字幕[：:].*$/m, `字幕：${voice}`);
+  }).join('');
 }
 
 function duplicateStoryboardFieldIssues(script: string): string[] {
@@ -1941,7 +1953,10 @@ Requirements:
       if (/(?:马上|立即|免费|可)?寄样|寄送样品|免费样品/i.test(candidate)) {
         issues.push('资料未支持的寄样或样品政策承诺');
       }
-      if (primaryCta && !candidate.includes(primaryCta)) {
+      const ctaSatisfied = !primaryCta
+        || candidate.includes(primaryCta)
+        || (/whatsapp/i.test(primaryCta) && /whatsapp|\bwa\b|私信|联系/i.test(candidate));
+      if (!ctaSatisfied) {
         issues.push(`未使用本条唯一主 CTA：${primaryCta}`);
       }
       const spokenLines = Array.from(candidate.matchAll(/^台词[：:]\s*(.+)$/gm))
@@ -2064,6 +2079,18 @@ ${script}`, { backend: providerOpt, systemPrompt: await enterpriseCtx() || undef
       script = normalizeGeneratedScript(repaired);
     }
     if (!isStructuredLockedProduct) script = normalizeGeneratedScript(script);
+    if (generationMode === 'clone') {
+      script = syncStoryboardSubtitles(fitStoryboardSpeech(script));
+      // Competitor identifiers are never valid output facts. Remove the small
+      // set extracted from the reference after the model repair passes, while
+      // keeping the selected product name enforced separately below.
+      for (const term of forbiddenTerms) {
+        script = script.replace(new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), '');
+      }
+      script = script
+        .replace(/零残留|无挂壁|无气泡|零瑕疵|零缺陷|完全密封|绝不漏|永不漏|无划痕|无毛边|无色差|回弹(?:顺畅|稳)|厚度差异|结构真实性/gi, '可见细节')
+        .replace(/资料齐全|随时可用|可追溯(?:的)?规格|真实材质(?:与)?结构|可信对比源/gi, '');
+    }
     const selectedNames = selectedProductNames(productInfo);
     // “秒”及时间戳是视频制作参数，不是产品主张，不能触发“资料外数字”风险。
     const unsupportedNumberClaims = Array.from(script.matchAll(/\d+(?:\.\d+)?\s*(?:瓶|ml|ML|毫升|kg|KG|g|克|斤|cm|厘米|mm|毫米|天|day|days|Days|%|个|pcs|件|箱|元|美元)/g))
@@ -2144,6 +2171,7 @@ ${script}`, { backend: providerOpt, systemPrompt: await enterpriseCtx() || undef
     ].filter(Boolean);
     const shouldBlockScript = validationIssues.length > 0 || unsafeScript;
     if (shouldBlockScript) {
+      console.warn('[studio] script rejected:', validationIssues.join(' | ') || 'unsafe_script');
       res.status(422).json({
         ok: false,
         source: 'ai_rejected',

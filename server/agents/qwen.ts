@@ -251,12 +251,15 @@ export async function analyzeVideoTimelineDetailsWithQwen(opts: {
 时间窗口：${JSON.stringify(boundaries)}
 ${opts.transcript?.segments.length ? `独立ASR：${JSON.stringify(opts.transcript.segments)}` : '无可靠ASR，dialogue留空。'}
 summary字段：theme、hooks、sellingPoints、mood、structure、baseRequirements、firstTenSeconds（atmosphere/audioVisual/camera/visuals/voiceMusic）、coarseStructure（time/label/description）、scriptSummary15s（visualStyle/coreEmotion/competitors）、recommendedScriptType。
-shots每项字段：boundaryId、environment、shot、camera、angle、composition、purpose、visual、dialogue、onScreenText、ambientSound、bgm、soundEffects、beats、persistentState、startState、endState、transitionToNext、authenticity、observedFacts、inferredIntent、causalGap、omniPrompt、omniNegativePrompt、confidence、needsReview、viralPotential、subtitle、audio、note。每个字符串简洁、具体，避免重复全局要求。
+shots每项字段：boundaryId、environment、shot、camera、angle、composition、purpose、visual、dialogue、onScreenText、ambientSound、bgm、soundEffects、beats、persistentState、startState、endState、transitionToNext、authenticity、observedFacts、inferredIntent、causalGap、omniPrompt、omniNegativePrompt、confidence、needsReview、viralPotential、subtitle、audio、note。每个字符串简洁、具体、尽量不超过24个汉字。shots必须完整返回${boundaries.length}项；无法确认时也必须保留对应boundaryId，用needsReview=true和较低confidence表达不确定，禁止省略分镜。
 observedFacts仅写真实可见内容；推断只写inferredIntent；缺失因果只写causalGap，不得进入visual或omniPrompt。分别记录口播、屏幕文字、环境声、BGM、音效。动作写初态、接触/路径、终态；运镜、角度、构图分开。专名、价格、型号、左右方向或ASR不确定时needsReview=true，禁止猜测。omni字段使用英文。` },
       ...opts.frames.map(frame => ({ type: 'image_url', image_url: { url: `data:${frame.mimeType};base64,${frame.base64}` } })),
     ] as any }],
     response_format: { type: 'json_object' },
-    max_tokens: Math.max(1800, Math.min(2800, boundaries.length * 520 + 700)),
+    // A shot carries director, continuity, audio and evidence fields. The old
+    // 2.8k ceiling truncated otherwise valid 3-shot JSON into an unparsable
+    // response, surfaced as `0_of_3`, and made the retry deterministic.
+    max_tokens: Math.max(3600, Math.min(6000, boundaries.length * 1200 + 1200)),
   } as any, { signal: opts.signal });
   const parsed = parseJson<{ summary?: Partial<VideoAiAnalysis>; shots?: Array<Record<string, unknown>> }>(completion.choices[0]?.message?.content || '', {});
   const returnedShots = Array.isArray(parsed.shots) ? parsed.shots : [];

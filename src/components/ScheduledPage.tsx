@@ -48,6 +48,18 @@ interface VideoStatsPayload {
       pendingRecords?: number;
       analyzedRecords?: number;
       failedRecords?: number;
+      refinementItems?: Array<{
+        id: string;
+        title: string;
+        platform: string;
+        thumbnailUrl?: string;
+        duration?: number;
+        status: string;
+        analysisMode?: string;
+        analysisQuality?: string;
+        syncedAt: string;
+        analyzedAt?: string;
+      }>;
     };
   };
 }
@@ -503,6 +515,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
     { label: '失败素材', value: analysisQueue.failedRecords ?? 0, desc: '需要重试或排查源文件' },
   ];
   const analysisStatusEntries = Object.entries(analysisQueue.byStatus ?? {});
+  const refinementItems = analysisQueue.refinementItems ?? [];
   const crawlTasks = (videoStats?.tasks ?? tasks).filter(t => ['video_keyword_crawl', 'image_post_crawl', 'competitor_account_crawl'].includes(t.taskType));
   const showTaskList = activeGroup !== 'social' || socialTaskTab === 'crawler';
   const formatTime = (value?: string) => value
@@ -1138,7 +1151,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
                 <div className="inline-flex rounded-xl border border-gray-200 bg-gray-50 p-1">
                   {[
                     { id: 'crawler' as const, label: '社媒爬虫定时任务' },
-                    { id: 'analysis' as const, label: '视频入库分析队列' },
+                    { id: 'analysis' as const, label: '视频分析' },
                   ].map(tab => (
                     <button
                       key={tab.id}
@@ -1235,6 +1248,40 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
                       )}
                     </div>
                   </div>
+                </section>
+                <section className="rounded-xl border border-gray-200 bg-white p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <p className="text-sm font-semibold text-gray-900">精修视频同步</p>
+                      <p className="text-xs text-gray-500 mt-0.5">从灵感大屏点击“AI一键爆款迭代”后自动进入此列表。</p>
+                    </div>
+                    <span className="text-xs text-gray-400">最近 {refinementItems.length} 条</span>
+                  </div>
+                  {refinementItems.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-gray-200 bg-gray-50/60 py-8 text-center text-xs text-gray-400">
+                      暂无已同步的精修视频
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {refinementItems.map(item => (
+                        <article key={item.id} className="flex items-center gap-3 rounded-xl border border-gray-100 bg-gray-50/60 p-3">
+                          {item.thumbnailUrl ? (
+                            <img src={item.thumbnailUrl} alt="" className="h-12 w-20 flex-shrink-0 rounded-lg bg-gray-100 object-cover" />
+                          ) : (
+                            <div className="h-12 w-20 flex-shrink-0 rounded-lg bg-gray-100" />
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-xs font-semibold text-gray-900">{item.title}</p>
+                            <p className="mt-1 text-[11px] text-gray-500">{item.platform.toUpperCase()} · {item.analysisMode === 'exact' ? '全片精确分析' : '视频分析'} · {item.duration ? `${Math.round(item.duration)} 秒` : '时长未知'}</p>
+                          </div>
+                          <div className="flex-shrink-0 text-right">
+                            <span className="rounded-full bg-green-50 px-2.5 py-1 text-[11px] font-medium text-green-700">待精修</span>
+                            <p className="mt-1 text-[10px] text-gray-400">{formatTime(item.syncedAt)}</p>
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+                  )}
                 </section>
               </div>
             )}

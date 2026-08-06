@@ -260,10 +260,9 @@ function analysisTimelineQualityError(analysis: VideoAiAnalysis, duration: numbe
     .filter((item): item is { detail: NonNullable<VideoAiAnalysis['scriptDetails15s']>[number]; range: { start: number; end: number } } => Boolean(item.range))
     .sort((a, b) => a.range.start - b.range.start);
   if (!details.length) return 'no_valid_storyboard_segments';
-  // `needsReview` is an honest uncertainty marker for proper nouns, prices,
-  // handedness or ASR; rejecting it would incentivize fabricated certainty.
-  // Only genuinely low-confidence visual segments fail the exact gate.
-  if (details.some(({ detail }) => Number(detail.confidence ?? 1) < 0.5)) return 'contains_low_confidence_segments';
+  // `needsReview` and low confidence are honest uncertainty markers. Keep
+  // those segments available for human review; structural coverage and usable
+  // visual evidence are validated independently.
 
   const effectiveDuration = duration > 0 ? duration : details[details.length - 1].range.end;
   const requiredSegments = effectiveDuration > 5 ? Math.max(2, Math.ceil(effectiveDuration / 5)) : 1;
@@ -2043,6 +2042,34 @@ videosRouter.patch('/:id/analysis-corrections', async (req, res) => {
   };
   await store.update(COL, req.params.id, { aiAnalysis: JSON.stringify(next) });
   res.json({ ok: true, correctedAt, version: next.correction.version, analysis: next.gemini });
+});
+
+// Record the handoff from Inspiration exact analysis into the refinement
+// workflow. ScheduledPage reads this marker from the same trend_videos record,
+// so the handoff is durable and tenant-scoped instead of being browser state.
+videosRouter.post('/:id/refinement-sync', async (req, res) => {
+  const { tenantId, userId } = res.locals as AuthLocals;
+  const record = await store.getById<Record<string, unknown>>(COL, req.params.id);
+  if (!record || (record.tenantId !== tenantId && !await requireAdminUser(req))) {
+    res.status(404).json({ error: 'Video record not found' });
+    return;
+  }
+  const previous = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
+  if (previous.analysisMode !== 'exact' || previous.requestedAnalysisMode === 'exact' || previous.analysisError) {
+    res.status(409).json({ error: '请先完成合格的全片精确分析，再进入精修流程' });
+    return;
+  }
+  const syncedAt = new Date().toISOString();
+  await store.update(COL, req.params.id, {
+    aiAnalysis: JSON.stringify({
+      ...previous,
+      refinementStatus: 'ready',
+      refinementQueuedAt: syncedAt,
+      refinementQueuedBy: userId,
+      refinementSource: String(req.body?.source || 'inspiration_analysis'),
+    }),
+  });
+  res.json({ ok: true, id: req.params.id, status: 'ready', syncedAt });
 });
 
 // ─── PATCH /videos/:id/reanalyze ─────────────────────────────────────────────
@@ -7584,6 +7611,27 @@ export async function getVideoPipelineStats(tenantId?: string): Promise<Record<s
     const crawledAt = Date.parse(String(record.crawledAt || ''));
     return Number.isFinite(crawledAt) && now - crawledAt <= 24 * 60 * 60 * 1000;
   });
+  const refinementItems = visibleRecords
+    .map(record => {
+      const analysis = parseJsonRecord<Record<string, unknown>>(record.aiAnalysis, {});
+      const syncedAt = String(analysis.refinementQueuedAt || '');
+      if (!syncedAt) return null;
+      return {
+        id: String(record.id || ''),
+        title: String(record.title || '未命名视频'),
+        platform: String(record.platform || 'unknown'),
+        thumbnailUrl: String(record.thumbnailUrl || ''),
+        duration: Number(record.duration || 0),
+        status: String(analysis.refinementStatus || 'ready'),
+        analysisMode: String(analysis.analysisMode || ''),
+        analysisQuality: String(analysis.analysisQuality || ''),
+        syncedAt,
+        analyzedAt: String(analysis.exactAnalyzedAt || analysis.analyzedAt || ''),
+      };
+    })
+    .filter((item): item is NonNullable<typeof item> => Boolean(item))
+    .sort((a, b) => Date.parse(b.syncedAt) - Date.parse(a.syncedAt))
+    .slice(0, 50);
 
   return {
     updatedAt: new Date().toISOString(),
@@ -7609,6 +7657,7 @@ export async function getVideoPipelineStats(tenantId?: string): Promise<Record<s
       pendingRecords: statusCounts.pending || 0,
       analyzedRecords: statusCounts.analyzed || 0,
       failedRecords: statusCounts.failed || 0,
+      refinementItems,
     },
   };
 }
