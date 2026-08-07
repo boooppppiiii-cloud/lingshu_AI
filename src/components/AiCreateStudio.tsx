@@ -4846,10 +4846,16 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
           .catch((err: any) => ({ ok: false, translations: {} as Record<string, string>, error: err?.message || '请求失败' }));
         translateError = translated.error || '';
         for (const code of targets) {
-          const raw = translated.translations?.[code] || '';
-          const normalized = raw.trim()
+          let raw = translated.translations?.[code] || '';
+          let normalized = raw.trim()
             ? normalizeTranslatedVoiceover(base, raw, code)
             : '';
+          if (!normalized.trim()) {
+            const single = await studioApi.translate({ text: normalizeScriptTimestamps(base), target: code, source: sourceLanguage })
+              .catch(() => ({ ok: false, text: '' }));
+            raw = single.ok ? single.text : '';
+            normalized = raw.trim() ? normalizeTranslatedVoiceover(base, raw, code) : '';
+          }
           if (normalized.trim()) {
             improved[code] = normalized;
           } else {
@@ -5105,6 +5111,10 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       previewAdvanceTimerRef.current = window.setTimeout(handlePreviewClipEnded, durationMs);
       return () => clearPreviewAdvanceTimer();
     }
+    // Remote ranged media does not always emit `ended` or a final
+    // `timeupdate`. Advance by the storyboard duration as a deterministic
+    // fallback so the preview cannot stall on a single shot.
+    previewAdvanceTimerRef.current = window.setTimeout(handlePreviewClipEnded, durationMs + 250);
     const video = previewVideoRef.current;
     if (video) {
       video.playbackRate = Math.max(0.25, Math.min(item.speed || 1, 4));
@@ -5800,10 +5810,16 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         const translated = await studioApi.translateBatch({ text: normalizeScriptTimestamps(base), targets: targetsToTranslate, source: sourceLanguage })
           .catch((err: any) => ({ ok: false, translations: {} as Record<string, string>, error: err?.message || '请求失败' }));
         for (const code of targetsToTranslate) {
-          const raw = translated.translations?.[code] || '';
-          const normalized = raw.trim()
+          let raw = translated.translations?.[code] || '';
+          let normalized = raw.trim()
             ? normalizeTranslatedVoiceover(base, raw, code)
             : '';
+          if (!normalized.trim()) {
+            const single = await studioApi.translate({ text: normalizeScriptTimestamps(base), target: code, source: sourceLanguage })
+              .catch(() => ({ ok: false, text: '' }));
+            raw = single.ok ? single.text : '';
+            normalized = raw.trim() ? normalizeTranslatedVoiceover(base, raw, code) : '';
+          }
           if (normalized.trim()) drafts[code] = normalized;
           else missingTranslationLangs.push(`${code}:${translated.error || '模型未返回有效译文'}`);
         }

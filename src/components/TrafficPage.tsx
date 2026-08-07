@@ -233,6 +233,19 @@ function readStoredPublishDraft(): PublishDraft | null {
   }
 }
 
+const PUBLISH_QUEUE_STORAGE_KEY = 'ow_publish_queue';
+
+function readStoredPublishQueue(): PublishQueueItem[] {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PUBLISH_QUEUE_STORAGE_KEY) || '[]');
+    return Array.isArray(parsed)
+      ? parsed.filter(item => item && typeof item === 'object' && typeof item.id === 'string') as PublishQueueItem[]
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 const PUBLISH_STATUS_META: Record<PublishItemStatus, { label: string; className: string }> = {
   draft: { label: '待配置', className: 'bg-slate-100 text-slate-600' },
   ready: { label: '待发布', className: 'bg-emerald-50 text-emerald-700' },
@@ -400,7 +413,11 @@ export default function TrafficPage({
 function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNavigate?: (p: Page) => void; draft?: PublishDraft | null; onReturnToPreview?: (projectId?: string) => void }) {
   const [workspaceTab, setWorkspaceTab] = useState<'schedule' | 'publish'>(() => draft || readStoredPublishDraft() ? 'publish' : 'schedule');
   const [accounts, setAccounts] = useState<PublishAccount[]>([]);
-  const [items, setItems] = useState<PublishQueueItem[]>(() => createPublishItems(draft || readStoredPublishDraft()));
+  const [items, setItems] = useState<PublishQueueItem[]>(() => {
+    const incoming = createPublishItems(draft || readStoredPublishDraft());
+    const stored = readStoredPublishQueue();
+    return incoming.length ? mergePublishItems(stored, incoming) : stored.length ? stored : [createPublishItem(null)];
+  });
   const [activeItemId, setActiveItemId] = useState('');
   const [loading, setLoading] = useState(true);
   const [uploadingVideos, setUploadingVideos] = useState(false);
@@ -473,6 +490,10 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
     setItems(prev => prev.map(item => item.id === id ? { ...item, ...patch } : item));
   };
 
+  useEffect(() => {
+    try { localStorage.setItem(PUBLISH_QUEUE_STORAGE_KEY, JSON.stringify(items)); } catch { /* storage unavailable */ }
+  }, [items]);
+
   const selectedQueueItems = items.filter(item => item.selected);
   const selectableQueueItems = items.filter(item => item.videoPath.trim());
   const allQueueItemsSelected = selectableQueueItems.length > 0 && selectableQueueItems.every(item => item.selected);
@@ -532,10 +553,10 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
     if (!activeItem) return;
     const targets = connectedAccounts.filter(account => activeItem.targetAccountIds.includes(account.id));
     if (!activeItem.videoPath.trim()) { setError('请先上传视频'); return; }
-    if (!targets.length) { setError('请先选择至少一个发布平台账号'); return; }
     if (!activeItem.title.trim()) { setError('请填写视频标题'); return; }
     if (!activeItem.description.trim()) { setError('请填写发布文案'); return; }
     if (activeItem.calendarPostIds?.length) {
+      if (!targets.length) { setError('日历内容需要至少选择一个发布平台账号'); return; }
       const calendarPlatform = activeItem.sourcePlatform || selectedPlatforms[0];
       const platformTargets = calendarPlatform
         ? targets.filter(account => account.platform === calendarPlatform)
@@ -588,7 +609,9 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
     });
     setError('');
     setNotice(activeItem.deliveryMode === 'now'
-      ? `“${activeItem.title.trim()}”已保存，可直接立即发布。`
+      ? targets.length
+        ? `“${activeItem.title.trim()}”已保存，可直接立即发布。`
+        : `“${activeItem.title.trim()}”已保存到待发布内容；连接平台账号后即可发布。`
       : activeItem.deliveryMode === 'flexible'
         ? `“${activeItem.title.trim()}”已保存，拖入日历时再选择时间。`
         : `“${activeItem.title.trim()}”已保存，定点时间已经锁定。`);
@@ -1330,8 +1353,9 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
                       ? '正在保存...'
                       : activeCalendarPost
                         ? activeItem?.status === 'ready' ? '日历修改已保存' : '保存日历修改'
-                        : activeItem?.status === 'ready' ? '已保存到待发布内容' : '保存并加入待发布内容'}
+                      : activeItem?.status === 'ready' ? '已保存到待发布内容' : '保存并加入待发布内容'}
                   </button>
+                  {error && <p role="status" className="w-full text-right text-[11px] font-semibold text-red-600">{error}</p>}
                 </div>
               </div>
               )}

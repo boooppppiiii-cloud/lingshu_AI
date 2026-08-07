@@ -2,7 +2,8 @@
 import { authHeader } from './auth';
 
 async function post<T>(path: string, body: unknown, fallback: T, signal?: AbortSignal): Promise<T & { source?: string }> {
-  const maxAttempts = path === 'script' ? 4 : 1;
+  const retryablePaths = new Set(['script', 'translate', 'translate/batch', 'tts', 'tts/batch']);
+  const maxAttempts = path === 'script' ? 4 : retryablePaths.has(path) ? 2 : 1;
   let lastError = 'request_failed';
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     try {
@@ -32,7 +33,7 @@ async function post<T>(path: string, body: unknown, fallback: T, signal?: AbortS
       if (signal?.aborted) throw err;
       lastError = message || 'request_failed';
       const transientNetworkError = /fetch|network|failed|load|eof|502|503|504/i.test(lastError);
-      if (path === 'script' && transientNetworkError && attempt < maxAttempts) {
+      if (retryablePaths.has(path) && transientNetworkError && attempt < maxAttempts) {
         await new Promise(resolve => window.setTimeout(resolve, [0, 2000, 5000, 10000][attempt] || 10000));
         continue;
       }
