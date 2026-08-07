@@ -347,6 +347,7 @@ interface ClipEdit {
   trimEnd: number;
   speed: number;
   targetDuration?: number;
+  targetDurationEdited?: boolean;
   transition: string;
   note: string;
 }
@@ -789,7 +790,12 @@ function renderSafeCues(cues: SubCue[], maxDuration: number): SubCue[] {
 }
 
 function parseTimeRangeLabel(value: string): { label: string; start: number; end: number } | null {
-  const normalized = value.replace(/秒/g, 's');
+  // Gemini occasionally emits the first range as `[start-4.5s]` instead of
+  // `[0-4.5s]`. Treat `start`/`开始` as zero so the first storyboard is not
+  // dropped and the following shot is not incorrectly promoted to slot 1.
+  const normalized = value
+    .replace(/秒/g, 's')
+    .replace(/\bstart\b|开始/gi, '0');
   const match = normalized.match(/(\d+(?:\.\d+)?)\s*s?\s*[-–]\s*(\d+(?:\.\d+)?)\s*s?/i);
   if (!match) return null;
   const start = Number(match[1]);
@@ -822,7 +828,7 @@ function parseStoryboardSlots(value: string, totalDuration: number): StoryboardS
   for (const raw of lines) {
     const line = raw.trim();
     if (!line) continue;
-    const bracket = line.match(/\[([^\]]*?\d+(?:\.\d+)?\s*(?:s|秒)?\s*[-–]\s*\d+(?:\.\d+)?\s*(?:s|秒)?[^\]]*)\]/i);
+    const bracket = line.match(/\[([^\]]*?(?:(?:start|开始)|\d+(?:\.\d+)?)\s*(?:s|秒)?\s*[-–]\s*\d+(?:\.\d+)?\s*(?:s|秒)?[^\]]*)\]/i);
     const scene = line.match(/Scene\s+\d+\s*\(([^)]*?\d+(?:\.\d+)?\s*(?:s|秒)?\s*[-–]\s*\d+(?:\.\d+)?\s*(?:s|秒)?[^)]*)\)/i);
     const inline = !bracket && !scene ? parseTimeRangeLabel(line) : null;
     const range = bracket ? parseTimeRangeLabel(bracket[1]) : scene ? parseTimeRangeLabel(scene[1]) : inline;
@@ -3887,8 +3893,9 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
   };
   const slotClipEditKey = (slotId: string, clipId: string) => `${slotId}:${clipId}`;
   const editForSlot = (clip: Clip, slot: StoryboardSlot): ClipEdit => {
-    const targetDuration = Math.max(0.5, slot.end - slot.start);
-    const base = editFor(clip);
+    const scriptDuration = Math.max(0.5, slot.end - slot.start);
+    const base = clipEdits[slotClipEditKey(slot.id, clip.id)] ?? editFor(clip);
+    const targetDuration = Math.max(0.5, base.targetDurationEdited ? base.targetDuration || scriptDuration : scriptDuration);
     const maxEnd = clip.type === 'image' ? Math.max(10, targetDuration) : Math.max(1, clip.duration || targetDuration);
     const trimStart = Math.max(0, Math.min(base.trimStart || 0, Math.max(0, maxEnd - 0.5)));
     const trimEnd = clip.type === 'image'
@@ -3898,7 +3905,11 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       ...base,
       trimStart,
       trimEnd,
-      targetDuration: Math.max(0.5, base.targetDuration || targetDuration),
+      // Historical drafts stored the then-derived duration. Only preserve it
+      // when the user explicitly changed the control; otherwise the script is
+      // the source of truth (important after repairing a missed first range).
+      targetDuration,
+      targetDurationEdited: Boolean(base.targetDurationEdited),
       speed: targetDuration > 0 && trimEnd > trimStart ? Math.max(0.25, Math.min((trimEnd - trimStart) / targetDuration, 4)) : base.speed,
       note: slot.detail,
     };
@@ -3949,6 +3960,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       const next = { ...base };
       if (field === 'targetDuration') {
         next.targetDuration = Math.max(0.5, Math.min(60, rawValue));
+        next.targetDurationEdited = true;
         if (clip.type === 'video') next.speed = Math.max(0.25, Math.min((next.trimEnd - next.trimStart) / next.targetDuration, 4));
       } else if (field === 'trimStart' && clip.type === 'video') {
         next.trimStart = Math.max(0, Math.min(rawValue, Math.max(0, next.trimEnd - 0.1)));
@@ -3959,6 +3971,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       } else if (field === 'speed' && clip.type === 'video') {
         next.speed = Math.max(0.25, Math.min(4, rawValue));
         next.targetDuration = Math.max(0.5, Math.min(60, (next.trimEnd - next.trimStart) / next.speed));
+        next.targetDurationEdited = true;
       }
       return { ...current, [key]: next };
     });
@@ -3968,7 +3981,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     const rows = storyboardSlots.map(slot => {
       const clip = materialById.get(storyboardAssignments[slot.id] || '');
       if (!clip) return null;
-      const edit = clipEdits[slotClipEditKey(slot.id, clip.id)] || defaultEditForSlot(clip, slot);
+      const edit = editForSlot(clip, slot);
       const targetDuration = Math.max(0.5, edit.targetDuration || slot.end - slot.start);
       const targetStart = timelineCursor;
       timelineCursor += targetDuration;
@@ -4009,7 +4022,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     const rows = storyboardSlots.map(slot => {
       const clip = materialById.get(assembly.assignments[slot.id] || '');
       if (!clip) return null;
-      const edit = clipEdits[slotClipEditKey(slot.id, clip.id)] || defaultEditForSlot(clip, slot);
+      const edit = editForSlot(clip, slot);
       const targetDuration = Math.max(0.5, edit.targetDuration || slot.end - slot.start);
       const targetStart = timelineCursor;
       timelineCursor += targetDuration;
@@ -7695,7 +7708,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
 	                )}
 	                {storyboardSlots.map((slot, index) => {
 	                  const clip = slot.id ? materialById.get(storyboardAssignments[slot.id] || '') : undefined;
-	                  const slotEdit = clip ? (clipEdits[slotClipEditKey(slot.id, clip.id)] || defaultEditForSlot(clip, slot)) : null;
+	                  const slotEdit = clip ? editForSlot(clip, slot) : null;
 	                  const shotGenerating = Boolean(storyboardGenerating[slot.id]);
                   const slotVersions = storyboardVideoVersions[slot.id] || [];
                   const slotScript = storyboardSlotScript(slot.detail);
