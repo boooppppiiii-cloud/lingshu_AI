@@ -98,15 +98,15 @@ async function main() {
     await fetch(`${pbUrl}/api/collections/trend_videos/records/${row.id}`, { method: 'DELETE', headers: { Authorization: token } });
   }
   const trendSeeds = [
-    ['Mock 爆款｜3秒展示精华液质地', 'TikTok', 18, 'texture_demo,hook,qa_mock'],
-    ['Mock 爆款｜工厂灌装线实拍', 'YouTube', 32, 'factory,production,qa_mock'],
-    ['Mock 爆款｜面膜包装前后对比', 'Instagram', 24, 'before_after,packaging,qa_mock'],
-    ['Mock 爆款｜低MOQ采购问答', 'TikTok', 21, 'buyer_pain,moq,qa_mock'],
+    ['Mock 爆款｜3秒展示精华液质地', 'tiktok', 18, 'texture_demo,hook,qa_mock'],
+    ['Mock 爆款｜工厂灌装线实拍', 'youtube', 32, 'factory,production,qa_mock'],
+    ['Mock 爆款｜面膜包装前后对比', 'instagram', 24, 'before_after,packaging,qa_mock'],
+    ['Mock 爆款｜低MOQ采购问答', 'tiktok', 21, 'buyer_pain,moq,qa_mock'],
   ];
   const trendIds: string[] = [];
   for (const [title, platform, duration, tags] of trendSeeds) {
     const row = await write(token, 'trend_videos', {
-      tenantId, platform, title, duration, tags, status: 'completed',
+      tenantId, platform, title, duration, tags, status: 'completed', contentFormat: 'video',
       thumbnailUrl: `https://picsum.photos/seed/${encodeURIComponent(String(title))}/360/640`,
       sourceUrl: `https://example.com/qa-mock/${trendIds.length + 1}`,
       aiAnalysis: JSON.stringify({ summary: `${title} 的 Mock 分析`, status: 'completed', marker }),
