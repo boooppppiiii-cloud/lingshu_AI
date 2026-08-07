@@ -2193,7 +2193,11 @@ function looksLikeOnScreenOnlyText(value: string): boolean {
 function looksLikeStandaloneSpeech(value: string): boolean {
   const text = cleanVoiceoverLine(value);
   if (!text || looksLikeOnScreenOnlyText(text) || looksLikeProductionInstruction(text)) return false;
-  if (/[，。！？!?、]/.test(text)) return true;
+  // Localized narration commonly uses ASCII punctuation (Russian and many
+  // European languages in particular). Treat it as spoken prose too; the
+  // previous CJK-only punctuation check caused valid translated cues to be
+  // dropped before the voiceover validator saw them.
+  if (/[，。！？!?、,.:;]/.test(text)) return true;
   if (/(吗|呢|吧|了|我|你|咱|这|那|真能|不是|马上|直接|发我|留言|私信)/.test(text) && text.length >= 6) return true;
   if (/\s/.test(text) && /^(check|send|watch|see|message|comment|dm|ask|get|try)\b/i.test(text)) return true;
   return text.length >= 10 && /[\u4e00-\u9fff]/.test(text);
