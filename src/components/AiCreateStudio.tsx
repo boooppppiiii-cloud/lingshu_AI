@@ -346,6 +346,7 @@ interface ClipEdit {
   trimStart: number;
   trimEnd: number;
   speed: number;
+  targetDuration?: number;
   transition: string;
   note: string;
 }
@@ -3897,6 +3898,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       ...base,
       trimStart,
       trimEnd,
+      targetDuration: Math.max(0.5, base.targetDuration || targetDuration),
       speed: targetDuration > 0 && trimEnd > trimStart ? Math.max(0.25, Math.min((trimEnd - trimStart) / targetDuration, 4)) : base.speed,
       note: slot.detail,
     };
@@ -3908,6 +3910,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       return {
         trimStart: 0,
         trimEnd: fullDuration,
+        targetDuration: Math.max(0.5, slot.end - slot.start),
         speed: 1,
         transition: '硬切',
         note: `${slot.detail}\n钩子素材：使用完整素材，不按分镜时间戳裁切。`,
@@ -3919,6 +3922,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     return {
       trimStart: 0,
       trimEnd: clip.type === 'image' ? targetDuration : usable,
+      targetDuration,
       speed: usable > 0 ? Math.max(0.25, Math.min(usable / targetDuration, 4)) : 1,
       transition: '硬切',
       note: slot.detail,
@@ -3936,11 +3940,38 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
       return current[key] ? current : { ...current, [key]: defaultEditForSlot(hookClip, firstSlot) };
     });
   }, [hookMaterialId, materialById, storyboardSlots]); // eslint-disable-line react-hooks/exhaustive-deps
+  const patchStoryboardClipEdit = (slot: StoryboardSlot, clip: Clip, field: 'targetDuration' | 'trimStart' | 'trimEnd' | 'speed', rawValue: number) => {
+    if (!Number.isFinite(rawValue)) return;
+    const key = slotClipEditKey(slot.id, clip.id);
+    setClipEdits(current => {
+      const base = current[key] || defaultEditForSlot(clip, slot);
+      const maxSourceDuration = clip.type === 'image' ? 60 : Math.max(0.5, clip.duration || base.trimEnd || 0.5);
+      const next = { ...base };
+      if (field === 'targetDuration') {
+        next.targetDuration = Math.max(0.5, Math.min(60, rawValue));
+        if (clip.type === 'video') next.speed = Math.max(0.25, Math.min((next.trimEnd - next.trimStart) / next.targetDuration, 4));
+      } else if (field === 'trimStart' && clip.type === 'video') {
+        next.trimStart = Math.max(0, Math.min(rawValue, Math.max(0, next.trimEnd - 0.1)));
+        next.speed = Math.max(0.25, Math.min((next.trimEnd - next.trimStart) / Math.max(0.5, next.targetDuration || slot.end - slot.start), 4));
+      } else if (field === 'trimEnd' && clip.type === 'video') {
+        next.trimEnd = Math.max(next.trimStart + 0.1, Math.min(rawValue, maxSourceDuration));
+        next.speed = Math.max(0.25, Math.min((next.trimEnd - next.trimStart) / Math.max(0.5, next.targetDuration || slot.end - slot.start), 4));
+      } else if (field === 'speed' && clip.type === 'video') {
+        next.speed = Math.max(0.25, Math.min(4, rawValue));
+        next.targetDuration = Math.max(0.5, Math.min(60, (next.trimEnd - next.trimStart) / next.speed));
+      }
+      return { ...current, [key]: next };
+    });
+  };
   const renderTimeline = useMemo(() => {
+    let timelineCursor = 0;
     const rows = storyboardSlots.map(slot => {
       const clip = materialById.get(storyboardAssignments[slot.id] || '');
       if (!clip) return null;
       const edit = clipEdits[slotClipEditKey(slot.id, clip.id)] || defaultEditForSlot(clip, slot);
+      const targetDuration = Math.max(0.5, edit.targetDuration || slot.end - slot.start);
+      const targetStart = timelineCursor;
+      timelineCursor += targetDuration;
       return {
         clipId: clip.id,
         name: clip.name,
@@ -3950,9 +3981,9 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         trimStart: edit.trimStart,
         trimEnd: edit.trimEnd,
         speed: edit.speed,
-        targetStart: slot.start,
-        targetEnd: slot.end,
-        targetDuration: Math.max(0.5, slot.end - slot.start),
+        targetStart,
+        targetEnd: timelineCursor,
+        targetDuration,
       };
     }).filter((item): item is NonNullable<typeof item> => Boolean(item));
     if (rows.length) return rows;
@@ -3974,14 +4005,18 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
     });
   }, [clipEdits, materialById, selectedClips, storyboardAssignments, storyboardSlots]);
   const timelineForAssembly = (assembly: StoryboardAssembly) => {
+    let timelineCursor = 0;
     const rows = storyboardSlots.map(slot => {
       const clip = materialById.get(assembly.assignments[slot.id] || '');
       if (!clip) return null;
       const edit = clipEdits[slotClipEditKey(slot.id, clip.id)] || defaultEditForSlot(clip, slot);
+      const targetDuration = Math.max(0.5, edit.targetDuration || slot.end - slot.start);
+      const targetStart = timelineCursor;
+      timelineCursor += targetDuration;
       return {
         clipId: clip.id, name: clip.name, type: clip.type, url: clip.url, poster: clip.poster,
         trimStart: edit.trimStart, trimEnd: edit.trimEnd, speed: edit.speed,
-        targetStart: slot.start, targetEnd: slot.end, targetDuration: Math.max(0.5, slot.end - slot.start),
+        targetStart, targetEnd: timelineCursor, targetDuration,
       };
     }).filter((item): item is NonNullable<typeof item> => Boolean(item));
     if (rows.length) return rows;
@@ -7618,6 +7653,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                 </div>
                 <div className="flex items-center justify-between gap-2 text-[11px] text-text-muted">
                   <span>{storyboardSlots.length ? `${assignedCount}/${storyboardSlots.length} 已匹配 · ${remainingStoryboardCount ? `${remainingStoryboardCount} 段待处理` : '可以进入下一步'}` : '暂无分镜'}</span>
+                  {renderTimeline.length > 0 && <span className="font-bold text-accent">成片约 {renderTimeline.reduce((sum, item) => sum + item.targetDuration, 0).toFixed(1)}s</span>}
                 </div>
                 {storyboardSlots.length > 0 && (
                   <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-2">
@@ -7659,6 +7695,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
 	                )}
 	                {storyboardSlots.map((slot, index) => {
 	                  const clip = slot.id ? materialById.get(storyboardAssignments[slot.id] || '') : undefined;
+	                  const slotEdit = clip ? (clipEdits[slotClipEditKey(slot.id, clip.id)] || defaultEditForSlot(clip, slot)) : null;
 	                  const shotGenerating = Boolean(storyboardGenerating[slot.id]);
                   const slotVersions = storyboardVideoVersions[slot.id] || [];
                   const slotScript = storyboardSlotScript(slot.detail);
@@ -7736,6 +7773,56 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                           }} className={`rounded-md border px-2 py-1 text-[9px] font-bold ${item.isSelected ? 'border-accent bg-accent/10 text-accent' : 'border-border bg-white text-text-muted'}`}>V{item.versionNumber}</button>)}
                           {mode === 'clone' && <button type="button" onClick={event => { event.stopPropagation(); void generateStoryboardShot(slot, { ...sourcePlanFor(slot), mode: sourcePlanFor(slot).mode === 'hybrid' ? 'hybrid' : 'ai', decided: true, confirmed: false }); }} disabled={shotGenerating} className="rounded-md bg-slate-950 px-2 py-1 text-[9px] font-bold text-white disabled:opacity-50">{shotGenerating ? '生成中…' : '再生成一版'}</button>}
                         </div>}
+                        {slotEdit && (
+                          <div className="grid grid-cols-2 gap-2 rounded-lg border border-border/70 bg-white p-2" onClick={event => event.stopPropagation()}>
+                            <label className="text-[9px] font-bold text-text-muted">
+                              <span className="mb-1 block">目标时长（秒）</span>
+                              <input
+                                aria-label={`分镜${index + 1}目标时长`}
+                                type="number" min={0.5} max={60} step={0.1}
+                                value={Number((slotEdit.targetDuration || Math.max(0.5, slot.end - slot.start)).toFixed(2))}
+                                onChange={event => patchStoryboardClipEdit(slot, clip, 'targetDuration', Number(event.target.value))}
+                                className="w-full rounded-md border border-border bg-surface px-2 py-1.5 font-mono text-[10px] text-text-primary outline-none focus:border-accent"
+                              />
+                            </label>
+                            <label className="text-[9px] font-bold text-text-muted">
+                              <span className="mb-1 block">播放速度</span>
+                              <input
+                                aria-label={`分镜${index + 1}播放速度`}
+                                type="number" min={0.25} max={4} step={0.05}
+                                value={Number(slotEdit.speed.toFixed(2))}
+                                disabled={clip.type === 'image'}
+                                onChange={event => patchStoryboardClipEdit(slot, clip, 'speed', Number(event.target.value))}
+                                className="w-full rounded-md border border-border bg-surface px-2 py-1.5 font-mono text-[10px] text-text-primary outline-none focus:border-accent disabled:cursor-not-allowed disabled:opacity-45"
+                              />
+                            </label>
+                            <label className="text-[9px] font-bold text-text-muted">
+                              <span className="mb-1 block">素材入点（秒）</span>
+                              <input
+                                aria-label={`分镜${index + 1}素材入点`}
+                                type="number" min={0} max={Math.max(0, clip.duration - 0.1)} step={0.1}
+                                value={Number(slotEdit.trimStart.toFixed(2))}
+                                disabled={clip.type === 'image'}
+                                onChange={event => patchStoryboardClipEdit(slot, clip, 'trimStart', Number(event.target.value))}
+                                className="w-full rounded-md border border-border bg-surface px-2 py-1.5 font-mono text-[10px] text-text-primary outline-none focus:border-accent disabled:cursor-not-allowed disabled:opacity-45"
+                              />
+                            </label>
+                            <label className="text-[9px] font-bold text-text-muted">
+                              <span className="mb-1 block">素材出点（秒）</span>
+                              <input
+                                aria-label={`分镜${index + 1}素材出点`}
+                                type="number" min={0.1} max={Math.max(0.5, clip.duration)} step={0.1}
+                                value={Number(slotEdit.trimEnd.toFixed(2))}
+                                disabled={clip.type === 'image'}
+                                onChange={event => patchStoryboardClipEdit(slot, clip, 'trimEnd', Number(event.target.value))}
+                                className="w-full rounded-md border border-border bg-surface px-2 py-1.5 font-mono text-[10px] text-text-primary outline-none focus:border-accent disabled:cursor-not-allowed disabled:opacity-45"
+                              />
+                            </label>
+                            <p className="col-span-2 text-[9px] leading-4 text-text-muted">
+                              {clip.type === 'image' ? '图片分镜只需调整目标时长。' : '入点/出点决定取用片段；速度与目标时长会自动联动。'}
+                            </p>
+                          </div>
+                        )}
                         </div>
                       ) : (
                         <div className="space-y-2">
