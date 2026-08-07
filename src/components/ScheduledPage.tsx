@@ -77,6 +77,16 @@ interface VideoStatsPayload {
   };
 }
 
+function safeAnalysisActionMessage(message: unknown, fallback: string): string {
+  const text = String(message || '').trim();
+  if (!text) return fallback;
+  if (/404|not found|unable to download|download webpage|unsupported url/i.test(text)) return '源视频暂时无法获取，请确认链接有效后重试。';
+  if (/429|quota|resource_exhausted|额度|余额/i.test(text)) return 'AI 分析额度暂时不足，请稍后重试。';
+  if (/timeout|timed out|超时/i.test(text)) return '视频分析超时，请稍后重试。';
+  if (/command failed|python3|yt_dlp|\/app\/|ffmpeg|bearer|api[_-]?key/i.test(text)) return fallback;
+  return text.slice(0, 120);
+}
+
 interface BusinessDynamicsPayload {
   generatedAt?: string;
   cached?: boolean;
@@ -370,7 +380,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
         },
       );
       const payload = await response.json().catch(() => ({})) as { error?: string };
-      if (!response.ok) throw new Error(payload.error || (action === 'pause' ? '暂停分析失败' : '重新分析失败'));
+      if (!response.ok) throw new Error(safeAnalysisActionMessage(payload.error, action === 'pause' ? '暂停分析失败，请稍后重试。' : '重新分析失败，请稍后重试。'));
       await fetchVideoStats();
     } catch (error) {
       setAnalysisActionError(error instanceof Error ? error.message : '操作失败');
@@ -541,6 +551,18 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
     setConfirmedKeywordSignature('');
     setCreateError('');
     setScheduleOpen(false);
+  }
+
+  function openAddModal() {
+    setResultTaskId(null);
+    setWorkspaceMessage('');
+    setSelectedTemplateIds([]);
+    setCustomName('');
+    setTaskKeywords('foundation');
+    setConfirmedKeywordSignature('');
+    setCreateError('');
+    setScheduleOpen(false);
+    setShowAdd(true);
   }
 
   const filtered = tasks.filter(t => taskAgentGroup(t.taskType) === activeGroup);
@@ -1188,7 +1210,7 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
             <button
               type="button"
               data-demo-target={!showAdd && activeGroup === 'social' ? 'scheduled_run' : undefined}
-              onClick={() => { setSelectedTemplateIds([]); setCustomName(''); setTaskKeywords('foundation'); setScheduleOpen(false); setShowAdd(true); }}
+              onClick={openAddModal}
               className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-white"
               style={{ background: '#16a34a' }}
             >
@@ -1549,6 +1571,9 @@ export default function ScheduledPage({ onAction }: { onAction?: AgentAction }) 
       <AnimatePresence>
         {showAdd && (
           <motion.div
+            role="dialog"
+            aria-modal="true"
+            aria-label="新建定时任务"
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center"
             onClick={closeAddModal}

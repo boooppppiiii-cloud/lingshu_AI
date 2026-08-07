@@ -1627,6 +1627,7 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
   const selected = useMemo(() => (
     selectedId ? customers.find(customer => customer.id === selectedId) ?? null : null
   ), [customers, selectedId]);
+  const customersInActiveView = useMemo(() => filterCustomers(view, customers), [view, customers]);
   const activeView = VIEW_META[view];
   const customerPendingCount = useMemo(() => pendingCount(customers), [customers]);
   const customerTodoItems = useMemo(() => (
@@ -1659,6 +1660,11 @@ export default function ConversionPage({ onLeaveConversation: _onLeaveConversati
       deepLinkConsumedRef.current = true;
     }
   }, [customers]);
+
+  useEffect(() => {
+    if (selectedId && customersInActiveView.some(customer => customer.id === selectedId)) return;
+    setSelectedId(customersInActiveView[0]?.id ?? null);
+  }, [customersInActiveView, selectedId]);
 
   useEffect(() => {
     customers.forEach(customer => {

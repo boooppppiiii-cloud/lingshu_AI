@@ -333,7 +333,7 @@ export default function OrderManagementPage() {
                   const margin = order.amount ? (order.amount - order.cost) / order.amount * 100 : 0;
                   const style = STATUS_STYLE[order.status];
                   return (
-                    <tr key={order.id} className="hover:bg-surface-2/70">
+                    <tr key={`${order.id}:${order.status}`} className="hover:bg-surface-2/70">
                       <td className="px-4 py-3 font-mono text-[11px] text-text-secondary">{order.orderNo}</td>
                       <td className="px-4 py-3">
                         <p className="font-semibold text-text-primary">{order.buyer}</p>
@@ -354,12 +354,12 @@ export default function OrderManagementPage() {
                         </span>
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap">
-                        <span className="inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold" style={{ background: style.bg, color: style.fg }}>{order.status}</span>
+                        <span aria-live="polite" className="inline-flex whitespace-nowrap rounded-full px-2 py-0.5 text-[10px] font-semibold" style={{ background: style.bg, color: style.fg }}>{order.status}</span>
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap text-text-secondary">{order.orderDate}</td>
                       <td className="px-4 py-3 text-text-secondary">{order.owner}</td>
                       <td className="px-4 py-3">
-                        <select value={order.status} onChange={e => setOrderStatus(order.id, e.target.value as OrderStatus)} className="rounded-md border border-border bg-white px-2 py-1 text-[11px] outline-none">
+                        <select aria-label={`${order.orderNo} 订单状态：${order.status}`} value={order.status} onChange={e => setOrderStatus(order.id, e.target.value as OrderStatus)} className="rounded-md border border-border bg-white px-2 py-1 text-[11px] outline-none">
                           {statusList.map(x => <option key={x} value={x}>{x}</option>)}
                         </select>
                       </td>

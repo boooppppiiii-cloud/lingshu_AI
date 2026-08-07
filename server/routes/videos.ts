@@ -472,6 +472,16 @@ function compactVideoPipelineError(message: unknown, max = 900): string {
     .slice(0, max);
 }
 
+function publicVideoPipelineError(message: unknown): string {
+  const text = compactVideoPipelineError(message, 500);
+  if (!text) return '视频分析失败，请稍后重试。';
+  if (/404|not found|unable to download|download webpage|unsupported url/i.test(text)) return '源视频暂时无法获取，请确认链接有效后重新分析。';
+  if (/429|quota|resource_exhausted|额度|余额/i.test(text)) return 'AI 分析额度暂时不足，请稍后重试或联系管理员。';
+  if (/timeout|timed out|超时/i.test(text)) return '视频分析超时，请稍后重新分析。';
+  if (/gemini|model|api/i.test(text)) return 'AI 分析服务暂时不可用，请稍后重试。';
+  return '视频分析失败，请稍后重试。';
+}
+
 function recordKeywordText(record: Record<string, unknown>): string {
   const analysis = videoAnalysisOf(record);
   const tags = parseJsonRecord<string[]>(record.tags, []);
@@ -7718,8 +7728,8 @@ async function enqueueOpsTasksFromRecords(recoverInterrupted = false): Promise<v
   }
 }
 
-function crawlerOpsStats(tenantId?: string): Record<string, unknown> {
-  const tasks = loadCrawlerOpsTasks();
+function crawlerOpsStats(tenantId?: string, visibleRecordIds?: Set<string>): Record<string, unknown> {
+  const tasks = loadCrawlerOpsTasks().filter(task => !visibleRecordIds || visibleRecordIds.has(task.recordId));
   const byStatus = tasks.reduce<Record<string, number>>((acc, task) => {
     acc[task.status] = (acc[task.status] || 0) + 1;
     return acc;
@@ -7863,7 +7873,7 @@ export async function getVideoPipelineStats(tenantId?: string): Promise<Record<s
       status: itemStatus,
       analysisMode: String(analysis.requestedAnalysisMode || analysis.analysisMode || 'strategy'),
       updatedAt: String(record.updated || record.crawledAt || ''),
-      error: failed ? String(analysis.analysisError || analysis.videoLevelFailureStatus || '视频分析失败') : '',
+      error: failed ? publicVideoPipelineError(analysis.analysisError || analysis.videoLevelFailureStatus) : '',
     };
   });
 
@@ -7883,14 +7893,17 @@ export async function getVideoPipelineStats(tenantId?: string): Promise<Record<s
     fetchQueue: {
       queued: fetchQueueCount,
       byStatus: downloadStatus,
-      ops: crawlerOpsStats(tenantId),
+      ops: crawlerOpsStats(tenantId, new Set(visibleRecords.map(record => String(record.id || '')).filter(Boolean))),
     },
     analysisQueue: {
-      queued: analysisQueueCount,
-      byStatus: geminiStatus,
-      pendingRecords: statusCounts.pending || 0,
-      analyzedRecords: statusCounts.analyzed || 0,
-      failedRecords: statusCounts.failed || 0,
+      queued: analysisItems.filter(item => item.status === 'analyzing').length,
+      byStatus: analysisItems.reduce<Record<string, number>>((acc, item) => {
+        acc[item.status] = (acc[item.status] || 0) + 1;
+        return acc;
+      }, {}),
+      pendingRecords: analysisItems.filter(item => item.status === 'analyzing' || item.status === 'paused').length,
+      analyzedRecords: analysisItems.filter(item => item.status === 'analyzed').length,
+      failedRecords: analysisItems.filter(item => item.status === 'failed').length,
       items: analysisItems,
       refinementItems,
     },
