@@ -1471,13 +1471,9 @@ function SocialPublishPanel({ onNavigate, draft, onReturnToPreview }: { onNaviga
                     <video
                       key={activePreviewUrl}
                       src={activePreviewUrl}
-                      autoPlay
-                      muted
-                      loop
                       controls
                       playsInline
                       preload="metadata"
-                      onLoadedData={event => { void event.currentTarget.play().catch(() => undefined); }}
                       className="h-full w-full object-contain"
                     />
                   ) : (

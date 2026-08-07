@@ -8348,7 +8348,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
               <div id="subtitle-effect-preview" className="mt-5 scroll-mt-5 rounded-2xl border border-border bg-surface p-4">
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <p className="text-sm font-black text-text-primary">分镜拼接与 AI 口播确认</p>
+                    <p className="text-sm font-black text-text-primary">分镜画面 + AI 口播同步确认</p>
                     <p className="mt-1 text-xs text-text-muted">
                       当前 {langZh(activeVoiceLang) || activeVoiceLang} · 录音 {voiceoverDur || 0}s · 字幕 {cues.length} 条 · 素材 {selectedClips.length} 段
                     </p>
@@ -8425,8 +8425,8 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                     )}
                   </div>
                   <div className="min-w-0">
-                    <div className="mb-3 rounded-xl border border-accent/20 bg-accent-glow px-3 py-2 text-xs text-accent">
-                      配音页面已自动开启字幕，后续成片会使用当前语种口播台词、AI 录音和这些字幕 cue。
+                    <div className="mb-3 rounded-xl border border-accent/20 bg-accent-glow px-3 py-2 text-xs leading-5 text-accent">
+                      下方是<strong>口播音轨的句级时间</strong>，用于校准配音与字幕，不是分镜切换时间。分镜画面时长仍由素材匹配步骤控制；修改这里只会调整字幕和口播在成片中的出现位置。
                     </div>
                     <div className="max-h-64 space-y-1 overflow-y-auto pr-1">
                       {cues.map((cue, i) => (
@@ -8440,7 +8440,7 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
                             <input type="number" min={0} step={0.05} value={cue.end}
                               onChange={e => patchAlignedCue(i, { end: Math.max(cue.start + 0.1, +e.target.value) })}
                               className="w-16 rounded border border-border bg-white px-1.5 py-1 font-mono text-[10px] text-text-muted" />
-                            <span className="ml-auto text-[9px] font-bold text-text-muted">{cue.words?.length ? `${cue.words.length} 词已对齐` : '句级时间'}</span>
+                            <span className="ml-auto text-[9px] font-bold text-text-muted">{cue.words?.length ? `口播音轨 · ${cue.words.length} 词已对齐` : '口播音轨 · 句级时间'}</span>
                           </div>
                           <textarea value={cue.text} rows={2} onChange={e => patchAlignedCue(i, { text: e.target.value })}
                             className="w-full resize-none rounded border border-border bg-white px-2 py-1.5 text-xs leading-5 text-text-secondary outline-none focus:border-accent" />
