@@ -2511,6 +2511,25 @@ function normalizeTranslatedVoiceover(base: string, translated: string, target: 
   return lines.join('\n');
 }
 
+function resolveTranslatedVoiceover(base: string, translated: string, target: string): string {
+  const raw = normalizeScriptTimestamps(String(translated || '')).trim();
+  if (!raw) return '';
+  const aligned = normalizeTranslatedVoiceover(base, raw, target);
+  if (aligned.trim()) return aligned;
+
+  // The model can return a valid localized script whose line structure is not
+  // identical to the extracted source (for example after omitting an SFX or
+  // merging a very short cue). Do not discard the whole translation merely
+  // because the stricter index-based aligner could not rebuild every line.
+  const spoken = stripVoiceoverTimestamps(raw).trim();
+  if (!spoken || isBadTranslatedLine(spoken, target)) return '';
+  if (target !== 'zh' && /[\u4e00-\u9fff]/.test(spoken)) return '';
+  const sourceCueCount = parseTimestampedVoiceover(base).filter(item => !isNonSpeechSfx(item.text)).length;
+  const translatedCueCount = parseTimestampedVoiceover(raw).filter(item => !isNonSpeechSfx(item.text)).length;
+  if (sourceCueCount > 1 && translatedCueCount < Math.max(1, Math.ceil(sourceCueCount * 0.5))) return '';
+  return raw;
+}
+
 const SAMPLE_SCRIPT = `[开场 · 0-3s]
 先别划走，这就是最近客户一直在问的那款产品。
 
@@ -4848,13 +4867,13 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         for (const code of targets) {
           let raw = translated.translations?.[code] || '';
           let normalized = raw.trim()
-            ? normalizeTranslatedVoiceover(base, raw, code)
+            ? resolveTranslatedVoiceover(base, raw, code)
             : '';
           if (!normalized.trim()) {
             const single = await studioApi.translate({ text: normalizeScriptTimestamps(base), target: code, source: sourceLanguage })
               .catch(() => ({ ok: false, text: '' }));
             raw = single.ok ? single.text : '';
-            normalized = raw.trim() ? normalizeTranslatedVoiceover(base, raw, code) : '';
+            normalized = raw.trim() ? resolveTranslatedVoiceover(base, raw, code) : '';
           }
           if (normalized.trim()) {
             improved[code] = normalized;
@@ -5812,13 +5831,13 @@ export default function AiCreateStudio({ onNavigate, onGoPublish }: { onNavigate
         for (const code of targetsToTranslate) {
           let raw = translated.translations?.[code] || '';
           let normalized = raw.trim()
-            ? normalizeTranslatedVoiceover(base, raw, code)
+            ? resolveTranslatedVoiceover(base, raw, code)
             : '';
           if (!normalized.trim()) {
             const single = await studioApi.translate({ text: normalizeScriptTimestamps(base), target: code, source: sourceLanguage })
               .catch(() => ({ ok: false, text: '' }));
             raw = single.ok ? single.text : '';
-            normalized = raw.trim() ? normalizeTranslatedVoiceover(base, raw, code) : '';
+            normalized = raw.trim() ? resolveTranslatedVoiceover(base, raw, code) : '';
           }
           if (normalized.trim()) drafts[code] = normalized;
           else missingTranslationLangs.push(`${code}:${translated.error || '模型未返回有效译文'}`);
